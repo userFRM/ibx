@@ -52,6 +52,7 @@ impl EClient {
                 ord_type: api_order.ord_type_byte(),
                 tif: api_order.tif_byte(),
                 stop_price: (api_order.aux_price * crate::api::types::PRICE_SCALE_F) as i64,
+                outside_rth: Some(api_order.outside_rth),
             })
         } else {
             ClientCore::build_order_request(&api_order, oid, instrument)
@@ -125,20 +126,12 @@ impl EClient {
                 currency: tracked.contract.currency.clone(),
                 ..Default::default()
             })?.into_any();
-            let mut o = Order::default();
-            o.order_id = tracked.order.order_id;
-            o.action = tracked.order.action.clone();
-            o.total_quantity = tracked.order.total_quantity;
-            o.order_type = tracked.order.order_type.clone();
-            o.lmt_price = tracked.order.lmt_price;
-            o.aux_price = tracked.order.aux_price;
-            o.tif = tracked.order.tif.clone();
-            o.account = tracked.order.account.clone();
-            o.perm_id = tracked.order.perm_id;
-            o.oca_type = tracked.order.oca_type;
-            o.use_price_mgmt_algo = tracked.order.use_price_mgmt_algo;
-            o.trail_stop_price = tracked.order.trail_stop_price;
-            o.algo_strategy = tracked.order.algo_strategy.clone();
+            // Rebuilt from the whole record. Copying a hand-picked subset
+            // meant an order handed back to a caller lost everything not on
+            // that list, and a caller who modified it was sending an order
+            // stripped of the attributes that define it — including the
+            // outside-RTH flag this change now reads (ibx#371).
+            let o = Order::from_api(&tracked.order);
             let o_py = Py::new(py, o)?.into_any();
             let mut state = super::super::contract::OrderState::default();
             state.status = tracked.status.clone();

@@ -876,6 +876,9 @@ pub enum OrderRequest {
         tif: u8,
         /// Trigger for the types defined by one; 0 = none.
         stop_price: Price,
+        /// Whether the order may execute outside regular hours. `None` states
+        /// nothing, which leaves the replace asserting what it always has.
+        outside_rth: Option<bool>,
     },
 }
 
@@ -1630,7 +1633,7 @@ mod tests {
             new_order_id: 2,
             order_id: 1,
             price: 100 * PRICE_SCALE,
-            qty: 200, ord_type: 0, tif: 0, stop_price: 0 };
+            qty: 200, ord_type: 0, tif: 0, stop_price: 0, outside_rth: None };
         let req2 = req.clone();
         match (req, req2) {
             (
@@ -1878,7 +1881,7 @@ mod tests {
         assert_eq!(req.instrument(), Some(7));
         assert_eq!(OrderRequest::Cancel { order_id: 1 }.instrument(), None);
         assert_eq!(
-            OrderRequest::Modify { new_order_id: 2, order_id: 1, price: 0, qty: 1, ord_type: 0, tif: 0, stop_price: 0 }.instrument(),
+            OrderRequest::Modify { new_order_id: 2, order_id: 1, price: 0, qty: 1, ord_type: 0, tif: 0, stop_price: 0, outside_rth: None }.instrument(),
             None
         );
     }
@@ -1903,7 +1906,7 @@ mod tests {
 
     #[test]
     fn order_request_modify_fields() {
-        let req = OrderRequest::Modify { new_order_id: 100, order_id: 99, price: 200 * PRICE_SCALE, qty: 10, ord_type: 0, tif: 0, stop_price: 0 };
+        let req = OrderRequest::Modify { new_order_id: 100, order_id: 99, price: 200 * PRICE_SCALE, qty: 10, ord_type: 0, tif: 0, stop_price: 0, outside_rth: None };
         match req {
             OrderRequest::Modify { order_id, price, qty, .. } => {
                 assert_eq!(order_id, 99);

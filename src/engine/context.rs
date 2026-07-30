@@ -857,7 +857,7 @@ impl Context {
     /// the resting order holds. Use `modify_ex` to change the order type, the
     /// time-in-force or the trigger.
     pub fn modify(&mut self, order_id: OrderId, price: Price, qty: u32) -> OrderId {
-        self.modify_ex(order_id, price, qty, 0, 0, 0)
+        self.modify_ex(order_id, price, qty, 0, 0, 0, None)
     }
 
     /// Replace a working order, stating what the replace should carry.
@@ -872,6 +872,7 @@ impl Context {
         ord_type: u8,
         tif: u8,
         stop_price: Price,
+        outside_rth: Option<bool>,
     ) -> OrderId {
         let new_id = self.next_order_id;
         self.next_order_id += 1;
@@ -883,6 +884,7 @@ impl Context {
             ord_type,
             tif,
             stop_price,
+            outside_rth,
         });
         new_id
     }

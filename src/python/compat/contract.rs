@@ -1532,6 +1532,179 @@ impl Order {
     }
 
     /// Convert to Rust API Order.
+    /// Rebuild the Python-facing order from the engine's own record.
+    ///
+    /// Every field the two types share, so a round trip through the open-order
+    /// callback cannot lose one. The callback used to copy a hand-picked
+    /// subset, and an order handed back to a caller arrived stripped of
+    /// everything not on that list — including the attributes a modify is
+    /// judged on, and the outside-RTH flag it now reads (ibx#371).
+    ///
+    /// The three collections held as opaque Python objects — conditions, combo
+    /// legs and misc options — cannot be rebuilt without a Python context and
+    /// are left empty, which is what the previous reconstruction did with them.
+    pub fn from_api(api: &crate::api::types::Order) -> Self {
+        Self {
+            order_id: api.order_id,
+            action: api.action.clone(),
+            total_quantity: api.total_quantity,
+            order_type: api.order_type.clone(),
+            lmt_price: api.lmt_price,
+            aux_price: api.aux_price,
+            tif: api.tif.clone(),
+            outside_rth: api.outside_rth,
+            display_size: api.display_size,
+            min_qty: api.min_qty,
+            hidden: api.hidden,
+            good_after_time: api.good_after_time.clone(),
+            good_till_date: api.good_till_date.clone(),
+            oca_group: api.oca_group.clone(),
+            trailing_percent: api.trailing_percent,
+            algo_strategy: api.algo_strategy.clone(),
+            algo_params: api.algo_params.iter().map(|tv| TagValue {
+                tag: tv.tag.clone(),
+                value: tv.value.clone(),
+            }).collect(),
+            what_if: api.what_if,
+            cash_qty: api.cash_qty,
+            parent_id: api.parent_id,
+            transmit: api.transmit,
+            discretionary_amt: api.discretionary_amt,
+            sweep_to_fill: api.sweep_to_fill,
+            all_or_none: api.all_or_none,
+            trigger_method: api.trigger_method,
+            adjusted_order_type: api.adjusted_order_type.clone(),
+            trigger_price: api.trigger_price,
+            adjusted_stop_price: api.adjusted_stop_price,
+            adjusted_stop_limit_price: api.adjusted_stop_limit_price,
+            conditions_ignore_rth: api.conditions_ignore_rth,
+            conditions_cancel_order: api.conditions_cancel_order,
+            account: api.account.clone(),
+            active_start_time: api.active_start_time.clone(),
+            active_stop_time: api.active_stop_time.clone(),
+            adjustable_trailing_unit: api.adjustable_trailing_unit,
+            adjusted_trailing_amount: api.adjusted_trailing_amount,
+            advanced_error_override: api.advanced_error_override.clone(),
+            algo_id: api.algo_id.clone(),
+            allow_pre_open: api.allow_pre_open,
+            auction_strategy: api.auction_strategy,
+            auto_cancel_date: api.auto_cancel_date.clone(),
+            auto_cancel_parent: api.auto_cancel_parent,
+            basis_points: api.basis_points,
+            basis_points_type: api.basis_points_type,
+            block_order: api.block_order,
+            bond_accrued_interest: api.bond_accrued_interest.clone(),
+            clearing_account: api.clearing_account.clone(),
+            clearing_intent: api.clearing_intent.clone(),
+            client_id: api.client_id,
+            compete_against_best_offset: api.compete_against_best_offset,
+            continuous_update: api.continuous_update,
+            customer_account: api.customer_account.clone(),
+            deactivate: api.deactivate,
+            delta: api.delta,
+            delta_neutral_aux_price: api.delta_neutral_aux_price,
+            delta_neutral_clearing_account: api.delta_neutral_clearing_account.clone(),
+            delta_neutral_clearing_intent: api.delta_neutral_clearing_intent.clone(),
+            delta_neutral_con_id: api.delta_neutral_con_id,
+            delta_neutral_designated_location: api.delta_neutral_designated_location.clone(),
+            delta_neutral_open_close: api.delta_neutral_open_close.clone(),
+            delta_neutral_order_type: api.delta_neutral_order_type.clone(),
+            delta_neutral_settling_firm: api.delta_neutral_settling_firm.clone(),
+            delta_neutral_short_sale: api.delta_neutral_short_sale,
+            delta_neutral_short_sale_slot: api.delta_neutral_short_sale_slot,
+            designated_location: api.designated_location.clone(),
+            discretionary_up_to_limit_price: api.discretionary_up_to_limit_price,
+            dont_use_auto_price_for_hedge: api.dont_use_auto_price_for_hedge,
+            duration: api.duration,
+            exempt_code: api.exempt_code,
+            ext_operator: api.ext_operator.clone(),
+            fa_group: api.fa_group.clone(),
+            fa_method: api.fa_method.clone(),
+            fa_percentage: api.fa_percentage.clone(),
+            filled_quantity: api.filled_quantity,
+            hedge_param: api.hedge_param.clone(),
+            hedge_type: api.hedge_type.clone(),
+            ignore_open_auction: api.ignore_open_auction,
+            imbalance_only: api.imbalance_only,
+            include_overnight: api.include_overnight,
+            is_oms_container: api.is_oms_container,
+            is_pegged_change_amount_decrease: api.is_pegged_change_amount_decrease,
+            lmt_price_offset: api.lmt_price_offset,
+            manual_order_indicator: api.manual_order_indicator,
+            manual_order_time: api.manual_order_time.clone(),
+            mid_offset_at_half: api.mid_offset_at_half,
+            mid_offset_at_whole: api.mid_offset_at_whole,
+            mifid2_decision_algo: api.mifid2_decision_algo.clone(),
+            mifid2_decision_maker: api.mifid2_decision_maker.clone(),
+            mifid2_execution_algo: api.mifid2_execution_algo.clone(),
+            mifid2_execution_trader: api.mifid2_execution_trader.clone(),
+            min_compete_size: api.min_compete_size,
+            min_trade_qty: api.min_trade_qty,
+            model_code: api.model_code.clone(),
+            not_held: api.not_held,
+            oca_type: api.oca_type,
+            open_close: api.open_close.clone(),
+            opt_out_smart_routing: api.opt_out_smart_routing,
+            order_ref: api.order_ref.clone(),
+            origin: api.origin,
+            override_percentage_constraints: api.override_percentage_constraints,
+            parent_perm_id: api.parent_perm_id,
+            pegged_change_amount: api.pegged_change_amount,
+            percent_offset: api.percent_offset,
+            perm_id: api.perm_id,
+            post_only: api.post_only,
+            post_to_ats: api.post_to_ats,
+            professional_customer: api.professional_customer,
+            pt_order_id: api.pt_order_id,
+            pt_order_type: api.pt_order_type.clone(),
+            randomize_price: api.randomize_price,
+            randomize_size: api.randomize_size,
+            ref_futures_con_id: api.ref_futures_con_id,
+            reference_change_amount: api.reference_change_amount,
+            reference_contract_id: api.reference_contract_id,
+            reference_exchange_id: api.reference_exchange_id.clone(),
+            reference_price_type: api.reference_price_type,
+            route_marketable_to_bbo: api.route_marketable_to_bbo,
+            rule80a: api.rule80a.clone(),
+            scale_auto_reset: api.scale_auto_reset,
+            scale_init_fill_qty: api.scale_init_fill_qty,
+            scale_init_level_size: api.scale_init_level_size,
+            scale_init_position: api.scale_init_position,
+            scale_price_adjust_interval: api.scale_price_adjust_interval,
+            scale_price_adjust_value: api.scale_price_adjust_value,
+            scale_price_increment: api.scale_price_increment,
+            scale_profit_offset: api.scale_profit_offset,
+            scale_random_percent: api.scale_random_percent,
+            scale_subs_level_size: api.scale_subs_level_size,
+            scale_table: api.scale_table.clone(),
+            seek_price_improvement: api.seek_price_improvement,
+            settling_firm: api.settling_firm.clone(),
+            shareholder: api.shareholder.clone(),
+            short_sale_slot: api.short_sale_slot,
+            sl_order_id: api.sl_order_id,
+            sl_order_type: api.sl_order_type.clone(),
+            smart_combo_routing_params: api.smart_combo_routing_params.iter().map(|tv| TagValue {
+                tag: tv.tag.clone(),
+                value: tv.value.clone(),
+            }).collect(),
+            soft_dollar_tier_name: api.soft_dollar_tier_name.clone(),
+            soft_dollar_tier_val: api.soft_dollar_tier_val.clone(),
+            soft_dollar_tier_display_name: api.soft_dollar_tier_display_name.clone(),
+            solicited: api.solicited,
+            starting_price: api.starting_price,
+            stock_range_lower: api.stock_range_lower,
+            stock_range_upper: api.stock_range_upper,
+            stock_ref_price: api.stock_ref_price,
+            submitter: api.submitter.clone(),
+            trail_stop_price: api.trail_stop_price,
+            use_price_mgmt_algo: api.use_price_mgmt_algo,
+            volatility: api.volatility,
+            volatility_type: api.volatility_type,
+            what_if_type: api.what_if_type,
+            ..Default::default()
+        }
+    }
+
     pub fn to_api(&self) -> crate::api::types::Order {
         crate::api::types::Order {
             order_id: self.order_id,
@@ -2495,5 +2668,82 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+}
+
+#[cfg(test)]
+mod order_round_trip_tests {
+    use super::*;
+
+    /// ibx#371: the open-order callback rebuilt the order from a hand-picked
+    /// subset of fields, so an order handed back to a caller lost everything
+    /// not on that list. A caller modifying it then sent an order stripped of
+    /// the attributes that define it — and once the modify reads the
+    /// outside-RTH flag, an extended-hours order came back regular-hours-only.
+    #[test]
+    fn an_order_survives_the_round_trip_through_the_callback() {
+        let api = crate::api::types::Order {
+            order_id: 7,
+            action: "BUY".into(),
+            total_quantity: 100.0,
+            order_type: "LMT".into(),
+            lmt_price: 150.0,
+            tif: "GTC".into(),
+            outside_rth: true,
+            hidden: true,
+            display_size: 10,
+            min_qty: 5,
+            good_till_date: "20260311 16:00:00".into(),
+            oca_group: "bracket_1".into(),
+            parent_id: 42,
+            sweep_to_fill: true,
+            trigger_method: 2,
+            discretionary_amt: 0.05,
+            cash_qty: 1000.0,
+            all_or_none: true,
+            oca_type: 2,
+            use_price_mgmt_algo: 1,
+            trail_stop_price: 149.5,
+            algo_params: vec![crate::api::types::TagValue {
+                tag: "maxPctVol".into(), value: "0.1".into(),
+            }],
+            ..Default::default()
+        };
+
+        // Asserted on the Python order itself. Round-tripping back through
+        // `to_api` would prove nothing here: that direction is separately
+        // partial (ibx#395) and would fail on fields this one carries.
+        let back = Order::from_api(&api);
+
+        assert!(back.outside_rth, "the flag the modify reads survives");
+        assert_eq!(back.parent_id, 42);
+        assert_eq!(back.oca_group, "bracket_1");
+        assert_eq!(back.good_till_date, "20260311 16:00:00");
+        assert_eq!(back.display_size, 10);
+        assert_eq!(back.min_qty, 5);
+        assert!(back.sweep_to_fill);
+        assert_eq!(back.trigger_method, 2);
+        assert!(back.hidden);
+        assert!(back.all_or_none);
+        assert_eq!(back.tif, "GTC");
+        // The three the previous reconstruction copied by hand, and the algo
+        // parameters it did not.
+        assert_eq!(back.oca_type, 2);
+        assert_eq!(back.use_price_mgmt_algo, 1);
+        assert_eq!(back.trail_stop_price, 149.5);
+        assert_eq!(back.algo_params.len(), 1);
+        assert_eq!(back.algo_params[0].tag, "maxPctVol");
+    }
+
+    /// Nothing the two types share may be dropped. Enumerated from the structs
+    /// rather than by hand, because a hand-picked list is what lost these
+    /// fields in the first place.
+    #[test]
+    fn from_api_covers_every_shared_field() {
+        let api = crate::api::types::Order { oca_type: 9, ..Default::default() };
+        assert_eq!(Order::from_api(&api).oca_type, 9, "a scalar the old reconstruction copied");
+
+        let api = crate::api::types::Order { min_qty: 3, ..Default::default() };
+        assert_eq!(Order::from_api(&api).min_qty, 3, "and one it did not");
     }
 }

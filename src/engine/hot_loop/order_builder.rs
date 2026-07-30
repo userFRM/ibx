@@ -1443,7 +1443,7 @@ pub(crate) fn drain_and_send_orders(
                 last_result
             }
             OrderRequest::Modify {
-                new_order_id, order_id, price, qty, ord_type, tif, stop_price,
+                new_order_id, order_id, price, qty, ord_type, tif, stop_price, outside_rth,
             } => {
                 let orig = context.order(order_id).copied();
                 // What the replace states. A zero field states nothing, so the
@@ -1509,7 +1509,12 @@ pub(crate) fn drain_and_send_orders(
                     (44, &price_str),    // Price
                     (1, account_id),     // Account
                     (6122, "c"),         // Client version
-                    (6433, "1"),         // OutsideRTH (preserve from original)
+                    // Stated by the caller; see the removal below when it is
+                    // false. The comment this replaces claimed to preserve the
+                    // original, but the value was a literal and nothing tracked
+                    // the flag — so every modify asserted extended-hours
+                    // eligibility for an order submitted without it (ibx#371).
+                    (6433, "1"),         // OutsideRTH
                     (38, &qty_str),      // OrderQty
                     (54, side_str),      // Side
                     (40, &ord_type_str), // OrdType
@@ -1522,6 +1527,12 @@ pub(crate) fn drain_and_send_orders(
                     (6211, ""),          // Empty (matches reference)
                     (6238, ""),          // Empty (matches reference)
                 ];
+                // A caller that states regular-hours-only gets no 6433. Left in
+                // place when they state nothing, so the low-level `modify` path
+                // sends exactly what it always did.
+                if outside_rth == Some(false) {
+                    fields.retain(|(tag, _)| *tag != 6433);
+                }
                 // Include stop price for order types that need it
                 let stop_str;
                 if stop_price != 0 {
@@ -2054,7 +2065,7 @@ mod tests {
         // Modified to a GTC stop at 149.
         context.modify_ex(
             42, 150 * crate::types::PRICE_SCALE, 100,
-            b'3', b'1', 149 * crate::types::PRICE_SCALE,
+            b'3', b'1', 149 * crate::types::PRICE_SCALE, None,
         );
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
@@ -2070,6 +2081,41 @@ mod tests {
         assert_eq!(tag("59=").as_deref(), Some("1"), "the tif the caller stated: {}", msg);
         assert_eq!(tag("99="), Some(format_price(149 * crate::types::PRICE_SCALE).to_string()),
             "the trigger the caller stated: {}", msg);
+    }
+
+    /// ibx#371: the replace asserted `6433=1` unconditionally. The submit path
+    /// emits the tag only when the caller asked for it, so a regular-hours
+    /// order carried no 6433 on the way in and extended-hours eligibility on
+    /// every subsequent modify — a silent change to where the order can fill,
+    /// with nothing reporting it.
+    #[test]
+    fn a_modify_states_the_trading_hours_the_caller_asked_for() {
+        use std::io::Read;
+        for (asked, expect) in [(false, None), (true, Some("1".to_string()))] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (mut peer, _) = listener.accept().unwrap();
+            let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.set_symbol(instrument, "SPY".to_string());
+            context.insert_order(crate::types::Order::new(
+                42, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            ));
+
+            context.modify_ex(
+                42, 151 * crate::types::PRICE_SCALE, 100, 0, 0, 0, Some(asked),
+            );
+            let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+            let shared = std::sync::Arc::new(SharedState::new());
+            drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);
+
+            let mut buf = [0u8; 4096];
+            let n = peer.read(&mut buf).unwrap();
+            let msg = String::from_utf8_lossy(&buf[..n]);
+            let tag = msg.split('\u{1}').find_map(|f| f.strip_prefix("6433=").map(str::to_string));
+            assert_eq!(tag, expect, "outside_rth={asked} produced: {}", msg);
+        }
     }
 
     /// The trigger is a price and lands on the instrument's grid like any
@@ -2093,7 +2139,7 @@ mod tests {
 
         // 149.03 is off a five-cent grid.
         let off_grid = 149 * crate::types::PRICE_SCALE + 3 * crate::types::PRICE_SCALE / 100;
-        context.modify_ex(42, 150 * crate::types::PRICE_SCALE, 100, b'3', b'0', off_grid);
+        context.modify_ex(42, 150 * crate::types::PRICE_SCALE, 100, b'3', b'0', off_grid, None);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
         drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);

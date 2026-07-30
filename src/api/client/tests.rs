@@ -2681,6 +2681,36 @@ fn a_modify_to_an_unrepresentable_type_is_refused() {
     }
 }
 
+/// ibx#371: the replace asserted `6433=1` whatever the order was submitted
+/// with, so moving the price of a regular-hours order silently opted it into
+/// extended-hours execution. The request has to state what the caller asked
+/// for, in both directions.
+#[test]
+fn a_modify_carries_the_trading_hours_the_caller_asked_for() {
+    for asked in [false, true] {
+        let (client, rx, shared) = test_client();
+        shared.market.set_instrument_count(1);
+        let order = Order {
+            action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+            lmt_price: 150.0, outside_rth: asked, ..Default::default()
+        };
+        client.place_order(77, &spy(), &order).unwrap();
+        while rx.try_recv().is_ok() {}
+
+        let moved = Order { lmt_price: 151.0, ..order.clone() };
+        client.place_order(77, &spy(), &moved).unwrap();
+
+        let mut seen = false;
+        while let Ok(cmd) = rx.try_recv() {
+            if let ControlCommand::Order(OrderRequest::Modify { outside_rth, .. }) = cmd {
+                assert_eq!(outside_rth, Some(asked), "the modify must state what was asked");
+                seen = true;
+            }
+        }
+        assert!(seen, "a modify was emitted");
+    }
+}
+
 #[test]
 fn modify_order_type_lmt_to_stp() {
     let (client, rx, shared) = test_client();
