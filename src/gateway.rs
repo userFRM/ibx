@@ -885,6 +885,10 @@ fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &BigUint) -> 
 }
 
 /// Configuration for connecting to IB.
+///
+/// `Default` is derived so a caller can name the fields it cares about and
+/// leave the rest — and so adding one does not break every construction site.
+#[derive(Default)]
 pub struct GatewayConfig {
     pub username: String,
     /// Wrapped in `Zeroizing` so the plaintext is wiped from memory on drop.
@@ -912,6 +916,9 @@ pub struct GatewayConfig {
     /// [`session::CodeProvider`] for the contract; `None` leaves behavior
     /// unchanged (push approval).
     pub code_provider: Option<session::CodeProvider>,
+    /// Called once when the second-factor gate begins waiting for approval.
+    /// Informational; the gate proceeds whatever it does (ibx#208).
+    pub on_2fa_wait: Option<session::WaitHook>,
 }
 
 impl Gateway {
@@ -1067,6 +1074,7 @@ impl Gateway {
                 &config.ib_key_token_sub_type,
                 deadline,
                 config.code_provider.as_ref(),
+                config.on_2fa_wait.as_ref(),
             )? {
                 session::IbKeyOutcome::Skipped => {
                     log::info!("2FA gate: skipped (no second factor)");
@@ -2201,6 +2209,8 @@ mod tests {
             ib_key_timeout_secs: session::IB_KEY_DEFAULT_TIMEOUT_SECS,
             ib_key_token_sub_type: session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
             code_provider: None,
+            on_2fa_wait: None,
+            ..Default::default()
         };
         assert_eq!(config.username, "user");
         assert!(config.paper);

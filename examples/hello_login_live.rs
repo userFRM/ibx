@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         host: env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".into()),
         paper: false,
         core_id: None,
+        ..Default::default()
     })?;
 
     let mut wrapper = LoginWrapper::default();

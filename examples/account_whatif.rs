@@ -86,6 +86,7 @@ fn connect() -> Result<EClient, Box<dyn std::error::Error>> {
         host,
         paper: true,
         core_id: None,
+        ..Default::default()
     })?)
 }
 

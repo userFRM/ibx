@@ -84,6 +84,7 @@ impl BenchSession {
             ib_key_timeout_secs: ibx::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
             ib_key_token_sub_type: ibx::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
             code_provider: None,
+            ..Default::default()
         };
 
         let connect_start = Instant::now();

@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = EClient::connect(&EClientConfig {
         username, password, host, paper: true, core_id: None,
+        ..Default::default()
     })?;
 
     println!("ccp_session_id: {:?}", client.ccp_session_id());

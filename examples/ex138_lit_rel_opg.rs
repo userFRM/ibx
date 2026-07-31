@@ -123,6 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t0 = Instant::now();
     let client = EClient::connect(&EClientConfig {
         username, password, host, paper: true, core_id: None,
+        ..Default::default()
     })?;
     println!("== Connected in {:.1}s", t0.elapsed().as_secs_f64());
 

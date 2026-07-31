@@ -637,6 +637,18 @@ pub type CodeProvider = std::sync::Arc<
     dyn Fn(IbKeyChallenge) -> io::Result<String> + Send + Sync,
 >;
 
+/// Called once, when the gate begins waiting for second-factor approval.
+///
+/// The wait is announced to the log already, but a log line cannot be reacted
+/// to. A consumer that wants to show the user which code to match, or start its
+/// own timer, needs the signal as it happens — and an engine event cannot carry
+/// it, because the event channel and the loop that drains it are both created
+/// after `connect()` returns (ibx#208).
+///
+/// Informational: the gate proceeds whatever the hook does, and a hook that
+/// fails does not fail the login.
+pub type WaitHook = std::sync::Arc<dyn Fn(&IbKeyChallenge) + Send + Sync>;
+
 /// Compact hex dump for diagnostic logging.
 fn hex_dump(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
@@ -678,6 +690,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
     token_sub_type: &str,
     deadline: std::time::Instant,
     code_provider: Option<&CodeProvider>,
+    on_wait: Option<&WaitHook>,
 ) -> io::Result<IbKeyOutcome> {
     use std::time::Instant;
 
@@ -745,6 +758,12 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                         if approval_url.is_empty() { "<not-provided>" } else { &approval_url },
                     );
                     announced_wait = true;
+                    if let Some(hook) = on_wait {
+                        hook(&IbKeyChallenge {
+                            display_id: session_id.clone(),
+                            avth_url: approval_url.clone(),
+                        });
+                    }
                 }
                 // Challenge/Response branch: if a code_provider is configured,
                 // pull the 8-char code from the callback and submit state=3
@@ -1538,7 +1557,7 @@ mod tests {
         // no SWCR_TOKEN(state=2) preceded it, so this is the no-2FA fast path.
         let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 5, "user", &["PASSED"]);
         let mut stream = ScriptedStream::new(frame_xyz(&auth_finish));
-        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap();
+        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None, None).unwrap();
         assert_eq!(outcome, IbKeyOutcome::Skipped);
 
         // Verify we sent the SWCR_TOKEN init carrying the tokenSubType.
@@ -1566,7 +1585,7 @@ mod tests {
         incoming.extend_from_slice(&frame_xyz(&auth_finish));
         let mut stream = ScriptedStream::new(incoming);
 
-        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap();
+        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None, None).unwrap();
         match outcome {
             IbKeyOutcome::Approved { approval_url, session_id, soft_token_hex } => {
                 assert_eq!(approval_url, "https://www.example.com/seamless?S=YWJjZA==");
@@ -1594,7 +1613,7 @@ mod tests {
         incoming.extend_from_slice(&frame_xyz(&auth_finish));
         let mut stream = ScriptedStream::new(incoming);
 
-        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap();
+        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None, None).unwrap();
         assert!(matches!(outcome, IbKeyOutcome::Approved { .. }));
 
         // The captured write stream contains: SWCR_TOKEN init, then HEART_BEAT.
@@ -1629,7 +1648,7 @@ mod tests {
             "https://x.example/u",
         ]);
         let mut stream = ScriptedStream::new(frame_xyz(&challenge));
-        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap_err();
+        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None, None).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
         assert!(err.to_string().contains("18 min server-side deadline"),
             "expected the long-deadline message; got {}", err);
@@ -1642,7 +1661,7 @@ mod tests {
         // the 18 min deadline (which would mislead users into "approve faster"
         // when the real fix is "your account doesn't use IBKey").
         let mut stream = ScriptedStream::new(Vec::new());
-        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap_err();
+        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None, None).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
         let msg = err.to_string();
         assert!(msg.contains("before issuing a challenge"),
@@ -1656,7 +1675,7 @@ mod tests {
         // Server replies AUTH_FINISH state=5 but payload says FAILED — denial.
         let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 5, "user", &["FAILED"]);
         let mut stream = ScriptedStream::new(frame_xyz(&auth_finish));
-        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap_err();
+        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None, None).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(err.to_string().contains("rejected"));
     }
@@ -1695,7 +1714,7 @@ mod tests {
             Ok(RUN_A_CODE.to_string())
         });
 
-        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), Some(&provider)).unwrap();
+        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), Some(&provider), None).unwrap();
         match outcome {
             IbKeyOutcome::Approved { approval_url, session_id, .. } => {
                 assert_eq!(session_id, RUN_A_SESSION_ID);
@@ -1726,6 +1745,64 @@ mod tests {
             "state=3 submission must byte-match the ib-agent#149 run-A capture");
     }
 
+    /// ibx#208: the gate announced the wait to the log, and a log line cannot be
+    /// reacted to. A consumer that wants to show the user which code to match,
+    /// or start its own timer, needs the signal as it happens — and an engine
+    /// event cannot carry it, because the channel and the loop that drains it
+    /// are both created after `connect()` returns.
+    #[test]
+    fn the_wait_hook_is_called_once_with_the_challenge() {
+        const RUN_A_SESSION_ID: &str = "399 830";
+        const RUN_A_AVTH_URL: &str = "https://www.ibkr.com/AVTH";
+        let challenge = xyz::xyz_build(xyz::XYZ_MSG_SWCR_TOKEN, 2, "johnbegood", &[
+            RUN_A_SESSION_ID,
+            RUN_A_AVTH_URL,
+        ]);
+        let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 3, "johnbegood", &["PASSED"]);
+        // The same state=2 twice, as a server retransmission would deliver it.
+        let mut incoming = frame_xyz(&challenge);
+        incoming.extend_from_slice(&frame_xyz(&challenge));
+        incoming.extend_from_slice(&frame_xyz(&auth_finish));
+        let mut stream = ScriptedStream::new(incoming);
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<IbKeyChallenge>::new()));
+        let seen_clone = seen.clone();
+        let hook: WaitHook = std::sync::Arc::new(move |c: &IbKeyChallenge| {
+            seen_clone.lock().unwrap().push(c.clone());
+        });
+
+        let _ = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None, Some(&hook));
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "announced once, not once per retransmission");
+        assert_eq!(seen[0].display_id, RUN_A_SESSION_ID);
+        assert_eq!(seen[0].avth_url, RUN_A_AVTH_URL);
+    }
+
+    /// The hook is informational. A consumer whose progress indicator fails is
+    /// not a reason to fail a login that is otherwise proceeding.
+    #[test]
+    fn a_failing_wait_hook_does_not_fail_the_gate() {
+        const RUN_A_SESSION_ID: &str = "399 830";
+        const RUN_A_AVTH_URL: &str = "https://www.ibkr.com/AVTH";
+        let challenge = xyz::xyz_build(xyz::XYZ_MSG_SWCR_TOKEN, 2, "johnbegood", &[
+            RUN_A_SESSION_ID,
+            RUN_A_AVTH_URL,
+        ]);
+        let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 3, "johnbegood", &["PASSED"]);
+        let mut incoming = frame_xyz(&challenge);
+        incoming.extend_from_slice(&frame_xyz(&auth_finish));
+        let mut stream = ScriptedStream::new(incoming);
+
+        let hook: WaitHook = std::sync::Arc::new(|_: &IbKeyChallenge| {
+            // What a Rust-side consumer's own error handling looks like from
+            // here: it returns nothing, so the gate cannot observe a failure.
+        });
+
+        let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None, Some(&hook));
+        assert!(outcome.is_ok(), "the gate proceeds: {:?}", outcome.err());
+    }
+
     #[test]
     fn ib_key_2fa_cr_code_rejected_on_state_4_failed() {
         // Server: state=2 → state=4 FAILED. Server tears the socket down after
@@ -1742,7 +1819,7 @@ mod tests {
         let mut stream = ScriptedStream::new(incoming);
 
         let provider: CodeProvider = std::sync::Arc::new(|_| Ok("99999999".to_string()));
-        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), Some(&provider)).unwrap_err();
+        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), Some(&provider), None).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(err.to_string().contains("C/R code rejected"),
             "expected C/R rejection message; got {}", err);
@@ -1761,7 +1838,7 @@ mod tests {
         let provider: CodeProvider = std::sync::Arc::new(|_| {
             Err(io::Error::new(io::ErrorKind::Interrupted, "user cancelled"))
         });
-        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), Some(&provider)).unwrap_err();
+        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), Some(&provider), None).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Interrupted);
     }
 }

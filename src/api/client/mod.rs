@@ -85,6 +85,7 @@ pub use orders::parse_algo_params;
 /// loops to the same core makes them busy-poll the same CPU and starve each
 /// other (degraded throughput, not a hang). With `core_id: None` (the default)
 /// no pinning happens and there is no conflict.
+#[derive(Default)]
 pub struct EClientConfig {
     pub username: String,
     pub password: String,
@@ -95,6 +96,15 @@ pub struct EClientConfig {
     /// CPU core to pin this engine's hot loop to. `None` = no pinning. When
     /// running multiple engines, use a **distinct** core per engine.
     pub core_id: Option<usize>,
+    /// Supplies the 8-character Challenge/Response code, in place of waiting
+    /// for a mobile push approval. `None` waits for the push.
+    pub code_provider: Option<crate::auth::session::CodeProvider>,
+    /// Called once when the second-factor gate begins waiting for approval.
+    ///
+    /// The wait is logged already, but a log line cannot be reacted to, and an
+    /// engine event cannot carry it — the event channel and the loop that
+    /// drains it are both created after `connect()` returns (ibx#208).
+    pub on_2fa_wait: Option<crate::auth::session::WaitHook>,
 }
 
 /// ibapi-compatible EClient. Matches C++ `EClientSocket` method signatures.
@@ -182,7 +192,9 @@ impl EClient {
             accept_invalid_certs: false,
             ib_key_timeout_secs: crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
             ib_key_token_sub_type: crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
-            code_provider: None,
+            code_provider: config.code_provider.clone(),
+            on_2fa_wait: config.on_2fa_wait.clone(),
+            ..Default::default()
         };
 
         let (gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&gw_config)?;

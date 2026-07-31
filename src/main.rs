@@ -52,6 +52,7 @@ fn main() {
         host,
         paper,
         core_id: None,
+        ..Default::default()
     }).unwrap_or_else(|e| {
         eprintln!("Connection failed: {}", e);
         std::process::exit(1);

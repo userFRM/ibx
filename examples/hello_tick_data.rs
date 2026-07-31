@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         host: "cdc1.ibllc.com".into(),
         paper: true,
         core_id: None,
+        ..Default::default()
     })?;
 
     let state = Arc::new(Mutex::new(State::default()));

@@ -7,6 +7,7 @@ mod reference;
 mod dispatch;
 mod stubs;
 mod test_helpers;
+mod second_factor;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -106,7 +107,8 @@ impl EClient {
     /// owns its own state, sockets, and engine thread, and ``connect()`` does
     /// not serialize across instances. If you pin engines via ``core_id``, give
     /// each a distinct value. See ibx#203 / ibx#207.
-    #[pyo3(signature = (host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None))]
+    #[pyo3(signature = (host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, on_2fa_wait=None))]
+    #[allow(clippy::too_many_arguments)]
     fn connect(
         &self,
         py: Python<'_>,
@@ -119,6 +121,8 @@ impl EClient {
         core_id: Option<usize>,
         ib_key_timeout_secs: Option<u64>,
         ib_key_token_sub_type: Option<String>,
+        code_provider: Option<Py<PyAny>>,
+        on_2fa_wait: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
@@ -134,7 +138,9 @@ impl EClient {
                 .unwrap_or(crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS),
             ib_key_token_sub_type: ib_key_token_sub_type
                 .unwrap_or_else(|| crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into()),
-            code_provider: None,
+            code_provider: code_provider.map(second_factor::code_provider_bridge),
+            on_2fa_wait: on_2fa_wait.map(second_factor::wait_hook_bridge),
+            ..Default::default()
         };
 
         let result = py.detach(|| Gateway::connect(&config));
