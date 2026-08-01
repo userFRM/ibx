@@ -1519,6 +1519,8 @@ mod tests {
             encoded: String::new(),
             hmds_host: "hmds.example".into(),
             hmds_farm: "hfarm".into(),
+            trading_host: "trade.example".into(),
+            trading_farm: "tfarm".into(),
         });
 
         // A live transport, so releasing it is observable.
