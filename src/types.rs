@@ -862,6 +862,10 @@ pub enum OrderRequest {
         order_id: OrderId,
         price: Price,
         qty: u32,
+        /// Outside-RTH flag from the order the caller resubmitted. The replace
+        /// asserts tag 6433 from this rather than from the tracked record,
+        /// which has no field for it (ibx#247).
+        outside_rth: bool,
     },
 }
 
@@ -1615,6 +1619,7 @@ mod tests {
             order_id: 1,
             price: 100 * PRICE_SCALE,
             qty: 200,
+            outside_rth: false,
         };
         let req2 = req.clone();
         match (req, req2) {
@@ -1863,7 +1868,7 @@ mod tests {
         assert_eq!(req.instrument(), Some(7));
         assert_eq!(OrderRequest::Cancel { order_id: 1 }.instrument(), None);
         assert_eq!(
-            OrderRequest::Modify { new_order_id: 2, order_id: 1, price: 0, qty: 1 }.instrument(),
+            OrderRequest::Modify { new_order_id: 2, order_id: 1, price: 0, qty: 1, outside_rth: false }.instrument(),
             None
         );
     }
@@ -1888,7 +1893,7 @@ mod tests {
 
     #[test]
     fn order_request_modify_fields() {
-        let req = OrderRequest::Modify { new_order_id: 100, order_id: 99, price: 200 * PRICE_SCALE, qty: 10 };
+        let req = OrderRequest::Modify { new_order_id: 100, order_id: 99, price: 200 * PRICE_SCALE, qty: 10, outside_rth: false };
         match req {
             OrderRequest::Modify { order_id, price, qty, .. } => {
                 assert_eq!(order_id, 99);
