@@ -505,7 +505,7 @@ pub fn connect_farm(
             format!("{} DH: expected 533, got {}", farm_id, msg_type),
         ));
     }
-    channel.process_server_hello(&parts[2..]);
+    channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
     log::info!("{} key exchange complete", farm_id);
 
     // Encrypted logon
@@ -685,7 +685,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
             format!("CCP reconnect DH: expected 533, got {}", msg_type),
         ));
     }
-    channel.process_server_hello(&parts[2..]);
+    channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
 
     // CONNECT_REQUEST with SOFT_TOKEN flag + token hash (field 9)
     let flags = session::FLAG_OK_TO_REDIRECT
@@ -1032,7 +1032,7 @@ impl Gateway {
                 format!("Expected 533, got {}", msg_type),
             ));
         }
-        channel.process_server_hello(&parts[2..]);
+        channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
         log::info!("Auth key exchange complete");
 
         // Send CONNECT_REQUEST (encrypted)
