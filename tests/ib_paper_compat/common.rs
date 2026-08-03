@@ -520,6 +520,7 @@ pub(super) fn run_submit_cancel_phase(
     let mut order_cancelled = false;
     let mut order_filled = false;
     let mut order_rejected = false;
+    let mut order_inactive = false;
 
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -544,6 +545,14 @@ pub(super) fn run_submit_cancel_phase(
                     }
                     OrderStatus::Cancelled => { order_cancelled = true; break; }
                     OrderStatus::Rejected => { order_rejected = true; break; }
+                    // The venue parked it rather than refusing it outright: an
+                    // order type the instrument does not support lands here
+                    // instead of Rejected. Captured live, STP PRT on a
+                    // SMART-routed stock returns Inactive and then refuses the
+                    // cancel with 202. That is the gateway declining the
+                    // combination, not the client failing to submit it, so the
+                    // phase reports it rather than asserting against it.
+                    OrderStatus::Inactive => { order_inactive = true; break; }
                     OrderStatus::Filled => {
                         order_filled = true;
                         if fill_or_cancel { break; }
@@ -561,6 +570,10 @@ pub(super) fn run_submit_cancel_phase(
         println!("  SKIP: Order rejected\n");
         return conns;
     }
+    if order_inactive {
+        println!("  SKIP: parked Inactive — the venue does not accept this order type here\n");
+        return conns;
+    }
     if fill_or_cancel {
         assert!(order_filled || order_cancelled, "Order was neither filled nor cancelled");
         if order_filled { println!("  PASS (filled)\n"); } else { println!("  PASS (cancelled)\n"); }
@@ -569,8 +582,15 @@ pub(super) fn run_submit_cancel_phase(
         // peg to a live primary NBBO and are never acknowledged when the market is
         // closed. Treat an un-acked order on a Closed session as a SKIP, not a
         // failure — a plain order that acks on a closed market still reaches PASS.
-        if !order_acked && market_session().0 == MarketSession::Closed {
-            println!("  SKIP: Closed — order not acknowledged (order type needs a live market)\n");
+        // Anything other than the regular session, not just Closed. These
+        // order types peg to a live primary NBBO, and pre-market and after-hours
+        // are as short of one as a shut market is: captured live in after-hours,
+        // a DAY order of this shape draws no report at all, while the same type
+        // sent GTC with outsideRTH is answered immediately. An un-acked order
+        // outside regular hours says nothing about the client.
+        if !order_acked && market_session().0 != MarketSession::Regular {
+            let (session, _) = market_session();
+            println!("  SKIP: {session:?} — not acknowledged (this order type needs a live market)\n");
             return conns;
         }
         assert!(order_acked, "Order was never acknowledged");
