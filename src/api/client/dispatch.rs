@@ -58,9 +58,12 @@ impl EClient {
                 .unwrap_or((0, 0));
             let parent_id = self.core.tracked_parent_id(fill.order_id)
                 .unwrap_or(engine_parent);
+            // `filled` and `avgFillPrice` describe the order so far;
+            // `lastFillPrice` describes this print.
+            let avg_price_f = fill.avg_price as f64 / PRICE_SCALE_F;
             wrapper.order_status(
-                fill.order_id as i64, status, fill.qty as f64, fill.remaining as f64,
-                price_f, perm_id, parent_id, price_f, 0, "", 0.0,
+                fill.order_id as i64, status, fill.cum_qty as f64, fill.remaining as f64,
+                avg_price_f, perm_id, parent_id, price_f, 0, "", 0.0,
             );
 
             let side_str = match fill.side {
@@ -106,7 +109,7 @@ impl EClient {
             self.core.push_execution(req_id, c, exec, report);
 
             // Update open order tracking
-            self.core.update_order_fill(fill.order_id, status, fill.qty as f64, fill.remaining as f64);
+            self.core.update_order_fill(fill.order_id, status, fill.cum_qty as f64, fill.remaining as f64);
         }
 
         // Order updates → order_status
