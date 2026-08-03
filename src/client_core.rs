@@ -1007,6 +1007,16 @@ impl ClientCore {
         }
     }
 
+    /// Stop tracking an order the gateway has said does not exist.
+    ///
+    /// A cancel rejected as UnknownOrder retires the engine's record, and the
+    /// client's own record has to go with it — the open-order snapshot unions
+    /// the two, so leaving this one behind kept reporting the order the
+    /// rejection was about (ibx#252).
+    pub fn untrack_order(&self, order_id: u64) {
+        self.open_orders.lock().unwrap().remove(&order_id);
+    }
+
     /// Update a tracked order status from an order update event. Takes the
     /// pre-stringification `OrderStatus` (not the ibapi string) so a
     /// Rejected transition can be flagged apart from a genuinely-Inactive
