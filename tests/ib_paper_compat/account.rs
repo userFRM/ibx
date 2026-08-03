@@ -89,12 +89,21 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
 
     let join = run_hot_loop(hot_loop);
 
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // The gateway pushes account values on its own cadence off the logon
+    // subscription; two consecutive pushes were 23s apart when measured. This
+    // phase runs on a fresh SharedState, so nothing an earlier phase received
+    // is here to short-circuit the wait, and a 15s deadline could expire
+    // between two pushes and report the account as never arriving.
+    let deadline = Instant::now() + Duration::from_secs(60);
     let mut account_received = false;
     let mut net_liq = 0i64;
     let mut probe_done = false;
 
-    while Instant::now() < deadline && !probe_done {
+    // Both conditions, not either. The $1 limit resolves in seconds while the
+    // account push runs on the gateway's own cadence, so exiting as soon as the
+    // order probe finished ended the wait before the account could arrive and
+    // reported it as never sent.
+    while Instant::now() < deadline && !(probe_done && account_received) {
         // Account state is written straight into SharedState by the account-summary
         // handler, which emits no Event — so poll it every iteration instead of only
         // when one arrives. Checking it inside the Tick/OrderUpdate arms meant a
@@ -124,7 +133,7 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     assert!(account_received,
-        "Account data not received — 6040=77 may not contain tag 9806");
+        "no account values in 60s — the logon subscription should have pushed at least once");
     assert!(net_liq > 0, "Paper account net liquidation should be > 0");
     println!("  NetLiq: ${:.2}", net_liq as f64 / PRICE_SCALE as f64);
     println!("  PASS\n");
