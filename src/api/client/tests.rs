@@ -109,6 +109,7 @@ fn a_fill_reports_the_parent_the_child_was_given() {
     shared.orders.push_fill(Fill {
         order_id: 9402, instrument: 0, side: Side::Sell, qty: 1, remaining: 0,
         price: 110 * crate::types::PRICE_SCALE, commission: 0, timestamp_ns: 0,
+        cum_qty: 1, avg_price: 110 * crate::types::PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -2564,6 +2565,7 @@ fn process_msgs_dispatches_fill() {
         instrument: 0, order_id: 42, side: Side::Buy,
         price: 150 * PRICE_SCALE, qty: 100, remaining: 0,
         commission: PRICE_SCALE, timestamp_ns: 123456789,
+        cum_qty: 100, avg_price: 150 * PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -2578,10 +2580,38 @@ fn process_msgs_dispatches_partial_fill() {
         instrument: 0, order_id: 42, side: Side::Buy,
         price: 150 * PRICE_SCALE, qty: 50, remaining: 50,
         commission: PRICE_SCALE, timestamp_ns: 123456789,
+        cum_qty: 50, avg_price: 150 * PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
     assert!(w.events.iter().any(|e| e.starts_with("order_status:42:PartiallyFilled")));
+}
+
+/// IB's `orderStatus` contract: `filled` is cumulative across the order and
+/// `avgFillPrice` is volume-weighted across every print, while `lastFillPrice`
+/// is this print. Reporting the print's own size and price as the cumulative
+/// pair means an order that fills in more than one print never reports its
+/// true average, and `filled` never reaches the order quantity.
+#[test]
+fn order_status_reports_the_order_total_not_the_last_print() {
+    let (client, _rx, shared) = test_client();
+    // Second print: 100 more at 151, taking the order to 200 filled at an
+    // average of 150.50, with 100 still working.
+    shared.orders.push_fill(Fill {
+        instrument: 0, order_id: 42, side: Side::Buy,
+        price: 151 * PRICE_SCALE, qty: 100, remaining: 100,
+        commission: PRICE_SCALE, timestamp_ns: 0,
+        cum_qty: 200, avg_price: 150 * PRICE_SCALE + PRICE_SCALE / 2,
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+
+    let status = w.events.iter().find(|e| e.starts_with("order_status:42:"))
+        .expect("order_status was dispatched");
+    assert_eq!(
+        status, "order_status:42:PartiallyFilled:200:100:150.5",
+        "filled and avgFillPrice must describe the order, not the print",
+    );
 }
 
 #[test]
@@ -2591,6 +2621,7 @@ fn process_msgs_dispatches_sell_fill() {
         instrument: 0, order_id: 43, side: Side::Sell,
         price: 151 * PRICE_SCALE, qty: 100, remaining: 0,
         commission: PRICE_SCALE, timestamp_ns: 0,
+        cum_qty: 100, avg_price: 151 * PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3205,6 +3236,7 @@ fn process_msgs_drains_on_first_call_empty_on_second() {
         instrument: 0, order_id: 1, side: Side::Buy,
         price: PRICE_SCALE, qty: 1, remaining: 0,
         commission: 0, timestamp_ns: 0,
+        cum_qty: 1, avg_price: PRICE_SCALE,
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 2, instrument: 0, status: OrderStatus::Submitted,
@@ -3236,6 +3268,7 @@ fn process_msgs_fill_uses_instrument_to_req_mapping() {
         instrument: 0, order_id: 1, side: Side::Buy,
         price: PRICE_SCALE, qty: 100, remaining: 0,
         commission: 0, timestamp_ns: 0,
+        cum_qty: 100, avg_price: PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3323,6 +3356,7 @@ fn modify_filled_order_receives_cancel_reject() {
         instrument: 0, order_id: 120, side: Side::Buy,
         price: 150 * PRICE_SCALE, qty: 100, remaining: 0,
         commission: 0, timestamp_ns: 1000,
+        cum_qty: 100, avg_price: 150 * PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);

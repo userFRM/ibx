@@ -83,8 +83,11 @@ impl EClient {
                 .unwrap_or((0, 0));
             let parent_id = self.core.tracked_parent_id(fill.order_id)
                 .unwrap_or(engine_parent);
-            call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, fill.qty as f64, fill.remaining as f64,
-                 price, perm_id, parent_id, price, 0i64, "", 0.0f64));
+            // `filled` and `avgFillPrice` describe the order so far;
+            // `lastFillPrice` describes this print.
+            let avg_price = fill.avg_price as f64 / PRICE_SCALE_F;
+            call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, fill.cum_qty as f64, fill.remaining as f64,
+                 avg_price, perm_id, parent_id, price, 0i64, "", 0.0f64));
 
             // Track execution for req_executions
             let exec_id = format!("{}.{}", fill.order_id, fill.timestamp_ns);
@@ -163,7 +166,7 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "exec_details", (req_id, &c_py, &exec_py));
 
             // Update open order tracking
-            self.core.update_order_fill(fill.order_id, status, fill.qty as f64, fill.remaining as f64);
+            self.core.update_order_fill(fill.order_id, status, fill.cum_qty as f64, fill.remaining as f64);
 
             // Dispatch commission_and_fees_report
             let report = CommissionAndFeesReport {
