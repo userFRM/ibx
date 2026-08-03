@@ -1077,11 +1077,13 @@ impl CcpState {
                         }
                         delta
                     }
+                } else if !self.record_exec_id(&dedup_key) {
+                    // A duplicate suppresses the fill and nothing else: the
+                    // report still carries a status to apply and terminal
+                    // bookkeeping to run, and returning here skipped both.
+                    log::warn!("Duplicate execution key={} — the fill is already booked", dedup_key);
+                    0
                 } else {
-                    if !self.record_exec_id(&dedup_key) {
-                        log::warn!("Duplicate execution key={} — skipping fill", dedup_key);
-                        return;
-                    }
                     last_shares
                 };
                 if booked > 0 {
@@ -1394,7 +1396,21 @@ impl CcpState {
             if matches!(exec_type, "G" | "H") {
                 shared.orders.push_order_correction(clord_id, info);
             } else {
-                shared.orders.push_order_info(clord_id, info);
+                // A late duplicate of an earlier partial must not rewrite a
+                // completed order back to open. The cache is what
+                // `req_open_orders` reads, so a caller polling between the two
+                // frames would see a finished order listed as working.
+                let already_terminal = shared.orders.get_order_info(clord_id).is_some_and(|prev| {
+                    matches!(prev.order_state.status.as_str(), "Filled" | "Cancelled" | "Inactive")
+                });
+                if !already_terminal || matches!(
+                    status,
+                    crate::types::OrderStatus::Filled
+                        | crate::types::OrderStatus::Cancelled
+                        | crate::types::OrderStatus::Rejected
+                ) {
+                    shared.orders.push_order_info(clord_id, info);
+                }
             }
         }
 
@@ -4281,4 +4297,106 @@ mod tests {
             );
         }
     }
+
+    /// Deduplication exists to stop a fill being counted twice. Returning out
+    /// of the whole handler also skips the status and the terminal bookkeeping,
+    /// so a replayed final fill leaves the order in `open_orders` for good and
+    /// `req_open_orders` keeps reporting a filled order as working.
+    #[test]
+    fn a_duplicate_exec_id_suppresses_the_fill_and_nothing_else() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let event_tx = Some(event_tx);
+
+        // Partial fill, booked normally.
+        ccp.handle_exec_report(
+            &exec_report_frame(&[
+                (150, "2"), (39, "1"), (32, "1"), (31, "100.00"), (151, "9"), (17, "DUP-1"),
+            ]),
+            &mut context, &shared, &event_tx, "",
+        );
+        assert_eq!(shared.orders.drain_fills().len(), 1, "the first delivery books");
+        assert!(context.order(42).is_some(), "and the order is still working");
+
+        // The same execution replayed, this time carrying the terminal status.
+        ccp.handle_exec_report(
+            &exec_report_frame(&[
+                (150, "2"), (39, "2"), (32, "1"), (31, "100.00"), (151, "0"), (17, "DUP-1"),
+            ]),
+            &mut context, &shared, &event_tx, "",
+        );
+
+        assert!(
+            shared.orders.drain_fills().is_empty(),
+            "the fill is not counted twice",
+        );
+        let position_after = context.position(0);
+        assert!(
+            context.order(42).is_none(),
+            "but the order still reaches its terminal state and is removed",
+        );
+        let completed = shared.orders.drain_completed_orders();
+        assert_eq!(completed.len(), 1, "and is reported completed");
+        assert_eq!(completed[0].order_id, 42);
+        assert_eq!(completed[0].status, crate::types::OrderStatus::Filled);
+
+        // The terminal status still reaches the application. Treating the
+        // duplicate as though it had booked a fill would swallow it, since the
+        // status notification is suppressed when a fill was reported instead.
+        let updates = shared.orders.drain_order_updates();
+        assert_eq!(updates.len(), 1, "exactly one status notification, not none and not two");
+        assert_eq!(updates[0].order_id, 42);
+        assert_eq!(updates[0].status, crate::types::OrderStatus::Filled);
+
+        // The position is what deduplication exists to protect. One share was
+        // filled; the replay must not make it two.
+        assert_eq!(position_after, 1, "the duplicate must not move the position again");
+        assert_eq!(updates[0].filled_qty, 1, "nor inflate the filled quantity");
+        assert_eq!(completed[0].filled_qty, 1);
+
+        // The event channel is a second delivery path for the same fill, and
+        // every other test here passes None for it, so it is checked once.
+        let events: Vec<_> = event_rx.try_iter().collect();
+        assert_eq!(
+            events.iter().filter(|e| matches!(e, Event::Fill(_))).count(), 1,
+            "exactly one Fill reaches the channel across both deliveries: {events:?}",
+        );
+    }
+
+    /// A late duplicate of an earlier partial must not put a finished order
+    /// back on the open list. The cache is what `req_open_orders` reads.
+    #[test]
+    fn a_late_partial_does_not_reopen_a_completed_order() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let partial = |exec: &str| exec_report_frame(&[
+            (150, "2"), (39, "1"), (32, "1"), (31, "100.00"), (151, "9"), (17, exec),
+            (6008, "756733"), (55, "SPY"),
+        ]);
+
+        ccp.handle_exec_report(&partial("E1"), &mut context, &shared, &None, "");
+        ccp.handle_exec_report(
+            &exec_report_frame(&[
+                (150, "2"), (39, "2"), (32, "9"), (31, "100.00"), (151, "0"), (17, "E2"),
+                (6008, "756733"), (55, "SPY"),
+            ]),
+            &mut context, &shared, &None, "",
+        );
+        let terminal = shared.orders.get_order_info(42).map(|i| i.order_state.status.clone());
+
+        // The earlier partial arrives again.
+        ccp.handle_exec_report(&partial("E1"), &mut context, &shared, &None, "");
+
+        assert_eq!(
+            shared.orders.get_order_info(42).map(|i| i.order_state.status.clone()),
+            terminal,
+            "the completed order stays completed",
+        );
+    }
+
+    // A fill with no ExecID is deduped on its content instead, and the key
+    // includes CumQty, which advances with every execution on an order. Two
+    // real fills therefore never collide. The case that asserted the opposite
+    // sent one frame twice with no CumQty tag at all, so both read as zero: a
+    // shape the gateway does not produce, and treating it as two fills would
+    // give back the replay double-booking the content key exists to stop.
 }
