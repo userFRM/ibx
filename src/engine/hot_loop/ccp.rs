@@ -20,6 +20,52 @@ use crossbeam_channel::Sender;
 
 use super::{HeartbeatState, emit, clone_for_event, parse_price_tag, decode_tif};
 
+/// Where to book a fill whose order this session does not track.
+///
+/// Both the contract and the side come off the report, and both are required:
+/// a guessed side would move the position the wrong way, which is worse than
+/// reporting that the fill could not be placed.
+fn untracked_fill_target(
+    context: &mut Context,
+    parsed: &std::collections::HashMap<u32, String>,
+) -> Option<(InstrumentId, Side)> {
+    // A replayed execution restates history rather than reporting something
+    // new. On a fresh process the gateway resends prior fills with 97=Y and
+    // their original ExecIDs, for orders no session tracks; booking those
+    // would build a position out of the past on top of the one the position
+    // feed already reports. Within a process the ExecID window catches the
+    // reconnect burst, so only the untracked case needs this.
+    let replayed = |tag| parsed.get(&tag).map(|v| v.eq_ignore_ascii_case("Y")).unwrap_or(false);
+    if replayed(97) || replayed(43) {
+        log::debug!("Untracked fill is a replay, leaving the position alone");
+        return None;
+    }
+    let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
+    if con_id == 0 {
+        log::warn!("Untracked fill carries no ContractID, position not updated");
+        return None;
+    }
+    let side = match parsed.get(&54).map(|s| s.as_str()) {
+        Some("1") => Side::Buy,
+        Some("2") => Side::Sell,
+        Some("5") => Side::ShortSell,
+        other => {
+            log::warn!("Untracked fill has Side={:?}, position not updated", other);
+            return None;
+        }
+    };
+    // Fallible: a full instrument table must not abort the engine on an
+    // inbound message.
+    let Some(instrument) = context.try_register_instrument(con_id) else {
+        log::warn!("Untracked fill for conId {con_id}: instrument table full, position not updated");
+        return None;
+    };
+    if let Some(symbol) = parsed.get(&55) {
+        context.set_symbol(instrument, symbol.clone());
+    }
+    Some((instrument, side))
+}
+
 /// Bound for an in-flight contract-details request (secdef reply or
 /// per-exchange fan-out). Refreshed on fan-out activity; on expiry the
 /// request surfaces error 200 + contract_details_end instead of hanging
@@ -955,21 +1001,18 @@ impl CcpState {
 
         let mut had_fill = false;
         if matches!(exec_type, "F" | "1" | "2") && last_shares > 0 {
-            if let Some(order) = context.order(clord_id).copied() {
-                // What this report adds that the order does not already hold.
-                //
-                // A live report is an increment: LastShares is new quantity by
-                // definition, and the dedup window is what stops a repeat.
-                //
-                // A resent one restates history, so its increment is whatever
-                // CumQty carries above what the order holds — zero when it
-                // restates. Reading the cumulative figure rather than the
-                // increment is what makes replay safe: the same report twice
-                // adds nothing the second time, and reports arriving out of
-                // order settle on the highest cumulative rather than losing the
-                // ones behind it. A marked report is not vetoed outright
-                // because a CCP reconnect replays executions that ran during
-                // the outage, and those are the first news of a real fill.
+            // A fill can arrive for an order this session does not track: one
+            // that raced its own cancel-ack out of the book, one placed from
+            // another client, or one left from an earlier session. The report
+            // names the contract and the side, so book it from that rather
+            // than dropping a position the account actually holds. An untracked
+            // order has nothing filled yet, so the arithmetic below reconciles
+            // against zero.
+            let target = match context.order(clord_id).copied() {
+                Some(order) => Some((order.instrument, order.side, order.filled as i64)),
+                None => untracked_fill_target(context, parsed).map(|(i, s)| (i, s, 0i64)),
+            };
+            if let Some((instrument, side, already_filled)) = target {
                 let booked = if is_resend {
                     // Recorded even though the cumulative figure is what decides
                     // this copy: the same execution can arrive again without its
@@ -985,7 +1028,7 @@ impl CcpState {
                             clord_id);
                         0
                     } else {
-                        let delta = (report_cum_qty - order.filled as i64).max(0);
+                        let delta = (report_cum_qty - already_filled).max(0);
                         if delta != last_shares && delta > 0 {
                             // The report's own increment is not what this client
                             // is missing, so the fill that follows carries a
@@ -1011,20 +1054,20 @@ impl CcpState {
                 if booked > 0 {
                     context.update_order_filled(clord_id, booked as u32);
                     let fill = Fill {
-                        instrument: order.instrument,
+                        instrument,
                         order_id: clord_id,
-                        side: order.side,
+                        side,
                         price: (last_px * PRICE_SCALE as f64) as i64,
                         qty: booked,
                         remaining: leaves_qty,
                         commission: (commission * PRICE_SCALE as f64) as i64,
                         timestamp_ns: context.now_ns(),
                     };
-                    let delta = match order.side {
+                    let delta = match side {
                         Side::Buy => booked,
                         Side::Sell | Side::ShortSell => -booked,
                     };
-                    context.update_position(order.instrument, delta);
+                    context.update_position(instrument, delta);
                     // notify_fill inlined
                     shared.orders.push_fill(fill);
                     shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
@@ -3808,5 +3851,129 @@ mod tests {
         assert_eq!(ccp.pending_fanout.len(), 1);
         assert!(shared.reference.drain_historical_errors().is_empty());
         assert!(shared.reference.drain_contract_details_end().is_empty());
+    }
+
+    /// A fill whose ClOrdID this session never tracked. Every field the engine
+    /// needs to book it is on the report itself.
+    fn untracked_fill(pairs: &[(u32, &str)]) -> std::collections::HashMap<u32, String> {
+        let mut m = std::collections::HashMap::new();
+        for (tag, val) in [
+            (11u32, "99"),      // ClOrdID the context does not know
+            (150, "2"),         // ExecType: trade
+            (39, "2"),          // OrdStatus: filled
+            (32, "5"),          // LastShares
+            (31, "100.00"),     // LastPx
+            (54, "1"),          // Side: buy
+            (6008, "888888"),   // ContractID
+            (55, "ZZZ"),
+            (17, "EXEC-1"),
+        ] {
+            m.insert(tag, val.to_string());
+        }
+        for (tag, val) in pairs {
+            if val.is_empty() {
+                m.remove(tag);
+            } else {
+                m.insert(*tag, val.to_string());
+            }
+        }
+        m
+    }
+
+    /// A fill for an order this session does not track is still a position the
+    /// account holds. Dropping it leaves the engine short of the truth with
+    /// nothing to say so — the cancel/fill race reaches this every time.
+    #[test]
+    fn a_fill_for_an_untracked_order_is_still_booked() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = untracked_fill(&[]);
+
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+
+        let fills = shared.orders.drain_fills();
+        assert_eq!(fills.len(), 1, "the fill must be reported");
+        assert_eq!(fills[0].qty, 5);
+        assert_eq!(fills[0].order_id, 99);
+        assert_eq!(fills[0].side, Side::Buy);
+        assert_eq!(
+            context.position(fills[0].instrument), 5,
+            "the position must move by the filled quantity",
+        );
+    }
+
+    /// A sell books the other way. Taking the side from the report rather than
+    /// defaulting is the whole point: the wrong sign is worse than no fill.
+    #[test]
+    fn an_untracked_sell_moves_the_position_down() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = untracked_fill(&[(54, "2")]);
+
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+
+        let fills = shared.orders.drain_fills();
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].side, Side::Sell);
+        assert_eq!(context.position(fills[0].instrument), -5);
+    }
+
+    /// Without a contract or a side there is nothing to book against, and
+    /// guessing either one would move a real position the wrong way.
+    #[test]
+    fn an_untracked_fill_is_not_booked_on_a_guess() {
+        for missing in [6008u32, 54] {
+            let (mut ccp, mut context, shared) = ord_status_test_state();
+            let frame = untracked_fill(&[(missing, "")]);
+
+            ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+
+            assert!(
+                shared.orders.drain_fills().is_empty(),
+                "tag {missing} missing: must not book a guessed fill",
+            );
+        }
+    }
+
+    /// On a fresh process the gateway resends prior executions with 97=Y and
+    /// their original ExecIDs, for orders no session tracks. Booking those
+    /// builds a position out of history on top of the one the position feed
+    /// already reports.
+    #[test]
+    fn a_replayed_execution_is_not_booked_as_a_new_position() {
+        for (tag, name) in [(97u32, "PossResend"), (43, "PossDupFlag")] {
+            let (mut ccp, mut context, shared) = ord_status_test_state();
+
+            ccp.handle_exec_report(&untracked_fill(&[(tag, "Y")]), &mut context, &shared, &None, "");
+
+            assert!(
+                shared.orders.drain_fills().is_empty(),
+                "{name}=Y restates history and must not move the position",
+            );
+        }
+
+        // The same report without the marker is booked, so the guard is the
+        // marker and not something else about the frame.
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        ccp.handle_exec_report(&untracked_fill(&[(97, "N")]), &mut context, &shared, &None, "");
+        assert_eq!(shared.orders.drain_fills().len(), 1);
+    }
+
+    /// An execution that could not be booked must stay replayable. Consuming
+    /// the ExecID for a fill that was dropped makes the loss permanent: the
+    /// replay after a reconnect is then rejected as a duplicate.
+    #[test]
+    fn an_unbookable_fill_does_not_consume_its_exec_id() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+
+        // Same execution, first seen without the contract that would let the
+        // engine place it.
+        ccp.handle_exec_report(&untracked_fill(&[(6008, "")]), &mut context, &shared, &None, "");
+        assert!(shared.orders.drain_fills().is_empty());
+
+        // Replayed in full — it must not be rejected as already seen.
+        ccp.handle_exec_report(&untracked_fill(&[]), &mut context, &shared, &None, "");
+        assert_eq!(
+            shared.orders.drain_fills().len(), 1,
+            "the replay must be booked, not dropped as a duplicate",
+        );
     }
 }
