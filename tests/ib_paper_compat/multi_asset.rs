@@ -92,7 +92,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
             Ok(Event::OrderUpdate(update)) => {
                 if update.order_id == oid {
                     match update.status {
-                        OrderStatus::Submitted => {
+                        OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                             order_acked = true;
                             if !cancel_sent {
                                 control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
@@ -214,7 +214,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
             Ok(Event::OrderUpdate(update)) => {
                 if update.order_id == oid {
                     match update.status {
-                        OrderStatus::Submitted => {
+                        OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                             order_acked = true;
                             if !cancel_sent {
                                 control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
@@ -345,7 +345,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
             Ok(Event::OrderUpdate(update)) => {
                 if update.order_id == oid {
                     match update.status {
-                        OrderStatus::Submitted => {
+                        OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                             order_acked = true;
                             if !cancel_sent {
                                 control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();

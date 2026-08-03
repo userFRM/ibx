@@ -119,7 +119,7 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
         }
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Submitted {
+                if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) {
                     control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                 }
                 if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected) {
@@ -316,7 +316,7 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 println!("  OrderUpdate: id={} status={:?}", update.order_id, update.status);
-                if update.status == OrderStatus::Submitted && !cancel_sent {
+                if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) && !cancel_sent {
                     control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                     cancel_sent = true;
                 }
@@ -417,7 +417,7 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
     while Instant::now() < deadline && !terminal {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Submitted && !cancel_sent {
+                if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) && !cancel_sent {
                     control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                     cancel_sent = true;
                 }
@@ -574,7 +574,7 @@ pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
     let mut submitted = false;
     while Instant::now() < deadline && !submitted {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(u)) if u.status == OrderStatus::Submitted => { submitted = true; }
+            Ok(Event::OrderUpdate(u)) if matches!(u.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) => { submitted = true; }
             _ => {}
         }
     }
@@ -916,7 +916,7 @@ pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Submitted {
+                if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) {
                     order_submitted = true;
                 }
             }

@@ -1461,7 +1461,7 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config
             Ok(Event::OrderUpdate(update)) => {
                 if update.order_id == oid {
                     match update.status {
-                        OrderStatus::Submitted => {
+                        OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                             order_acked = true;
                             if !cancel_sent {
                                 control_tx.send(ControlCommand::Order(
