@@ -976,9 +976,22 @@ impl CcpState {
             }
         };
 
+        // A replace is acknowledged as 39=5, and the gateway reaches it through
+        // 39=6 first: captured live, a modify runs PendingCancel then Replaced.
+        // The monotonic guard ranks PendingCancel above the working states, so
+        // that acknowledgement reads as a stale frame and is dropped, leaving a
+        // successfully modified order reported as stuck mid-cancel and never
+        // confirmed. It is a deliberate transition, which is what the forced
+        // path is for; the ranks are left alone because a partially filled
+        // order must still be able to reach PendingCancel.
+        let is_replace_ack = ord_status == "5";
+        if is_replace_ack {
+            context.set_order_status_forced(clord_id, status);
+        }
+
         // The guard's verdict doubles as the change flag (ibx#212): a stale
         // frame the guard rejects must not surface as an order_status either.
-        let status_changed = context.update_order_status(clord_id, status);
+        let status_changed = is_replace_ack || context.update_order_status(clord_id, status);
 
         // The gateway marks a report that restates history: 97=Y is PossResend
         // and 43=Y is PossDupFlag. Neither was read anywhere, and the only
@@ -2575,6 +2588,38 @@ mod tests {
             stop_price: 0,
         });
         (CcpState::new(), context, SharedState::new())
+    }
+
+    /// A replace is acknowledged as 39=5, and the gateway sends 39=6 first.
+    /// Captured live against a paper account, a modify runs PendingCancel then
+    /// Replaced. The monotonic guard ranks PendingCancel above the working
+    /// states, so the acknowledgement looked like a stale frame: the caller was
+    /// told the order was cancelling and never told the replacement was live.
+    #[test]
+    fn a_replace_acknowledgement_is_not_dropped_as_a_stale_frame() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+
+        // The order is working, then the replace puts a cancel in flight.
+        ccp.handle_exec_report(&exec_report_frame(&[(150, "0"), (39, "0")]),
+            &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&exec_report_frame(&[(150, "6"), (39, "6")]),
+            &mut context, &shared, &None, "");
+        assert_eq!(context.order(42).map(|o| o.status),
+            Some(crate::types::OrderStatus::PendingCancel), "the cancel is in flight");
+        let _ = shared.orders.drain_open_orders();
+
+        ccp.handle_exec_report(&exec_report_frame(&[(150, "5"), (39, "5")]),
+            &mut context, &shared, &None, "");
+
+        assert_eq!(
+            context.order(42).map(|o| o.status),
+            Some(crate::types::OrderStatus::Submitted),
+            "the replacement is working, not still cancelling",
+        );
+        assert!(
+            shared.orders.drain_open_orders().iter().any(|(id, _)| *id == 42),
+            "and the caller is told, rather than the frame being dropped",
+        );
     }
 
     /// The recovery-push terminator carries `11='*'`, which parses to the
