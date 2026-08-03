@@ -200,7 +200,12 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
     let mut modify_acked = false;
     let mut order_cancelled = false;
     let mut order_rejected = false;
-    let new_order_id = order_id + 1;
+    // The replacement is addressed by the original id: the wire ClOrdID is
+    // `orderId.version`, so every report for a replaced order maps back to
+    // `order_id`. A distinct id here only books a local record the gateway will
+    // never mention, and the cancel that follows would address nothing. The
+    // client passes the same id for exactly this reason.
+    let new_order_id = order_id;
 
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -417,7 +422,12 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    let new_order_id = order_id + 1;
+    // The replacement is addressed by the original id: the wire ClOrdID is
+    // `orderId.version`, so every report for a replaced order maps back to
+    // `order_id`. A distinct id here only books a local record the gateway will
+    // never mention, and the cancel that follows would address nothing. The
+    // client passes the same id for exactly this reason.
+    let new_order_id = order_id;
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
@@ -1693,7 +1703,12 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    let new_order_id = order_id + 1;
+    // The replacement is addressed by the original id: the wire ClOrdID is
+    // `orderId.version`, so every report for a replaced order maps back to
+    // `order_id`. A distinct id here only books a local record the gateway will
+    // never mention, and the cancel that follows would address nothing. The
+    // client passes the same id for exactly this reason.
+    let new_order_id = order_id;
     // Submit limit buy at $1, qty=1
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
@@ -1840,7 +1855,12 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    let new_order_id = order_id + 1;
+    // The replacement is addressed by the original id: the wire ClOrdID is
+    // `orderId.version`, so every report for a replaced order maps back to
+    // `order_id`. A distinct id here only books a local record the gateway will
+    // never mention, and the cancel that follows would address nothing. The
+    // client passes the same id for exactly this reason.
+    let new_order_id = order_id;
 
     // Submit limit buy at $1
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
