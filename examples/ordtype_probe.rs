@@ -89,6 +89,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             client.process_msgs(&mut probe);
             std::thread::sleep(Duration::from_millis(20));
         }
+        // `open_order` answers a request; without one the gateway's restatement
+        // of the order, which is the whole measurement, never arrives.
+        client.req_open_orders(&mut probe);
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            client.process_msgs(&mut probe);
+            std::thread::sleep(Duration::from_millis(20));
+        }
         client.cancel_order(oid, "");
         oid += 1;
     }
