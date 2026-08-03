@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match kind.as_str() {
         // Far below the market, so it rests rather than triggering.
         "STP" => { order.order_type = "STP".into(); order.aux_price = 1.0; }
+        "STPPRT" => { order.order_type = "STP PRT".into(); order.aux_price = 1.0; }
         _ => { order.order_type = "LMT".into(); order.lmt_price = 9999.0; }
     }
 
