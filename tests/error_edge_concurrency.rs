@@ -395,6 +395,7 @@ fn process_msgs_multiple_rapid_calls_no_duplicates() {
         instrument: 0, order_id: 1, side: Side::Buy,
         price: PRICE_SCALE, qty: 1, remaining: 0,
         commission: 0, timestamp_ns: 0,
+        cum_qty: 1, avg_price: PRICE_SCALE,
     });
 
     let mut w = RecordingWrapper::default();
@@ -516,6 +517,7 @@ fn concurrent_disconnect_during_process_msgs() {
             instrument: 0, order_id: i, side: Side::Buy,
             price: PRICE_SCALE, qty: 1, remaining: 0,
             commission: 0, timestamp_ns: 0,
+            cum_qty: 1, avg_price: PRICE_SCALE,
         });
     }
 
@@ -587,6 +589,7 @@ fn concurrent_place_order_and_process_msgs() {
                 instrument: 0, order_id: i, side: Side::Buy,
                 price: PRICE_SCALE, qty: 1, remaining: 0,
                 commission: 0, timestamp_ns: 0,
+                cum_qty: 1, avg_price: PRICE_SCALE,
             });
             let mut w = RecordingWrapper::default();
             client_a.process_msgs(&mut w);
@@ -682,6 +685,7 @@ fn shared_state_all_drains_empty_after_first_call() {
 
     // Push one item to each queue
     ss.orders.push_fill(Fill { instrument: 0, order_id: 1, side: Side::Buy,
+        cum_qty: 0, avg_price: 0,
         price: PRICE_SCALE, qty: 1, remaining: 0, commission: 0, timestamp_ns: 0 });
     ss.orders.push_order_update(OrderUpdate { order_id: 1, instrument: 0,
         status: OrderStatus::Filled, filled_qty: 1, remaining_qty: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0 });
@@ -721,6 +725,7 @@ fn concurrent_drain_fills_no_duplicates() {
             instrument: 0, order_id: i, side: Side::Buy,
             price: PRICE_SCALE, qty: 1, remaining: 0,
             commission: 0, timestamp_ns: 0,
+            cum_qty: 1, avg_price: PRICE_SCALE,
         });
     }
 
