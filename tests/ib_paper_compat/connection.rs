@@ -362,7 +362,7 @@ pub(super) fn phase_update_param(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         order_acked = true;
                         if !cancel_sent {
                             control_tx.send(ControlCommand::Order(

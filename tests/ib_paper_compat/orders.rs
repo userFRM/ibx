@@ -121,7 +121,7 @@ pub(super) fn phase_limit_order(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         if !order_acked {
                             submit_ack_us = submit_time.elapsed().as_micros() as u64;
                             order_acked = true;
@@ -206,7 +206,7 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         if modify_sent && !modify_acked {
                             modify_acked = true;
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
@@ -368,7 +368,12 @@ pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    // A resting stop is held by the gateway rather than worked,
+                    // and it acknowledges that as PreSubmitted: captured live,
+                    // this order goes PreSubmitted -> PendingCancel -> Cancelled
+                    // and never reports Submitted at all. The rest of the suite
+                    // already treats the two as one ack.
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         order_acked = true;
                         if !cancel_sent {
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
@@ -428,7 +433,7 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         if modify_sent && !modify_acked_local {
                             modify_acked_local = true;
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
@@ -668,7 +673,7 @@ pub(super) fn phase_bracket_order(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         if update.order_id == parent_id { parent_acked = true; }
                         if parent_acked && !cancel_sent {
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: parent_id })).unwrap();
@@ -804,7 +809,7 @@ pub(super) fn phase_oca_group(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         if update.order_id == id1 { order1_acked = true; }
                         if update.order_id == id2 { order2_acked = true; }
                         if order1_acked && order2_acked && !cancel_sent {
@@ -1231,7 +1236,7 @@ pub(super) fn phase_cash_qty_order(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         order_acked = true;
                         if !cancel_sent {
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
@@ -1291,7 +1296,7 @@ pub(super) fn phase_fractional_order(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         order_acked = true;
                         if !cancel_sent {
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
@@ -1394,7 +1399,7 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
             }
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         if Some(update.order_id) == tp_id { tp_active = true; }
                         if Some(update.order_id) == sl_id { sl_active = true; }
                         if tp_active && sl_active && !cancel_sent {
@@ -1557,7 +1562,7 @@ pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Submitted && !order_acked {
+                if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) && !order_acked {
                     order_acked = true;
                     control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                     _first_cancel_sent = true;
@@ -1705,7 +1710,7 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         if modify_sent && !modify_acked {
                             modify_acked = true;
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
@@ -1852,7 +1857,7 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         if !order_acked {
                             order_acked = true;
                             // Send modify AND cancel back-to-back — no waiting
@@ -1927,7 +1932,7 @@ pub(super) fn phase_global_cancel(conns: Conns) -> Conns {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
-                    OrderStatus::Submitted => {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         acked.insert(update.order_id);
                         if acked.len() >= 3 && !cancel_all_sent {
                             control_tx.send(ControlCommand::Order(
