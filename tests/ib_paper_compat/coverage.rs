@@ -41,6 +41,8 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
     "UnsubscribeDepth",
     "SubscribePnl",
     "CancelPnl",
+    // Covered live by `rtt_ping_phase_live` (ibx#158).
+    "Ping",
     "Shutdown",
 ];
 
