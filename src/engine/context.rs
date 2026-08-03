@@ -899,12 +899,15 @@ impl Context {
 
     // ── Instrument management ──
 
-    pub fn try_register_instrument(&mut self, con_id: i64) -> Option<InstrumentId> {
-        self.market.try_register(con_id)
-    }
-
     pub fn register_instrument(&mut self, con_id: i64) -> InstrumentId {
         self.market.register(con_id)
+    }
+
+    /// Register without panicking when the instrument table is full. Inbound
+    /// message handling must use this — a full table is a condition to report,
+    /// not one to abort the engine on.
+    pub fn try_register_instrument(&mut self, con_id: i64) -> Option<InstrumentId> {
+        self.market.try_register(con_id)
     }
 
     pub fn set_symbol(&mut self, id: InstrumentId, symbol: String) {
