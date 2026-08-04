@@ -693,8 +693,14 @@ pub fn decode_bar_payload(payload: &[u8], min_tick: f64) -> Option<crate::types:
 ///
 /// Schedule requests use `<data>Schedule</data>` and `<scheduleOnly>true</scheduleOnly>`
 /// with `<type>BarData</type>`. Response is `<ResultSetSchedule>`.
-pub fn build_schedule_xml(query_id: &str, con_id: i64, end_time: &str, duration: &str, use_rth: bool) -> String {
-    let exchange = "BEST";
+pub fn build_schedule_xml(
+    query_id: &str, con_id: i64, end_time: &str, duration: &str, use_rth: bool,
+    sec_type: &str, exchange: &str,
+) -> String {
+    // The last of the query builders that described a US stock routed BEST
+    // whatever contract it was asked about.
+    let exchange = if exchange.is_empty() { "BEST" } else { exchange };
+    let sec_type = if sec_type.is_empty() { "CS" } else { sec_type };
     let rth = if use_rth { "true" } else { "false" };
 
     format!(
@@ -705,7 +711,7 @@ pub fn build_schedule_xml(query_id: &str, con_id: i64, end_time: &str, duration:
          <useRTH>{rth}</useRTH>\
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
-         <secType>STK</secType>\
+         <secType>{sec_type}</secType>\
          <type>BarData</type>\
          <data>Schedule</data>\
          <endTime>{end_time}</endTime>\
@@ -1103,7 +1109,7 @@ mod tests {
 
     #[test]
     fn build_schedule_xml_structure() {
-        let xml = build_schedule_xml("sched_1", 756733, "20260312-19:34:06", "5 d", true);
+        let xml = build_schedule_xml("sched_1", 756733, "20260312-19:34:06", "5 d", true, "CS", "BEST");
         assert!(xml.contains("<id>sched_1</id>"));
         assert!(xml.contains("<contractID>756733</contractID>"));
         assert!(xml.contains("<data>Schedule</data>"));

@@ -232,6 +232,8 @@ impl EClient {
         self.send(ControlCommand::FetchHistoricalSchedule {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
+            sec_type: contract.sec_type.clone(),
+            exchange: contract.exchange.clone(),
             end_date_time: end_date_time.into(),
             duration: duration.into(),
             use_rth,

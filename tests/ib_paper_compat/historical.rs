@@ -683,6 +683,8 @@ pub(super) fn phase_historical_schedule(mut conns: Conns, gw: &Gateway, config: 
     control_tx.send(ControlCommand::FetchHistoricalSchedule {
         req_id: 4001,
         con_id: 756733,
+        sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(),
         end_date_time: end_dt,
         duration: "5 d".to_string(),
         use_rth: true,
