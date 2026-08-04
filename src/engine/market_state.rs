@@ -41,6 +41,12 @@ pub struct MarketState {
     exchanges: [Option<String>; MAX_INSTRUMENTS],
 }
 
+impl Default for MarketState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MarketState {
     pub fn new() -> Self {
         Self {
@@ -700,7 +706,7 @@ mod tests {
         q.low = 147 * PRICE_SCALE;
         q.close = 152 * PRICE_SCALE;
         q.volume = 50_000_000;
-        q.timestamp_ns = 1709654400_000_000_000;
+        q.timestamp_ns = 1_709_654_400_000_000_000;
 
         let q_ref = ms.quote(id);
         assert_eq!(q_ref.open, 148 * PRICE_SCALE);
@@ -708,7 +714,7 @@ mod tests {
         assert_eq!(q_ref.low, 147 * PRICE_SCALE);
         assert_eq!(q_ref.close, 152 * PRICE_SCALE);
         assert_eq!(q_ref.volume, 50_000_000);
-        assert_eq!(q_ref.timestamp_ns, 1709654400_000_000_000);
+        assert_eq!(q_ref.timestamp_ns, 1_709_654_400_000_000_000);
     }
 
     // --- Spread edge cases ---
