@@ -700,8 +700,6 @@ pub const IB_KEY_DEFAULT_TIMEOUT_SECS: u64 = 1080;
 /// [`crate::gateway::GatewayConfig::ib_key_token_sub_type`].
 pub const IB_KEY_DEFAULT_TOKEN_SUB_TYPE: &str = "2a";
 
-/// Cadence at which the server probes during the wait window.
-const IB_KEY_HEARTBEAT_CADENCE_SECS: u64 = 20;
 /// Ceiling on a frame in the auth gate, where the traffic is 774/771 replies
 /// and keepalives — none of which reach a fraction of this.
 const MAX_GATE_FRAME: usize = 64 * 1024;
