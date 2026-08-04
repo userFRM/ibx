@@ -36,6 +36,11 @@ const LIVENESS_DEAD_SECS: u64 = 35;
 /// early-connection jitter must not trigger a false disconnect during a
 /// period the server itself treats as warm-up. Heartbeats are still sent.
 const LIVENESS_WARMUP_SECS: u64 = 60;
+// The ladder is ordered by construction, so it is checked by construction: a
+// heartbeat that outlives the test window, or a test that outlives the dead
+// window, fails the build rather than a test the optimizer folds away.
+const _: () = assert!(CCP_HEARTBEAT_SECS < LIVENESS_TEST_SECS);
+const _: () = assert!(LIVENESS_TEST_SECS < LIVENESS_DEAD_SECS);
 
 /// The pinned-core hot loop. Pushes events to SharedState + optional event channel.
 pub struct HotLoop {
@@ -238,7 +243,7 @@ impl HotLoop {
                 Some(id)
             }
             None => {
-                log::error!("Instrument table full: rejecting registration for con_id={}", con_id);
+                log::error!("Instrument table full: rejecting registration for con_id={con_id}");
                 if let Some(tx) = reply_tx {
                     let _ = tx.send(Err(format!(
                         "instrument table full: {} contracts are live concurrently; \
@@ -277,7 +282,7 @@ impl HotLoop {
             // Zero the shared-side quote so a reused slot cannot serve the
             // previous contract's prices before its first tick.
             self.shared.market.push_quote(instrument, &crate::types::Quote::default());
-            log::info!("Reclaimed instrument slot {}", instrument);
+            log::info!("Reclaimed instrument slot {instrument}");
         }
     }
 
@@ -293,7 +298,7 @@ impl HotLoop {
                 .map(|s| s.as_str())
                 .or_else(|| payload.downcast_ref::<&'static str>().copied())
                 .unwrap_or("<non-string panic payload>");
-            log::error!("Engine hot loop panicked, emitting Disconnected: {}", msg);
+            log::error!("Engine hot loop panicked, emitting Disconnected: {msg}");
             shared.set_connection_lost();
             emit(&event_tx, Event::Disconnected);
         }
@@ -693,7 +698,7 @@ impl HotLoop {
             let warmed_up = now.duration_since(self.hb.ccp_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
             if warmed_up && since_recv > LIVENESS_TEST_SECS {
                 if since_recv > LIVENESS_DEAD_SECS {
-                    log::error!("CCP liveness timeout ({}s silent) — connection lost", since_recv);
+                    log::error!("CCP liveness timeout ({since_recv}s silent) — connection lost");
                     self.ccp.handle_disconnect(&mut self.context, &self.event_tx);
                 } else if self.hb.pending_ccp_test.is_none() {
                     let test_id = self.hb.next_test_id();
@@ -726,7 +731,7 @@ impl HotLoop {
             let warmed_up = now.duration_since(self.hb.farm_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
             if warmed_up && since_recv > LIVENESS_TEST_SECS {
                 if since_recv > LIVENESS_DEAD_SECS {
-                    log::error!("Farm liveness timeout ({}s silent) — connection lost", since_recv);
+                    log::error!("Farm liveness timeout ({since_recv}s silent) — connection lost");
                     self.farm.handle_disconnect(&mut self.context, &self.event_tx);
                 } else if self.hb.pending_farm_test.is_none() {
                     let test_id = self.hb.next_test_id();
@@ -759,7 +764,7 @@ impl HotLoop {
             let warmed_up = now.duration_since(self.hb.hmds_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
             if warmed_up && since_recv > LIVENESS_TEST_SECS {
                 if since_recv > LIVENESS_DEAD_SECS {
-                    log::error!("HMDS liveness timeout ({}s silent) — connection lost", since_recv);
+                    log::error!("HMDS liveness timeout ({since_recv}s silent) — connection lost");
                     self.hmds.disconnect(&mut self.hmds_conn);
                 } else if self.hb.pending_hmds_test.is_none() {
                     let test_id = self.hb.next_test_id();
@@ -881,7 +886,7 @@ impl HotLoop {
 
         let (tx, rx) = crossbeam_channel::bounded(1);
         std::thread::Builder::new()
-            .name(format!("farm-reconnect-{}", attempt))
+            .name(format!("farm-reconnect-{attempt}"))
             .spawn(move || {
                 let (farm_host, farm_name) =
                     crate::gateway::reconnect_trading_route(&auth);
@@ -948,7 +953,7 @@ impl HotLoop {
 
         let (tx, rx) = crossbeam_channel::bounded(1);
         std::thread::Builder::new()
-            .name(format!("ccp-reconnect-{}", attempt))
+            .name(format!("ccp-reconnect-{attempt}"))
             .spawn(move || {
                 let _ = tx.send(reconnect_ccp(&auth));
             })
@@ -1019,7 +1024,7 @@ impl HotLoop {
         );
         let (tx, rx) = crossbeam_channel::bounded(1);
         std::thread::Builder::new()
-            .name(format!("hmds-reconnect-{}", attempt))
+            .name(format!("hmds-reconnect-{attempt}"))
             .spawn(move || {
                 let result = connect_farm(
                     &auth.hmds_host, &auth.hmds_farm,
@@ -1066,8 +1071,7 @@ impl HotLoop {
                 self.pending_hmds_reconnect = None;
                 if self.hmds_reconnect_attempt >= HMDS_MAX_RECONNECT_ATTEMPTS {
                     log::error!(
-                        "HMDS reconnect exhausted {} attempts — historical data unavailable for this session",
-                        HMDS_MAX_RECONNECT_ATTEMPTS,
+                        "HMDS reconnect exhausted {HMDS_MAX_RECONNECT_ATTEMPTS} attempts — historical data unavailable for this session",
                     );
                     self.hmds_next_attempt_at = None;
                 } else {
@@ -1130,7 +1134,7 @@ impl HotLoop {
 
     /// Inject a TBT quote for testing. Pushes to SharedState.
     pub fn inject_tbt_quote(&mut self, quote: &TbtQuote) {
-        self.shared.market.push_tbt_quote(quote.clone());
+        self.shared.market.push_tbt_quote(*quote);
     }
 
     /// Inject a simulated tick for testing.
@@ -1338,9 +1342,7 @@ pub(crate) fn format_price(price: Price) -> StackStr {
         // Find last non-zero digit.
         let mut end = 8;
         while end > 0 && digits[end - 1] == b'0' { end -= 1; }
-        for i in 0..end {
-            s.buf[frac_start + i] = digits[i];
-        }
+        s.buf[frac_start..frac_start + end].copy_from_slice(&digits[..end]);
         s.len = (frac_start + end) as u8;
     }
     s
@@ -1386,9 +1388,7 @@ pub(crate) fn format_qty(qty: Qty) -> StackStr {
         ];
         let mut end = 4;
         while end > 0 && digits[end - 1] == b'0' { end -= 1; }
-        for i in 0..end {
-            s.buf[frac_start + i] = digits[i];
-        }
+        s.buf[frac_start..frac_start + end].copy_from_slice(&digits[..end]);
         s.len = (frac_start + end) as u8;
     }
     s
@@ -1399,16 +1399,16 @@ pub(crate) fn fast_extract_msg_type(msg: &[u8]) -> Option<&[u8]> {
     let limit = msg.len().min(48);
     let mut i = 0;
     while i + 3 < limit {
-        if msg[i] == b'3' && msg[i + 1] == b'5' && msg[i + 2] == b'=' {
-            if i == 0 || msg[i - 1] == 0x01 {
-                let val_start = i + 3;
-                let mut j = val_start;
-                while j < msg.len() && msg[j] != 0x01 {
-                    j += 1;
-                }
-                if j > val_start {
-                    return Some(&msg[val_start..j]);
-                }
+        if msg[i] == b'3' && msg[i + 1] == b'5' && msg[i + 2] == b'='
+            && (i == 0 || msg[i - 1] == 0x01)
+        {
+            let val_start = i + 3;
+            let mut j = val_start;
+            while j < msg.len() && msg[j] != 0x01 {
+                j += 1;
+            }
+            if j > val_start {
+                return Some(&msg[val_start..j]);
             }
         }
         i += 1;
@@ -1427,7 +1427,7 @@ pub(crate) fn extract_raw_tag(msg: &[u8], tag: u32) -> Option<Vec<u8>> {
     let len_tag = tag - 1;
     if let Some(len_val) = extract_text_tag(msg, len_tag) {
         if let Ok(data_len) = len_val.parse::<usize>() {
-            let needle = format!("{}=", tag);
+            let needle = format!("{tag}=");
             let needle_bytes = needle.as_bytes();
             if let Some(idx) = msg.windows(needle_bytes.len()).position(|w| w == needle_bytes) {
                 let val_start = idx + needle_bytes.len();
@@ -1436,7 +1436,7 @@ pub(crate) fn extract_raw_tag(msg: &[u8], tag: u32) -> Option<Vec<u8>> {
             }
         }
     }
-    let needle = format!("{}=", tag);
+    let needle = format!("{tag}=");
     let needle_bytes = needle.as_bytes();
     let mut pos = 0;
     while pos < msg.len() {
@@ -1460,7 +1460,7 @@ pub(crate) fn extract_raw_tag(msg: &[u8], tag: u32) -> Option<Vec<u8>> {
 
 /// Extract a text FIX tag value (SOH-delimited) from raw message bytes.
 fn extract_text_tag(msg: &[u8], tag: u32) -> Option<String> {
-    let needle = format!("{}=", tag);
+    let needle = format!("{tag}=");
     let needle_bytes = needle.as_bytes();
     let mut pos = 0;
     while pos < msg.len() {
@@ -1628,7 +1628,7 @@ mod tests {
     #[test]
     fn inject_fill_updates_position() {
         let shared = Arc::new(SharedState::new());
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
         let mut engine = HotLoop::new(shared.clone(), Some(event_tx), None);
         engine.context_mut().market.register(265598);
 
@@ -1844,7 +1844,7 @@ mod tests {
             for _ in 0..50 {
                 let d = reconnect_backoff(failures);
                 assert!(d >= Duration::from_millis(lo) && d < Duration::from_millis(hi),
-                    "failures={} got {:?}, expected [{}ms, {}ms)", failures, d, lo, hi);
+                    "failures={failures} got {d:?}, expected [{lo}ms, {hi}ms)");
             }
         };
         expect(0, 2_000, 7_000);    // 2s + 0 + jitter(0..5s)
@@ -1855,18 +1855,13 @@ mod tests {
         expect(50, 62_000, 82_001); // ladder index capped
     }
 
-    // ibx#219: the liveness ladder must be ordered and inside the server's
-    // own thresholds (test at 15s, dead at 35s, warm-up 60s).
+    // ibx#219: the liveness ladder must sit inside the server's own thresholds
+    // (test at 15s, dead at 35s, warm-up 60s). Ordering is a `const _` assert.
     #[test]
     fn liveness_thresholds_ordered() {
-        assert!(CCP_HEARTBEAT_SECS < LIVENESS_TEST_SECS);
-        assert!(LIVENESS_TEST_SECS < LIVENESS_DEAD_SECS);
         assert_eq!(LIVENESS_TEST_SECS, 15);
         assert_eq!(LIVENESS_DEAD_SECS, 35);
         assert_eq!(LIVENESS_WARMUP_SECS, 60);
-        // The duplicate interval constants are gone — these now alias config.
-        assert_eq!(CCP_HEARTBEAT_SECS, crate::config::CCP_HEARTBEAT);
-        assert_eq!(FARM_HEARTBEAT_SECS, crate::config::FARM_HEARTBEAT);
     }
 
     #[test]
