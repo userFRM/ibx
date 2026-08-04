@@ -33,6 +33,9 @@ pub(crate) fn drain_and_send_orders(
     let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
     for mut order_req in orders {
         let oid = order_req.order_id();
+        // A replace claims its ClOrdID version before the write, and the broker
+        // still holds the previous one if that write never lands.
+        let is_replace = matches!(order_req, OrderRequest::Modify { .. });
         // Snap every price to the contract's tick grid before encoding
         // (ibx#216). The tick comes from the market-data subscription ack;
         // without one it is 0 and prices pass through unchanged.
@@ -597,7 +600,15 @@ pub(crate) fn drain_and_send_orders(
                 // it from aux_price, which on a market-to-limit is meaningless.
                 let carries_trigger = trigger_only
                     || (matches!(ord_type, b'4' | b'K')
-                        && (orig_stop != 0 || (ord_type_stated && stop_price != 0)));
+                        && if ord_type_stated {
+                            // The replace names the type, so only what it also
+                            // states belongs to it. The resting trigger was the
+                            // old type's: carrying it into a market-to-limit
+                            // turns the order into limit-if-touched.
+                            stop_price != 0
+                        } else {
+                            orig_stop != 0
+                        });
                 let new_stop = if trigger_only && stop_price == 0 {
                     price
                 } else if carries_trigger && stop_price != 0 {
@@ -708,11 +719,21 @@ pub(crate) fn drain_and_send_orders(
                 // See: https://github.com/deepentropy/ibx/issues/116
                 log::error!("Failed to send order {oid}: {e} — notifying application");
                 if oid != 0 {
-                    // Tracking stops, but the ClOrdID chain stays: a replace
-                    // that never went out leaves the previous version working
-                    // at the broker, and cancelling it means stating the
-                    // ClOrdID the broker last recorded.
-                    context.remove_order(oid);
+                    if is_replace {
+                        // Give the version back. The broker never saw this
+                        // replace, so a cancel has to state the one before it;
+                        // leaving the unsent version claimed had the cancel
+                        // rejected while the order stayed live. The chain stays
+                        // for the same reason.
+                        if let Some(v) = context.modify_versions.get_mut(&oid) {
+                            *v = v.saturating_sub(1);
+                        }
+                        context.remove_order(oid);
+                    } else {
+                        // Nothing of this order reached the broker, so nothing
+                        // will ever cancel or replace it.
+                        context.retire_order(oid);
+                    }
                     shared.orders.push_order_update(OrderUpdate {
                         order_id: oid,
                         instrument: 0,

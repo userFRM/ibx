@@ -455,6 +455,12 @@ impl HmdsState {
                             if let Some(pos) = self.pending_historical.iter().position(|(q, _, _)| q == qid) {
                                 let (_, req_id, _) = self.pending_historical.remove(pos);
                                 self.keep_up_to_date_reqs.remove(&req_id);
+                                // The reconnect lists are what get asked for
+                                // again, so a query the server rejected has to
+                                // leave them or it comes straight back.
+                                self.kut_resub.retain(|k| k.req_id != req_id);
+                                self.rtbar_resub.retain(|r| r.req_id != req_id);
+                                self.rtbar_subs.retain(|(_, rid, _, _)| *rid != req_id);
                                 released_req_id = Some(req_id);
                                 from_historical = true;
                             } else if let Some(pos) = self.pending_head_ts.iter().position(|(q, _)| q == qid) {

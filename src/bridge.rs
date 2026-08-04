@@ -161,7 +161,12 @@ impl SeqQuote {
             for (word, slot) in words.iter_mut().zip(self.data.iter()) {
                 *word = slot.load(Ordering::Relaxed);
             }
-            let v2 = self.version.load(Ordering::Acquire);
+            // The fence is what makes the check mean anything: an Acquire
+            // load constrains what comes after it, so without this the payload
+            // reads above may be satisfied after the version read below and a
+            // torn snapshot would pass a counter that never moved.
+            std::sync::atomic::fence(Ordering::Acquire);
+            let v2 = self.version.load(Ordering::Relaxed);
             if v1 == v2 { return quote_from_words(words); }
         }
     }
@@ -200,32 +205,6 @@ mod seq_quote_tests {
             assert_eq!(q.timestamp_ns as i64, q.bid, "including the field of another type");
         }
         writer.join().unwrap();
-    }
-}
-
-#[cfg(test)]
-mod portfolio_merge_tests {
-    use super::*;
-
-    /// The lean feed states a quantity and often no cost. Taking that as a
-    /// cost of zero erased the basis of a live holding, and the P&L path reads
-    /// a zero basis as having acquired it for nothing.
-    #[test]
-    fn a_row_without_a_cost_does_not_erase_the_one_on_file() {
-        let p = PortfolioState::new();
-        p.set_position_info(PositionInfo {
-            con_id: 265598, position: 100, avg_cost: 150 * crate::types::PRICE_SCALE,
-            ..Default::default()
-        });
-        p.set_position_info(PositionInfo { con_id: 265598, position: 100, avg_cost: 0, ..Default::default() });
-        assert_eq!(
-            p.position_info(265598).map(|i| i.avg_cost), Some(150 * crate::types::PRICE_SCALE),
-            "the cost on file stands",
-        );
-
-        // Flat is allowed to state zero: there is no basis left to keep.
-        p.set_position_info(PositionInfo { con_id: 265598, position: 0, avg_cost: 0, ..Default::default() });
-        assert_eq!(p.position_info(265598).map(|i| i.avg_cost), Some(0));
     }
 }
 
@@ -948,15 +927,11 @@ impl PortfolioState {
         match map.get_mut(&info.con_id) {
             Some(existing) => {
                 existing.position = info.position;
-                // An absent average cost is not a zero one. The lean feed
-                // states a quantity and often no cost, and assigning it anyway
-                // erased the basis of a live holding — which the P&L path
-                // reads as having been acquired for nothing, reporting a
-                // holding's whole market value as the day's profit. A flat
-                // position may state zero, since it has no basis to keep.
-                if info.avg_cost != 0 || info.position == 0 {
-                    existing.avg_cost = info.avg_cost;
-                }
+                // Written as given: a cost the row did not state is filled
+                // in by the caller, which is the only side that can tell an
+                // absent tag from a stated zero. A broker correcting a basis
+                // to zero has to be able to say so.
+                existing.avg_cost = info.avg_cost;
                 if !info.symbol.is_empty() { existing.symbol = info.symbol; }
                 if !info.sec_type.is_empty() { existing.sec_type = info.sec_type; }
                 if !info.currency.is_empty() { existing.currency = info.currency; }
