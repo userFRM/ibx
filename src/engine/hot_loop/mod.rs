@@ -284,7 +284,7 @@ impl HotLoop {
         if self.hmds.tbt_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
             return;
         }
-        if self.ccp.news_subscriptions.iter().any(|(id, _)| *id == instrument) {
+        if self.ccp.news_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
             return;
         }
         if self.context.market.unregister(instrument).is_some() {
@@ -482,7 +482,7 @@ impl HotLoop {
                     // one reader that outlives the L1 request: ticker setup
                     // registers into the same map and news routes on it, so a
                     // live news subscription keeps them.
-                    if !self.ccp.news_subscriptions.iter().any(|(id, _)| *id == instrument) {
+                    if !self.ccp.news_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
                         self.context.market.clear_server_tags_for(instrument);
                     }
                     self.try_reclaim_instrument(instrument);
@@ -543,6 +543,11 @@ impl HotLoop {
                     } else if keep_up_to_date {
                         if self.hmds.send_historical_request_via_ccp(req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show, use_rth, &symbol, &sec_type, &exchange, &mut self.ccp_conn, &mut self.hb, &self.ccp.ccp_sign_key, &self.ccp.ccp_sign_iv, &self.shared) {
                             self.hmds.keep_up_to_date_reqs.insert(req_id);
+                            self.hmds.kut_resub.retain(|k| k.req_id != req_id);
+                            self.hmds.kut_resub.push(crate::engine::hot_loop::hmds::KutRequest {
+                                req_id, con_id, end_date_time, duration, bar_size,
+                                what_to_show, use_rth, symbol, sec_type, exchange,
+                            });
                         }
                     } else {
                         self.hmds.send_historical_request_ex(req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show, use_rth, false, &symbol, &sec_type, &exchange, &mut self.hmds_conn, &mut self.hb, &self.shared);
@@ -550,6 +555,7 @@ impl HotLoop {
                 }
                 ControlCommand::CancelHistorical { req_id } => {
                     self.hmds.keep_up_to_date_reqs.remove(&req_id);
+                    self.hmds.kut_resub.retain(|k| k.req_id != req_id);
                     if let Some(pos) = self.hmds.pending_historical.iter().position(|(_, rid, _)| *rid == req_id) {
                         let (query_id, _, _) = self.hmds.pending_historical.remove(pos);
                         self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
@@ -710,7 +716,7 @@ impl HotLoop {
                     }
                     // Unsubscribe all news subscriptions before stopping
                     let news_instruments: Vec<InstrumentId> = self.ccp.news_subscriptions
-                        .iter().map(|(id, _)| *id).collect();
+                        .iter().map(|(id, _, _)| *id).collect();
                     for instrument in news_instruments {
                         self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb);
                     }
@@ -862,7 +868,7 @@ impl HotLoop {
 
     /// Replace the auth connection (after reconnection) and reconcile order state.
     pub fn reconnect_ccp(&mut self, conn: Connection) {
-        self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id);
+        self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.context.market);
     }
 
     /// Tell the client a transport it was told about is carrying traffic
@@ -1103,6 +1109,35 @@ impl HotLoop {
         self.pending_hmds_reconnect = Some(rx);
     }
 
+    /// Ask again for the keepUpToDate streams the dead HMDS socket was
+    /// carrying. The request goes out on CCP and the bars arrive on HMDS, so
+    /// only this side owns both and only this side can put them back.
+    fn resubscribe_keep_up_to_date(&mut self) {
+        if self.hmds.kut_resub.is_empty() { return; }
+        if self.ccp_conn.is_none() || self.ccp.disconnected {
+            log::warn!(
+                "HMDS is back but CCP is not, so {} keepUpToDate stream(s) stay down; \
+                 the CCP reconnect does not carry them",
+                self.hmds.kut_resub.len(),
+            );
+            return;
+        }
+        let wanted: Vec<_> = self.hmds.kut_resub.clone();
+        let mut back = 0;
+        for k in &wanted {
+            self.hmds.pending_historical.retain(|(_, rid, _)| *rid != k.req_id);
+            if self.hmds.send_historical_request_via_ccp(
+                k.req_id, k.con_id, &k.end_date_time, &k.duration, &k.bar_size,
+                &k.what_to_show, k.use_rth, &k.symbol, &k.sec_type, &k.exchange,
+                &mut self.ccp_conn, &mut self.hb, &self.ccp.ccp_sign_key,
+                &self.ccp.ccp_sign_iv, &self.shared,
+            ) {
+                back += 1;
+            }
+        }
+        log::info!("HMDS reconnected, re-requested {}/{} keepUpToDate streams", back, wanted.len());
+    }
+
     /// Poll for a completed HMDS reconnect. Non-blocking.
     fn poll_hmds_reconnect(&mut self) {
         let rx = match self.pending_hmds_reconnect.as_ref() {
@@ -1112,8 +1147,7 @@ impl HotLoop {
         match rx.try_recv() {
             Ok(Ok(conn)) => {
                 log::info!("HMDS reconnect succeeded (attempt {})", self.hmds_reconnect_attempt);
-                self.hmds_conn = Some(conn);
-                self.hmds.disconnected = false;
+                self.hmds.reconnect(conn, &mut self.hmds_conn, &self.context.market, &mut self.hb);
                 self.hb.last_hmds_recv = Instant::now();
                 self.hb.last_hmds_sent = Instant::now();
                 // The probe that went unanswered belonged to the dead session.
@@ -1127,6 +1161,7 @@ impl HotLoop {
                 self.hmds_reconnect_attempt = 0;
                 self.hmds_next_attempt_at = None;
                 self.pending_hmds_reconnect = None;
+                self.resubscribe_keep_up_to_date();
             }
             Ok(Err(e)) => {
                 log::warn!(
@@ -2126,7 +2161,7 @@ mod tests {
         let id = hl.context.market.register(4002);
         hl.context.market.register_server_tag(910_002, id);
         hl.farm.instrument_md_reqs.push((id, vec![8]));
-        hl.ccp.news_subscriptions.push((id, 55));
+        hl.ccp.news_subscriptions.push((id, 55, "BRFG".to_string()));
 
         tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
         hl.poll_once();

@@ -185,7 +185,11 @@ pub(crate) struct CcpState {
     /// replay of a recently-seen ExecID double-count a fill (ibx#198).
     pub(crate) exec_id_order: VecDeque<String>,
     pub(crate) bulletin_next_id: i32,
-    pub(crate) news_subscriptions: Vec<(InstrumentId, u32)>,
+    /// Live news subscriptions: instrument, request id, and the providers the
+    /// caller asked for. The providers are kept because a reconnect has to
+    /// send the same request again, and the request is the only place they
+    /// appear.
+    pub(crate) news_subscriptions: Vec<(InstrumentId, u32, String)>,
     pub(crate) disconnected: bool,
     /// When to account for orders the reconnect did not explain.
     ///
@@ -1852,7 +1856,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        self.news_subscriptions.push((instrument, req_id));
+        self.news_subscriptions.push((instrument, req_id, providers.to_string()));
         if let Some(conn) = ccp_conn.as_mut() {
             let req_id_str = req_id.to_string();
             let con_id_str = (con_id as u32).to_string();
@@ -1880,9 +1884,9 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        let req_id = match self.news_subscriptions.iter().position(|(id, _)| *id == instrument) {
+        let req_id = match self.news_subscriptions.iter().position(|(id, _, _)| *id == instrument) {
             Some(pos) => {
-                let (_, rid) = self.news_subscriptions.remove(pos);
+                let (_, rid, _) = self.news_subscriptions.remove(pos);
                 rid
             }
             None => return,
@@ -2195,6 +2199,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
         account_id: &str,
+        market: &crate::engine::market_state::MarketState,
     ) {
         *ccp_conn = Some(conn);
         self.disconnected = false;
@@ -2221,6 +2226,29 @@ impl CcpState {
             // terminated by 11='*' sentinel. See ib-agent#155, ibx#191.
             hb.last_ccp_sent = Instant::now();
             log::info!("CCP reconnected, sent account/position re-subscribe");
+        }
+
+        // News streams belonged to the dead session and are not part of what
+        // the server pushes back. Left alone they went quiet for good, with
+        // the connection reporting healthy the whole time.
+        let stale: Vec<_> = self.news_subscriptions.drain(..).collect();
+        let wanted = stale.len();
+        for (instrument, req_id, providers) in stale {
+            match market.con_id(instrument) {
+                Some(con_id) => self.send_news_subscribe(
+                    con_id, instrument, &providers, req_id, ccp_conn, hb,
+                ),
+                None => log::warn!(
+                    "CCP reconnect: instrument {instrument} has no contract id, \
+                     leaving its news stream unsubscribed",
+                ),
+            }
+        }
+        if wanted > 0 {
+            log::info!(
+                "CCP reconnected, re-subscribed {}/{} news streams",
+                self.news_subscriptions.len(), wanted,
+            );
         }
     }
 }

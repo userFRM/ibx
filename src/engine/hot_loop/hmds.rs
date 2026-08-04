@@ -44,6 +44,10 @@ pub(crate) struct HmdsState {
     pub(crate) rtbar_subs: Vec<(String, u32, Option<u32>, f64)>,
     /// req_ids that should keep streaming after initial batch (keepUpToDate=True).
     pub(crate) keep_up_to_date_reqs: std::collections::HashSet<u32>,
+    /// The keepUpToDate streams, kept so a reconnect can ask for them again.
+    /// The request goes out on CCP and the bars come back on HMDS, so losing
+    /// the HMDS socket ends the stream even though nothing cancelled it.
+    pub(crate) kut_resub: Vec<KutRequest>,
     /// Scanner results parked for contract-detail enrichment before dispatch.
     /// Drained by the engine top-level after each hmds.poll, then handed to
     /// `CcpState::start_scanner_enrichment`.
@@ -96,6 +100,21 @@ fn hist_exchange(exchange: &str) -> String {
     if exchange.is_empty() { "SMART".to_string() } else { exchange.to_string() }
 }
 
+/// A live keepUpToDate stream, in the shape its request needs to go out again.
+#[derive(Clone)]
+pub(crate) struct KutRequest {
+    pub req_id: u32,
+    pub con_id: i64,
+    pub end_date_time: String,
+    pub duration: String,
+    pub bar_size: String,
+    pub what_to_show: String,
+    pub use_rth: bool,
+    pub symbol: String,
+    pub sec_type: String,
+    pub exchange: String,
+}
+
 impl HmdsState {
     pub(crate) fn new() -> Self {
         Self {
@@ -117,6 +136,7 @@ impl HmdsState {
             pending_ticks: Vec::new(),
             rtbar_subs: Vec::new(),
             keep_up_to_date_reqs: std::collections::HashSet::new(),
+            kut_resub: Vec::new(),
             cold_scanner_results: Vec::new(),
         }
     }
@@ -131,6 +151,40 @@ impl HmdsState {
     pub(crate) fn disconnect(&mut self, hmds_conn: &mut Option<Connection>) {
         self.disconnected = true;
         *hmds_conn = None;
+    }
+
+    /// Take over a fresh socket and put the streams back on it.
+    ///
+    /// A reconnect that only replaced the transport left every tick-by-tick
+    /// subscription behind on the dead one. Nothing said so — the socket was
+    /// healthy, the heartbeats flowed — and the stream simply never resumed.
+    pub(crate) fn reconnect(
+        &mut self,
+        conn: Connection,
+        hmds_conn: &mut Option<Connection>,
+        market: &crate::engine::market_state::MarketState,
+        hb: &mut HeartbeatState,
+    ) {
+        *hmds_conn = Some(conn);
+        self.disconnected = false;
+
+        // The ids belong to the session that died; each subscription is sent
+        // again and takes a new one.
+        let stale: Vec<_> = self.tbt_subscriptions.drain(..).collect();
+        let wanted = stale.len();
+        for (instrument, _dead_ticker_id, tbt_type) in stale {
+            match market.con_id(instrument) {
+                Some(con_id) => self.send_tbt_subscribe(con_id, instrument, tbt_type, hmds_conn, hb),
+                None => log::warn!(
+                    "HMDS reconnect: instrument {instrument} has no contract id, \
+                     leaving its tick-by-tick stream unsubscribed",
+                ),
+            }
+        }
+        log::info!(
+            "HMDS reconnected, re-subscribed {}/{} tick-by-tick streams",
+            self.tbt_subscriptions.len(), wanted,
+        );
     }
 
     pub(crate) fn poll(
@@ -1266,6 +1320,36 @@ mod historical_contract_tests {
 #[cfg(test)]
 mod tests {
     /// ibx#254: a keep-up-to-date request whose send is refused was still
+    /// A reconnect that only replaced the socket left every tick-by-tick
+    /// stream behind on the dead one. The transport reported healthy, so
+    /// nothing anywhere said the data had stopped.
+    #[test]
+    fn a_reconnect_puts_the_tick_by_tick_streams_back() {
+        let mut hmds = HmdsState::new();
+        let mut market = crate::engine::market_state::MarketState::new();
+        let instrument = market.try_register(756733).expect("slot");
+        hmds.tbt_subscriptions.push((instrument, "tbt_0".to_string(), TbtType::Last));
+        // One with no contract behind it: it must be reported, not resubscribed
+        // against a contract id the engine does not have.
+        hmds.tbt_subscriptions.push((7, "tbt_1".to_string(), TbtType::BidAsk));
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        let mut conn = None;
+        let mut hb = HeartbeatState::new();
+        hmds.disconnected = true;
+        hmds.reconnect(
+            crate::protocol::connection::Connection::new_raw(sock).unwrap(),
+            &mut conn, &market, &mut hb,
+        );
+
+        assert!(!hmds.disconnected, "the transport is live again");
+        assert_eq!(hmds.tbt_subscriptions.len(), 1, "the resolvable stream is back");
+        assert_eq!(hmds.tbt_subscriptions[0].0, instrument);
+        assert_ne!(hmds.tbt_subscriptions[0].1, "tbt_0", "under a new id, not the dead session's");
+    }
+
     /// registered as pending and reported to the caller as sent. That waiter is
     /// exempt from the idle sweep — a subscription has no single answer to time
     /// out — so nothing would ever answer it and nothing would ever expire it.
