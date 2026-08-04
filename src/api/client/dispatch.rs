@@ -36,6 +36,13 @@ impl EClient {
         if self.shared.take_connection_lost() {
             self.connected.store(false, Ordering::Release);
         }
+        // A recovered session is connected again, and `close_notified` has to
+        // come back with it: left latched, the next loss would pass without
+        // firing `connection_closed` at all.
+        if self.shared.take_connection_restored() {
+            self.connected.store(true, Ordering::Release);
+            self.close_notified.store(false, Ordering::Release);
+        }
         if !self.connected.load(Ordering::Acquire)
             && !self.close_notified.swap(true, Ordering::AcqRel)
         {

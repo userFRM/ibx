@@ -49,6 +49,9 @@ pub struct HotLoop {
     context: Context,
     /// Core ID to pin the hot loop thread to. None = no pinning.
     core_id: Option<usize>,
+    /// Whether a recoverable loss was announced to the client. Gates the
+    /// restore notice so a reconnect that nobody was told about stays quiet.
+    loss_announced: bool,
     /// Next scheduled CCP/farm reconnect attempt (jittered backoff, ibx#218).
     ccp_next_attempt_at: Option<Instant>,
     farm_next_attempt_at: Option<Instant>,
@@ -167,6 +170,7 @@ impl HotLoop {
             pending_farm_reconnect: None,
             ccp_next_attempt_at: None,
             farm_next_attempt_at: None,
+            loss_announced: false,
             farm_reconnect_attempt: 0,
             pending_ccp_reconnect: None,
             ccp_reconnect_attempt: 0,
@@ -860,6 +864,17 @@ impl HotLoop {
         self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id);
     }
 
+    /// Tell the client a transport it was told about is carrying traffic
+    /// again. Silent unless a loss was announced, so the routine drops a
+    /// reconnect handles on its own stay invisible.
+    fn announce_reconnected(&mut self) {
+        if !self.loss_announced { return; }
+        self.loss_announced = false;
+        log::info!("Connection restored — subscriptions re-established");
+        self.shared.set_connection_restored();
+        emit(&self.event_tx, Event::Reconnected);
+    }
+
     /// Set cached auth credentials for farm auto-reconnect.
     pub fn set_reconnect_auth(&mut self, auth: ReconnectAuth) {
         self.reconnect_auth = Some(auth);
@@ -961,6 +976,7 @@ impl HotLoop {
                 log::info!("Farm auto-reconnect succeeded (attempt {})", self.farm_reconnect_attempt);
                 self.reconnect_farm(conn);
                 self.farm_reconnect_attempt = 0;
+                self.announce_reconnected();
                 self.farm_next_attempt_at = None;
                 self.hb.farm_up_since = Instant::now();
                 self.pending_farm_reconnect = None;
@@ -973,6 +989,7 @@ impl HotLoop {
                 // sooner than the gateway would (ibx#218).
                 if self.farm_reconnect_attempt == 3 {
                     log::error!("Farm auto-reconnect failed 3 times — notifying (retries continue)");
+                    self.loss_announced = true;
                     self.shared.set_connection_lost();
                     emit(&self.event_tx, Event::Disconnected);
                 }
@@ -1020,6 +1037,7 @@ impl HotLoop {
                 log::info!("CCP auto-reconnect succeeded (attempt {})", self.ccp_reconnect_attempt);
                 self.reconnect_ccp(conn);
                 self.ccp_reconnect_attempt = 0;
+                self.announce_reconnected();
                 self.ccp_next_attempt_at = None;
                 self.hb.ccp_up_since = Instant::now();
                 self.pending_ccp_reconnect = None;
@@ -1030,6 +1048,7 @@ impl HotLoop {
                 // See the farm path: notify once, keep retrying (ibx#218).
                 if self.ccp_reconnect_attempt == 3 {
                     log::error!("CCP auto-reconnect failed 3 times — notifying (retries continue)");
+                    self.loss_announced = true;
                     self.shared.set_connection_lost();
                     emit(&self.event_tx, Event::Disconnected);
                 }
@@ -1612,6 +1631,26 @@ mod tests {
             hl.hmds_next_attempt_at.is_some(),
             "an HMDS reconnect is scheduled rather than skipped forever",
         );
+    }
+
+    /// A client that stood down on the loss needs the other edge to come back
+    /// up. Without it an overnight outage the engine recovered from on its own
+    /// still ended the session, from the caller's side.
+    #[test]
+    fn a_recovered_loss_is_announced_once_and_only_after_a_loss() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+
+        // Reconnects the client was never told about stay quiet.
+        hl.announce_reconnected();
+        assert!(!shared.take_connection_restored(), "nothing was announced to recover from");
+
+        hl.loss_announced = true;
+        hl.announce_reconnected();
+        assert!(shared.take_connection_restored(), "the recovery reaches the client");
+
+        hl.announce_reconnected();
+        assert!(!shared.take_connection_restored(), "and reaches it once");
     }
 
     /// The servers go down for maintenance most nights and come back on their
