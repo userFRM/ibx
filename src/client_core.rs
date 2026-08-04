@@ -1663,6 +1663,23 @@ impl ClientCore {
             );
         }
 
+        // Financial-advisor allocation is not wire-encoded, so an accepted
+        // fa_group would put the whole size on the connected account rather
+        // than spread it across the group, with nothing to show for it.
+        // See: https://github.com/deepentropy/ibx/issues/96
+        if !order.fa_group.is_empty()
+            || !order.fa_method.is_empty()
+            || !order.fa_percentage.is_empty()
+        {
+            return Err(
+                "FA allocation is not supported: fa_group, fa_method and \
+                 fa_percentage are not carried on the order, so the full \
+                 quantity would fill on the connected account instead of \
+                 being allocated across the advisor group."
+                    .into(),
+            );
+        }
+
         // An unrecognized tif would otherwise be sent as DAY silently.
         match order.tif.as_str() {
             "" | "DAY" | "GTC" | "IOC" | "FOK" | "OPG" | "GTD" | "DTC" | "AUC" => {}
