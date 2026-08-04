@@ -43,7 +43,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, price, b'2', b'1', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
@@ -83,7 +83,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, stop_price, b'3', b'1', stop_price,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let stop_str = format_price(stop_price);
@@ -119,7 +119,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, price, b'4', b'1', stop_price,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
@@ -157,7 +157,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, price, b'2', b'3', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
@@ -189,7 +189,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, price, b'2', b'4', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
@@ -229,7 +229,7 @@ pub(crate) fn drain_and_send_orders(
                 let entry_str = format_price(entry_price);
                 let tp_price_str = format_price(take_profit);
                 let sl_price_str = format_price(stop_loss);
-                let oca_group = format!("OCA_{}", parent_id);
+                let oca_group = format!("OCA_{parent_id}");
 
                 // 1. Parent order: limit entry
                 context.insert_order(crate::types::Order::new(
@@ -317,7 +317,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, price, b'2', b'2', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
@@ -350,7 +350,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, price, crate::types::ORD_PEG_BENCH, b'0', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
@@ -390,7 +390,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, price, b'2', b'8', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
@@ -422,7 +422,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, qty, 0, b'K', b'8', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
                 let symbol = context.market.symbol(instrument).to_string();
@@ -452,7 +452,7 @@ pub(crate) fn drain_and_send_orders(
                     order_id, instrument, side, 0, price, b'2', b'0', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{}.{}", order_id, ver);
+                let clord_str = format!("{order_id}.{ver}");
                 let side_str = fix_side(side);
                 let qty_str = format_qty(qty);
                 let price_str = format_price(price);
@@ -489,9 +489,9 @@ pub(crate) fn drain_and_send_orders(
                 let orig_clord = context.last_clord.get(&order_id).cloned()
                     .unwrap_or_else(|| {
                         let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                        format!("{}.{}", order_id, ver)
+                        format!("{order_id}.{ver}")
                     });
-                let clord_str = format!("C{}", order_id);
+                let clord_str = format!("C{order_id}");
                 let now = chrono_free_timestamp();
                 let result = conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_ORDER_CANCEL),
@@ -515,9 +515,9 @@ pub(crate) fn drain_and_send_orders(
                     let orig_clord = context.last_clord.get(&oid).cloned()
                         .unwrap_or_else(|| {
                             let ver = *context.modify_versions.get(&oid).unwrap_or(&0);
-                            format!("{}.{}", oid, ver)
+                            format!("{oid}.{ver}")
                         });
-                    let clord_str = format!("C{}", oid);
+                    let clord_str = format!("C{oid}");
                     let now = chrono_free_timestamp();
                     last_result = conn.send_fix(&[
                         (fix::TAG_MSG_TYPE, fix::MSG_ORDER_CANCEL),
@@ -581,11 +581,11 @@ pub(crate) fn drain_and_send_orders(
                 let prev_ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
                 let new_ver = prev_ver + 1;
                 context.modify_versions.insert(order_id, new_ver);
-                let clord_str = format!("{}.{}", order_id, new_ver);
+                let clord_str = format!("{order_id}.{new_ver}");
                 // OrigClOrdID matches whatever the server last recorded for
                 // this order (which may pre-date the versioned scheme — ibx#179).
                 let orig_clord = context.last_clord.get(&order_id).cloned()
-                    .unwrap_or_else(|| format!("{}.{}", order_id, prev_ver));
+                    .unwrap_or_else(|| format!("{order_id}.{prev_ver}"));
                 // Pre-seed `last_clord` with what we're about to emit so a
                 // subsequent cancel before the modify-ack still references the
                 // right version.
@@ -664,7 +664,7 @@ pub(crate) fn drain_and_send_orders(
             Err(e) => {
                 // Order failed to send — remove from engine state and notify the application.
                 // See: https://github.com/deepentropy/ibx/issues/116
-                log::error!("Failed to send order {}: {} — notifying application", oid, e);
+                log::error!("Failed to send order {oid}: {e} — notifying application");
                 if oid != 0 {
                     context.remove_order(oid);
                     shared.orders.push_order_update(OrderUpdate {
@@ -803,7 +803,7 @@ fn send_order_ex(
     let mut fields: Vec<(u32, String)> = vec![
         (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER.to_string()),
         (fix::TAG_SENDING_TIME, now.clone()),
-        (11, format!("{}.{}", order_id, ver)),
+        (11, format!("{order_id}.{ver}")),
         (1, account_id.to_string()),
         (21, "2".to_string()),
         (55, symbol),
@@ -1094,7 +1094,7 @@ fn send_order_ex(
                 | AlgoParams::ArrivalPx { max_pct_vol, .. }
                 | AlgoParams::ClosePx { max_pct_vol, .. } = algo
             {
-                fields.push((849, format!("{}", max_pct_vol)));
+                fields.push((849, format!("{max_pct_vol}")));
             }
             fields.push((5957, (param_strs.len() / 2).to_string()));
             // Key/value pairs: 5958=key, 5960=value, repeated.
@@ -1222,7 +1222,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());
                 out.push(String::new());
                 let exch = if exchange == "SMART" { "*" } else { exchange.as_str() };
-                out.push(format!("symbol={};exchange={};securityType={};", symbol, exch, sec_type));
+                out.push(format!("symbol={symbol};exchange={exch};securityType={sec_type};"));
             }
             OrderCondition::Volume { con_id, exchange, volume, is_more } => {
                 out.push("6".into());
@@ -1246,7 +1246,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());
                 out.push(String::new());
                 out.push(String::new());
-                out.push(format!("{}", percent));                   // percent
+                out.push(format!("{percent}"));                   // percent
                 out.push(String::new());
                 out.push(String::new());
             }
@@ -1316,20 +1316,20 @@ mod tests {
         );
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {}", msg);
-        assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {}", msg);
-        assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {}", msg);
-        assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {}", msg);
+        assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {msg}");
+        assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
+        assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {msg}");
+        assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
 
         // And everything the standalone encoder emitted is unchanged.
         assert_eq!(tag("40=").as_deref(), Some("2"));
-        assert_eq!(tag("18=").as_deref(), Some("e"), "adaptive wrapper missing: {}", msg);
+        assert_eq!(tag("18=").as_deref(), Some("e"), "adaptive wrapper missing: {msg}");
         assert_eq!(tag("847=").as_deref(), Some("Adaptive"));
         assert_eq!(tag("5957=").as_deref(), Some("1"));
         assert_eq!(tag("5958=").as_deref(), Some("adaptivePriority"));
         assert_eq!(tag("5960=").as_deref(), Some("Urgent"));
         assert!(msg.find("204=").unwrap() < msg.find("847=").unwrap(),
-            "the strategy tags keep their position after 204: {}", msg);
+            "the strategy tags keep their position after 204: {msg}");
     }
 
     #[test]
@@ -1350,14 +1350,14 @@ mod tests {
         );
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {}", msg);
-        assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {}", msg);
-        assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {}", msg);
-        assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {}", msg);
+        assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {msg}");
+        assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
+        assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {msg}");
+        assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
 
         assert_eq!(tag("847=").as_deref(), Some("Vwap"));
-        assert_eq!(tag("849=").as_deref(), Some("0.25"), "maxPctVol missing: {}", msg);
-        assert_eq!(tag("5957=").as_deref(), Some("4"), "param count: {}", msg);
+        assert_eq!(tag("849=").as_deref(), Some("0.25"), "maxPctVol missing: {msg}");
+        assert_eq!(tag("5957=").as_deref(), Some("4"), "param count: {msg}");
         assert_eq!(tag("5958=").as_deref(), Some("noTakeLiq"));
         assert_eq!(tag("5960=").as_deref(), Some("1"));
     }
@@ -1371,12 +1371,12 @@ mod tests {
         );
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {}", msg);
-        assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {}", msg);
-        assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {}", msg);
-        assert_eq!(tag("6091=").as_deref(), Some("1"), "what-if flag missing: {}", msg);
+        assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {msg}");
+        assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
+        assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
+        assert_eq!(tag("6091=").as_deref(), Some("1"), "what-if flag missing: {msg}");
         assert!(msg.find("204=").unwrap() < msg.find("6091=").unwrap(),
-            "the preview flag keeps its position after 204: {}", msg);
+            "the preview flag keeps its position after 204: {msg}");
     }
 
     fn bracket_child_attrs() -> crate::types::OrderAttrs {
@@ -1439,9 +1439,9 @@ mod tests {
         let msg = String::from_utf8_lossy(&buf[..n]);
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {}", msg);
-        assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {}", msg);
-        assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {}", msg);
+        assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
+        assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {msg}");
+        assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
         // The adjustable-specific tags keep both the values and the position the
         // standalone arm gave them — after 204 and the attribute block — which
         // the sibling test pins by asserting 204 precedes 6257.
@@ -1494,12 +1494,12 @@ mod tests {
         // but this path had a shipped layout and there is no reason to change
         // it as a side effect (ibx#240).
         let pos = |t: &str| msg.split('\u{1}').position(|f| f.starts_with(t));
-        assert!(pos("40=") < pos("59="), "base type tags precede tif: {}", msg);
-        assert!(pos("99=") < pos("59="), "stop price precedes tif: {}", msg);
-        assert!(pos("204=") < pos("6257="), "adjustable tags follow 204: {}", msg);
-        assert!(pos("6257=") < pos("6261="), "adjustable tags keep their order: {}", msg);
-        assert!(pos("6259=") < pos("6262="), "adjustable tags keep their order: {}", msg);
-        assert!(pos("6262=") < pos("6260="), "adjustable tags keep their order: {}", msg);
+        assert!(pos("40=") < pos("59="), "base type tags precede tif: {msg}");
+        assert!(pos("99=") < pos("59="), "stop price precedes tif: {msg}");
+        assert!(pos("204=") < pos("6257="), "adjustable tags follow 204: {msg}");
+        assert!(pos("6257=") < pos("6261="), "adjustable tags keep their order: {msg}");
+        assert!(pos("6259=") < pos("6262="), "adjustable tags keep their order: {msg}");
+        assert!(pos("6262=") < pos("6260="), "adjustable tags keep their order: {msg}");
     }
 }
 
@@ -1545,11 +1545,11 @@ mod modify_wire_tests {
     fn modify_emits_outside_rth_only_when_the_caller_set_it() {
         let on = replace_bytes(true);
         assert!(on.contains("|6122=c|6433=1|38=50|"),
-            "6433 must keep its captured position between 6122 and 38: {}", on);
+            "6433 must keep its captured position between 6122 and 38: {on}");
 
         let off = replace_bytes(false);
-        assert!(!off.contains("|6433="), "an RTH-only order must not assert 6433: {}", off);
-        assert!(off.contains("|6122=c|38=50|"), "the rest of the message is unchanged: {}", off);
+        assert!(!off.contains("|6433="), "an RTH-only order must not assert 6433: {off}");
+        assert!(off.contains("|6122=c|38=50|"), "the rest of the message is unchanged: {off}");
     }
 
     /// ibx#324: a stop has no limit leg, so the price a caller supplies to a
@@ -1747,9 +1747,12 @@ mod outside_rth_polarity_tests {
     /// 6433 opted every modified order into the extended session. An order
     /// widened to outside regular hours fills at prices the caller never meant
     /// to trade at, and no callback distinguishes it (ibx#352).
+    /// A named submit path, invoked as (context, instrument, outside_rth).
+    type SubmitCase = (&'static str, fn(&mut Context, u32, bool) -> crate::types::OrderId);
+
     #[test]
     fn every_submit_path_emits_outside_rth_only_when_it_was_asked_for() {
-        let cases: Vec<(&str, fn(&mut Context, u32, bool) -> crate::types::OrderId)> = vec![
+        let cases: Vec<SubmitCase> = vec![
             ("limit gtc", |c, i, o| c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)),
             ("stop gtc", |c, i, o| c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)),
             ("stop limit gtc", |c, i, o| {

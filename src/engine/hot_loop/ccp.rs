@@ -50,7 +50,7 @@ fn untracked_fill_target(
         Some("2") => Side::Sell,
         Some("5") => Side::ShortSell,
         other => {
-            log::warn!("Untracked fill has Side={:?}, position not updated", other);
+            log::warn!("Untracked fill has Side={other:?}, position not updated");
             return None;
         }
     };
@@ -265,7 +265,7 @@ impl CcpState {
                     Ok(0) if !conn.has_buffered_data() => return,
                     Ok(0) => {}
                     Err(e) => {
-                        log::error!("CCP connection lost: {}", e);
+                        log::error!("CCP connection lost: {e}");
                         self.handle_disconnect(context, event_tx);
                         return;
                     }
@@ -364,7 +364,7 @@ impl CcpState {
             "3" => {
                 let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 let ref_tag = parsed.get(&371).map(|s| s.as_str()).unwrap_or("?");
-                log::warn!("SessionReject: reason='{}' refTag={}", reason, ref_tag);
+                log::warn!("SessionReject: reason='{reason}' refTag={ref_tag}");
                 // ibx#229: a rejection of an in-flight contract-details
                 // request was warn-only — the caller saw neither error()
                 // nor end (a hang until the ibx#227 sweep, and before that
@@ -376,7 +376,7 @@ impl CcpState {
                     if req_id < 0xF000_0000 {
                         shared.reference.push_historical_error(
                             req_id, 200,
-                            format!("contract details request rejected: {}", reason),
+                            format!("contract details request rejected: {reason}"),
                         );
                         shared.reference.push_contract_details_end(req_id);
                         emit(event_tx, Event::ContractDetailsEnd(req_id));
@@ -495,7 +495,7 @@ impl CcpState {
                             if let Some(mut bar) = crate::control::historical::decode_bar_payload(payload, min_tick) {
                                 bar.timestamp = timestamp;
                                 let hist_bar = crate::control::historical::HistoricalBar {
-                                    time: format!("{}", timestamp),
+                                    time: format!("{timestamp}"),
                                     open: bar.open,
                                     high: bar.high,
                                     low: bar.low,
@@ -652,7 +652,7 @@ impl CcpState {
                         // symbol resolves to a single exchange and there's
                         // nothing to fan out to).
                         if is_by_symbol && !is_last_wire {
-                            self.pending_secdef.retain(|(rid, ss, _)| !(*rid == req_id && !*ss));
+                            self.pending_secdef.retain(|(rid, ss, _)| *rid != req_id || *ss);
                             if fanout_exchanges.is_empty() || con_id == 0 {
                                 // The master row may be parked awaiting its
                                 // schedule pair; firing end now would order
@@ -764,8 +764,7 @@ impl CcpState {
                     // refused.
                     if clord_id != 0 {
                         log::warn!(
-                            "Recovery record for order {} has Side={:?}; not tracking it",
-                            clord_id, other,
+                            "Recovery record for order {clord_id} has Side={other:?}; not tracking it",
                         );
                     }
                     None
@@ -802,8 +801,7 @@ impl CcpState {
                 // the engine down; it is not a complete answer.
                 match context.try_register_instrument(con_id) {
                     None => log::warn!(
-                        "recovery: instrument table full, order clord={} con_id={} not tracked in the engine book",
-                        clord_id, con_id,
+                        "recovery: instrument table full, order clord={clord_id} con_id={con_id} not tracked in the engine book",
                     ),
                     Some(instrument) => {
                 if let Some(sym) = parsed.get(&55) {
@@ -971,7 +969,7 @@ impl CcpState {
             "8" => crate::types::OrderStatus::Rejected,
             "I" => crate::types::OrderStatus::Inactive,
             _ => {
-                log::warn!("Unknown order status 39={} for order {}", ord_status, clord_id);
+                log::warn!("Unknown order status 39={ord_status} for order {clord_id}");
                 return;
             }
         };
@@ -1057,8 +1055,7 @@ impl CcpState {
                     if report_cum_qty <= 0 {
                         // Nothing to reconcile against. Booking the increment
                         // would double what the recovery record already seeded.
-                        log::debug!("Resent execution for order {} carries no CumQty — not booked",
-                            clord_id);
+                        log::debug!("Resent execution for order {clord_id} carries no CumQty — not booked");
                         0
                     } else {
                         let delta = (report_cum_qty - already_filled).max(0);
@@ -1070,9 +1067,8 @@ impl CcpState {
                             // and the position are right; the execution record
                             // is approximate, and says so here.
                             log::warn!(
-                                "Resent execution for order {}: booking {} to reach CumQty {} \
-                                 (report states {}) — execution detail is reconciled, not exact",
-                                clord_id, delta, report_cum_qty, last_shares,
+                                "Resent execution for order {clord_id}: booking {delta} to reach CumQty {report_cum_qty} \
+                                 (report states {last_shares}) — execution detail is reconciled, not exact",
                             );
                         }
                         delta
@@ -1081,7 +1077,7 @@ impl CcpState {
                     // A duplicate suppresses the fill and nothing else: the
                     // report still carries a status to apply and terminal
                     // bookkeeping to run, and returning here skipped both.
-                    log::warn!("Duplicate execution key={} — the fill is already booked", dedup_key);
+                    log::warn!("Duplicate execution key={dedup_key} — the fill is already booked");
                     0
                 } else {
                     last_shares
@@ -1146,9 +1142,9 @@ impl CcpState {
                     let text = parsed.get(&58).map(|s| s.as_str()).unwrap_or("");
                     let reason_code = parsed.get(&103).map(|s| s.as_str()).unwrap_or("");
                     let reason = match (text.is_empty(), reason_code.is_empty()) {
-                        (false, false) => format!("{} (reason code {})", text, reason_code),
+                        (false, false) => format!("{text} (reason code {reason_code})"),
                         (false, true) => text.to_string(),
-                        (true, false) => format!("reason code {}", reason_code),
+                        (true, false) => format!("reason code {reason_code}"),
                         (true, true) => String::new(),
                     };
                     if !reason.is_empty() {
@@ -1449,8 +1445,7 @@ impl CcpState {
         let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("Cancel rejected");
         let reject_type: u8 = parsed.get(&434).and_then(|s| s.parse().ok()).unwrap_or(1);
         let reason_code: i32 = parsed.get(&102).and_then(|s| s.parse().ok()).unwrap_or(-1);
-        log::warn!("CancelReject: origClOrd={:?} type={} code={} reason={}",
-            orig_clord, reject_type, reason_code, reason);
+        log::warn!("CancelReject: origClOrd={orig_clord:?} type={reject_type} code={reason_code} reason={reason}");
 
         let Some(oid) = orig_clord else { return };
 
@@ -1564,7 +1559,7 @@ impl CcpState {
         if let Some(conn) = ccp_conn.as_mut() {
             let sub_id = self.next_schedule_sub_id;
             self.next_schedule_sub_id += 1;
-            let sub_id_str = format!("SchedSub.{}", sub_id);
+            let sub_id_str = format!("SchedSub.{sub_id}");
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"),
@@ -1601,7 +1596,7 @@ impl CcpState {
                 if *req_id < 0xF000_0000 {
                     expired.push(*req_id);
                 } else {
-                    log::warn!("Internal secdef timeout: req_id={:#x}", req_id);
+                    log::warn!("Internal secdef timeout: req_id={req_id:#x}");
                 }
                 false
             } else {
@@ -1621,8 +1616,7 @@ impl CcpState {
             }
         });
         for req_id in expired {
-            log::warn!("Contract-details timeout: req_id={} — no gateway reply within {:?}",
-                req_id, SECDEF_TIMEOUT);
+            log::warn!("Contract-details timeout: req_id={req_id} — no gateway reply within {SECDEF_TIMEOUT:?}");
             shared.reference.push_historical_error(
                 req_id, 200,
                 "contract details request timed out — no reply from the gateway".to_string(),
@@ -1722,7 +1716,7 @@ impl CcpState {
         hb: &mut HeartbeatState,
     ) {
         if let Some(conn) = ccp_conn.as_mut() {
-            let pnl_payload = format!("PLR.{}|1={}|", req_id, account);
+            let pnl_payload = format!("PLR.{req_id}|1={account}|");
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"),
@@ -1731,7 +1725,7 @@ impl CcpState {
                 (6529, &pnl_payload),
             ]);
             hb.last_ccp_sent = Instant::now();
-            log::info!("Sent P&L subscribe: req_id={} account={}", req_id, account);
+            log::info!("Sent P&L subscribe: req_id={req_id} account={account}");
         }
     }
 
@@ -1762,7 +1756,7 @@ impl CcpState {
                 (6472, providers),
             ]);
             hb.last_ccp_sent = Instant::now();
-            log::info!("Sent news subscribe: con_id={} req_id={} providers={}", con_id, req_id, providers);
+            log::info!("Sent news subscribe: con_id={con_id} req_id={req_id} providers={providers}");
         }
     }
 
@@ -1787,7 +1781,7 @@ impl CcpState {
                 (263, "2"),
             ]);
             hb.last_ccp_sent = Instant::now();
-            log::info!("Sent news unsubscribe: instrument={:?} req_id={}", instrument, req_id);
+            log::info!("Sent news unsubscribe: instrument={instrument:?} req_id={req_id}");
         }
     }
 
@@ -1804,12 +1798,12 @@ impl CcpState {
                 (crate::control::contracts::TAG_IB_CON_ID, &con_id_str),
                 (crate::control::contracts::TAG_IB_SOURCE, "Socket"),
             ]);
-            log::info!("Sent secdef request: req_id={} con_id={}", req_id, con_id);
+            log::info!("Sent secdef request: req_id={req_id} con_id={con_id}");
             hb.last_ccp_sent = Instant::now();
         } else {
             // No CCP socket: the entry still gets a deadline, so the caller
             // receives error 200 + end via the sweep instead of silence (ibx#227).
-            log::warn!("secdef request req_id={} queued with no CCP socket", req_id);
+            log::warn!("secdef request req_id={req_id} queued with no CCP socket");
         }
         // Known-conId lookup: single record, no paginated terminator.
         self.pending_secdef.push((req_id, true, Instant::now() + SECDEF_TIMEOUT));
@@ -1886,11 +1880,11 @@ impl CcpState {
             fields.push((15, currency));
             fields.push((6088, "Socket"));
             let _ = conn.send_fix(&fields);
-            log::info!("Sent secdef lookup: req_id={} symbol={} sec_type={} identifier={}", req_id, symbol, sec_type, identifier_lookup);
+            log::info!("Sent secdef lookup: req_id={req_id} symbol={symbol} sec_type={sec_type} identifier={identifier_lookup}");
             hb.last_ccp_sent = Instant::now();
         } else {
             // See send_secdef_request: sweep converts this to a visible error.
-            log::warn!("secdef-by-symbol request req_id={} queued with no CCP socket", req_id);
+            log::warn!("secdef-by-symbol request req_id={req_id} queued with no CCP socket");
         }
         // By-symbol lookup: master reply carries `6046={exch_list}`. The
         // server never emits a 323=5/6 terminator; completion is detected
@@ -1931,8 +1925,7 @@ impl CcpState {
         // request issued while the transport was down was queued as pending
         // with nothing on the wire to answer it (ibx#369).
         let Some(conn) = ccp_conn.as_mut() else {
-            log::warn!("Matching symbols request req_id={} pattern='{}' not sent: no CCP transport",
-                req_id, pattern);
+            log::warn!("Matching symbols request req_id={req_id} pattern='{pattern}' not sent: no CCP transport");
             return;
         };
         let req_id_str = req_id.to_string();
@@ -1944,12 +1937,11 @@ impl CcpState {
             (320, &req_id_str),
             (58, pattern),
         ]) {
-            log::warn!("Matching symbols request req_id={} pattern='{}' not sent: {}",
-                req_id, pattern, e);
+            log::warn!("Matching symbols request req_id={req_id} pattern='{pattern}' not sent: {e}");
             return;
         }
         hb.last_ccp_sent = Instant::now();
-        log::info!("Sent matching symbols request: req_id={} pattern='{}'", req_id, pattern);
+        log::info!("Sent matching symbols request: req_id={req_id} pattern='{pattern}'");
         self.pending_matching_symbols.push((req_id, Instant::now() + MATCHING_SYMBOLS_TIMEOUT));
     }
 
@@ -1966,8 +1958,7 @@ impl CcpState {
         let now = Instant::now();
         self.pending_matching_symbols.retain(|(req_id, deadline)| {
             if now >= *deadline {
-                log::warn!("Matching symbols request req_id={} unanswered after {:?} — giving up",
-                    req_id, MATCHING_SYMBOLS_TIMEOUT);
+                log::warn!("Matching symbols request req_id={req_id} unanswered after {MATCHING_SYMBOLS_TIMEOUT:?} — giving up");
                 false
             } else {
                 true
@@ -2016,7 +2007,7 @@ impl CcpState {
                     exchange: exch.to_string(),
                     sec_type: current_sec_type.clone(),
                     listing_exch: name.to_string(),
-                    service_data_type: if current_sec_type == "STK" { "L1".to_string() } else { "L1".to_string() },
+                    service_data_type: "L1".to_string(),
                     agg_group: current_agg_group,
                 });
                 i += 1; // skip the 6813= field
@@ -2512,7 +2503,7 @@ mod tests {
                 &position_frame(&[(6064, bad), (6101, "151.0")]), &mut context, &shared, &None);
             assert_eq!(
                 shared.portfolio.position_info(265598).map(|p| p.position), Some(100),
-                "{} must not flatten a live position", bad);
+                "{bad} must not flatten a live position");
         }
     }
 
@@ -2821,15 +2812,15 @@ mod tests {
             // row callers read, the atomic the engine reads, and the event.
             assert_eq!(
                 shared.portfolio.position_info(265598).map(|p| p.position), Some(100),
-                "{:?} must not flatten the position row", body,
+                "{body:?} must not flatten the position row",
             );
             assert_eq!(
                 shared.portfolio.position(instrument), 100,
-                "{:?} must not flatten the shared position", body,
+                "{body:?} must not flatten the shared position",
             );
             let flattened = rx.try_iter().any(|e| matches!(
                 e, Event::PositionUpdate { con_id: 265598, position: 0, .. }));
-            assert!(!flattened, "{:?} must not publish a flat", body);
+            assert!(!flattened, "{body:?} must not publish a flat");
         }
     }
 
@@ -3615,9 +3606,9 @@ mod tests {
         let mut buf = [0u8; 4096];
         let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
         let msg = String::from_utf8_lossy(&buf[..n]);
-        assert!(msg.contains("35=G"), "a replace was sent: {}", msg);
+        assert!(msg.contains("35=G"), "a replace was sent: {msg}");
         assert!(!msg.split('\u{1}').any(|f| f.starts_with("59=")),
-            "a replace must not restate a time-in-force the order never had: {}", msg);
+            "a replace must not restate a time-in-force the order never had: {msg}");
     }
 
     fn cancel_reject_frame(reason_code: &str) -> std::collections::HashMap<u32, String> {

@@ -68,6 +68,12 @@ fn build_conid_subscribe_tags(
     tags
 }
 
+/// Option resub info: (instrument, symbol, exchange, sec_type, last_trade_date, strike, right, multiplier, mode_9887).
+type MdResubInfo = (InstrumentId, String, String, String, String, f64, String, String, i32);
+
+/// `MdResubInfo` with the instrument's resolved con_id spliced in behind it.
+type MdResubTarget = (InstrumentId, i64, String, String, String, String, f64, String, String, i32);
+
 pub(crate) struct FarmState {
     pub(crate) next_md_req_id: u32,
     pub(crate) md_req_to_instrument: Vec<(u32, InstrumentId)>,
@@ -80,8 +86,7 @@ pub(crate) struct FarmState {
     depth_fanout_map: Vec<(u32, u32)>,
     /// Primary depth subscription params for reconnect: (req_id, con_id, exchange, sec_type, num_rows, is_smart_depth).
     depth_resub_info: Vec<(u32, i64, String, String, i32, bool)>,
-    /// Option resub info: (instrument, symbol, exchange, sec_type, last_trade_date, strike, right, multiplier, mode_9887).
-    md_resub_info: Vec<(InstrumentId, String, String, String, String, f64, String, String, i32)>,
+    md_resub_info: Vec<MdResubInfo>,
     pub(crate) disconnected: bool,
     pub(crate) tick_buf: Vec<tick_decoder::RawTick>,
     pub(crate) farm_msg_buf: Vec<Vec<u8>>,
@@ -144,7 +149,7 @@ impl FarmState {
             match conn.try_recv() {
                 Ok(0) => return,
                 Err(e) => {
-                    log::error!("Farm connection lost: {}", e);
+                    log::error!("Farm connection lost: {e}");
                     self.handle_disconnect(context, event_tx);
                     return;
                 }
@@ -423,8 +428,7 @@ impl FarmState {
                 .map(|(_, user)| *user)
                 .unwrap_or(req_id);
             self.depth_tag_to_req.push((server_tag, user_req, is_smart, min_tick));
-            log::info!("Depth ack: server_tag {} -> req_id {} (levels={}, smart={}, min_tick={})",
-                server_tag, user_req, depth_levels, is_smart, min_tick);
+            log::info!("Depth ack: server_tag {server_tag} -> req_id {user_req} (levels={depth_levels}, smart={is_smart}, min_tick={min_tick})");
             return;
         }
 
@@ -441,7 +445,7 @@ impl FarmState {
 
         context.market.register_server_tag(server_tag, instrument);
         context.market.set_min_tick(instrument, min_tick);
-        log::info!("Subscribed instrument {} -> server_tag {}, minTick {}", instrument, server_tag, min_tick);
+        log::info!("Subscribed instrument {instrument} -> server_tag {server_tag}, minTick {min_tick}");
     }
 
     fn handle_ticker_setup(&mut self, msg: &[u8], context: &mut Context) {
@@ -460,7 +464,7 @@ impl FarmState {
         if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
             context.market.register_server_tag(server_tag, instrument);
             context.market.set_min_tick(instrument, min_tick);
-            log::info!("Ticker setup: con_id {} -> server_tag {}, minTick {}", con_id, server_tag, min_tick);
+            log::info!("Ticker setup: con_id {con_id} -> server_tag {server_tag}, minTick {min_tick}");
         }
     }
 
@@ -677,7 +681,7 @@ impl FarmState {
                 };
                 let req_id_str = req_id.to_string();
                 self.send_depth_one(conn, &req_id_str, &con_id_str, fix_exchange, fix_sec_type);
-                log::info!("Depth subscribe: req={} con_id={} exchange={}", req_id, con_id, fix_exchange);
+                log::info!("Depth subscribe: req={req_id} con_id={con_id} exchange={fix_exchange}");
             }
             hb.last_farm_sent = Instant::now();
         }
@@ -1040,7 +1044,7 @@ impl FarmState {
     fn take_resub_targets(
         &mut self,
         market: &crate::engine::market_state::MarketState,
-    ) -> Vec<(InstrumentId, i64, String, String, String, String, f64, String, String, i32)> {
+    ) -> Vec<MdResubTarget> {
         std::mem::take(&mut self.md_resub_info)
             .into_iter()
             .filter_map(|(id, sym, exch, st, ltd, strike, right, mult, mode)| {
@@ -1258,7 +1262,7 @@ mod decode_publish_tests {
             push_bits(&mut bits, 0, 1); // positive
             push_bits(&mut bits, value, (width * 8 - 1) as usize);
         }
-        let byte_count = (bits.len() + 7) / 8;
+        let byte_count = bits.len().div_ceil(8);
         let mut payload = vec![0u8; byte_count];
         for (i, &b) in bits.iter().enumerate() {
             if b == 1 {
@@ -1271,7 +1275,7 @@ mod decode_publish_tests {
         tick_payload.extend_from_slice(&payload);
 
         let body_len = 5 + tick_payload.len() + 15;
-        let mut msg = format!("8=O\x019={}\x01", body_len).into_bytes();
+        let mut msg = format!("8=O\x019={body_len}\x01").into_bytes();
         msg.extend_from_slice(b"35=P\x01");
         msg.extend_from_slice(&tick_payload);
         msg.extend_from_slice(b"\x018349=AABBCCDD\x01");
@@ -1688,7 +1692,7 @@ mod stale_ack_tests {
         for req_id in pending {
             assert!(
                 !farm.md_req_to_instrument.iter().any(|(r, _)| *r == req_id),
-                "request {} must not resolve after its unsubscribe", req_id,
+                "request {req_id} must not resolve after its unsubscribe",
             );
         }
     }
@@ -1723,7 +1727,7 @@ mod price_scaling_tests {
         push(&mut bits, 0, 1);  // sign
         push(&mut bits, value, (byte_width * 8 - 1) as usize);
 
-        let byte_count = (bits.len() + 7) / 8;
+        let byte_count = bits.len().div_ceil(8);
         let mut payload = vec![0u8; byte_count];
         for (i, &b) in bits.iter().enumerate() {
             if b == 1 {
@@ -1736,7 +1740,7 @@ mod price_scaling_tests {
         tick_payload.extend_from_slice(&payload);
 
         let body_len = 5 + tick_payload.len() + 15;
-        let mut msg = format!("8=O\x019={}\x01", body_len).into_bytes();
+        let mut msg = format!("8=O\x019={body_len}\x01").into_bytes();
         msg.extend_from_slice(b"35=P\x01");
         msg.extend_from_slice(&tick_payload);
         msg.extend_from_slice(b"\x018349=AABBCCDD\x01");
