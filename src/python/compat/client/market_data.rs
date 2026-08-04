@@ -4,7 +4,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::types::*;
-use super::EClient;
+use super::{wire_req_id, EClient};
 use super::super::contract::Contract;
 
 #[pymethods]
@@ -27,6 +27,26 @@ impl EClient {
         regulatory_snapshot: bool,
         mkt_data_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
+        let _ = mkt_data_options;
+        self.req_mkt_data_ex(py, req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, 0)
+    }
+
+    /// Like `req_mkt_data`, but encodes the market-data mode per request
+    /// (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several
+    /// subscriptions on the same contract can run in parallel and the caller
+    /// picks whichever feed has data. The frozen one keeps thinly-traded names
+    /// streaming after hours when the realtime feed is silent.
+    #[pyo3(signature = (req_id, contract, generic_tick_list="", snapshot=false, regulatory_snapshot=false, mode_9887=0))]
+    fn req_mkt_data_ex(
+        &self,
+        py: Python<'_>,
+        req_id: i64,
+        contract: &Contract,
+        generic_tick_list: &str,
+        snapshot: bool,
+        regulatory_snapshot: bool,
+        mode_9887: i32,
+    ) -> PyResult<()> {
         let tx = self.tx()?;
         let shared = self.shared_state()?;
 
@@ -47,7 +67,7 @@ impl EClient {
             &shared, &tx, req_id,
             con_id, &symbol, &exchange, &sec_type,
             &last_trade_date, strike, &right, &multiplier,
-            snapshot, &generic_tick_list, 0,
+            snapshot, &generic_tick_list, mode_9887,
         )).map_err(PyRuntimeError::new_err)?;
         self.core.cache_contract(contract.con_id, crate::api::types::Contract {
             con_id: contract.con_id,
@@ -62,7 +82,7 @@ impl EClient {
             ..Default::default()
         });
 
-        let _ = (regulatory_snapshot, mkt_data_options);
+        let _ = regulatory_snapshot;
 
         Ok(())
     }
@@ -178,7 +198,7 @@ impl EClient {
         let sec_type = if contract.sec_type.is_empty() { "STK".to_string() } else { contract.sec_type.clone() };
         let tx = self.tx()?;
         Self::send_control(py, &tx, ControlCommand::SubscribeDepth {
-            req_id: req_id as u32,
+            req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
             exchange,
             sec_type,
@@ -193,7 +213,7 @@ impl EClient {
     fn cancel_mkt_depth(&self, py: Python<'_>, req_id: i64, is_smart_depth: bool) -> PyResult<()> {
         let _ = is_smart_depth;
         let tx = self.tx()?;
-        Self::send_control(py, &tx, ControlCommand::UnsubscribeDepth { req_id: req_id as u32 })?;
+        Self::send_control(py, &tx, ControlCommand::UnsubscribeDepth { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }
 
@@ -212,7 +232,7 @@ impl EClient {
         let tx = self.tx()?;
         let _ = (bar_size, real_time_bars_options);
         Self::send_control(py, &tx, ControlCommand::SubscribeRealTimeBar {
-            req_id: req_id as u32,
+            req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
             symbol: contract.symbol.clone(),
             what_to_show: what_to_show.to_string(),
@@ -224,7 +244,7 @@ impl EClient {
     /// Cancel real-time bars.
     fn cancel_real_time_bars(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let tx = self.tx()?;
-        Self::send_control(py, &tx, ControlCommand::CancelRealTimeBar { req_id: req_id as u32 })?;
+        Self::send_control(py, &tx, ControlCommand::CancelRealTimeBar { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }
 

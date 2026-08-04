@@ -90,6 +90,15 @@ impl Drop for EClient {
     }
 }
 
+/// Narrow a caller's req_id to the width the request carries on the wire,
+/// refusing rather than truncating. `next_order_id()` starts at
+/// milliseconds-since-epoch, so the ibapi idiom of one counter for orders and
+/// requests is past `u32::MAX` on the first call, and a truncated id answers
+/// under one the caller never used (ibx#285).
+pub(crate) fn wire_req_id(req_id: i64) -> PyResult<u32> {
+    crate::api::client::wire_req_id(req_id).map_err(PyRuntimeError::new_err)
+}
+
 /// Adapt a Python callable to the second-factor [`CodeProvider`] the login gate
 /// calls. The gate runs it on a thread of its own, so it takes the GIL itself;
 /// `connect` has released it for the whole login. A raising callback becomes an
@@ -297,6 +306,17 @@ impl EClient {
     fn get_account_id(&self) -> String {
         self.account()
     }
+
+    /// Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
+    fn ccp_session_id(&self) -> PyResult<String> {
+        Ok(self.shared_state()?.reference.ccp_session_id())
+    }
+
+    /// Logical-name → host URL lookup from the gateway logon MiscUrls push
+    /// (e.g. `region_dam`). None when the gateway did not push this key.
+    fn misc_url(&self, key: &str) -> PyResult<Option<String>> {
+        Ok(self.shared_state()?.reference.misc_url(key))
+    }
 }
 
 impl EClient {
@@ -408,6 +428,178 @@ mod tests {
             let boom = py.eval(c"lambda *a: (_ for _ in ()).throw(ValueError('no code'))", None, None).unwrap().unbind();
             let err = code_provider_from_py(boom)(IbKeyChallenge::default()).unwrap_err();
             assert!(err.to_string().contains("no code"), "got {err}");
+        });
+    }
+
+    // ── Parity with the Rust EClient ──
+    //
+    // Most callers reach this engine through Python, so a request the Rust
+    // surface carries and this one drops is a defect the majority of users hit.
+
+    use crate::api::types::{Contract as ApiContract, Order as ApiOrder};
+    use crate::types::PositionInfo;
+
+    /// A wrapper that keeps every callback it is handed, so a test can read
+    /// back exactly what crossed the boundary.
+    fn recording_wrapper(py: Python<'_>) -> Py<PyAny> {
+        let ns = pyo3::types::PyDict::new(py);
+        py.run(
+            c"class W:
+    def __init__(self): self.calls = []
+    def __getattr__(self, name):
+        return lambda *args: self.calls.append((name,) + args)
+w = W()",
+            None,
+            Some(&ns),
+        ).unwrap();
+        ns.get_item("w").unwrap().unwrap().unbind()
+    }
+
+    /// A connected client whose engine is a channel the test reads.
+    fn wired_client(
+        py: Python<'_>,
+    ) -> (Py<EClient>, crossbeam_channel::Receiver<ControlCommand>, Arc<SharedState>, Py<PyAny>) {
+        let w = recording_wrapper(py);
+        let client = EClient::new(w.clone_ref(py));
+        let shared = Arc::new(SharedState::new());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        *client.shared.lock().unwrap() = Some(shared.clone());
+        *client.control_tx.lock().unwrap() = Some(tx);
+        *client.account_id.lock().unwrap() = Some("DU123".into());
+        client.connected.store(true, Ordering::Release);
+        (Py::new(py, client).unwrap(), rx, shared, w)
+    }
+
+    /// `next_order_id()` starts at milliseconds-since-epoch, so the ibapi idiom
+    /// of one counter for orders and requests hands every request an id past
+    /// `u32::MAX`. Truncating it answers under an id the caller never used.
+    #[test]
+    fn a_req_id_past_u32_is_refused_rather_than_truncated() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, _shared, _w) = wired_client(py);
+            let big = u32::MAX as i64 + 1;
+            for method in [
+                "cancel_historical_data", "cancel_head_time_stamp", "cancel_scanner_subscription",
+                "cancel_fundamental_data", "cancel_histogram_data", "cancel_mkt_depth",
+                "cancel_real_time_bars",
+            ] {
+                let Err(err) = client.call_method1(py, method, (big,)) else {
+                    panic!("{method} accepted a req_id it cannot carry");
+                };
+                assert!(err.to_string().contains("outside the range"), "{method}: got {err}");
+            }
+            assert!(rx.try_recv().is_err(), "a refused req_id must reach no engine command");
+        });
+    }
+
+    /// The Rust surface hands `position` the whole contract. An options
+    /// position whose strike, right and expiry are dropped names no contract
+    /// the caller can act on.
+    #[test]
+    fn a_position_carries_the_contract_it_is_a_position_in() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            client.get().core.cache_contract(756733, ApiContract {
+                con_id: 756733, symbol: "SPY".into(), sec_type: "OPT".into(),
+                exchange: "SMART".into(), currency: "USD".into(),
+                last_trade_date_or_contract_month: "20260320".into(),
+                strike: 600.0, right: "C".into(), multiplier: "100".into(),
+                ..Default::default()
+            });
+            shared.portfolio.set_position_info(PositionInfo {
+                con_id: 756733, position: 1, ..Default::default()
+            });
+            shared.portfolio.set_account_download_complete();
+            shared.portfolio.set_account(&Default::default());
+
+            client.call_method0(py, "req_positions").unwrap();
+            client.call_method1(py, "req_positions_multi", (1i64, "DU123", "")).unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            for (callback, index) in [("position", 2), ("position_multi", 4)] {
+                let expr = format!("[c[{index}] for c in w.calls if c[0] == '{callback}'][0]");
+                let c = py.eval(&std::ffi::CString::new(expr).unwrap(), Some(&g), None).unwrap();
+                for (field, want) in [
+                    ("symbol", "SPY"), ("sec_type", "OPT"), ("right", "C"),
+                    ("multiplier", "100"), ("last_trade_date_or_contract_month", "20260320"),
+                ] {
+                    let got: String = c.getattr(field).unwrap().extract().unwrap();
+                    assert_eq!(got, want, "{callback} dropped {field}");
+                }
+                let strike: f64 = c.getattr("strike").unwrap().extract().unwrap();
+                assert_eq!(strike, 600.0, "{callback} dropped strike");
+            }
+        });
+    }
+
+    /// `permId` is what survives a restart; the local order id does not.
+    #[test]
+    fn an_order_can_be_cancelled_by_its_perm_id() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, _shared, _w) = wired_client(py);
+            client.get().core.track_order(
+                77,
+                ApiContract { con_id: 756733, symbol: "SPY".into(), ..Default::default() },
+                ApiOrder { order_id: 77, total_quantity: 1.0, perm_id: 91011, ..Default::default() },
+                0,
+            );
+
+            client.call_method1(py, "cancel_order_by_perm_id", (91011i64,)).unwrap();
+            match rx.try_recv().expect("a cancel must reach the engine") {
+                ControlCommand::Order(OrderRequest::Cancel { order_id }) => assert_eq!(order_id, 77),
+                other => panic!("expected a Cancel, got {other:?}"),
+            }
+        });
+    }
+
+    /// The per-request market-data mode is what keeps a thinly-traded name
+    /// streaming after hours; without it this surface can only ask for realtime.
+    #[test]
+    fn req_mkt_data_ex_carries_the_market_data_mode() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, _shared, _w) = wired_client(py);
+            let contract = Py::new(py, Contract {
+                con_id: 756733, symbol: "SPY".into(), ..Default::default()
+            }).unwrap();
+            // The registration reply comes from an engine no test has, so the
+            // call itself fails; the commands are on the channel either way.
+            let _ = client.call_method1(py, "req_mkt_data_ex", (1i64, &contract, "", false, false, 2i32));
+
+            let mut mode = None;
+            while let Ok(cmd) = rx.try_recv() {
+                if let ControlCommand::Subscribe { mode_9887, .. } = cmd {
+                    mode = Some(mode_9887);
+                }
+            }
+            assert_eq!(mode, Some(2), "the requested market-data mode must reach the subscribe");
+        });
+    }
+
+    /// Both are read off the same logon push the Rust surface exposes; a webapp
+    /// REST call from Python needs them.
+    #[test]
+    fn the_session_id_and_url_map_from_logon_are_readable() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _w) = wired_client(py);
+            shared.reference.set_ccp_session_id("abc.0001".into());
+            shared.reference.set_misc_urls(
+                [("region_dam".to_string(), "api.ibkr.com".to_string())].into_iter().collect(),
+            );
+
+            let id: String = client.call_method0(py, "ccp_session_id").unwrap().extract(py).unwrap();
+            assert_eq!(id, "abc.0001");
+            let url: Option<String> = client.call_method1(py, "misc_url", ("region_dam",))
+                .unwrap().extract(py).unwrap();
+            assert_eq!(url.as_deref(), Some("api.ibkr.com"));
+            let missing: Option<String> = client.call_method1(py, "misc_url", ("nope",))
+                .unwrap().extract(py).unwrap();
+            assert_eq!(missing, None);
         });
     }
 }
