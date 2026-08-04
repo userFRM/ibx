@@ -10,10 +10,9 @@
 //! - The HotLoop pushes to SharedState sub-containers directly.
 //! - External callers read snapshots and poll events without blocking the hot loop.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::sync::{Condvar, Mutex};
-use std::cell::UnsafeCell;
 
 use std::collections::HashMap;
 use crate::control::historical::{HistoricalResponse, HeadTimestampResponse};
@@ -83,17 +82,47 @@ pub enum Event {
 }
 
 /// SeqLock-protected quote slot. Writer (hot loop) never blocks.
-/// Reader retries if it catches a write in progress.
-#[repr(C)]
+/// A quote published by the hot loop and read by any number of consumers.
+///
+/// The version counter is the freshness test: odd means a write is in flight,
+/// and a reader that sees the same even value on both sides of its snapshot
+/// took a whole one. The payload itself is held as words rather than a plain
+/// copy of the struct, so the concurrent read and write are both defined
+/// operations — a version counter can discard a torn snapshot but cannot make
+/// the racing access that produced it legal (ibx#388).
+#[repr(align(64))]
 pub struct SeqQuote {
     version: AtomicU64,
-    data: UnsafeCell<Quote>,
+    data: [AtomicI64; QUOTE_WORDS],
 }
 
-// SAFETY: SeqQuote is designed for single-writer (hot loop) + multiple-reader (Python).
-// The version counter ensures readers see consistent data.
-unsafe impl Sync for SeqQuote {}
-unsafe impl Send for SeqQuote {}
+/// `Quote` as its fields, in order. Both directions destructure or name every
+/// field, so a field added to `Quote` fails to compile here rather than being
+/// silently dropped from everything the seqlock publishes.
+const QUOTE_WORDS: usize = 15;
+
+fn quote_to_words(q: &Quote) -> [i64; QUOTE_WORDS] {
+    let Quote {
+        bid, ask, last, bid_size, ask_size, last_size, volume,
+        open, high, low, close, timestamp_ns,
+        bid_exch_mask, ask_exch_mask, last_exch_mask,
+    } = *q;
+    [
+        bid, ask, last, bid_size, ask_size, last_size, volume,
+        open, high, low, close, timestamp_ns as i64,
+        bid_exch_mask, ask_exch_mask, last_exch_mask,
+    ]
+}
+
+fn quote_from_words(w: [i64; QUOTE_WORDS]) -> Quote {
+    Quote {
+        bid: w[0], ask: w[1], last: w[2],
+        bid_size: w[3], ask_size: w[4], last_size: w[5], volume: w[6],
+        open: w[7], high: w[8], low: w[9], close: w[10],
+        timestamp_ns: w[11] as u64,
+        bid_exch_mask: w[12], ask_exch_mask: w[13], last_exch_mask: w[14],
+    }
+}
 
 impl Default for SeqQuote {
     fn default() -> Self {
@@ -105,18 +134,20 @@ impl SeqQuote {
     pub fn new() -> Self {
         Self {
             version: AtomicU64::new(0),
-            data: UnsafeCell::new(Quote::default()),
+            data: std::array::from_fn(|_| AtomicI64::new(0)),
         }
     }
 
     /// Write a quote (hot loop side). Never blocks.
     #[inline]
     pub fn write(&self, quote: &Quote) {
-        // AcqRel, not Release: the payload write below must not be reordered
+        // AcqRel, not Release: the payload writes below must not be reordered
         // above this store. Release alone only fences what precedes it; the
         // Acquire half is what pins *following* accesses inside the odd window.
         self.version.fetch_add(1, Ordering::AcqRel); // odd = writing
-        unsafe { *self.data.get() = *quote; }
+        for (slot, word) in self.data.iter().zip(quote_to_words(quote)) {
+            slot.store(word, Ordering::Relaxed);
+        }
         self.version.fetch_add(1, Ordering::Release); // even = stable
     }
 
@@ -126,10 +157,49 @@ impl SeqQuote {
         loop {
             let v1 = self.version.load(Ordering::Acquire);
             if v1 & 1 != 0 { continue; } // writer active
-            let q = unsafe { *self.data.get() };
+            let mut words = [0i64; QUOTE_WORDS];
+            for (word, slot) in words.iter_mut().zip(self.data.iter()) {
+                *word = slot.load(Ordering::Relaxed);
+            }
             let v2 = self.version.load(Ordering::Acquire);
-            if v1 == v2 { return q; }
+            if v1 == v2 { return quote_from_words(words); }
         }
+    }
+}
+
+#[cfg(test)]
+mod seq_quote_tests {
+    use super::*;
+
+    /// A reader and a writer working the same slot at once. The payload is
+    /// accessed as atomics, so the race the version counter guards against is
+    /// a defined operation rather than undefined behaviour — which is what
+    /// lets this run under Miri at all.
+    #[test]
+    fn a_concurrent_reader_never_sees_half_a_quote() {
+        let slot = std::sync::Arc::new(SeqQuote::new());
+        let writer = {
+            let slot = slot.clone();
+            std::thread::spawn(move || {
+                for i in 1..500i64 {
+                    // Every field moves together, so any snapshot mixing two
+                    // generations is visible as a field that disagrees.
+                    slot.write(&Quote {
+                        bid: i, ask: i, last: i,
+                        bid_size: i, ask_size: i, last_size: i, volume: i,
+                        open: i, high: i, low: i, close: i,
+                        timestamp_ns: i as u64,
+                        bid_exch_mask: i, ask_exch_mask: i, last_exch_mask: i,
+                    });
+                }
+            })
+        };
+        for _ in 0..500 {
+            let q = slot.read();
+            assert_eq!(q.bid, q.last_exch_mask, "a snapshot must come from one write");
+            assert_eq!(q.timestamp_ns as i64, q.bid, "including the field of another type");
+        }
+        writer.join().unwrap();
     }
 }
 
