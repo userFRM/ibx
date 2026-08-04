@@ -101,6 +101,9 @@ impl BenchSession {
                     username: gw_config.username.clone(),
                     password: gw_config.password.clone(),
                     paper: gw_config.paper,
+                    code_provider: gw_config.code_provider.clone(),
+                    ib_key_timeout_secs: gw_config.ib_key_timeout_secs,
+                    ib_key_token_sub_type: gw_config.ib_key_token_sub_type.clone(),
                 });
 
         let join = std::thread::spawn(move || {
