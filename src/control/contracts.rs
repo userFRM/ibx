@@ -335,8 +335,10 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     }
     // Either tag may carry it: a contract month on 200, a full expiry date on
     // 541. Reading only 200 left an option's expiry empty when the definition
-    // stated the date.
-    if let Some(v) = tags.get(&TAG_LAST_TRADE_DATE).or_else(|| tags.get(&TAG_MATURITY_DATE)) {
+    // stated the date, and preferring 200 where both are stated threw the
+    // exact expiry away — a weekly option handed back as its month no longer
+    // names the contract it came from.
+    if let Some(v) = tags.get(&TAG_MATURITY_DATE).or_else(|| tags.get(&TAG_LAST_TRADE_DATE)) {
         def.last_trade_date = v.clone();
     }
     if let Some(v) = tags.get(&TAG_STRIKE) {
@@ -1078,6 +1080,26 @@ mod tests {
         });
         assert_eq!(store.len(), 1);
         assert_eq!(store.get(265598).unwrap().long_name, "APPLE INC");
+    }
+
+    /// A definition that states both keeps the one that names the contract.
+    /// Handing back the month instead turned a weekly option into something
+    /// that no longer identifies what it came from.
+    #[test]
+    fn the_exact_expiry_wins_over_the_month_it_falls_in() {
+        let msg = fix::fix_build(
+            &[
+                (TAG_MSG_TYPE, "d"),
+                (TAG_IB_CON_ID, "12345"),
+                (TAG_SYMBOL, "SPY"),
+                (TAG_SECURITY_TYPE, "OPT"),
+                (TAG_LAST_TRADE_DATE, "202609"),
+                (TAG_MATURITY_DATE, "20260918"),
+            ],
+            1,
+        );
+        let def = super::parse_secdef_response(&msg).unwrap();
+        assert_eq!(def.last_trade_date, "20260918");
     }
 
     /// An expiry is a date and a contract month is not, and the two ride

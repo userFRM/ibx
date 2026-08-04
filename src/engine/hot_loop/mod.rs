@@ -666,6 +666,7 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelRealTimeBar { req_id } => {
+                    self.hmds.rtbar_resub.retain(|r| r.req_id != req_id);
                     if let Some(pos) = self.hmds.rtbar_subs.iter().position(|(_, rid, _, _)| *rid == req_id) {
                         let (query_id, _, ticker_id, _) = self.hmds.rtbar_subs.remove(pos);
                         let cancel_id = ticker_id.map(|t| t.to_string()).unwrap_or(query_id);
@@ -1060,6 +1061,11 @@ impl HotLoop {
                 log::info!("CCP auto-reconnect succeeded (attempt {})", self.ccp_reconnect_attempt);
                 self.reconnect_ccp(conn);
                 self.ccp_reconnect_attempt = 0;
+                // The request for these goes out on this socket even though
+                // the bars come back on the historical one, so an HMDS that
+                // recovered first could not send them and left them recorded
+                // but silent.
+                self.resubscribe_keep_up_to_date();
                 self.announce_reconnected();
                 self.ccp_next_attempt_at = None;
                 self.hb.ccp_up_since = Instant::now();

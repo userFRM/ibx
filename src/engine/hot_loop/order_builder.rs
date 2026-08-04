@@ -548,6 +548,10 @@ pub(crate) fn drain_and_send_orders(
                 // encoder used to do for every field, so a caller changing the
                 // order type, the time-in-force or the trigger had the change
                 // accepted, acknowledged, and dropped (ibx#349, ibx#372).
+                // Whether the caller named the type, kept before the fallback
+                // below overwrites it. A trigger on the request only means one
+                // when the replace also states what it is replacing into.
+                let ord_type_stated = ord_type != 0;
                 let ord_type = if ord_type != 0 { ord_type } else { orig.map_or(b'2', |o| o.ord_type) };
                 let tif = if tif != 0 { tif } else { orig.map_or(b'0', |o| o.tif) };
                 // Modify carries no instrument, so `snap_prices` cannot reach
@@ -580,8 +584,20 @@ pub(crate) fn drain_and_send_orders(
                 // so its replace does restate that on 99 — unchanged from
                 // before, and one of the reasons those types are refused a
                 // modify outright (ibx#334).
-                let carries_trigger =
-                    trigger_only || (matches!(ord_type, b'4' | b'K') && orig_stop != 0);
+                // A two-legged type carries a trigger when it has one, and it
+                // has one either because the resting order did or because this
+                // replace states it. Reading only the resting order sent a
+                // stop-limit with no tag 99 at all when a limit was replaced
+                // into one, which is not a stop-limit the gateway can accept.
+                // A two-legged type carries a trigger when it has one: either
+                // the resting order had one, or this replace states both the
+                // type and the trigger. Reading only the resting order sent a
+                // stop-limit with no tag 99 when a limit was replaced into one.
+                // Reading the request alone is worse — the public client fills
+                // it from aux_price, which on a market-to-limit is meaningless.
+                let carries_trigger = trigger_only
+                    || (matches!(ord_type, b'4' | b'K')
+                        && (orig_stop != 0 || (ord_type_stated && stop_price != 0)));
                 let new_stop = if trigger_only && stop_price == 0 {
                     price
                 } else if carries_trigger && stop_price != 0 {
@@ -692,6 +708,10 @@ pub(crate) fn drain_and_send_orders(
                 // See: https://github.com/deepentropy/ibx/issues/116
                 log::error!("Failed to send order {oid}: {e} — notifying application");
                 if oid != 0 {
+                    // Tracking stops, but the ClOrdID chain stays: a replace
+                    // that never went out leaves the previous version working
+                    // at the broker, and cancelling it means stating the
+                    // ClOrdID the broker last recorded.
                     context.remove_order(oid);
                     shared.orders.push_order_update(OrderUpdate {
                         order_id: oid,
@@ -1821,6 +1841,34 @@ mod modify_wire_tests {
                 "{ord_type} is not trigger-only and keeps tag 44: {sent}",
             );
         }
+    }
+
+    /// The other side of the same rule: a replace that states both the type
+    /// and the trigger is stating a real one. Deciding from the resting order
+    /// alone sent a stop-limit with no tag 99, which is not a stop-limit.
+    #[test]
+    fn a_replace_into_a_stop_limit_states_the_trigger_it_was_given() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        // A plain limit, so there is no resting trigger to fall back on.
+        context.insert_order(crate::types::Order::new(
+            7, instrument, Side::Sell, 1, 100 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+        ));
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            new_order_id: 8,
+            order_id: 7,
+            ord_type: b'4',
+            tif: 0,
+            price: 101 * crate::types::PRICE_SCALE,
+            qty: 1,
+            outside_rth: false,
+            stop_price: 99 * crate::types::PRICE_SCALE,
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|40=4|"), "it is a stop-limit now: {sent}");
+        assert!(sent.contains("|44=101|"), "with its limit leg: {sent}");
+        assert!(sent.contains("|99=99|"), "and the trigger it was given: {sent}");
     }
 
     /// A type that carries no trigger must not acquire one. The public client

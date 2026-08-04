@@ -48,6 +48,11 @@ pub(crate) struct HmdsState {
     /// The request goes out on CCP and the bars come back on HMDS, so losing
     /// the HMDS socket ends the stream even though nothing cancelled it.
     pub(crate) kut_resub: Vec<KutRequest>,
+    /// The live five-second bar streams, in the shape their request needs to
+    /// go out again. `rtbar_subs` holds the routing for the session that is
+    /// running and cannot rebuild a request, so a reconnect had nothing to
+    /// send and the bars stopped for good.
+    pub(crate) rtbar_resub: Vec<RtBarRequest>,
     /// Scanner results parked for contract-detail enrichment before dispatch.
     /// Drained by the engine top-level after each hmds.poll, then handed to
     /// `CcpState::start_scanner_enrichment`.
@@ -100,6 +105,15 @@ fn hist_exchange(exchange: &str) -> String {
     if exchange.is_empty() { "SMART".to_string() } else { exchange.to_string() }
 }
 
+/// A live five-second bar stream, in the shape its request needs to go again.
+#[derive(Clone)]
+pub(crate) struct RtBarRequest {
+    pub req_id: u32,
+    pub con_id: i64,
+    pub what_to_show: String,
+    pub use_rth: bool,
+}
+
 /// A live keepUpToDate stream, in the shape its request needs to go out again.
 #[derive(Clone)]
 pub(crate) struct KutRequest {
@@ -137,6 +151,7 @@ impl HmdsState {
             rtbar_subs: Vec::new(),
             keep_up_to_date_reqs: std::collections::HashSet::new(),
             kut_resub: Vec::new(),
+            rtbar_resub: Vec::new(),
             cold_scanner_results: Vec::new(),
         }
     }
@@ -173,6 +188,10 @@ impl HmdsState {
         let stale: Vec<_> = self.tbt_subscriptions.drain(..).collect();
         let wanted = stale.len();
         for (instrument, _dead_ticker_id, tbt_type) in stale {
+            // Prices arrive as deltas against the last pair seen. The pair the
+            // dead session left would have the new session's first delta added
+            // to it, and every price after that would carry the error.
+            self.tbt_price_state[instrument as usize] = (0, 0, 0);
             match market.con_id(instrument) {
                 Some(con_id) => self.send_tbt_subscribe(con_id, instrument, tbt_type, hmds_conn, hb),
                 None => log::warn!(
@@ -185,6 +204,20 @@ impl HmdsState {
             "HMDS reconnected, re-subscribed {}/{} tick-by-tick streams",
             self.tbt_subscriptions.len(), wanted,
         );
+
+        // Five-second bars are routed by a ticker id the dead session issued.
+        // The routing goes with it and the requests are sent again.
+        let bars: Vec<_> = self.rtbar_resub.clone();
+        self.rtbar_subs.clear();
+        self.rtbar_resub.clear();
+        for r in &bars {
+            self.send_realtime_bar_subscribe(
+                r.req_id, r.con_id, "", &r.what_to_show, r.use_rth, hmds_conn, hb,
+            );
+        }
+        if !bars.is_empty() {
+            log::info!("HMDS reconnected, re-subscribed {} real-time bar streams", bars.len());
+        }
     }
 
     pub(crate) fn poll(
@@ -1206,6 +1239,10 @@ impl HmdsState {
             log::info!("Sent rtbar subscribe: req_id={req_id} con_id={con_id} what={what_to_show}");
         }
         self.rtbar_subs.push((query_id, req_id, None, 0.01));
+        self.rtbar_resub.retain(|r| r.req_id != req_id);
+        self.rtbar_resub.push(RtBarRequest {
+            req_id, con_id, what_to_show: what_to_show.to_string(), use_rth,
+        });
     }
 
     pub(crate) fn send_schedule_request(&mut self, req_id: u32, con_id: i64, end_date_time: &str, duration: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
@@ -1345,9 +1382,41 @@ mod tests {
         );
 
         assert!(!hmds.disconnected, "the transport is live again");
+        assert_eq!(
+            hmds.tbt_price_state[instrument as usize], (0, 0, 0),
+            "the dead session's prices go with it, or its last pair takes the next delta",
+        );
         assert_eq!(hmds.tbt_subscriptions.len(), 1, "the resolvable stream is back");
         assert_eq!(hmds.tbt_subscriptions[0].0, instrument);
         assert_ne!(hmds.tbt_subscriptions[0].1, "tbt_0", "under a new id, not the dead session's");
+    }
+
+    /// The routing for a five-second bar stream is a ticker id the session
+    /// issued. A reconnect that kept the routing and re-sent nothing left the
+    /// bars stopped with the connection reporting healthy.
+    #[test]
+    fn a_reconnect_asks_for_the_five_second_bars_again() {
+        let mut hmds = HmdsState::new();
+        let market = crate::engine::market_state::MarketState::new();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(sock).unwrap());
+        let mut hb = HeartbeatState::new();
+        hmds.send_realtime_bar_subscribe(9, 265598, "", "TRADES", true, &mut conn, &mut hb);
+        let first = hmds.rtbar_subs[0].0.clone();
+
+        let sock2 = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_peer2, _) = listener.accept().unwrap();
+        hmds.disconnected = true;
+        hmds.reconnect(
+            crate::protocol::connection::Connection::new_raw(sock2).unwrap(),
+            &mut conn, &market, &mut hb,
+        );
+
+        assert_eq!(hmds.rtbar_subs.len(), 1, "the stream is asked for again");
+        assert_ne!(hmds.rtbar_subs[0].0, first, "under a new query, not the dead session's");
+        assert_eq!(hmds.rtbar_subs[0].1, 9, "still answering the caller's request id");
     }
 
     /// registered as pending and reported to the caller as sent. That waiter is
