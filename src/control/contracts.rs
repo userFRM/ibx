@@ -15,6 +15,9 @@ pub const TAG_SECURITY_TYPE: u32 = 167;
 pub const TAG_EXCHANGE: u32 = 100;
 pub const TAG_CURRENCY: u32 = 15;
 pub const TAG_LAST_TRADE_DATE: u32 = 200;
+/// MaturityDate. Carries a full expiry date where 200 carries a contract
+/// month, so a definition that states one states it here.
+pub const TAG_MATURITY_DATE: u32 = 541;
 pub const TAG_RIGHT: u32 = 201;
 pub const TAG_STRIKE: u32 = 202;
 pub const TAG_SECURITY_EXCHANGE: u32 = 207;
@@ -330,7 +333,10 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&TAG_IB_MARKET_RULE_ID) {
         def.market_rule_id = v.parse().ok();
     }
-    if let Some(v) = tags.get(&TAG_LAST_TRADE_DATE) {
+    // Either tag may carry it: a contract month on 200, a full expiry date on
+    // 541. Reading only 200 left an option's expiry empty when the definition
+    // stated the date.
+    if let Some(v) = tags.get(&TAG_LAST_TRADE_DATE).or_else(|| tags.get(&TAG_MATURITY_DATE)) {
         def.last_trade_date = v.clone();
     }
     if let Some(v) = tags.get(&TAG_STRIKE) {
@@ -1072,6 +1078,27 @@ mod tests {
         });
         assert_eq!(store.len(), 1);
         assert_eq!(store.get(265598).unwrap().long_name, "APPLE INC");
+    }
+
+    /// An expiry is a date and a contract month is not, and the two ride
+    /// different tags. Reading only MaturityMonthYear left the expiry empty on
+    /// any definition that stated the date.
+    #[test]
+    fn an_expiry_stated_as_a_date_is_read_from_its_own_tag() {
+        let msg = fix::fix_build(
+            &[
+                (TAG_MSG_TYPE, "d"),
+                (TAG_IB_CON_ID, "12345"),
+                (TAG_SYMBOL, "AAPL"),
+                (TAG_SECURITY_TYPE, "OPT"),
+                (TAG_MATURITY_DATE, "20260918"),
+                (TAG_STRIKE, "200.0"),
+                (TAG_RIGHT, "C"),
+            ],
+            1,
+        );
+        let def = super::parse_secdef_response(&msg).unwrap();
+        assert_eq!(def.last_trade_date, "20260918");
     }
 
     #[test]
