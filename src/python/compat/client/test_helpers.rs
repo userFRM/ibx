@@ -87,7 +87,7 @@ impl EClient {
             "BUY" => Side::Buy,
             "SELL" => Side::Sell,
             "SSHORT" => Side::ShortSell,
-            _ => return Err(PyRuntimeError::new_err(format!("Invalid side: {}", side))),
+            _ => return Err(PyRuntimeError::new_err(format!("Invalid side: {side}"))),
         };
         let ps = PRICE_SCALE as f64;
         shared.orders.push_fill(Fill {
@@ -119,7 +119,7 @@ impl EClient {
             "Cancelled" => OrderStatus::Cancelled,
             "Rejected" => OrderStatus::Rejected,
             "Inactive" => OrderStatus::Inactive,
-            _ => return Err(PyRuntimeError::new_err(format!("Invalid status: {}", status))),
+            _ => return Err(PyRuntimeError::new_err(format!("Invalid status: {status}"))),
         };
         shared.orders.push_order_update(OrderUpdate {
             order_id, instrument, status: st, filled_qty, remaining_qty, perm_id: 0, parent_id: 0, timestamp_ns: 100,
@@ -147,7 +147,7 @@ impl EClient {
             "Filled" => OrderStatus::Filled,
             "Cancelled" => OrderStatus::Cancelled,
             "Rejected" => OrderStatus::Rejected,
-            _ => return Err(PyRuntimeError::new_err(format!("Invalid status: {}", status))),
+            _ => return Err(PyRuntimeError::new_err(format!("Invalid status: {status}"))),
         };
         shared.orders.push_completed_order(crate::types::CompletedOrder {
             order_id, instrument, status: st, filled_qty, timestamp_ns: 100,
@@ -352,6 +352,6 @@ impl EClient {
     fn _test_push_disconnect_event(&self) -> PyResult<()> {
         let tx = self._test_event_tx.lock().unwrap();
         let tx = tx.as_ref().ok_or_else(|| PyRuntimeError::new_err("No event channel"))?;
-        tx.send(Event::Disconnected).map_err(|e| PyRuntimeError::new_err(format!("{}", e)))
+        tx.send(Event::Disconnected).map_err(|e| PyRuntimeError::new_err(format!("{e}")))
     }
 }

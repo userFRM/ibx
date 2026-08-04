@@ -27,6 +27,9 @@ fn spy() -> Contract {
     Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() }
 }
 
+/// Case name paired with the setter that gives an order the named attribute.
+type OrderCase = (&'static str, fn(&mut Order));
+
 // ═══════════════════════════════════════════════════════════════════
 //  Algo parsing
 // ═══════════════════════════════════════════════════════════════════
@@ -157,7 +160,7 @@ fn a_fractional_quantity_is_refused_rather_than_truncated() {
         tif: "DAY".into(), ..Default::default()
     };
     let err = client.place_order(9101, &spy(), &order).expect_err("must be refused");
-    assert!(format!("{err}").contains("whole number"), "the error says why: {err}");
+    assert!(err.to_string().contains("whole number"), "the error says why: {err}");
     assert!(rx.try_recv().is_err(), "and nothing reaches the wire");
 }
 
@@ -275,7 +278,7 @@ fn a_type_the_replace_cannot_restate_is_not_modified() {
 /// the type.
 #[test]
 fn an_order_defined_by_more_than_its_type_is_not_modified() {
-    let cases: Vec<(&str, fn(&mut Order))> = vec![
+    let cases: Vec<OrderCase> = vec![
         ("adaptive", |o| o.algo_strategy = "Adaptive".into()),
         ("algo", |o| o.algo_strategy = "Vwap".into()),
         ("adjustable stop", |o| o.adjusted_order_type = "TRAIL".into()),
@@ -345,7 +348,7 @@ fn a_limit_if_touched_is_not_modified() {
 /// the attribute through on the very message that was supposed to carry it.
 #[test]
 fn an_attribute_added_by_the_modify_is_refused_too() {
-    let cases: Vec<(&str, fn(&mut Order))> = vec![
+    let cases: Vec<OrderCase> = vec![
         ("bracket child", |o| o.parent_id = 4242),
         ("OCA member", |o| o.oca_group = "bracket_1".into()),
         ("iceberg", |o| o.display_size = 100),
@@ -530,28 +533,28 @@ fn parse_algo_unsupported() {
 fn parse_algo_vwap_rejects_malformed_max_pct_vol() {
     let params = vec![TagValue { tag: "maxPctVol".into(), value: "abc".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("maxPctVol"), "got: {}", err);
+    assert!(err.contains("maxPctVol"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_vwap_rejects_nan_max_pct_vol() {
     let params = vec![TagValue { tag: "maxPctVol".into(), value: "NaN".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("maxPctVol"), "got: {}", err);
+    assert!(err.contains("maxPctVol"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_vwap_rejects_infinite_max_pct_vol() {
     let params = vec![TagValue { tag: "maxPctVol".into(), value: "inf".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("maxPctVol"), "got: {}", err);
+    assert!(err.contains("maxPctVol"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_vwap_rejects_malformed_bool() {
     let params = vec![TagValue { tag: "noTakeLiq".into(), value: "yes".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("noTakeLiq"), "got: {}", err);
+    assert!(err.contains("noTakeLiq"), "got: {err}");
 }
 
 #[test]
@@ -561,14 +564,14 @@ fn parse_algo_vwap_rejects_empty_max_pct_vol() {
     // not silently coerced into the "absent" default of 0.0.
     let params = vec![TagValue { tag: "maxPctVol".into(), value: "".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("maxPctVol"), "got: {}", err);
+    assert!(err.contains("maxPctVol"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_vwap_rejects_empty_bool() {
     let params = vec![TagValue { tag: "noTakeLiq".into(), value: "".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("noTakeLiq"), "got: {}", err);
+    assert!(err.contains("noTakeLiq"), "got: {err}");
 }
 
 #[test]
@@ -576,7 +579,7 @@ fn parse_algo_arrival_price_rejects_unknown_risk_aversion() {
     // The issue's own repro: a typo must be refused, not silently sent as Neutral.
     let params = vec![TagValue { tag: "riskAversion".into(), value: "Aggresive".into() }];
     let err = parse_algo_params("arrivalpx", &params).unwrap_err();
-    assert!(err.contains("riskAversion"), "got: {}", err);
+    assert!(err.contains("riskAversion"), "got: {err}");
 }
 
 #[test]
@@ -594,21 +597,21 @@ fn parse_algo_arrival_price_rejects_empty_risk_aversion() {
     // never set may default to Neutral.
     let params = vec![TagValue { tag: "riskAversion".into(), value: "".into() }];
     let err = parse_algo_params("arrivalpx", &params).unwrap_err();
-    assert!(err.contains("riskAversion"), "got: {}", err);
+    assert!(err.contains("riskAversion"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_dark_ice_rejects_malformed_display_size() {
     let params = vec![TagValue { tag: "displaySize".into(), value: "abc".into() }];
     let err = parse_algo_params("darkice", &params).unwrap_err();
-    assert!(err.contains("displaySize"), "got: {}", err);
+    assert!(err.contains("displaySize"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_dark_ice_rejects_negative_display_size() {
     let params = vec![TagValue { tag: "displaySize".into(), value: "-5".into() }];
     let err = parse_algo_params("darkice", &params).unwrap_err();
-    assert!(err.contains("displaySize"), "got: {}", err);
+    assert!(err.contains("displaySize"), "got: {err}");
 }
 
 #[test]
@@ -624,7 +627,7 @@ fn parse_algo_dark_ice_defaults_display_size_when_absent() {
 fn parse_algo_dark_ice_rejects_empty_display_size() {
     let params = vec![TagValue { tag: "displaySize".into(), value: "".into() }];
     let err = parse_algo_params("darkice", &params).unwrap_err();
-    assert!(err.contains("displaySize"), "got: {}", err);
+    assert!(err.contains("displaySize"), "got: {err}");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -693,7 +696,7 @@ fn req_mkt_data_sends_register_and_subscribe() {
             assert_eq!(con_id, 756733);
             assert_eq!(symbol, "SPY");
         }
-        _ => panic!("expected Subscribe, got {:?}", cmd2),
+        _ => panic!("expected Subscribe, got {cmd2:?}"),
     }
 }
 
@@ -704,7 +707,7 @@ fn req_mkt_data_defaults_to_realtime_mode() {
     let _register = rx.try_recv().unwrap();
     match rx.try_recv().unwrap() {
         ControlCommand::Subscribe { mode_9887, .. } => assert_eq!(mode_9887, 0),
-        other => panic!("expected Subscribe, got {:?}", other),
+        other => panic!("expected Subscribe, got {other:?}"),
     }
 }
 
@@ -719,7 +722,7 @@ fn req_mkt_data_ex_propagates_mode_9887() {
                 assert_eq!(mode_9887, mode);
                 assert_eq!(con_id, 756733);
             }
-            other => panic!("expected Subscribe, got {:?}", other),
+            other => panic!("expected Subscribe, got {other:?}"),
         }
     }
 }
@@ -733,7 +736,7 @@ fn req_mkt_data_duplicate_instrument_is_rejected() {
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
 
     let err = client.req_mkt_data(2, &spy(), "", false, false).unwrap_err();
-    assert!(err.contains("req_id 1"), "got: {}", err);
+    assert!(err.contains("req_id 1"), "got: {err}");
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
 }
 
@@ -815,7 +818,7 @@ fn place_order_market() {
     let cmd = rx.try_recv().unwrap();
     match cmd {
         ControlCommand::Order(OrderRequest::SubmitEx { qty, kind: OrderKind::Market, .. }) => assert_eq!(qty, 100),
-        _ => panic!("expected a Market order, got {:?}", cmd),
+        _ => panic!("expected a Market order, got {cmd:?}"),
     }
 }
 
@@ -835,7 +838,7 @@ fn place_order_limit() {
             assert_eq!(qty, 50);
             assert_eq!(price, (150.25 * PRICE_SCALE_F) as i64);
         }
-        _ => panic!("expected a Limit order, got {:?}", cmd),
+        _ => panic!("expected a Limit order, got {cmd:?}"),
     }
 }
 
@@ -857,7 +860,7 @@ fn place_order_trailing_stop_carries_initial_trigger() {
             assert_eq!(trail_amt, (0.50 * PRICE_SCALE_F) as i64);
             assert_eq!(trail_stop_price, (10.00 * PRICE_SCALE_F) as i64);
         }
-        cmd => panic!("expected a TrailingStop order, got {:?}", cmd),
+        cmd => panic!("expected a TrailingStop order, got {cmd:?}"),
     }
 }
 
@@ -875,7 +878,7 @@ fn place_order_trailing_stop_without_trigger_is_unset() {
         ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::TrailingStop { trail_stop_price, .. }, .. }) => {
             assert_eq!(trail_stop_price, 0);
         }
-        cmd => panic!("expected a TrailingStop order, got {:?}", cmd),
+        cmd => panic!("expected a TrailingStop order, got {cmd:?}"),
     }
 }
 
@@ -909,7 +912,7 @@ fn place_order_adjustable_trail_carries_trailing_amount_and_unit() {
             assert_eq!(adjusted_trailing_amount, (0.50 * PRICE_SCALE_F) as i64);
             assert_eq!(adjustable_trailing_unit, 0);
         }
-        _ => panic!("expected SubmitEx carrying AdjustableStop, got {:?}", cmd),
+        _ => panic!("expected SubmitEx carrying AdjustableStop, got {cmd:?}"),
     }
 }
 
@@ -937,12 +940,12 @@ fn place_order_adjustable_stop_carries_bracket_attrs_and_tif() {
     match rx.try_recv().unwrap() {
         ControlCommand::Order(OrderRequest::SubmitEx { kind, tif, attrs, .. }) => {
             assert!(matches!(kind, crate::types::OrderKind::AdjustableStop { .. }),
-                "adjustable stop must route through the extended path; got {:?}", kind);
+                "adjustable stop must route through the extended path; got {kind:?}");
             assert_eq!(tif, b'1', "tif must survive as GTC");
             assert_eq!(attrs.parent_id, 42, "bracket child must stay linked to its parent");
             assert_eq!(attrs.oca_group_str, "bracket_1", "OCA group must survive");
         }
-        cmd => panic!("expected SubmitEx carrying AdjustableStop, got {:?}", cmd),
+        cmd => panic!("expected SubmitEx carrying AdjustableStop, got {cmd:?}"),
     }
 }
 
@@ -968,7 +971,7 @@ fn modify_carries_outside_rth_from_the_resubmitted_order() {
         ControlCommand::Order(OrderRequest::Modify { outside_rth, .. }) => {
             assert!(!outside_rth, "a modify must not opt the order into the extended session");
         }
-        cmd => panic!("expected Modify, got {:?}", cmd),
+        cmd => panic!("expected Modify, got {cmd:?}"),
     }
 
     // And it survives when the caller does want it.
@@ -978,7 +981,7 @@ fn modify_carries_outside_rth_from_the_resubmitted_order() {
         ControlCommand::Order(OrderRequest::Modify { outside_rth, .. }) => {
             assert!(outside_rth, "an explicit outside_rth=true must reach the replace");
         }
-        cmd => panic!("expected Modify, got {:?}", cmd),
+        cmd => panic!("expected Modify, got {cmd:?}"),
     }
 }
 
@@ -1003,7 +1006,7 @@ fn place_order_adjustable_trail_percent_unit_passes_through() {
             assert_eq!(adjustable_trailing_unit, 100);
             assert_eq!(adjusted_trailing_amount, (1.00 * PRICE_SCALE_F) as i64);
         }
-        cmd => panic!("expected SubmitEx carrying AdjustableStop, got {:?}", cmd),
+        cmd => panic!("expected SubmitEx carrying AdjustableStop, got {cmd:?}"),
     }
 }
 
@@ -1022,7 +1025,7 @@ fn place_order_limit_gtc_carries_the_tif() {
         ControlCommand::Order(OrderRequest::SubmitEx { tif, kind: OrderKind::Limit { .. }, .. }) => {
             assert_eq!(tif, b'1'); // GTC
         }
-        _ => panic!("expected a limit order, got {:?}", cmd),
+        _ => panic!("expected a limit order, got {cmd:?}"),
     }
 }
 
@@ -1041,7 +1044,7 @@ fn place_order_limit_hidden_carries_the_attribute() {
         ControlCommand::Order(OrderRequest::SubmitEx { attrs, kind: OrderKind::Limit { .. }, .. }) => {
             assert!(attrs.hidden);
         }
-        _ => panic!("expected a limit order, got {:?}", cmd),
+        _ => panic!("expected a limit order, got {cmd:?}"),
     }
 }
 
@@ -1067,7 +1070,7 @@ fn place_order_stop_with_parent_and_gtc_uses_submit_ex() {
             assert_eq!(attrs.parent_id, 42);
             assert_eq!(attrs.oca_group, 77);
         }
-        _ => panic!("expected a Ex order, got {:?}", cmd),
+        _ => panic!("expected a Ex order, got {cmd:?}"),
     }
 }
 
@@ -1088,7 +1091,7 @@ fn place_order_market_outside_rth_uses_submit_ex() {
             assert_eq!(tif, b'0'); // DAY
             assert!(attrs.outside_rth);
         }
-        _ => panic!("expected a Ex order, got {:?}", cmd),
+        _ => panic!("expected a Ex order, got {cmd:?}"),
     }
 }
 
@@ -1112,7 +1115,7 @@ fn place_order_trailing_amount_with_oca_uses_submit_ex() {
             assert_eq!(attrs.oca_group_str, "exit_9");
             assert_eq!(attrs.oca_type, 2); // ibx#215
         }
-        _ => panic!("expected a Ex order, got {:?}", cmd),
+        _ => panic!("expected a Ex order, got {cmd:?}"),
     }
 }
 
@@ -1145,7 +1148,7 @@ fn place_order_transmit_false_is_rejected() {
         lmt_price: 100.0, transmit: false, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.to_string().contains("transmit=false"), "got: {}", err);
+    assert!(err.to_string().contains("transmit=false"), "got: {err}");
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
 }
 
@@ -1158,7 +1161,7 @@ fn place_order_unknown_tif_is_rejected() {
         lmt_price: 100.0, tif: "GTX".into(), ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.to_string().contains("tif"), "got: {}", err);
+    assert!(err.to_string().contains("tif"), "got: {err}");
     assert!(rx.try_recv().is_err());
 }
 
@@ -1171,7 +1174,7 @@ fn place_order_all_or_none_trail_is_rejected() {
         aux_price: 2.0, all_or_none: true, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.to_string().contains("all_or_none"), "got: {}", err);
+    assert!(err.to_string().contains("all_or_none"), "got: {err}");
     assert!(rx.try_recv().is_err());
 }
 
@@ -1203,7 +1206,7 @@ fn place_order_stop() {
             assert!(matches!(side, Side::Sell));
             assert_eq!(stop_price, (145.0 * PRICE_SCALE_F) as i64);
         }
-        _ => panic!("expected a Stop order, got {:?}", cmd),
+        _ => panic!("expected a Stop order, got {cmd:?}"),
     }
 }
 
@@ -1223,7 +1226,7 @@ fn place_order_stop_limit() {
             assert_eq!(price, (144.0 * PRICE_SCALE_F) as i64);
             assert_eq!(stop_price, (145.0 * PRICE_SCALE_F) as i64);
         }
-        _ => panic!("expected a StopLimit order, got {:?}", cmd),
+        _ => panic!("expected a StopLimit order, got {cmd:?}"),
     }
 }
 
@@ -1242,7 +1245,7 @@ fn place_order_trailing_stop_amount() {
         ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::TrailingStop { trail_amt, .. }, .. }) => {
             assert_eq!(trail_amt, (2.0 * PRICE_SCALE_F) as i64);
         }
-        _ => panic!("expected a TrailingStop order, got {:?}", cmd),
+        _ => panic!("expected a TrailingStop order, got {cmd:?}"),
     }
 }
 
@@ -1261,7 +1264,7 @@ fn place_order_trailing_stop_percent() {
         ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::TrailPct { trail_pct, .. }, .. }) => {
             assert_eq!(trail_pct, 500); // 5.0 * 100
         }
-        _ => panic!("expected a TrailingStopPct order, got {:?}", cmd),
+        _ => panic!("expected a TrailingStopPct order, got {cmd:?}"),
     }
 }
 
@@ -1869,7 +1872,7 @@ fn place_order_rejects_nan_lmt_price() {
         lmt_price: f64::NAN, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("lmt_price"), "got: {}", err);
+    assert!(err.contains("lmt_price"), "got: {err}");
 }
 
 #[test]
@@ -1881,7 +1884,7 @@ fn place_order_rejects_infinite_lmt_price() {
         lmt_price: f64::INFINITY, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("lmt_price"), "got: {}", err);
+    assert!(err.contains("lmt_price"), "got: {err}");
 }
 
 #[test]
@@ -1895,7 +1898,7 @@ fn place_order_rejects_lmt_price_that_overflows_the_wire() {
         lmt_price: 1.0e12, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("lmt_price"), "got: {}", err);
+    assert!(err.contains("lmt_price"), "got: {err}");
 }
 
 #[test]
@@ -1911,7 +1914,7 @@ fn place_order_rejects_lmt_price_at_the_exact_wire_boundary() {
         lmt_price: i64::MAX as f64 / PRICE_SCALE_F, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("lmt_price"), "got: {}", err);
+    assert!(err.contains("lmt_price"), "got: {err}");
 }
 
 #[test]
@@ -1925,7 +1928,7 @@ fn place_order_rejects_nan_aux_price() {
         aux_price: f64::NAN, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("aux_price"), "got: {}", err);
+    assert!(err.contains("aux_price"), "got: {err}");
 }
 
 #[test]
@@ -1936,7 +1939,7 @@ fn place_order_rejects_negative_quantity() {
         action: "BUY".into(), total_quantity: -100.0, order_type: "MKT".into(), ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("total_quantity"), "got: {}", err);
+    assert!(err.contains("total_quantity"), "got: {err}");
 }
 
 #[test]
@@ -1947,7 +1950,7 @@ fn place_order_rejects_nan_quantity() {
         action: "BUY".into(), total_quantity: f64::NAN, order_type: "MKT".into(), ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("total_quantity"), "got: {}", err);
+    assert!(err.contains("total_quantity"), "got: {err}");
 }
 
 #[test]
@@ -1958,7 +1961,7 @@ fn place_order_rejects_infinite_quantity() {
         action: "BUY".into(), total_quantity: f64::INFINITY, order_type: "MKT".into(), ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("total_quantity"), "got: {}", err);
+    assert!(err.contains("total_quantity"), "got: {err}");
 }
 
 #[test]
@@ -1970,7 +1973,7 @@ fn place_order_rejects_negative_display_size() {
         lmt_price: 150.0, display_size: -5, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("display_size"), "got: {}", err);
+    assert!(err.contains("display_size"), "got: {err}");
 }
 
 #[test]
@@ -1982,7 +1985,7 @@ fn place_order_rejects_negative_min_qty() {
         lmt_price: 150.0, min_qty: -5, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("min_qty"), "got: {}", err);
+    assert!(err.contains("min_qty"), "got: {err}");
 }
 
 #[test]
@@ -1994,7 +1997,7 @@ fn place_order_rejects_negative_parent_id() {
         lmt_price: 150.0, parent_id: -5, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("parent_id"), "got: {}", err);
+    assert!(err.contains("parent_id"), "got: {err}");
 }
 
 #[test]
@@ -2006,7 +2009,7 @@ fn place_order_rejects_negative_trailing_percent() {
         trailing_percent: -5.0, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("trailing_percent"), "got: {}", err);
+    assert!(err.contains("trailing_percent"), "got: {err}");
 }
 
 #[test]
@@ -2020,7 +2023,7 @@ fn place_order_adaptive_rejects_unknown_priority() {
         ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("adaptivePriority"), "got: {}", err);
+    assert!(err.contains("adaptivePriority"), "got: {err}");
 }
 
 #[test]
@@ -2038,7 +2041,7 @@ fn place_order_adaptive_defaults_priority_when_absent() {
         }) => {
             assert_eq!(priority, crate::types::AdaptivePriority::Normal);
         }
-        cmd => panic!("expected an adaptive order, got {:?}", cmd),
+        cmd => panic!("expected an adaptive order, got {cmd:?}"),
     }
 }
 
@@ -2058,7 +2061,7 @@ fn validate_order_adaptive_rejects_unknown_priority() {
         ..Default::default()
     };
     let err = crate::client_core::ClientCore::validate_order(&order).unwrap_err();
-    assert!(err.contains("adaptivePriority"), "got: {}", err);
+    assert!(err.contains("adaptivePriority"), "got: {err}");
 }
 
 #[test]
@@ -2070,7 +2073,7 @@ fn build_order_request_adaptive_rejects_unknown_priority() {
         ..Default::default()
     };
     let err = crate::client_core::ClientCore::build_order_request(&order, 1, 0).unwrap_err();
-    assert!(err.contains("adaptivePriority"), "got: {}", err);
+    assert!(err.contains("adaptivePriority"), "got: {err}");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2132,7 +2135,7 @@ fn req_historical_data_rejects_unknown_bar_size() {
     // The issue's exact repro: "1 Min" (wrong case) used to return 5-minute
     // candles with no error.
     let err = client.req_historical_data(5, &spy(), "", "2 D", "1 Min", "TRADES", true, 1, false).unwrap_err();
-    assert!(err.contains("bar_size"), "got: {}", err);
+    assert!(err.contains("bar_size"), "got: {err}");
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
 }
 
@@ -2140,7 +2143,7 @@ fn req_historical_data_rejects_unknown_bar_size() {
 fn req_historical_data_rejects_unknown_what_to_show() {
     let (client, rx, _shared) = test_client();
     let err = client.req_historical_data(5, &spy(), "", "2 D", "1 min", "TRADE", true, 1, false).unwrap_err();
-    assert!(err.contains("what_to_show"), "got: {}", err);
+    assert!(err.contains("what_to_show"), "got: {err}");
     assert!(rx.try_recv().is_err());
 }
 
@@ -2150,7 +2153,7 @@ fn req_historical_data_rejects_unsupported_keep_up_to_date_size() {
     // "1 min" is valid on the batch path but not supported for streaming —
     // it used to silently downgrade to 5-minute bars on this path only.
     let err = client.req_historical_data(5, &spy(), "", "1 D", "1 min", "TRADES", true, 1, true).unwrap_err();
-    assert!(err.contains("keep_up_to_date"), "got: {}", err);
+    assert!(err.contains("keep_up_to_date"), "got: {err}");
     assert!(rx.try_recv().is_err());
 }
 
@@ -2234,7 +2237,7 @@ fn req_contract_details_forwards_filter_fields() {
             assert_eq!(filters.multiplier, "100");
             assert_eq!(filters.trading_class, "AAPL");
         }
-        cmd => panic!("expected FetchContractDetails, got {:?}", cmd),
+        cmd => panic!("expected FetchContractDetails, got {cmd:?}"),
     }
 }
 
@@ -2254,7 +2257,7 @@ fn req_contract_details_forwards_identifier_lookup() {
             assert_eq!(filters.sec_id, "US0378331005");
             assert_eq!(filters.sec_id_type, "ISIN");
         }
-        cmd => panic!("expected FetchContractDetails, got {:?}", cmd),
+        cmd => panic!("expected FetchContractDetails, got {cmd:?}"),
     }
 }
 
@@ -2493,8 +2496,7 @@ fn req_historical_schedule_sends_fetch() {
 #[test]
 fn quote_escape_hatch() {
     let shared = Arc::new(SharedState::new());
-    let mut q = Quote::default();
-    q.bid = 200 * PRICE_SCALE;
+    let q = Quote { bid: 200 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(0, &q);
 
     let (tx, _rx) = crossbeam_channel::unbounded();
@@ -2524,8 +2526,7 @@ fn rtt_none_until_measured_and_ping_sends_command() {
 #[test]
 fn quote_by_instrument_direct() {
     let shared = Arc::new(SharedState::new());
-    let mut q = Quote::default();
-    q.ask = 300 * PRICE_SCALE;
+    let q = Quote { ask: 300 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(2, &q);
 
     let (tx, _rx) = crossbeam_channel::unbounded();
@@ -2543,8 +2544,7 @@ fn quote_by_instrument_direct() {
 #[test]
 fn account_reads_shared_state() {
     let (_client, _rx, shared) = test_client();
-    let mut a = AccountState::default();
-    a.net_liquidation = 100_000 * PRICE_SCALE;
+    let a = AccountState { net_liquidation: 100_000 * PRICE_SCALE, ..Default::default() };
     shared.portfolio.set_account(&a);
     let (client2, _rx2, _) = {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -2724,9 +2724,7 @@ fn process_msgs_dispatches_cancel_reject_type_2() {
 #[test]
 fn process_msgs_dispatches_quotes_on_change() {
     let (client, _rx, shared) = test_client();
-    let mut q = Quote::default();
-    q.bid = 150 * PRICE_SCALE;
-    q.ask = 151 * PRICE_SCALE;
+    let mut q = Quote { bid: 150 * PRICE_SCALE, ask: 151 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(0, &q);
 
     client.core.req_to_instrument.lock().unwrap().insert(1, 0);
@@ -2754,10 +2752,10 @@ fn process_msgs_dispatches_all_quote_fields() {
     let (client, _rx, shared) = test_client();
     let q = Quote {
         bid: 150 * PRICE_SCALE, ask: 151 * PRICE_SCALE, last: 150_50000000,
-        bid_size: 1000 * QTY_SCALE as i64, ask_size: 2000 * QTY_SCALE as i64,
-        last_size: 500 * QTY_SCALE as i64,
+        bid_size: 1000 * QTY_SCALE, ask_size: 2000 * QTY_SCALE,
+        last_size: 500 * QTY_SCALE,
         high: 155 * PRICE_SCALE, low: 148 * PRICE_SCALE,
-        volume: 10_000 * QTY_SCALE as i64,
+        volume: 10_000 * QTY_SCALE,
         close: 149 * PRICE_SCALE, open: 150 * PRICE_SCALE,
         timestamp_ns: 1234567890,
         bid_exch_mask: 0, ask_exch_mask: 0, last_exch_mask: 0,
@@ -2796,11 +2794,9 @@ fn process_msgs_dispatches_all_quote_fields() {
 #[test]
 fn process_msgs_multiple_instruments_independent() {
     let (client, _rx, shared) = test_client();
-    let mut q0 = Quote::default();
-    q0.bid = 150 * PRICE_SCALE;
+    let q0 = Quote { bid: 150 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(0, &q0);
-    let mut q1 = Quote::default();
-    q1.bid = 400 * PRICE_SCALE;
+    let q1 = Quote { bid: 400 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(1, &q1);
 
     client.core.req_to_instrument.lock().unwrap().insert(1, 0);
@@ -3320,7 +3316,7 @@ fn modify_order_before_ack_no_panic() {
     }
     let mut count = 0;
     while rx.try_recv().is_ok() { count += 1; }
-    assert!(count >= 10, "All modify attempts should send commands, got {}", count);
+    assert!(count >= 10, "All modify attempts should send commands, got {count}");
 }
 
 #[test]
@@ -3498,9 +3494,7 @@ fn market_data_type_callback_compiles_and_dispatches() {
 fn quote_dispatch_agnostic_to_data_type() {
     let (client, _rx, shared) = test_client();
     client.map_req_instrument(1, 0);
-    let mut q = Quote::default();
-    q.bid = 450 * PRICE_SCALE;
-    q.ask = 451 * PRICE_SCALE;
+    let q = Quote { bid: 450 * PRICE_SCALE, ask: 451 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(0, &q);
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3511,9 +3505,7 @@ fn quote_dispatch_agnostic_to_data_type() {
 fn frozen_stale_quote_no_redispatch() {
     let (client, _rx, shared) = test_client();
     client.map_req_instrument(1, 0);
-    let mut q = Quote::default();
-    q.bid = 300 * PRICE_SCALE;
-    q.ask = 301 * PRICE_SCALE;
+    let q = Quote { bid: 300 * PRICE_SCALE, ask: 301 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(0, &q);
 
     let mut w = RecordingWrapper::default();
@@ -3535,9 +3527,7 @@ fn transition_no_data_to_live_fires_callbacks() {
     client.process_msgs(&mut w);
     assert_eq!(w.events.iter().filter(|e| e.starts_with("tick_price:1:")).count(), 0);
 
-    let mut q = Quote::default();
-    q.bid = 500 * PRICE_SCALE;
-    q.ask = 501 * PRICE_SCALE;
+    let q = Quote { bid: 500 * PRICE_SCALE, ask: 501 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(0, &q);
     w.events.clear();
     client.process_msgs(&mut w);
@@ -3549,9 +3539,7 @@ fn transition_no_data_to_live_fires_callbacks() {
 fn partial_quote_update_only_changed_fields_dispatch() {
     let (client, _rx, shared) = test_client();
     client.map_req_instrument(1, 0);
-    let mut q = Quote::default();
-    q.bid = 100 * PRICE_SCALE;
-    q.ask = 101 * PRICE_SCALE;
+    let mut q = Quote { bid: 100 * PRICE_SCALE, ask: 101 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(0, &q);
 
     let mut w = RecordingWrapper::default();

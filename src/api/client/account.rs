@@ -114,7 +114,7 @@ impl EClient {
             ("MaintMarginReq", acct.maint_margin_req as f64 / PRICE_SCALE_F),
         ];
         for (key, val) in fields {
-            let val_str = format!("{:.2}", val);
+            let val_str = format!("{val:.2}");
             wrapper.update_account_value(key, &val_str, "USD", &self.account_id);
         }
         wrapper.account_download_end(&self.account_id);

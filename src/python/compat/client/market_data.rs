@@ -48,7 +48,7 @@ impl EClient {
             con_id, &symbol, &exchange, &sec_type,
             &last_trade_date, strike, &right, &multiplier,
             snapshot, &generic_tick_list, 0,
-        )).map_err(|e| PyRuntimeError::new_err(e))?;
+        )).map_err(PyRuntimeError::new_err)?;
         self.core.cache_contract(contract.con_id, crate::api::types::Contract {
             con_id: contract.con_id,
             symbol: contract.symbol.clone(),
@@ -96,7 +96,7 @@ impl EClient {
         let tbt_type = match tick_type {
             "Last" | "AllLast" => TbtType::Last,
             "BidAsk" => TbtType::BidAsk,
-            _ => return Err(PyRuntimeError::new_err(format!("Unknown tick type: '{}'", tick_type))),
+            _ => return Err(PyRuntimeError::new_err(format!("Unknown tick type: '{tick_type}'"))),
         };
 
         let shared = self.shared_state()?;
@@ -112,7 +112,7 @@ impl EClient {
         let con_id = contract.con_id;
         let symbol = contract.symbol.clone();
         py.detach(|| self.core.register_tbt(&shared, &tx, req_id, con_id, &symbol, tbt_type))
-            .map_err(|e| PyRuntimeError::new_err(e))?;
+            .map_err(PyRuntimeError::new_err)?;
 
         let _ = (number_of_ticks, ignore_size);
         Ok(())
