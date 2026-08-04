@@ -126,8 +126,9 @@ impl MarketState {
 
     /// Drop every tag mapped to this instrument. Tags arrive from more than
     /// one exchange — `35=Q` acks for L1 and `35=L` ticker setup for news
-    /// routing — so this is only safe where the instrument itself is going
-    /// away, not when one of its subscriptions ends.
+    /// routing — and only tick and news routing read them back, so this is
+    /// safe where the instrument is going away and where its L1 subscription
+    /// ends with no news subscription left on it (ibx#292).
     pub fn clear_server_tags_for(&mut self, instrument: InstrumentId) {
         self.server_tag_to_instrument.retain(|_, id| *id != instrument);
     }

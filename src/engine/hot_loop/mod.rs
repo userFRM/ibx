@@ -432,6 +432,16 @@ impl HotLoop {
                         &mut self.farm_conn,
                         &mut self.hb,
                     );
+                    // The tags are dead with the requests that earned them, and
+                    // `try_reclaim_instrument` below only drops them when the
+                    // slot itself goes — so a pinned instrument accumulated one
+                    // per ack until the next farm drop (ibx#292). News is the
+                    // one reader that outlives the L1 request: ticker setup
+                    // registers into the same map and news routes on it, so a
+                    // live news subscription keeps them.
+                    if !self.ccp.news_subscriptions.iter().any(|(id, _)| *id == instrument) {
+                        self.context.market.clear_server_tags_for(instrument);
+                    }
                     self.try_reclaim_instrument(instrument);
                 }
                 ControlCommand::SubscribeTbt { con_id, symbol, tbt_type, reply_tx } => {
@@ -1896,5 +1906,58 @@ mod tests {
         // Head-ts / histogram / ticks / schedule / scanner / news / fundamental:
         // no bar-stream consumer waiting for historical_data_end.
         assert!(shared.reference.drain_historical_data().is_empty());
+    }
+
+    /// The tags a `35=Q` ack bound are dead the moment the subscription is
+    /// cancelled, but `try_reclaim_instrument` was the only path that dropped
+    /// them and it returns early while an open order, a tick-by-tick or a news
+    /// subscription pins the slot. Every subscribe/unsubscribe cycle on a
+    /// pinned instrument then left one behind until the next farm drop
+    /// (ibx#292).
+    #[test]
+    fn an_l1_unsubscribe_hands_back_its_tags_on_a_pinned_instrument() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (tx, rx) = bounded(4);
+        hl.set_control_rx(rx);
+
+        let id = hl.context.market.register(4001);
+        hl.context.market.register_server_tag(910_001, id);
+        hl.farm.instrument_md_reqs.push((id, vec![7]));
+        hl.hmds.tbt_subscriptions.push((id, "AAPL".to_string(), TbtType::Last));
+
+        tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
+        hl.poll_once();
+
+        assert_eq!(
+            hl.context.market.instrument_by_server_tag(910_001), None,
+            "the cancelled subscription's tag is handed back, not held to the next farm drop",
+        );
+        assert_eq!(
+            hl.context.market.con_id(id), Some(4001),
+            "and the tick-by-tick subscription still pins the slot itself",
+        );
+    }
+
+    /// The map is not L1-only: `35=L` ticker setup registers into it too and
+    /// news resolves against it, so an unsubscribe that clears an instrument's
+    /// tags while its news subscription is live ends the news feed silently.
+    #[test]
+    fn an_l1_unsubscribe_keeps_the_tags_a_live_news_subscription_routes_on() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (tx, rx) = bounded(4);
+        hl.set_control_rx(rx);
+
+        let id = hl.context.market.register(4002);
+        hl.context.market.register_server_tag(910_002, id);
+        hl.farm.instrument_md_reqs.push((id, vec![8]));
+        hl.ccp.news_subscriptions.push((id, 55));
+
+        tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
+        hl.poll_once();
+
+        assert_eq!(
+            hl.context.market.instrument_by_server_tag(910_002), Some(id),
+            "news routes through this map, so its tag outlives the L1 request",
+        );
     }
 }
