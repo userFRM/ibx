@@ -442,6 +442,19 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
     false
 }
 
+/// The gateway's stated reason for a rejected order, for the SKIP line.
+///
+/// `SKIP: Order rejected` on its own is unreadable: a venue refusing an order
+/// type outside its session and the client encoding one wrong print the same
+/// line. The reason (FIX tag 58 text plus the tag 103 code) is what separates
+/// them, and the engine records it on the order snapshot.
+pub(super) fn reject_reason(shared: &SharedState, order_id: u64) -> String {
+    shared.orders.get_order_info(order_id)
+        .map(|info| info.order_state.reject_reason)
+        .filter(|reason| !reason.is_empty())
+        .unwrap_or_else(|| "no reason reported".to_string())
+}
+
 // ─── Generic submit+cancel helper ───
 // fill_or_cancel=false: only cancelled counts as success
 // fill_or_cancel=true: filled OR cancelled both count as success
@@ -458,7 +471,7 @@ pub(super) fn run_submit_cancel_phase(
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = crossbeam_channel::unbounded();
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
@@ -519,7 +532,7 @@ pub(super) fn run_submit_cancel_phase(
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if order_rejected {
-        println!("  SKIP: Order rejected\n");
+        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, order_id));
         return conns;
     }
     if order_inactive {

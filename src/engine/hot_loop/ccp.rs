@@ -85,6 +85,21 @@ const EXEC_ID_WINDOW: usize = 1024;
 /// still reactivate (ibx#250).
 const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
 
+/// The gateway's stated reason for a parked or rejected order: the tag 58 text
+/// with the tag 103 reason code. Either alone is ambiguous — the text is often
+/// generic and the code alone names no instrument — so both are reported when
+/// the report carries both. Empty when it carries neither.
+fn stated_reason(parsed: &std::collections::HashMap<u32, String>) -> String {
+    let text = parsed.get(&58).map(|s| s.as_str()).unwrap_or("");
+    let code = parsed.get(&103).map(|s| s.as_str()).unwrap_or("");
+    match (text.is_empty(), code.is_empty()) {
+        (false, false) => format!("{text} (reason code {code})"),
+        (false, true) => text.to_string(),
+        (true, false) => format!("reason code {code}"),
+        (true, true) => String::new(),
+    }
+}
+
 /// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a stable i64 permId.
 /// Uses FNV-1a hash of the first 3 dot-segments (the stable prefix) so that permId
 /// remains constant across modifications (the last segment increments on each modify).
@@ -1181,14 +1196,7 @@ impl CcpState {
                 // reason on. Route it through the same error() path a
                 // cancel/modify reject already uses instead (ibx#250).
                 if status == crate::types::OrderStatus::Inactive {
-                    let text = parsed.get(&58).map(|s| s.as_str()).unwrap_or("");
-                    let reason_code = parsed.get(&103).map(|s| s.as_str()).unwrap_or("");
-                    let reason = match (text.is_empty(), reason_code.is_empty()) {
-                        (false, false) => format!("{text} (reason code {reason_code})"),
-                        (false, true) => text.to_string(),
-                        (true, false) => format!("reason code {reason_code}"),
-                        (true, true) => String::new(),
-                    };
+                    let reason = stated_reason(parsed);
                     if !reason.is_empty() {
                         shared.orders.push_order_inactive(clord_id, ORDER_INACTIVE_ERROR_CODE, reason);
                     }
@@ -1400,6 +1408,15 @@ impl CcpState {
                 commission_and_fees: commission,
                 completed_time,
                 completed_status,
+                // `completed_status` is the reject text alone, which is what
+                // ibapi's field means. The reason code lives here, where a
+                // caller telling a venue's refusal from a bad request can
+                // reach it.
+                reject_reason: if status == crate::types::OrderStatus::Rejected {
+                    stated_reason(parsed)
+                } else {
+                    String::new()
+                },
                 ..Default::default()
             };
 
@@ -3842,7 +3859,7 @@ mod tests {
     // treated the same here. A parked (39=I) order's reason is queued for
     // delivery through Wrapper::error, and its completed_status stays empty
     // (it is not completed and may reactivate). A rejected order's reason
-    // stays on completed_status only, and nothing is queued for it — the
+    // stays on the order snapshot, and nothing is queued for it — the
     // engine still holds the order at this point, so context still knows it
     // as Inactive/reactivatable while a Rejected order is retired below.
     #[test]
@@ -3884,6 +3901,22 @@ mod tests {
         // by ibx#250 — this pins the pre-existing behavior the fix builds on).
         let info = shared.orders.get_order_info(42).unwrap();
         assert_eq!(info.order_state.completed_status, "No valid bid/ask");
+    }
+
+    /// `completed_status` carries the reject text alone, so a caller reading it
+    /// cannot tell a venue refusing an order type from a malformed request when
+    /// the text is generic. The reason code (tag 103) is what separates them.
+    #[test]
+    fn ord_status_rejected_records_the_reason_with_its_code() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = exec_report_frame(&[
+            (39, "8"), (150, "0"),
+            (58, "No valid bid/ask"), (103, "1"),
+        ]);
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+
+        let info = shared.orders.get_order_info(42).unwrap();
+        assert_eq!(info.order_state.reject_reason, "No valid bid/ask (reason code 1)");
     }
 
     // ibx#238 / ib-agent#172: in the UP portfolio snapshot the average cost is

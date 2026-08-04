@@ -70,7 +70,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = crossbeam_channel::unbounded();
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
+        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
     );
     let inst = hot_loop.context_mut().register_instrument(fx_con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "EUR".to_string());
@@ -85,7 +85,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     let mut order_acked = false;
     let mut cancel_sent = false;
     let mut order_cancelled = false;
-    let mut order_rejected = false;
+    let mut rejected_order: Option<u64> = None;
 
     while Instant::now() < deadline {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -99,7 +99,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
                         }
                     }
                     OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
+                    OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
                     _ => {}
                 }
             }
@@ -108,8 +108,8 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    if order_rejected {
-        println!("  SKIP: Forex order rejected (may need trading permissions)\n");
+    if let Some(id) = rejected_order {
+        println!("  SKIP: Forex order rejected — {}\n", reject_reason(&shared, id));
     } else {
         if skip_unacked_if_closed(order_acked) { return conns; }
         assert!(order_acked, "Forex order should be acknowledged");
@@ -189,7 +189,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = crossbeam_channel::unbounded();
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
+        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
     );
     let inst = hot_loop.context_mut().register_instrument(fut_def.con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "MES".to_string());
@@ -204,7 +204,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     let mut order_acked = false;
     let mut cancel_sent = false;
     let mut order_cancelled = false;
-    let mut order_rejected = false;
+    let mut rejected_order: Option<u64> = None;
 
     while Instant::now() < deadline {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -218,7 +218,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
                         }
                     }
                     OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
+                    OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
                     _ => {}
                 }
             }
@@ -227,8 +227,8 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    if order_rejected {
-        println!("  SKIP: Futures order rejected (may need trading permissions)\n");
+    if let Some(id) = rejected_order {
+        println!("  SKIP: Futures order rejected — {}\n", reject_reason(&shared, id));
     } else {
         if skip_unacked_if_closed(order_acked) { return conns; }
         assert!(order_acked, "Futures order should be acknowledged");
@@ -317,7 +317,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = crossbeam_channel::unbounded();
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
+        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
     );
     let inst = hot_loop.context_mut().register_instrument(opt_con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "SPY".to_string());
@@ -332,7 +332,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     let mut order_acked = false;
     let mut cancel_sent = false;
     let mut order_cancelled = false;
-    let mut order_rejected = false;
+    let mut rejected_order: Option<u64> = None;
 
     while Instant::now() < deadline {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -346,7 +346,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
                         }
                     }
                     OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
+                    OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
                     _ => {}
                 }
             }
@@ -355,8 +355,8 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    if order_rejected {
-        println!("  SKIP: Option order rejected (may need trading permissions)\n");
+    if let Some(id) = rejected_order {
+        println!("  SKIP: Option order rejected — {}\n", reject_reason(&shared, id));
     } else {
         if skip_unacked_if_closed(order_acked) { return conns; }
         assert!(order_acked, "Option order should be acknowledged");
@@ -373,7 +373,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = crossbeam_channel::unbounded();
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
     // Register SPY
@@ -402,7 +402,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     let mut acked = [false; 3];
     let mut cancelled = [false; 3];
     let mut cancel_sent = false;
-    let mut rejected = false;
+    let mut rejected_order: Option<u64> = None;
     let oids = [oid1, oid2, oid3];
 
     while Instant::now() < deadline {
@@ -421,7 +421,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
                         }
                     }
                     OrderStatus::Cancelled => { cancelled[i] = true; }
-                    OrderStatus::Rejected => { rejected = true; break; }
+                    OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
                     _ => {}
                 }
             }
@@ -431,8 +431,8 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    if rejected {
-        println!("  SKIP: One or more orders rejected\n");
+    if let Some(id) = rejected_order {
+        println!("  SKIP: One or more orders rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
 
