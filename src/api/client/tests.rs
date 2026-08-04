@@ -74,7 +74,7 @@ fn a_locally_placed_child_reports_the_parent_it_was_given() {
 
     shared.orders.push_order_update(OrderUpdate {
         order_id: 9401, instrument: 0, status: OrderStatus::Submitted,
-        filled_qty: 0, remaining_qty: 1, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 1.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -89,7 +89,7 @@ fn a_locally_placed_child_reports_the_parent_it_was_given() {
     // An order this client never placed keeps the engine's answer.
     shared.orders.push_order_update(OrderUpdate {
         order_id: 9999, instrument: 0, status: OrderStatus::Submitted,
-        filled_qty: 0, remaining_qty: 1, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 1.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     let mut w2 = RecordingWrapper::default();
     client.process_msgs(&mut w2);
@@ -2633,15 +2633,15 @@ fn process_msgs_dispatches_order_updates() {
     let (client, _rx, shared) = test_client();
     shared.orders.push_order_update(OrderUpdate {
         order_id: 43, instrument: 0, status: OrderStatus::Submitted,
-        filled_qty: 0, remaining_qty: 100, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 44, instrument: 0, status: OrderStatus::Cancelled,
-        filled_qty: 0, remaining_qty: 100, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 45, instrument: 0, status: OrderStatus::Rejected,
-        filled_qty: 0, remaining_qty: 100, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -2678,11 +2678,11 @@ fn process_msgs_then_open_orders_admits_inactive_excludes_rejected() {
 
     shared.orders.push_order_update(OrderUpdate {
         order_id: 82, instrument: 0, status: OrderStatus::Inactive,
-        filled_qty: 0, remaining_qty: 100, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 83, instrument: 0, status: OrderStatus::Rejected,
-        filled_qty: 0, remaining_qty: 100, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3236,7 +3236,7 @@ fn process_msgs_drains_on_first_call_empty_on_second() {
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 2, instrument: 0, status: OrderStatus::Submitted,
-        filled_qty: 0, remaining_qty: 1, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 1.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
 
     let mut w = RecordingWrapper::default();

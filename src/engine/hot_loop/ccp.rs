@@ -124,6 +124,15 @@ pub(crate) struct CcpState {
     pub(crate) bulletin_next_id: i32,
     pub(crate) news_subscriptions: Vec<(InstrumentId, u32)>,
     pub(crate) disconnected: bool,
+    /// When to account for orders the reconnect did not explain.
+    ///
+    /// An order that terminated while the connection was down leaves no
+    /// message behind — its evidence is an absence, and absence only means
+    /// something once the recovery push is known to be complete. Armed
+    /// generously at reconnect so the sweep still runs when the push says
+    /// nothing at all, and re-armed tightly when the push's own terminator
+    /// arrives (ibx#251). Cleared on a disconnect so a second drop before the
+    /// sweep cancels it rather than reaping against a dead session.
     /// (req_id, is_single_shot). Single-shot = known-conId lookup whose
     /// first 35=d reply is also the last (server emits no 323=5/6 terminator
     /// for these). Multi-record by-symbol/matching-symbols requests push
@@ -266,7 +275,7 @@ impl CcpState {
                     Ok(0) => {}
                     Err(e) => {
                         log::error!("CCP connection lost: {e}");
-                        self.handle_disconnect(context, event_tx);
+                        self.handle_disconnect(context, shared, event_tx);
                         return;
                     }
                     Ok(_) => {
@@ -1123,8 +1132,8 @@ impl CcpState {
                     order_id: clord_id,
                     instrument: order.instrument,
                     status,
-                    filled_qty: order.filled as i64,
-                    remaining_qty: leaves_qty,
+                    filled_qty: order.filled as f64,
+                    remaining_qty: leaves_qty as f64,
                     perm_id,
                     parent_id,
                     timestamp_ns: context.now_ns(),
@@ -2018,9 +2027,52 @@ impl CcpState {
         shared.reference.push_depth_exchanges(descs);
     }
 
-    pub(crate) fn handle_disconnect(&mut self, context: &mut Context, _event_tx: &Option<Sender<Event>>) {
+    pub(crate) fn handle_disconnect(
+        &mut self,
+        context: &mut Context,
+        shared: &SharedState,
+        event_tx: &Option<Sender<Event>>,
+    ) {
         self.disconnected = true;
+        // The engine stops believing these statuses here, and said so to
+        // nobody — so the API layer went on reporting the pre-disconnect
+        // status and `req_open_orders` kept asserting it (ibx#251).
         context.mark_orders_uncertain();
+        for order in context.uncertain_orders() {
+            let cached = shared.orders.get_order_info(order.order_id);
+            let update = crate::types::OrderUpdate {
+                order_id: order.order_id,
+                instrument: order.instrument,
+                status: crate::types::OrderStatus::Uncertain,
+                filled_qty: order.filled as f64,
+                // A fractional order deliberately tracks `qty` as zero — the
+                // decimal it was submitted with lives only in the enriched
+                // record. Both quantity fields are floating point end to
+                // end — the dispatchers already hand them to the callback
+                // as f64 — so the fraction itself survives exactly here
+                // rather than being rounded to a whole unit.
+                remaining_qty: {
+                    let outstanding = |total: f64| (total - order.filled as f64).max(0.0);
+                    if order.qty > 0 {
+                        outstanding(order.qty as f64)
+                    } else if let Some(c) = cached.as_ref() {
+                        outstanding(c.order.total_quantity)
+                    } else {
+                        // No exec report has reached this order yet, so
+                        // neither its quantity nor a fill is known — both
+                        // arrive on the same message — and there is no
+                        // honest quantity to give. ibapi's own "value not
+                        // set" sentinel, rather than a guessed number.
+                        f64::MAX
+                    }
+                },
+                perm_id: cached.as_ref().map(|c| c.order.perm_id).unwrap_or(0),
+                parent_id: cached.as_ref().map(|c| c.order.parent_id).unwrap_or(0),
+                timestamp_ns: 0,
+            };
+            shared.orders.push_order_update(update);
+            emit(event_tx, Event::OrderUpdate(update));
+        }
         // Don't emit Event::Disconnected — auto-reconnect handles CCP drops transparently.
         // Python is only notified if reconnect exhausts retries.
     }
@@ -4342,7 +4394,7 @@ mod tests {
         // The position is what deduplication exists to protect. One share was
         // filled; the replay must not make it two.
         assert_eq!(position_after, 1, "the duplicate must not move the position again");
-        assert_eq!(updates[0].filled_qty, 1, "nor inflate the filled quantity");
+        assert_eq!(updates[0].filled_qty, 1.0, "nor inflate the filled quantity");
         assert_eq!(completed[0].filled_qty, 1);
 
         // The event channel is a second delivery path for the same fill, and

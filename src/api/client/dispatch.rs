@@ -124,7 +124,7 @@ impl EClient {
                 update.order_id as i64, status, update.filled_qty as f64,
                 update.remaining_qty as f64, 0.0, update.perm_id, parent_id, 0.0, 0, "", 0.0,
             );
-            self.core.update_order_status(update.order_id, update.status, update.filled_qty as f64, update.remaining_qty as f64);
+            self.core.update_order_status(&self.shared, update.order_id, update.status, update.filled_qty as f64, update.remaining_qty as f64);
         }
 
         // Cancel rejects → error

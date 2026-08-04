@@ -1017,20 +1017,31 @@ impl ClientCore {
         self.open_orders.lock().unwrap().remove(&order_id);
     }
 
-    /// Update a tracked order status from an order update event. Takes the
-    /// pre-stringification `OrderStatus` (not the ibapi string) so a
-    /// Rejected transition can be flagged apart from a genuinely-Inactive
-    /// one: both stringify to "Inactive" (ibapi has no Rejected string), but
-    /// only a genuine Inactive is reactivatable and belongs back in the
-    /// open-order snapshot (ibx#250).
-    pub fn update_order_status(&self, order_id: u64, status: OrderStatus, filled: f64, remaining: f64) {
+    /// Update a tracked order status from an order update event.
+    ///
+    /// Takes the pre-stringification `OrderStatus` rather than the ibapi string
+    /// so a Rejected transition stays distinct from a genuinely-Inactive one:
+    /// both stringify to "Inactive", and only a genuine Inactive is
+    /// reactivatable and belongs back in the open-order snapshot (ibx#250).
+    ///
+    /// Upserts, because an order recovered from an earlier session was never
+    /// submitted by this client and so has no entry here. Doing nothing for it
+    /// left `collect_open_orders` unable to tell it had just been withdrawn
+    /// (ibx#251). A fresh entry seeds contract and order from the same enriched
+    /// cache `collect_open_orders` reads, rather than leaving them blank.
+    pub fn update_order_status(&self, shared: &SharedState, order_id: u64, status: OrderStatus, filled: f64, remaining: f64) {
         let mut orders = self.open_orders.lock().unwrap();
-        if let Some(o) = orders.get_mut(&order_id) {
-            o.status = order_status_str(status).into();
-            o.rejected = status == OrderStatus::Rejected;
-            o.filled = filled;
-            o.remaining = remaining;
-        }
+        let o = orders.entry(order_id).or_insert_with(|| {
+            let (contract, order) = match shared.orders.get_order_info(order_id) {
+                Some(info) => (info.contract, info.order),
+                None => (ApiContract::default(), ApiOrder::default()),
+            };
+            TrackedOrder { contract, order, status: String::new(), rejected: false, filled: 0.0, remaining: 0.0, instrument: 0 }
+        });
+        o.status = order_status_str(status).into();
+        o.rejected = status == OrderStatus::Rejected;
+        o.filled = filled;
+        o.remaining = remaining;
     }
 
     /// Collect open orders: merge local tracking with shared state.
@@ -1053,6 +1064,18 @@ impl ClientCore {
                 }
             }
         }
+
+        // The orders whose status this client has withdrawn. A disconnect marks
+        // a tracked order unknown without touching the cached view, so the union
+        // below re-imported it as working for the whole outage, contradicting
+        // the callback the caller had already been given (ibx#251). Scoped to
+        // withdrawn statuses so the cache can still carry a genuinely newer one
+        // — a terminal local status the cache has since superseded still wins.
+        let status_withdrawn: std::collections::HashSet<u64> = self.open_orders.lock().unwrap()
+            .iter()
+            .filter(|(_, o)| o.status == "Unknown")
+            .map(|(&id, _)| id)
+            .collect();
 
         // Local tracked orders (non-terminal, or genuinely-Inactive and
         // still reactivatable — ibx#250), enriched from secdef cache
@@ -1081,6 +1104,9 @@ impl ClientCore {
         // Add shared-only entries not already present from local
         for (oid, info) in shared_orders {
             if !is_open_or_reactivatable(&info.order_state.status, &info.order_state.completed_status) {
+                continue;
+            }
+            if status_withdrawn.contains(&oid) {
                 continue;
             }
             if !result.iter().any(|(id, _)| *id == oid) {
@@ -1987,8 +2013,8 @@ mod tests {
         core.track_order(80, ApiContract::default(), ApiOrder { order_id: 80, ..Default::default() }, 0);
         core.track_order(81, ApiContract::default(), ApiOrder { order_id: 81, ..Default::default() }, 0);
 
-        core.update_order_status(80, OrderStatus::Inactive, 0.0, 100.0);
-        core.update_order_status(81, OrderStatus::Rejected, 0.0, 100.0);
+        core.update_order_status(&shared, 80, OrderStatus::Inactive, 0.0, 100.0);
+        core.update_order_status(&shared, 81, OrderStatus::Rejected, 0.0, 100.0);
 
         let result = core.collect_open_orders(&shared);
         assert!(result.iter().any(|(id, _)| *id == 80),
