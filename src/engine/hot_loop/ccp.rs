@@ -542,12 +542,15 @@ impl CcpState {
                                 ..Default::default()
                             });
                             self.try_release_scanner_enrichments(def.con_id as i64, shared);
+                            let for_event = clone_for_event(event_tx, &def);
+                            shared.reference.push_contract_details(api_req_id, def);
+                            if let Some(details) = for_event {
+                                emit(event_tx, Event::ContractDetails { req_id: api_req_id, details });
+                            }
                         }
-                        let for_event = clone_for_event(event_tx, &def);
-                        shared.reference.push_contract_details(api_req_id, def);
-                        if let Some(details) = for_event {
-                            emit(event_tx, Event::ContractDetails { req_id: api_req_id, details });
-                        }
+                        // A leg the gateway cannot resolve carries no contract:
+                        // it still completes the fan-out, but a zeroed row is
+                        // not a listing (ibx#400).
                         self.pending_fanout[idx].received += 1;
                         self.pending_fanout[idx].deadline = Instant::now() + SECDEF_TIMEOUT;
                         if self.pending_fanout[idx].received >= self.pending_fanout[idx].fanout_req_ids.len() {
@@ -622,7 +625,23 @@ impl CcpState {
                             self.pending_secdef.remove(idx);
                         }
                         let con_id = def.con_id as i64;
-                        if join_key.is_empty() {
+                        if con_id == 0 {
+                            // The gateway answers a symbol it cannot resolve
+                            // with a contract-less 35=d (live: "BRK.A" for
+                            // the "BRK A" listing). Forwarding it handed the
+                            // caller a zeroed ContractDetails row that reads
+                            // as a real contract; report the miss the way the
+                            // timeout and reject paths do (ibx#400).
+                            self.pending_secdef.retain(|(rid, ss, _)| *rid != req_id || *ss);
+                            if !is_internal {
+                                shared.reference.push_historical_error(
+                                    req_id, 200,
+                                    "no security definition has been found for the request".to_string(),
+                                );
+                                shared.reference.push_contract_details_end(req_id);
+                                emit(event_tx, Event::ContractDetailsEnd(req_id));
+                            }
+                        } else if join_key.is_empty() {
                             // No join key — emit immediately without schedule data.
                             if !is_internal {
                                 let for_event = clone_for_event(event_tx, &def);
@@ -651,9 +670,9 @@ impl CcpState {
                         // Dispatch fan-out (or fire end immediately if the
                         // symbol resolves to a single exchange and there's
                         // nothing to fan out to).
-                        if is_by_symbol && !is_last_wire {
+                        if is_by_symbol && !is_last_wire && con_id != 0 {
                             self.pending_secdef.retain(|(rid, ss, _)| *rid != req_id || *ss);
-                            if fanout_exchanges.is_empty() || con_id == 0 {
+                            if fanout_exchanges.is_empty() {
                                 // The master row may be parked awaiting its
                                 // schedule pair; firing end now would order
                                 // end BEFORE the row (ibx#227). Defer it to
@@ -3919,6 +3938,101 @@ mod tests {
         assert_eq!(errors[0].0, 9);
         assert_eq!(errors[0].1, 200);
         assert_eq!(shared.reference.drain_contract_details_end(), vec![9]);
+    }
+
+    // ── ibx#400: a secdef reply that carries no contract ──
+
+    /// The gateway's answer to a symbol it cannot resolve: a `35=d` echoing
+    /// the request id with no contract fields (live: "BRK.A").
+    fn secdef_no_match(req_id: &str, response_type: &str) -> Vec<u8> {
+        crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+            (crate::control::contracts::TAG_SECURITY_REQ_ID, req_id),
+            (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, response_type),
+        ], 1)
+    }
+
+    #[test]
+    fn secdef_no_match_reports_error_200_not_a_zeroed_row() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        // By-symbol lookup: not single-shot.
+        ccp.pending_secdef.push((1005, false, Instant::now() + SECDEF_TIMEOUT));
+
+        let msg = secdef_no_match("1005", "6");
+        ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+
+        assert!(shared.reference.drain_contract_details().is_empty(),
+            "a contract-less reply must not surface as a ContractDetails row");
+        let errors = shared.reference.drain_historical_errors();
+        assert_eq!(errors.len(), 1, "the caller must be told the symbol did not resolve");
+        assert_eq!(errors[0].0, 1005);
+        assert_eq!(errors[0].1, 200);
+        assert_eq!(shared.reference.drain_contract_details_end(), vec![1005]);
+        assert!(ccp.pending_secdef.is_empty(), "the request must not outlive its answer");
+    }
+
+    /// Same reply without the 323 terminator: the by-symbol path reached end
+    /// through the fan-out branch instead, and must not fire end twice.
+    #[test]
+    fn secdef_no_match_without_terminator_ends_once() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        ccp.pending_secdef.push((1005, false, Instant::now() + SECDEF_TIMEOUT));
+
+        let msg = secdef_no_match("1005", "4");
+        ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+
+        assert!(shared.reference.drain_contract_details().is_empty());
+        assert_eq!(shared.reference.drain_historical_errors().len(), 1);
+        assert_eq!(shared.reference.drain_contract_details_end(), vec![1005]);
+        assert!(ccp.pending_secdef.is_empty());
+    }
+
+    /// One leg of a by-symbol fan-out the gateway cannot resolve: no row for
+    /// that exchange, but the leg still counts toward completion.
+    #[test]
+    fn fanout_leg_without_a_contract_counts_but_adds_no_row() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        ccp.pending_fanout.push(PendingFanout {
+            api_req_id: 9,
+            fanout_req_ids: vec!["ibxfan-9-0".to_string(), "ibxfan-9-1".to_string()],
+            received: 0,
+            deadline: Instant::now() + SECDEF_TIMEOUT,
+        });
+
+        let miss = secdef_no_match("ibxfan-9-0", "4");
+        ccp.process_ccp_message(&miss, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+        assert!(shared.reference.drain_contract_details().is_empty(),
+            "an exchange that does not list the contract adds no row");
+        assert!(shared.reference.drain_contract_details_end().is_empty(),
+            "the second leg is still outstanding");
+
+        let hit = crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+            (crate::control::contracts::TAG_SECURITY_REQ_ID, "ibxfan-9-1"),
+            (crate::control::contracts::TAG_IB_CON_ID, "5222"),
+            (crate::control::contracts::TAG_SYMBOL, "BRK A"),
+        ], 2);
+        ccp.process_ccp_message(&hit, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+
+        let rows = shared.reference.drain_contract_details();
+        assert_eq!(rows.len(), 1, "only the exchange that answered contributes a row");
+        assert_eq!(rows[0].1.con_id, 5222);
+        assert_eq!(shared.reference.drain_contract_details_end(), vec![9]);
+        assert!(ccp.pending_fanout.is_empty());
+    }
+
+    #[test]
+    fn secdef_no_match_on_internal_req_id_stays_silent() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        ccp.pending_secdef.push((0xF000_0001, true, Instant::now() + SECDEF_TIMEOUT));
+
+        let msg = secdef_no_match("4026531841", "6"); // 0xF0000001
+        ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+
+        assert!(shared.reference.drain_contract_details().is_empty());
+        assert!(shared.reference.drain_historical_errors().is_empty());
+        assert!(shared.reference.drain_contract_details_end().is_empty());
+        assert!(ccp.pending_secdef.is_empty());
     }
 
     // ── ibx#228: matching-symbols attribution ──
