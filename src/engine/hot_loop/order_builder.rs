@@ -17,6 +17,8 @@ pub(crate) fn drain_and_send_orders(
     hb: &mut HeartbeatState,
     disconnected: bool,
     shared: &Arc<SharedState>,
+    // Whether a reconnect's recovery is still settling what the broker holds.
+    recovery_pending: bool,
 ) {
     // If CCP is disconnected, leave orders in the pending buffer for retry after reconnect.
     // See: https://github.com/deepentropy/ibx/issues/116
@@ -39,6 +41,17 @@ pub(crate) fn drain_and_send_orders(
         // never sent, so they go back to wait for the reconnect rather than
         // being reported as orders of unknown state.
         if conn.write_failed() {
+            unsent.push(order_req);
+            continue;
+        }
+        // A cancel or a replace names a version of an order the recovery may be
+        // about to correct — a replace that failed left its attempted ClOrdID
+        // in front of the one the broker actually holds. Sent now they would
+        // state that version and be refused, leaving the order live. They wait
+        // for the account of what is there, which a new socket alone is not.
+        if recovery_pending
+            && matches!(order_req, OrderRequest::Cancel { .. } | OrderRequest::Modify { .. })
+        {
             unsent.push(order_req);
             continue;
         }
@@ -1393,7 +1406,7 @@ mod tests {
         );
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1431,7 +1444,7 @@ mod tests {
         context.modify_ex(42, 150 * crate::types::PRICE_SCALE, 100, false, b'3', b'0', off_grid);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1441,6 +1454,43 @@ mod tests {
             tag("99="),
             Some(format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100).to_string()),
             "the trigger must be on the grid: {}", msg,
+        );
+    }
+
+    /// A cancel names a version of an order the recovery may be about to
+    /// correct. Sent against a reconnect that has not finished accounting for
+    /// what the broker holds, it states a version that may not exist there and
+    /// is refused, leaving the order live.
+    #[test]
+    fn a_cancel_waits_for_the_recovery_to_say_what_the_broker_holds() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        context.insert_order(crate::types::Order::new(
+            42, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
+        ));
+        context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 42 });
+        let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+        let shared = std::sync::Arc::new(SharedState::new());
+
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true);
+        peer.set_read_timeout(Some(std::time::Duration::from_millis(50))).unwrap();
+        let mut buf = [0u8; 512];
+        assert!(
+            std::io::Read::read(&mut peer, &mut buf).unwrap_or(0) == 0,
+            "nothing goes out while the recovery is still settling",
+        );
+
+        // Once it has settled, the cancel goes as normal.
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf[..n]).contains("35=F"),
+            "and then it is sent",
         );
     }
 
@@ -1470,7 +1520,7 @@ mod tests {
 
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
 
         let updates = shared.orders.drain_order_updates();
         assert!(
@@ -1511,7 +1561,7 @@ mod tests {
         context.modify_ex(42, 151 * crate::types::PRICE_SCALE, 100, false, b'2', 0, 0);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1544,7 +1594,7 @@ mod tests {
         context.modify(42, 151 * crate::types::PRICE_SCALE, 100, false);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1823,7 +1873,7 @@ mod modify_wire_tests {
 
         let shared = std::sync::Arc::new(SharedState::new());
         let mut hb = HeartbeatState::new();
-        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared);
+        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -2191,7 +2241,7 @@ mod outside_rth_polarity_tests {
 
         let shared = std::sync::Arc::new(SharedState::new());
         let mut hb = HeartbeatState::new();
-        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared);
+        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false);
 
         let mut buf = vec![0u8; 8192];
         let n = peer.read(&mut buf).unwrap();

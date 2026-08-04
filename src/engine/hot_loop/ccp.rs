@@ -875,8 +875,14 @@ impl CcpState {
         // definition in place; the server's account of the order is the
         // authority and replaces it. Anything with a status the engine still
         // believes is left alone.
-        let unknown = context.order(clord_id)
-            .is_some_and(|o| o.status == crate::types::OrderStatus::Uncertain);
+        // What the engine already holds for this order, where it holds
+        // anything. The push states what the broker has and omits the rest —
+        // tag 59 among them — so an unstated field keeps what was known rather
+        // than taking a default meant for an order this session never saw.
+        let prior = context.order(clord_id)
+            .filter(|o| o.status == crate::types::OrderStatus::Uncertain)
+            .copied();
+        let unknown = prior.is_some();
         if is_new_ack && clord_id != 0 && (context.order(clord_id).is_none() || unknown) {
             let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
             // The side has to be stated. A guess does not stay in the recovered
@@ -903,16 +909,18 @@ impl CcpState {
                     None
                 }
             };
-            let qty: u32 = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).map(|q| q as u32).unwrap_or(0);
+            let qty: u32 = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).map(|q| q as u32)
+                .unwrap_or_else(|| prior.map_or(0, |o| o.qty));
             let limit_price_i64: i64 = parsed.get(&44)
                 .and_then(|s| s.parse::<f64>().ok())
                 .map(|p| (p * PRICE_SCALE as f64) as i64)
-                .unwrap_or(0);
+                .unwrap_or_else(|| prior.map_or(0, |o| o.price));
             let stop_price_i64: i64 = parsed.get(&99)
                 .and_then(|s| s.parse::<f64>().ok())
                 .map(|p| (p * PRICE_SCALE as f64) as i64)
-                .unwrap_or(0);
-            let ord_type_byte: u8 = parsed.get(&40).and_then(|s| s.bytes().next()).unwrap_or(b'2');
+                .unwrap_or_else(|| prior.map_or(0, |o| o.stop_price));
+            let ord_type_byte: u8 = parsed.get(&40).and_then(|s| s.bytes().next())
+                .unwrap_or_else(|| prior.map_or(b'2', |o| o.ord_type));
             // A recovery record with no tag 59 states no time-in-force, and this
             // order was not placed by this session, so there is nothing to
             // recover it from. Recorded as unstated rather than guessed: either
@@ -920,7 +928,7 @@ impl CcpState {
             // an invented DAY would expire a resting GTC order at the close.
             let tif_byte: u8 = parsed.get(&59)
                 .and_then(|s| s.bytes().next())
-                .unwrap_or(crate::types::TIF_UNSTATED);
+                .unwrap_or_else(|| prior.map_or(crate::types::TIF_UNSTATED, |o| o.tif));
             if let (Some(side), true) = (side, con_id != 0 && qty > 0) {
                 // Recovery is fed by gateway frames, so a full instrument
                 // table must degrade to a missing order rather than take the
@@ -953,8 +961,17 @@ impl CcpState {
                     filled: parsed.get(&14)
                         .and_then(|s| s.parse::<f64>().ok())
                         .map(|c| c as u32)
-                        .unwrap_or(0),
-                    status: crate::types::OrderStatus::Submitted,
+                        .unwrap_or_else(|| prior.map_or(0, |o| o.filled)),
+                    // An order this session never saw is working by the fact of
+                    // being in the push. One whose state was not known stays
+                    // not known here, so the status this very message carries
+                    // moves it — and the caller who was told it was unknown is
+                    // told what it turned out to be.
+                    status: if prior.is_some() {
+                        crate::types::OrderStatus::Uncertain
+                    } else {
+                        crate::types::OrderStatus::Submitted
+                    },
                     ord_type: ord_type_byte,
                     tif: tif_byte,
                     stop_price: stop_price_i64,
@@ -2390,6 +2407,9 @@ impl CcpState {
     // saying flat — the same defect ibx#261 fixed on the account-update path
     // (ibx#296). A genuine flat still arrives as an explicit `6064=0`.
     let mut qty: Option<i64> = None;
+    /// The quantity exactly as stated. The whole-number one above truncates,
+    /// and half a share is not a closed position.
+    let mut qty_raw: Option<f64> = None;
     // `None` where the row states no cost. Folding that into a zero made an
     // absent cost indistinguishable from a real one, and publishing it erased
     // the basis of a live holding.
@@ -2402,7 +2422,7 @@ impl CcpState {
                 if let Some(qty) = qty {
                     let avg_cost = basis_for(
                         shared, con_id,
-                        avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
+                        avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty_raw.unwrap_or(0.0),
                     );
                     shared.portfolio.set_position_info(PositionInfo {
                         con_id, position: qty, avg_cost, ..Default::default()
@@ -2417,12 +2437,14 @@ impl CcpState {
             }
             con_id = v.parse().unwrap_or(0);
             qty = None;
+            qty_raw = None;
             avg_cost_raw = None;
             count += 1;
         } else if let Some(v) = part.strip_prefix("6064=") {
             // Filtered to finite: `"NaN".parse()` succeeds and `NaN as i64`
             // is 0, which would flatten by the same route.
-            qty = v.parse::<f64>().ok().filter(|f| f.is_finite()).map(|f| f as i64);
+            qty_raw = v.parse::<f64>().ok().filter(|f| f.is_finite());
+            qty = qty_raw.map(|f| f as i64);
         } else if let Some(v) = part.strip_prefix("6101=") {
             avg_cost_raw = v.parse::<f64>().ok().filter(|f| f.is_finite());
         }
@@ -2432,7 +2454,7 @@ impl CcpState {
         if let Some(qty) = qty {
             let avg_cost = basis_for(
                 shared, con_id,
-                avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
+                avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty_raw.unwrap_or(0.0),
             );
             shared.portfolio.set_position_info(PositionInfo {
                 con_id, position: qty, avg_cost, ..Default::default()
@@ -2557,11 +2579,14 @@ impl CcpState {
 /// standing, since an absent cost is not a cost of zero — but only while the
 /// holding is open: a row closing it takes the basis with it, or the next
 /// position in the same contract would inherit the last one's.
-fn basis_for(shared: &SharedState, con_id: i64, stated: Option<Price>, qty: i64) -> Price {
+fn basis_for(shared: &SharedState, con_id: i64, stated: Option<Price>, qty: f64) -> Price {
     // A closed holding has no basis, and a row closing one has been seen to
     // carry the cost it was closed at. Keeping that leaves the next position
     // in the contract opening against the last one's price.
-    if qty == 0 {
+    // The quantity decides this, and a fractional holding is a holding: taking
+    // it from the whole-number field would read half a share as flat and throw
+    // away the basis of a position that is open.
+    if qty == 0.0 {
         return 0;
     }
     if let Some(c) = stated {
@@ -2599,13 +2624,13 @@ pub(crate) fn handle_position_update(
     // account is flat. Defaulting to 0 reconciled the engine's position to zero
     // off a marks-only frame and published a flat book to reqPositions and both
     // P&L paths until the next frame that did carry 6064 (ibx#261).
-    let position: Option<i64> = parsed.get(&6064)
+    let position_raw: Option<f64> = parsed.get(&6064)
         .and_then(|s| s.parse::<f64>().ok())
         // `"NaN".parse()` succeeds and `NaN as i64` is 0, so a non-finite
         // value would flatten a live position by the same route the absent
         // tag did. Route it to no-data instead.
-        .filter(|v| v.is_finite())
-        .map(|v| v as i64);
+        .filter(|v| v.is_finite());
+    let position: Option<i64> = position_raw.map(|v| v as i64);
     // Tag map verified against the updatePortfolio callback (ib-agent#172):
     // 6101 = averageCost, 6065 = marketPrice (per share), 6067 = marketValue,
     // 6100 = unrealizedPNL, 6099 = realizedPNL. Earlier code read 6065 as the
@@ -2644,7 +2669,7 @@ pub(crate) fn handle_position_update(
     };
 
     // Always store position info for reqPositions/pnlSingle, regardless of instrument registry.
-    let avg_cost = basis_for(shared, con_id, avg_cost, position);
+    let avg_cost = basis_for(shared, con_id, avg_cost, position_raw.unwrap_or(0.0));
     shared.portfolio.set_position_info(PositionInfo {
         con_id, position, avg_cost,
         symbol, sec_type, currency, multiplier,
@@ -4002,7 +4027,7 @@ mod tests {
 
         context.modify(78, 100 * PRICE_SCALE, 100, false);
         crate::engine::hot_loop::order_builder::drain_and_send_orders(
-            &mut conn, &mut context, "DU1", &mut hb, false, &shared_arc,
+            &mut conn, &mut context, "DU1", &mut hb, false, &shared_arc, false,
         );
 
         let mut buf = [0u8; 4096];
