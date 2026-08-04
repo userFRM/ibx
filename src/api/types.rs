@@ -708,6 +708,10 @@ pub struct ContractDetails {
     pub trading_hours: Option<String>,
     pub liquid_hours: Option<String>,
     pub time_zone_id: Option<String>,
+    /// The price-increment rules this contract trades under, as the definition
+    /// states them. Parsed all along and never surfaced, so a caller had no way
+    /// to learn which rule to ask `req_market_rule` for.
+    pub market_rule_ids: String,
 }
 
 impl ContractDetails {
@@ -747,6 +751,7 @@ impl ContractDetails {
             trading_hours: def.trading_hours.clone(),
             liquid_hours: def.liquid_hours.clone(),
             time_zone_id: def.time_zone_id.clone(),
+            market_rule_ids: def.market_rule_id.map(|r| r.to_string()).unwrap_or_default(),
         }
     }
 }
