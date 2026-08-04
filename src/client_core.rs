@@ -1578,7 +1578,7 @@ impl ClientCore {
 
     /// Pre-validate order fields that don't depend on instrument ID.
     /// Call this before `find_or_register_instrument` to fail fast.
-    pub fn validate_order(order: &ApiOrder) -> Result<(), String> {
+    pub fn validate_order(order: &ApiOrder, connected_account: &str) -> Result<(), String> {
         order.side()?;
 
         // Reject non-finite and out-of-range numerics up front, before any
@@ -1667,6 +1667,21 @@ impl ClientCore {
         // fa_group would put the whole size on the connected account rather
         // than spread it across the group, with nothing to show for it.
         // See: https://github.com/deepentropy/ibx/issues/96
+        // Same class as the FA fields below, and sharper: no encoder reads
+        // `order.account` — every order carries tag 1 from the session account —
+        // so the quantity fills on the connected account. The echo then confirms
+        // the wrong answer, because the open-order snapshot backfills the account
+        // from the report only when the caller left it blank. An FA order at
+        // least errors; this one filled elsewhere and reported success.
+        if !order.account.is_empty() && order.account != connected_account {
+            return Err(format!(
+                "order.account {:?} is not carried on the order: the quantity \
+                 would fill on the connected account {:?} instead, and the \
+                 open-order snapshot would still report {:?}",
+                order.account, connected_account, order.account,
+            ));
+        }
+
         if !order.fa_group.is_empty()
             || !order.fa_method.is_empty()
             || !order.fa_percentage.is_empty()

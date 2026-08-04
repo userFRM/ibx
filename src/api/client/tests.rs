@@ -1158,6 +1158,19 @@ fn place_order_transmit_false_is_rejected() {
 /// the connected account instead of spreading it across the advisor group.
 /// The algo case is the ordering proof: `validate_order` returns Ok early for
 /// an algo order, so a guard placed after that check lets FA+Adaptive through.
+/// Naming your own connected account is the ordinary single-account pattern and
+/// must keep working: the guard rejects a mismatch, not the presence of a value.
+#[test]
+fn place_order_accepts_the_connected_account_by_name() {
+    let (client, rx, _shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 150.0, account: "DU123".into(), ..Default::default()
+    };
+    client.place_order(1, &spy(), &order).expect("the connected account is not a mismatch");
+    assert!(rx.try_recv().is_ok(), "and the order reaches the engine");
+}
+
 #[test]
 fn place_order_fa_allocation_is_rejected() {
     let cases: Vec<OrderCase> = vec![
@@ -1168,6 +1181,10 @@ fn place_order_fa_allocation_is_rejected() {
             o.fa_group = "AllAccounts".into();
             o.algo_strategy = "Adaptive".into();
         }),
+        // Same class, and sharper: no encoder reads this either, so the order
+        // fills on the connected account while the open-order snapshot echoes
+        // the caller's value back and confirms the wrong one.
+        ("account", |o| o.account = "U9999999".into()),
     ];
     for (name, set) in cases {
         let (client, rx, _shared) = test_client();
@@ -1179,7 +1196,10 @@ fn place_order_fa_allocation_is_rejected() {
         let Err(err) = client.place_order(1, &spy(), &order) else {
             panic!("{name} must be refused");
         };
-        assert!(err.contains("fa_group"), "{name}: {err}");
+        // The field under test, not a fixed one: asserting "fa_group" for every
+        // arm meant three of them only proved that some error was returned.
+        let field = name.split(' ').next().unwrap();
+        assert!(err.contains(field), "{name}: the message must name the field — {err}");
         assert!(rx.try_recv().is_err(), "{name}: nothing reaches the engine");
     }
 }
@@ -2092,7 +2112,7 @@ fn validate_order_adaptive_rejects_unknown_priority() {
         algo_params: vec![TagValue { tag: "adaptivePriority".into(), value: "Aggressive".into() }],
         ..Default::default()
     };
-    let err = crate::client_core::ClientCore::validate_order(&order).unwrap_err();
+    let err = crate::client_core::ClientCore::validate_order(&order, "DU123").unwrap_err();
     assert!(err.contains("adaptivePriority"), "got: {err}");
 }
 
