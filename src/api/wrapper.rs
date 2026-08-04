@@ -467,12 +467,11 @@ pub mod tests {
     }
 
     /// Verify a bare no-op impl compiles — ensures all defaults work.
-    #[allow(dead_code)]
-    struct NoOpWrapper;
-    impl Wrapper for NoOpWrapper {}
-
     #[test]
     fn noop_wrapper_compiles() {
+        struct NoOpWrapper;
+        impl Wrapper for NoOpWrapper {}
+
         let mut w = NoOpWrapper;
         w.connect_ack();
         w.tick_price(0, 0, 0.0, &TickAttrib::default());

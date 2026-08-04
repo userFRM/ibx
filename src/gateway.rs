@@ -913,7 +913,7 @@ fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &BigUint) -> 
     // State 2: Receive challenge
     let recv2 = session::recv_msg(stream)?;
     let challenge_hex = match recv2 {
-        session::RecvMsg::Xyz { state, fields, .. } if state == 2 => {
+        session::RecvMsg::Xyz { state: 2, fields, .. } => {
             fields.get(1).filter(|s| !s.is_empty()).cloned()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CCP SOFT_TOKEN: empty challenge"))?
         }

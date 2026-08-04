@@ -2117,11 +2117,15 @@ mod tests {
     fn a_shared_order_reports_its_filled_quantity() {
         let shared = SharedState::new();
         let core = ClientCore::new();
-        let mut order = crate::api::types::Order::default();
-        order.total_quantity = 10.0;
-        order.filled_quantity = 4.0;
-        let mut order_state = crate::api::types::OrderState::default();
-        order_state.status = "Submitted".to_string();
+        let order = crate::api::types::Order {
+            total_quantity: 10.0,
+            filled_quantity: 4.0,
+            ..Default::default()
+        };
+        let order_state = crate::api::types::OrderState {
+            status: "Submitted".to_string(),
+            ..Default::default()
+        };
         shared.orders.push_order_info(55, crate::bridge::RichOrderInfo {
             contract: crate::api::types::Contract::default(),
             order,
@@ -2200,9 +2204,11 @@ mod tests {
             multiplier: String::new(),
             ..Default::default()
         });
-        let mut q = Quote::default();
-        q.last = (last_dollars * PRICE_SCALE_F) as i64;
-        q.close = (close_dollars * PRICE_SCALE_F) as i64;
+        let q = Quote {
+            last: (last_dollars * PRICE_SCALE_F) as i64,
+            close: (close_dollars * PRICE_SCALE_F) as i64,
+            ..Default::default()
+        };
         shared.market.push_quote(iid, &q);
     }
 
@@ -2230,9 +2236,11 @@ mod tests {
         // And one held overnight that this session cannot size.
         core.con_id_to_instrument.lock().unwrap().insert(2, 1);
         core.instrument_to_req.lock().unwrap().insert(1, 1);
-        let mut q = Quote::default();
-        q.last = (735.00 * PRICE_SCALE_F) as i64;
-        q.close = (730.00 * PRICE_SCALE_F) as i64;
+        let q = Quote {
+            last: (735.00 * PRICE_SCALE_F) as i64,
+            close: (730.00 * PRICE_SCALE_F) as i64,
+            ..Default::default()
+        };
         shared.market.push_quote(1, &q);
         shared.portfolio.set_midnight_seeds(vec![MidnightSeed {
             con_id: 2, qty_midnight: Some(10), money_traded: 0.0, realized_pnl: 0.0,
@@ -2272,9 +2280,11 @@ mod tests {
         assert!((first[0].unrealized_pnl - 350.0).abs() < 1e-6, "unrealized");
 
         // And a later change to a field that IS known still produces an update.
-        let mut q = Quote::default();
-        q.last = (736.00 * PRICE_SCALE_F) as i64;
-        q.close = (730.00 * PRICE_SCALE_F) as i64;
+        let q = Quote {
+            last: (736.00 * PRICE_SCALE_F) as i64,
+            close: (730.00 * PRICE_SCALE_F) as i64,
+            ..Default::default()
+        };
         shared.market.push_quote(0, &q);
         let second = core.poll_pnl_single(&shared);
         assert!(!second.is_empty(), "a moved quote must still reach the caller");
@@ -2295,9 +2305,11 @@ mod tests {
         // A quote and a seed, but no position row — the feed dropped it.
         core.con_id_to_instrument.lock().unwrap().insert(756733, 0);
         core.instrument_to_req.lock().unwrap().insert(0, 1);
-        let mut q = Quote::default();
-        q.last = (735.00 * PRICE_SCALE_F) as i64;
-        q.close = (730.00 * PRICE_SCALE_F) as i64;
+        let q = Quote {
+            last: (735.00 * PRICE_SCALE_F) as i64,
+            close: (730.00 * PRICE_SCALE_F) as i64,
+            ..Default::default()
+        };
         shared.market.push_quote(0, &q);
         shared.portfolio.set_midnight_seeds(vec![MidnightSeed {
             con_id: 756733,
@@ -2455,10 +2467,12 @@ mod tests {
 
         // Gateway-pushed account-level P&L (from the DailyPnL/UnrealizedPnL/
         // RealizedPnL account-value keys).
-        let mut acct = AccountState::default();
-        acct.daily_pnl = (12.50 * PRICE_SCALE_F) as i64;
-        acct.unrealized_pnl = (35.00 * PRICE_SCALE_F) as i64;
-        acct.realized_pnl = (4.00 * PRICE_SCALE_F) as i64;
+        let acct = AccountState {
+            daily_pnl: (12.50 * PRICE_SCALE_F) as i64,
+            unrealized_pnl: (35.00 * PRICE_SCALE_F) as i64,
+            realized_pnl: (4.00 * PRICE_SCALE_F) as i64,
+            ..Default::default()
+        };
         shared.portfolio.set_account(&acct);
 
         let update = core.poll_pnl(&shared).expect("callback must fire from account-level P&L");
@@ -2480,9 +2494,11 @@ mod tests {
         seed_pnl_position(&core, &shared, 1, 0, 1, 100.0, 101.0, 0.0);
 
         // Divergent account-level values that must be ignored while priced.
-        let mut acct = AccountState::default();
-        acct.daily_pnl = (999.0 * PRICE_SCALE_F) as i64;
-        acct.unrealized_pnl = (999.0 * PRICE_SCALE_F) as i64;
+        let acct = AccountState {
+            daily_pnl: (999.0 * PRICE_SCALE_F) as i64,
+            unrealized_pnl: (999.0 * PRICE_SCALE_F) as i64,
+            ..Default::default()
+        };
         shared.portfolio.set_account(&acct);
 
         let update = core.poll_pnl(&shared).expect("callback must fire");

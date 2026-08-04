@@ -573,7 +573,7 @@ impl CcpState {
                             let for_event = clone_for_event(event_tx, &def);
                             shared.reference.push_contract_details(api_req_id, def);
                             if let Some(details) = for_event {
-                                emit(event_tx, Event::ContractDetails { req_id: api_req_id, details });
+                                emit(event_tx, Event::ContractDetails { req_id: api_req_id, details: Box::new(details) });
                             }
                         }
                         // A leg the gateway cannot resolve carries no contract:
@@ -685,7 +685,7 @@ impl CcpState {
                                 let for_event = clone_for_event(event_tx, &def);
                                 shared.reference.push_contract_details(req_id, def);
                                 if let Some(details) = for_event {
-                                    emit(event_tx, Event::ContractDetails { req_id, details });
+                                    emit(event_tx, Event::ContractDetails { req_id, details: Box::new(details) });
                                 }
                                 if is_last {
                                     shared.reference.push_contract_details_end(req_id);
@@ -1716,7 +1716,7 @@ impl CcpState {
             let for_event = clone_for_event(event_tx, &p.def);
             shared.reference.push_contract_details(p.api_req_id, p.def);
             if let Some(details) = for_event {
-                emit(event_tx, Event::ContractDetails { req_id: p.api_req_id, details });
+                emit(event_tx, Event::ContractDetails { req_id: p.api_req_id, details: Box::new(details) });
             }
             if p.is_last {
                 shared.reference.push_contract_details_end(p.api_req_id);
@@ -1758,7 +1758,7 @@ impl CcpState {
         let for_event = clone_for_event(event_tx, &pair.def);
         shared.reference.push_contract_details(pair.api_req_id, pair.def);
         if let Some(details) = for_event {
-            emit(event_tx, Event::ContractDetails { req_id: pair.api_req_id, details });
+            emit(event_tx, Event::ContractDetails { req_id: pair.api_req_id, details: Box::new(details) });
         }
         if pair.is_last {
             shared.reference.push_contract_details_end(pair.api_req_id);
