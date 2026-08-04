@@ -2,7 +2,7 @@
 
 use crate::types::*;
 
-use super::{Contract, EClient};
+use super::{wire_req_id, Contract, EClient};
 
 impl EClient {
     // ── Market Data ──
@@ -99,7 +99,7 @@ impl EClient {
         let exchange = if contract.exchange.is_empty() { "SMART".to_string() } else { contract.exchange.clone() };
         let sec_type = if contract.sec_type.is_empty() { "STK".to_string() } else { contract.sec_type.clone() };
         self.send(ControlCommand::SubscribeDepth {
-            req_id: req_id as u32,
+            req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
             exchange,
             sec_type,
@@ -110,7 +110,7 @@ impl EClient {
 
     /// Cancel market depth. Matches `cancelMktDepth` in C++.
     pub fn cancel_mkt_depth(&self, req_id: i64) -> Result<(), String> {
-        self.send(ControlCommand::UnsubscribeDepth { req_id: req_id as u32 })
+        self.send(ControlCommand::UnsubscribeDepth { req_id: wire_req_id(req_id)? })
     }
 
     // ── Real-Time Bars ──
@@ -121,7 +121,7 @@ impl EClient {
         _bar_size: i32, what_to_show: &str, use_rth: bool,
     ) -> Result<(), String> {
         self.send(ControlCommand::SubscribeRealTimeBar {
-            req_id: req_id as u32,
+            req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
             symbol: contract.symbol.clone(),
             what_to_show: what_to_show.into(),
@@ -131,7 +131,7 @@ impl EClient {
 
     /// Cancel real-time bars. Matches `cancelRealTimeBars` in C++.
     pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), String> {
-        self.send(ControlCommand::CancelRealTimeBar { req_id: req_id as u32 })
+        self.send(ControlCommand::CancelRealTimeBar { req_id: wire_req_id(req_id)? })
     }
 
     /// Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen).
