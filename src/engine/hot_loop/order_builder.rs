@@ -33,9 +33,6 @@ pub(crate) fn drain_and_send_orders(
     let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
     for mut order_req in orders {
         let oid = order_req.order_id();
-        // A replace claims its ClOrdID version before the write, and the broker
-        // still holds the previous one if that write never lands.
-        let is_replace = matches!(order_req, OrderRequest::Modify { .. });
         // Snap every price to the contract's tick grid before encoding
         // (ibx#216). The tick comes from the market-data subscription ack;
         // without one it is 0 and prices pass through unchanged.
@@ -246,7 +243,7 @@ pub(crate) fn drain_and_send_orders(
                     parent_id, instrument, side, qty, entry_price, b'2', b'0', 0,
                 ));
                 let now = chrono_free_timestamp();
-                let _ = conn.send_fix(&[
+                let parent_sent = conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &parent_str),
@@ -271,7 +268,7 @@ pub(crate) fn drain_and_send_orders(
                     tp_id, instrument, exit_side, qty, take_profit, b'2', b'1', 0,
                 ));
                 let now = chrono_free_timestamp();
-                let _ = conn.send_fix(&[
+                let tp_sent = conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &tp_str),
@@ -299,7 +296,10 @@ pub(crate) fn drain_and_send_orders(
                     sl_id, instrument, exit_side, qty, stop_loss, b'3', b'1', stop_loss,
                 ));
                 let now = chrono_free_timestamp();
-                conn.send_fix(&[
+                // The legs go out as three messages and the arm reports one
+                // outcome. Reporting only the last meant a parent that never
+                // left was silence, with two children tracked against it.
+                parent_sent.and(tp_sent).and(conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &sl_str),
@@ -320,7 +320,7 @@ pub(crate) fn drain_and_send_orders(
                     (6107, &parent_str),       // ParentOrderID
                     (583, &oca_group),         // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
-                ])
+                ]))
             }
             OrderRequest::SubmitLimitOpg { order_id, instrument, side, qty, price } => {
                 context.insert_order(crate::types::Order::new(
@@ -715,29 +715,25 @@ pub(crate) fn drain_and_send_orders(
         match result {
             Ok(()) => hb.last_ccp_sent = Instant::now(),
             Err(e) => {
-                // Order failed to send — remove from engine state and notify the application.
-                // See: https://github.com/deepentropy/ibx/issues/116
-                log::error!("Failed to send order {oid}: {e} — notifying application");
+                // The caller is told, which is the whole of ibx#116 — it was
+                // the silence that left a phantom position. What it is told is
+                // that the state is not known: a write reporting failure may
+                // already have put the frame on the wire, as the transport
+                // says of TLS in as many words, so calling this a rejection
+                // invited a resubmission of an order that may be working.
+                //
+                // Nothing is discarded and nothing is rolled back. The failure
+                // abandons the transport, the reconnect that follows brings the
+                // server's own account of what it holds, and `last_clord` is
+                // re-recorded from that echo. Where the recovery accounts for
+                // none of it, the sweep says so rather than this guessing.
+                log::error!("Failed to send order {oid}: {e} — its state is not known");
                 if oid != 0 {
-                    if is_replace {
-                        // Give the version back. The broker never saw this
-                        // replace, so a cancel has to state the one before it;
-                        // leaving the unsent version claimed had the cancel
-                        // rejected while the order stayed live. The chain stays
-                        // for the same reason.
-                        if let Some(v) = context.modify_versions.get_mut(&oid) {
-                            *v = v.saturating_sub(1);
-                        }
-                        context.remove_order(oid);
-                    } else {
-                        // Nothing of this order reached the broker, so nothing
-                        // will ever cancel or replace it.
-                        context.retire_order(oid);
-                    }
+                    context.set_order_status_forced(oid, OrderStatus::Uncertain);
                     shared.orders.push_order_update(OrderUpdate {
                         order_id: oid,
                         instrument: 0,
-                        status: OrderStatus::Rejected,
+                        status: OrderStatus::Uncertain,
                         filled_qty: 0.0,
                         remaining_qty: 0.0,
                         perm_id: 0,
@@ -1434,6 +1430,50 @@ mod tests {
             tag("99="),
             Some(format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100).to_string()),
             "the trigger must be on the grid: {}", msg,
+        );
+    }
+
+    /// A write that fails has not established that the broker has nothing —
+    /// the transport says as much of TLS. Calling it a rejection invited a
+    /// resubmission of an order that may be working.
+    #[test]
+    fn an_order_whose_write_failed_is_unknown_rather_than_rejected() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        // Closing this side's write half makes the send fail on the call
+        // rather than after a buffer fills.
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        context.insert_order(crate::types::Order::new(
+            42, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
+        ));
+        context.last_clord.insert(42, "42.7".to_string());
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            new_order_id: 43, order_id: 42, price: 151 * crate::types::PRICE_SCALE,
+            qty: 100, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        });
+
+        let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+        let shared = std::sync::Arc::new(SharedState::new());
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);
+
+        let updates = shared.orders.drain_order_updates();
+        assert!(
+            updates.iter().any(|u| u.order_id == 42
+                && u.status == crate::types::OrderStatus::Uncertain),
+            "the caller is told, and told it is unknown: {updates:?}",
+        );
+        assert!(
+            !updates.iter().any(|u| u.status == crate::types::OrderStatus::Rejected),
+            "not that the broker refused it: {updates:?}",
+        );
+        assert!(
+            context.order(42).is_some(),
+            "and it stays tracked, for the recovery to account for",
         );
     }
 

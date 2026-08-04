@@ -2392,10 +2392,7 @@ impl CcpState {
             // Flush previous position if any
             if count > 0 && con_id != 0 {
                 if let Some(qty) = qty {
-                    let avg_cost = avg_cost_raw
-                        .map(|c| (c * PRICE_SCALE as f64) as Price)
-                        .or_else(|| shared.portfolio.position_info(con_id).map(|p| p.avg_cost))
-                        .unwrap_or(0);
+                    let avg_cost = basis_for(shared, con_id, avg_cost_raw, qty);
                     shared.portfolio.set_position_info(PositionInfo {
                         con_id, position: qty, avg_cost, ..Default::default()
                     });
@@ -2422,10 +2419,7 @@ impl CcpState {
     // Flush last position
     if count > 0 && con_id != 0 {
         if let Some(qty) = qty {
-            let avg_cost = avg_cost_raw
-                .map(|c| (c * PRICE_SCALE as f64) as Price)
-                .or_else(|| shared.portfolio.position_info(con_id).map(|p| p.avg_cost))
-                .unwrap_or(0);
+            let avg_cost = basis_for(shared, con_id, avg_cost_raw, qty);
             shared.portfolio.set_position_info(PositionInfo {
                 con_id, position: qty, avg_cost, ..Default::default()
             });
@@ -2542,6 +2536,22 @@ impl CcpState {
     }
 }
 
+
+/// The basis to publish for a position row.
+///
+/// A row that states one states it. A row that does not leaves the one on file
+/// standing, since an absent cost is not a cost of zero — but only while the
+/// holding is open: a row closing it takes the basis with it, or the next
+/// position in the same contract would inherit the last one's.
+fn basis_for(shared: &SharedState, con_id: i64, stated: Option<f64>, qty: i64) -> Price {
+    if let Some(c) = stated {
+        return (c * PRICE_SCALE as f64) as Price;
+    }
+    if qty == 0 {
+        return 0;
+    }
+    shared.portfolio.position_info(con_id).map(|p| p.avg_cost).unwrap_or(0)
+}
 
 /// Take the server's position as the engine's own.
 ///
@@ -3082,6 +3092,21 @@ mod tests {
         assert_eq!(
             shared.portfolio.position_info(265598).map(|i| i.avg_cost), basis,
             "the basis on file stands where the row states none",
+        );
+
+        // A row that closes the holding takes the basis with it, or the next
+        // position in this contract would open against the last one's cost.
+        ccp.handle_position_feed(
+            "6008=265598\x016064=0\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
+        );
+        assert_eq!(
+            shared.portfolio.position_info(265598).map(|i| i.avg_cost), Some(0),
+            "a closed holding leaves no basis behind",
+        );
+        ccp.handle_position_feed(
+            "6008=265598\x016064=100\x016101=150.0\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
         );
 
         // Stated as zero, which is the broker saying zero.

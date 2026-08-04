@@ -455,14 +455,26 @@ impl HmdsState {
                             if let Some(pos) = self.pending_historical.iter().position(|(q, _, _)| q == qid) {
                                 let (_, req_id, _) = self.pending_historical.remove(pos);
                                 self.keep_up_to_date_reqs.remove(&req_id);
-                                // The reconnect lists are what get asked for
+                                // The reconnect list is what gets asked for
                                 // again, so a query the server rejected has to
-                                // leave them or it comes straight back.
+                                // leave it or it comes straight back. Only the
+                                // keepUpToDate list: a real-time bar carries the
+                                // same caller id in a list of its own, and the
+                                // two id spaces are not shared, so matching on
+                                // the number alone tore down a live bar stream
+                                // that nothing had rejected.
                                 self.kut_resub.retain(|k| k.req_id != req_id);
-                                self.rtbar_resub.retain(|r| r.req_id != req_id);
-                                self.rtbar_subs.retain(|(_, rid, _, _)| *rid != req_id);
                                 released_req_id = Some(req_id);
                                 from_historical = true;
+                            } else if let Some(pos) = self.rtbar_subs.iter().position(|(q, _, _, _)| q == qid) {
+                                // A rejected bar query is matched on the query
+                                // id, which is the one identifier that is
+                                // unique across request kinds. Its reconnect
+                                // record goes too, or the next reconnect asks
+                                // for a stream the server already refused.
+                                let (_, req_id, _, _) = self.rtbar_subs.remove(pos);
+                                self.rtbar_resub.retain(|r| r.req_id != req_id);
+                                released_req_id = Some(req_id);
                             } else if let Some(pos) = self.pending_head_ts.iter().position(|(q, _)| q == qid) {
                                 let (_, req_id) = self.pending_head_ts.remove(pos);
                                 released_req_id = Some(req_id);
