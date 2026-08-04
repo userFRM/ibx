@@ -27,7 +27,13 @@ impl EClient {
         let connected = self.account_id.lock().unwrap().clone().unwrap_or_default();
         ClientCore::validate_order(&api_order, &connected)
             .map_err(PyRuntimeError::new_err)?;
-        ClientCore::validate_order_contract(&contract.sec_type)
+        ClientCore::validate_order_contract(
+            &contract.sec_type,
+            &ClientCore::contract_identity(
+                &contract.last_trade_date_or_contract_month, contract.strike,
+                &contract.right, &contract.multiplier,
+            ),
+        )
             .map_err(PyRuntimeError::new_err)?;
 
         let tx = self.tx()?;

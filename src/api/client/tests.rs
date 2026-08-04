@@ -1644,19 +1644,21 @@ fn place_order_unsupported_type_returns_error() {
 
 #[test]
 fn place_order_non_stk_contract_rejected() {
-    // A non-STK contract must be rejected, not silently sent as a stock order
-    // on the underlying. See: https://github.com/deepentropy/ibx/issues/202
+    // An option's symbol names a whole chain. Without an expiry, strike or
+    // right the order cannot say which contract it means, and the gateway would
+    // fill whichever one it picked (ibx#202).
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
-    let opt = Contract { con_id: 999001, symbol: "AAPL".into(), sec_type: "OPT".into(), ..Default::default() };
+    let bare = Contract { con_id: 999001, symbol: "AAPL".into(), sec_type: "OPT".into(), ..Default::default() };
     let order = Order { action: "BUY".into(), total_quantity: 1.0, order_type: "MKT".into(), ..Default::default() };
-    let result = client.place_order(1, &opt, &order);
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.contains("OPT"));
-    assert!(err.contains("STK"));
-    // No order must have been queued to the engine.
-    assert!(rx.try_recv().is_err());
+    let err = client.place_order(1, &bare, &order).expect_err("a chain is not a contract");
+    assert!(err.contains("OPT"), "the refusal names the type: {err}");
+    assert!(rx.try_recv().is_err(), "and nothing reaches the engine");
+
+    // The named case is not asserted here: this fixture has no engine, so
+    // registering an instrument blocks on a reply that never arrives. That an
+    // identified option is accepted is pinned by `contract_gate_tests`, and that
+    // the identity reaches the wire by `an_option_order_names_its_contract`.
 }
 
 #[test]

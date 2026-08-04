@@ -16,7 +16,13 @@ impl EClient {
     pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), String> {
         // Validate order params and contract before registering instrument (fail fast).
         ClientCore::validate_order(order, &self.account_id)?;
-        ClientCore::validate_order_contract(&contract.sec_type)?;
+        ClientCore::validate_order_contract(
+            &contract.sec_type,
+            &ClientCore::contract_identity(
+                &contract.last_trade_date_or_contract_month, contract.strike,
+                &contract.right, &contract.multiplier,
+            ),
+        )?;
 
         let oid = if order_id > 0 {
             order_id as u64
@@ -27,6 +33,10 @@ impl EClient {
         let instrument = self.core.find_or_register_instrument(
             &self.control_tx,
             contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
+            &ClientCore::contract_identity(
+                &contract.last_trade_date_or_contract_month, contract.strike,
+                &contract.right, &contract.multiplier,
+            ),
         )?;
 
         // If orderId is already tracked, this is a modification — emit Modify instead of Submit.

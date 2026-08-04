@@ -750,6 +750,23 @@ fn is_trigger_only(ord_type: u8) -> bool {
 /// `SubmitLimitEx`, `SubmitTrailingStopPctEx` and `SubmitEx` all route
 /// through here so the attrs emission cannot drift between order types.
 #[allow(clippy::too_many_arguments)]
+/// Restate the contract identity on an order for anything a symbol does not
+/// name on its own. Without these an option order says nothing about which
+/// strike, right or expiry it means and a future says nothing about its
+/// contract month, which is why those types were refused outright rather than
+/// sent under-specified (ibx#202).
+fn push_contract_identity(
+    fields: &mut Vec<(u32, String)>, context: &Context, instrument: crate::types::InstrumentId,
+) {
+    let Some((expiry, strike, right, multiplier)) = context.market.order_identity(instrument) else {
+        return;
+    };
+    if !expiry.is_empty() { fields.push((200, expiry)); }
+    if strike.parse::<f64>().unwrap_or(0.0) > 0.0 { fields.push((202, strike)); }
+    if !right.is_empty() { fields.push((201, right)); }
+    if !multiplier.is_empty() { fields.push((231, multiplier)); }
+}
+
 fn send_order_ex(
     conn: &mut Connection,
     context: &mut Context,
@@ -800,7 +817,7 @@ fn send_order_ex(
 
     let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
     let symbol = context.market.symbol(instrument).to_string();
-                let (sec_type_str, destination) = context.market.order_routing(instrument);
+    let (sec_type_str, destination) = context.market.order_routing(instrument);
     let now = chrono_free_timestamp().to_string();
     let tif_byte = [tif];
     let tif_str = std::str::from_utf8(&tif_byte).unwrap_or("0");
@@ -943,6 +960,7 @@ fn send_order_ex(
     fields.push((59, tif_str.to_string()));
     fields.push((60, now));
     fields.push((167, sec_type_str.clone()));
+    push_contract_identity(&mut fields, context, instrument);
     // MIDPX / SNAP* / PEG* require a directed exchange; everything else
     // routes per the instrument's registered routing (ibx#217).
     let destination = match kind {
@@ -1666,6 +1684,50 @@ mod modify_wire_tests {
     /// in types.rs. Neither emitted tag 18, so the two went on the wire byte
     /// for byte identical and neither said which peg it was — every other
     /// shared-OrdType pair in this encoder does emit its disambiguator.
+    /// An option order that does not restate expiry, strike and right names no
+    /// particular contract: the symbol alone is the whole chain. That is why
+    /// non-stock orders were refused rather than sent, and carrying the identity
+    /// is what makes sending one safe (ibx#202).
+    #[test]
+    fn an_option_order_names_its_contract() {
+        let mut context = Context::new();
+        let instrument = context.market.try_register_contract(
+            0, "AAPL", "OPT", "SMART", "20260619|230|C|100",
+        ).expect("slot");
+        context.market.set_symbol(instrument, "AAPL".into());
+        context.market.set_routing(instrument, "OPT", "SMART");
+
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7, instrument, side: Side::Buy, qty: 1,
+            kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
+            tif: b'0', attrs: crate::types::OrderAttrs::default(),
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|167=OPT|"), "the security type: {sent}");
+        assert!(sent.contains("|200=20260619|"), "the expiry: {sent}");
+        assert!(sent.contains("|202=230|"), "the strike: {sent}");
+        assert!(sent.contains("|201=C|"), "the right: {sent}");
+        assert!(sent.contains("|231=100|"), "the multiplier: {sent}");
+    }
+
+    /// A stock names itself with its symbol, so none of those tags belong on it.
+    #[test]
+    fn a_stock_order_carries_no_option_identity() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_symbol(instrument, "SPY".into());
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7, instrument, side: Side::Buy, qty: 1,
+            kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
+            tif: b'0', attrs: crate::types::OrderAttrs::default(),
+        });
+        let sent = drain(&mut context);
+        for tag in ["|200=", "|201=", "|202=", "|231="] {
+            assert!(!sent.contains(tag), "a stock carries no {tag}: {sent}");
+        }
+    }
+
     #[test]
     fn the_two_pegs_are_told_apart_on_the_wire() {
         let mut sent = Vec::new();

@@ -360,7 +360,11 @@ impl EClient {
         let symbol = contract.symbol.clone();
         let exchange = contract.exchange.clone();
         let sec_type = contract.sec_type.clone();
-        py.detach(|| self.core.find_or_register_instrument(&tx, con_id, &symbol, &exchange, &sec_type))
+        let identity = crate::client_core::ClientCore::contract_identity(
+            &contract.last_trade_date_or_contract_month, contract.strike,
+            &contract.right, &contract.multiplier,
+        );
+        py.detach(|| self.core.find_or_register_instrument(&tx, con_id, &symbol, &exchange, &sec_type, &identity))
             .map_err(PyRuntimeError::new_err)
     }
 }
