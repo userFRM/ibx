@@ -83,14 +83,18 @@ pub struct HotLoop {
     /// connect failed, or a future runtime disconnect detector trips it.
     pending_hmds_reconnect: Option<Receiver<io::Result<Connection>>>,
     hmds_reconnect_attempt: u32,
-    /// Earliest instant the next HMDS reconnect attempt may spawn. `None` once
-    /// retries are exhausted or HMDS is healthy.
+    /// Earliest instant the next HMDS reconnect attempt may spawn. `None`
+    /// while HMDS is healthy.
     hmds_next_attempt_at: Option<Instant>,
 }
 
-/// Maximum HMDS reconnect attempts before giving up (ibx#187).
-/// Total wait at cap: 3+6+12+24+48 = 93s before final attempt fires.
-const HMDS_MAX_RECONNECT_ATTEMPTS: u32 = 6;
+/// Consecutive HMDS reconnect failures before the loss is logged as an error
+/// (ibx#187). Retries do not stop there: the servers go down for maintenance
+/// nightly and come back on their own, and a client that gave up after ~2
+/// minutes would stay dark until someone restarted the process — the same
+/// failure the gateway has when its restart token is unset. Attempts continue
+/// on the ladder below, which caps at 64s.
+const HMDS_NOTIFY_AFTER_ATTEMPTS: u32 = 6;
 
 /// Tracks last send/recv times and pending test requests for heartbeat management.
 pub struct HeartbeatState {
@@ -1049,9 +1053,6 @@ impl HotLoop {
             Some(a) if !a.host.is_empty() && !a.hmds_host.is_empty() => a,
             _ => return,
         };
-        if self.hmds_reconnect_attempt >= HMDS_MAX_RECONNECT_ATTEMPTS {
-            return;
-        }
         // Schedule the first attempt if not already scheduled.
         if self.hmds_next_attempt_at.is_none() {
             self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
@@ -1109,18 +1110,16 @@ impl HotLoop {
             }
             Ok(Err(e)) => {
                 log::warn!(
-                    "HMDS reconnect failed (attempt {}/{}): {}",
-                    self.hmds_reconnect_attempt, HMDS_MAX_RECONNECT_ATTEMPTS, e,
+                    "HMDS reconnect failed (attempt {}): {}",
+                    self.hmds_reconnect_attempt, e,
                 );
                 self.pending_hmds_reconnect = None;
-                if self.hmds_reconnect_attempt >= HMDS_MAX_RECONNECT_ATTEMPTS {
+                if self.hmds_reconnect_attempt == HMDS_NOTIFY_AFTER_ATTEMPTS {
                     log::error!(
-                        "HMDS reconnect exhausted {HMDS_MAX_RECONNECT_ATTEMPTS} attempts — historical data unavailable for this session",
+                        "HMDS still down after {HMDS_NOTIFY_AFTER_ATTEMPTS} attempts — historical data is unavailable until it answers; retries continue",
                     );
-                    self.hmds_next_attempt_at = None;
-                } else {
-                    self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
                 }
+                self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
             }
             Err(crossbeam_channel::TryRecvError::Empty) => {}
             Err(crossbeam_channel::TryRecvError::Disconnected) => {
@@ -1609,6 +1608,41 @@ mod tests {
         assert!(
             hl.hmds_next_attempt_at.is_some(),
             "an HMDS reconnect is scheduled rather than skipped forever",
+        );
+    }
+
+    /// The servers go down for maintenance most nights and come back on their
+    /// own. Stopping after six attempts — about two and a half minutes on the
+    /// ladder — left historical data dead until someone restarted the process,
+    /// which is the failure the gateway has when its restart token is unset.
+    #[test]
+    fn hmds_keeps_retrying_through_an_outage_longer_than_the_ladder() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            host: "gw.example".into(),
+            username: "u".into(),
+            password: zeroize::Zeroizing::new(String::new()),
+            paper: true,
+            session_key: Default::default(),
+            session_token: Default::default(),
+            server_session_id: String::new(),
+            hw_info: String::new(),
+            encoded: String::new(),
+            hmds_host: "hmds.example".into(),
+            hmds_farm: "hfarm".into(),
+            trading_host: "trade.example".into(),
+            trading_farm: "tfarm".into(),
+        });
+
+        // Well past the old cap, with the socket still down.
+        hl.hmds_reconnect_attempt = 60;
+        hl.hmds_next_attempt_at = None;
+        hl.maybe_spawn_hmds_reconnect();
+
+        let due = hl.hmds_next_attempt_at.expect("another attempt is armed");
+        assert!(
+            due.saturating_duration_since(Instant::now()) <= Duration::from_secs(64),
+            "and the ladder stays capped rather than drifting out to nothing",
         );
     }
     use super::*;
