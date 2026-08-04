@@ -353,7 +353,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::super::contract::TagValue;
+    use pyo3::Python;
 
     #[test]
     fn eclient_default_state() {
