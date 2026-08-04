@@ -287,10 +287,21 @@ impl HotLoop {
         if self.ccp.news_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
             return;
         }
+        // A holding is a reference to the contract as much as a subscription
+        // is. Dropping the last subscription on something the account still
+        // owns handed the slot to the next contract, which then reported the
+        // previous one's position as its own.
+        if self.context.position(instrument) != 0 {
+            return;
+        }
         if self.context.market.unregister(instrument).is_some() {
             // Zero the shared-side quote so a reused slot cannot serve the
             // previous contract's prices before its first tick.
             self.shared.market.push_quote(instrument, &crate::types::Quote::default());
+            // Tick-by-tick rebuilds bid and ask from deltas against the last
+            // pair it saw. Left in place, the next occupant's first delta
+            // would be applied to the previous contract's prices.
+            self.hmds.tbt_price_state[instrument as usize] = (0, 0, 0);
             log::info!("Reclaimed instrument slot {instrument}");
         }
     }
@@ -1671,6 +1682,32 @@ mod tests {
         assert!(
             hl.hmds_next_attempt_at.is_some(),
             "an HMDS reconnect is scheduled rather than skipped forever",
+        );
+    }
+
+    /// The slot guard lists what still refers to a contract, and a holding was
+    /// not on it. Dropping the last subscription on something the account owns
+    /// freed the slot, and the contract that took it inherited the position.
+    #[test]
+    fn a_slot_the_account_still_holds_is_not_reclaimed() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let instrument = hl.context.register_instrument(265598);
+        hl.context.update_position(instrument, 100);
+
+        hl.try_reclaim_instrument(instrument);
+        assert_eq!(
+            hl.context.market.con_id(instrument), Some(265598),
+            "the slot stays with the contract the account is long",
+        );
+
+        // Flat, and nothing else refers to it: now it may go.
+        hl.context.update_position(instrument, -100);
+        hl.hmds.tbt_price_state[instrument as usize] = (1, 2, 3);
+        hl.try_reclaim_instrument(instrument);
+        assert_eq!(hl.context.market.con_id(instrument), None, "the freed slot holds no contract");
+        assert_eq!(
+            hl.hmds.tbt_price_state[instrument as usize], (0, 0, 0),
+            "and no prices for the next occupant's deltas to build on",
         );
     }
 
