@@ -108,7 +108,15 @@ impl MarketState {
         &mut self, con_id: i64, symbol: &str, sec_type: &str, exchange: &str, option_key: &str,
     ) -> Option<InstrumentId> {
         if con_id != 0 {
-            return self.try_register(con_id);
+            let id = self.try_register(con_id)?;
+            // A conId names the contract to the gateway, but an order still has
+            // to restate the identity on the wire, and this is where an order
+            // reads it from. Recorded here too, or a future known by conId went
+            // out naming its exchange and not its month.
+            if !option_key.is_empty() && self.option_keys[id as usize].is_none() {
+                self.option_keys[id as usize] = Some(option_key.to_string());
+            }
+            return Some(id);
         }
         if let Some(id) = self.instrument_by_descriptor(symbol, sec_type, exchange, option_key) {
             // First caller to state an identity fixes it, so the next contract
