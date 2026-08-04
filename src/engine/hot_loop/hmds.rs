@@ -1285,7 +1285,8 @@ impl HmdsState {
         });
     }
 
-    pub(crate) fn send_schedule_request(&mut self, req_id: u32, con_id: i64, end_date_time: &str, duration: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn send_schedule_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, end_date_time: &str, duration: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
         let duration = duration.to_lowercase();
@@ -1295,7 +1296,10 @@ impl HmdsState {
             end_date_time.to_string()
         };
         let query_id = format!("sched_{qid}");
-        let xml = crate::control::historical::build_schedule_xml(&query_id, con_id, &end_date_time, &duration, use_rth);
+        let xml = crate::control::historical::build_schedule_xml(
+            &query_id, con_id, &end_date_time, &duration, use_rth,
+            &hist_sec_type(sec_type), &hist_exchange(exchange),
+        );
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[

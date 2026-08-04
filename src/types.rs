@@ -1193,6 +1193,8 @@ pub enum ControlCommand {
     FetchHistoricalSchedule {
         req_id: u32,
         con_id: i64,
+        sec_type: String,
+        exchange: String,
         end_date_time: String,
         duration: String,
         use_rth: bool,
