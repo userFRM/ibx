@@ -230,6 +230,9 @@ impl EClient {
                 username: config.username.clone(),
                 password: zeroize::Zeroizing::new(config.password.clone()),
                 paper: config.paper,
+                code_provider: gw_config.code_provider.clone(),
+                ib_key_timeout_secs: gw_config.ib_key_timeout_secs,
+                ib_key_token_sub_type: gw_config.ib_key_token_sub_type.clone(),
             },
         );
 

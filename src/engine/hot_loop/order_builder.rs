@@ -24,11 +24,13 @@ pub(crate) fn drain_and_send_orders(
         return;
     }
 
-    let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
+    // Claim the buffer only once there is somewhere to send it. Draining first
+    // and then finding no socket dropped every pending order on the floor.
     let conn = match ccp_conn.as_mut() {
         Some(c) => c,
         None => return,
     };
+    let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
     for mut order_req in orders {
         let oid = order_req.order_id();
         // Snap every price to the contract's tick grid before encoding

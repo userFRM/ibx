@@ -190,6 +190,9 @@ fn main() {
             username: config.username.clone(),
             password: config.password.clone(),
             paper: config.paper,
+            code_provider: config.code_provider.clone(),
+            ib_key_timeout_secs: config.ib_key_timeout_secs,
+            ib_key_token_sub_type: config.ib_key_token_sub_type.clone(),
         },
     );
 

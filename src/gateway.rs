@@ -427,6 +427,11 @@ pub struct CallerAuth {
     pub username: String,
     pub password: Zeroizing<String>,
     pub paper: bool,
+    /// What the second-factor gate needs if the server bumps a reconnect back
+    /// to SRP. Without these an unattended client cannot finish that handshake.
+    pub code_provider: Option<session::CodeProvider>,
+    pub ib_key_timeout_secs: u64,
+    pub ib_key_token_sub_type: String,
 }
 
 /// Credentials cached for auto-reconnect (no SRP needed).
@@ -437,6 +442,11 @@ pub struct ReconnectAuth {
     /// Wrapped in `Zeroizing` so the plaintext is wiped from memory on drop.
     pub password: Zeroizing<String>,
     pub paper: bool,
+    /// What the second-factor gate needs if the server bumps a reconnect back
+    /// to SRP. Without these an unattended client cannot finish that handshake.
+    pub code_provider: Option<session::CodeProvider>,
+    pub ib_key_timeout_secs: u64,
+    pub ib_key_token_sub_type: String,
     pub session_key: BigUint,
     pub session_token: BigUint,
     pub server_session_id: String,
@@ -810,6 +820,23 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         // Gateway::connect uses on first login.
         log::info!("CCP reconnect: server requires SRP, running handshake with cached credentials");
         do_srp(&mut tls, &auth.username, &auth.password)?;
+        // The same gate the first login runs. A session dropped across a
+        // maintenance window comes back asking for the second factor again,
+        // and a reconnect that skipped it retried a handshake the server was
+        // never going to finish.
+        let (token_type, token_sub_type) = parse_auth_start_token(&auth_text);
+        // ponytail: a SOFT token issued here is not written back to `auth`,
+        // which the reconnect thread only holds by reference — the next
+        // reconnect runs SRP again rather than the cheaper token path.
+        run_second_factor(&mut tls, SecondFactor {
+            paper: auth.paper,
+            username: &auth.username,
+            token_type,
+            token_sub_type,
+            code_provider: auth.code_provider.as_ref(),
+            timeout_secs: auth.ib_key_timeout_secs,
+            default_sub_type: &auth.ib_key_token_sub_type,
+        })?;
     }
 
     // Post-auth: wait for NS_CONNECT_RESPONSE → NEWCOMMPORTTYPE → NS_FIX_START.
@@ -1085,6 +1112,140 @@ fn parse_auth_start_token(auth_start: &str) -> (String, Option<String>) {
 /// The field carries a comma-separated list when the account has more than one
 /// factor enabled — `AUTH_START` advertised `4,5` for an account with both an
 /// authenticator and IBKey. Reading the whole field as one type refused the
+
+/// What the second-factor gate needs, whether this is the first login or a
+/// reconnect that the server bumped back to SRP.
+pub(crate) struct SecondFactor<'a> {
+    pub paper: bool,
+    pub username: &'a str,
+    /// Token type and per-session subtype as AUTH_START stated them.
+    pub token_type: String,
+    pub token_sub_type: Option<String>,
+    pub code_provider: Option<&'a session::CodeProvider>,
+    pub timeout_secs: u64,
+    pub default_sub_type: &'a str,
+}
+
+/// Run the per-session second-factor gate after SRP. Returns the SOFT token
+/// when the gate issued one.
+///
+/// A reconnect runs this too: the server drops a session across its own
+/// maintenance windows, answers the next soft-token connect with SRP, and then
+/// asks for the second factor again. Skipping it there left an unattended
+/// client retrying a handshake it could never finish.
+fn run_second_factor(
+    tls: &mut native_tls::TlsStream<TcpStream>,
+    sf: SecondFactor<'_>,
+) -> io::Result<Option<BigUint>> {
+    let mut soft_token: Option<BigUint> = None;
+    // An advertised type this client cannot perform is worth saying out
+    // loud: sending 775 at it gets the socket closed before any challenge,
+    // and skipping the gate leaves the server waiting until the connect
+    // dies with "Never received data start after auth". Neither names the
+    // cause (ibx#279). See `second_factor_route` for why an absent type is
+    // the one case that is not an error.
+    let route = second_factor_route(sf.paper, &sf.token_type);
+    if !sf.paper {
+        log::debug!(
+            "second factor: AUTH_START type {:?} sub {:?} -> {route:?}",
+            sf.token_type, sf.token_sub_type,
+        );
+    }
+    if route == SecondFactorRoute::SecurityCode {
+        // Authenticator-code accounts take the 774 exchange rather than the
+        // IBKey push. The same code_provider supplies the code (ibx#282).
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(sf.timeout_secs);
+        log::info!(
+            "Live login for {}: second factor is an authenticator code; awaiting code_provider",
+            sf.username,
+        );
+        // The code is written raw, with no DH encryption — the same
+        // transport the IBKey gate uses. The encrypted variant gets the
+        // connection reset on receipt.
+        // Poll the socket so the gate can submit as soon as the code is
+        // available instead of waiting for the server's next keepalive: an
+        // authenticator code is only valid for ~30s, and a 20s wait spends
+        // most of it. Restored afterwards.
+        tls.get_ref().set_read_timeout(Some(Duration::from_millis(500)))?;
+        let gate = session::do_security_code_2fa(
+            tls, deadline, sf.code_provider,
+        );
+        let restore = tls.get_ref().set_read_timeout(None);
+        gate?;
+        restore?;
+        log::info!("security-code gate: passed")
+    } else if route == SecondFactorRoute::Unsupported {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "second-factor token type {:?} is not supported; AUTH_START advertised it for {}",
+                sf.token_type, sf.username,
+            ),
+        ));
+    }
+    if route == SecondFactorRoute::IbKey {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(sf.timeout_secs);
+        // Live logins enter a human-approval window here: connect() blocks
+        // until the second factor is approved (mobile push) or this deadline
+        // fires. Announce it up front so a stalled connect() reads as
+        // "waiting for approval" rather than a hang (ibx#203 / ibx#207).
+        // Accounts with no second factor fall straight through (Skipped).
+        if sf.code_provider.is_none() {
+            log::info!(
+                "Live login for {}: waiting for second-factor approval (mobile push); \
+                 connect() blocks up to {}s. Use paper=true, a lower ib_key_timeout_secs, \
+                 or a code_provider to avoid this.",
+                sf.username, sf.timeout_secs,
+            );
+        } else {
+            log::info!(
+                "Live login for {}: second-factor via code_provider (Challenge/Response); \
+                 connect() blocks up to {}s awaiting the challenge.",
+                sf.username, sf.timeout_secs,
+            );
+        }
+        // The server's per-session value wins. `ib_key_token_sub_type` is
+        // the fallback for an AUTH_START that states none, not an override
+        // — a fixed value cannot be right for a session it predates.
+        let token_sub_type = sf.token_sub_type
+            .as_deref()
+            .unwrap_or(&sf.default_sub_type);
+        log::info!(
+            "2FA gate: token sub-type {:?} ({})",
+            token_sub_type,
+            if sf.token_sub_type.is_some() { "from AUTH_START" } else { "configured default" },
+        );
+        match session::do_ib_key_2fa(
+            tls,
+            token_sub_type,
+            deadline,
+            sf.code_provider,
+        )? {
+            session::IbKeyOutcome::Skipped => {
+                log::info!("2FA gate: skipped (no second factor)");
+            }
+            session::IbKeyOutcome::Approved { approval_url, session_id, soft_token_hex } => {
+                log::info!(
+                    "2FA gate: approved (session_id={}, approval_url={}, token_hex_len={})",
+                    if session_id.is_empty() { "<none>" } else { &session_id },
+                    if approval_url.is_empty() { "<none>" } else { &approval_url },
+                    soft_token_hex.len(),
+                );
+                if !soft_token_hex.is_empty() {
+                    if let Some(tok) = BigUint::parse_bytes(soft_token_hex.as_bytes(), 16) {
+                        soft_token = Some(tok);
+                    } else {
+                        log::warn!("2FA gate: SOFT token hex did not parse — falling back to session_key");
+                    }
+                }
+            }
+        }
+    }
+    Ok(soft_token)
+}
+
 /// login outright, so each entry is considered and IBKey is preferred: it is
 /// the only one that completes without a `code_provider`, and it still serves
 /// a configured one through Challenge/Response.
@@ -1284,111 +1445,15 @@ impl Gateway {
         // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
         // ib-agent#125 that body carries none, so this stays `None` on both
         // live paths and the farm logon falls back to the SRP session key.
-        let mut soft_token: Option<BigUint> = None;
-        // An advertised type this client cannot perform is worth saying out
-        // loud: sending 775 at it gets the socket closed before any challenge,
-        // and skipping the gate leaves the server waiting until the connect
-        // dies with "Never received data start after auth". Neither names the
-        // cause (ibx#279). See `second_factor_route` for why an absent type is
-        // the one case that is not an error.
-        let route = second_factor_route(config.paper, &server_token_type);
-        if !config.paper {
-            log::debug!(
-                "second factor: AUTH_START type {server_token_type:?} sub {server_token_sub_type:?} -> {route:?}",
-            );
-        }
-        if route == SecondFactorRoute::SecurityCode {
-            // Authenticator-code accounts take the 774 exchange rather than the
-            // IBKey push. The same code_provider supplies the code (ibx#282).
-            let deadline = std::time::Instant::now()
-                + std::time::Duration::from_secs(config.ib_key_timeout_secs);
-            log::info!(
-                "Live login for {}: second factor is an authenticator code; awaiting code_provider",
-                config.username,
-            );
-            // The code is written raw, with no DH encryption — the same
-            // transport the IBKey gate uses. The encrypted variant gets the
-            // connection reset on receipt.
-            // Poll the socket so the gate can submit as soon as the code is
-            // available instead of waiting for the server's next keepalive: an
-            // authenticator code is only valid for ~30s, and a 20s wait spends
-            // most of it. Restored afterwards.
-            tls.get_ref().set_read_timeout(Some(Duration::from_millis(500)))?;
-            let gate = session::do_security_code_2fa(
-                &mut tls, deadline, config.code_provider.as_ref(),
-            );
-            let restore = tls.get_ref().set_read_timeout(None);
-            gate?;
-            restore?;
-            log::info!("security-code gate: passed")
-        } else if route == SecondFactorRoute::Unsupported {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                format!(
-                    "second-factor token type {:?} is not supported; AUTH_START advertised it for {}",
-                    server_token_type, config.username,
-                ),
-            ));
-        }
-        if route == SecondFactorRoute::IbKey {
-            let deadline = std::time::Instant::now()
-                + std::time::Duration::from_secs(config.ib_key_timeout_secs);
-            // Live logins enter a human-approval window here: connect() blocks
-            // until the second factor is approved (mobile push) or this deadline
-            // fires. Announce it up front so a stalled connect() reads as
-            // "waiting for approval" rather than a hang (ibx#203 / ibx#207).
-            // Accounts with no second factor fall straight through (Skipped).
-            if config.code_provider.is_none() {
-                log::info!(
-                    "Live login for {}: waiting for second-factor approval (mobile push); \
-                     connect() blocks up to {}s. Use paper=true, a lower ib_key_timeout_secs, \
-                     or a code_provider to avoid this.",
-                    config.username, config.ib_key_timeout_secs,
-                );
-            } else {
-                log::info!(
-                    "Live login for {}: second-factor via code_provider (Challenge/Response); \
-                     connect() blocks up to {}s awaiting the challenge.",
-                    config.username, config.ib_key_timeout_secs,
-                );
-            }
-            // The server's per-session value wins. `ib_key_token_sub_type` is
-            // the fallback for an AUTH_START that states none, not an override
-            // — a fixed value cannot be right for a session it predates.
-            let token_sub_type = server_token_sub_type
-                .as_deref()
-                .unwrap_or(&config.ib_key_token_sub_type);
-            log::info!(
-                "2FA gate: token sub-type {:?} ({})",
-                token_sub_type,
-                if server_token_sub_type.is_some() { "from AUTH_START" } else { "configured default" },
-            );
-            match session::do_ib_key_2fa(
-                &mut tls,
-                token_sub_type,
-                deadline,
-                config.code_provider.as_ref(),
-            )? {
-                session::IbKeyOutcome::Skipped => {
-                    log::info!("2FA gate: skipped (no second factor)");
-                }
-                session::IbKeyOutcome::Approved { approval_url, session_id, soft_token_hex } => {
-                    log::info!(
-                        "2FA gate: approved (session_id={}, approval_url={}, token_hex_len={})",
-                        if session_id.is_empty() { "<none>" } else { &session_id },
-                        if approval_url.is_empty() { "<none>" } else { &approval_url },
-                        soft_token_hex.len(),
-                    );
-                    if !soft_token_hex.is_empty() {
-                        if let Some(tok) = BigUint::parse_bytes(soft_token_hex.as_bytes(), 16) {
-                            soft_token = Some(tok);
-                        } else {
-                            log::warn!("2FA gate: SOFT token hex did not parse — falling back to session_key");
-                        }
-                    }
-                }
-            }
-        }
+        let soft_token = run_second_factor(&mut tls, SecondFactor {
+            paper: config.paper,
+            username: &config.username,
+            token_type: server_token_type,
+            token_sub_type: server_token_sub_type,
+            code_provider: config.code_provider.as_ref(),
+            timeout_secs: config.ib_key_timeout_secs,
+            default_sub_type: &config.ib_key_token_sub_type,
+        })?;
 
         // Receive post-auth messages (encrypted via 534) and wait for the
         // data-farm start (NS_FIX_START). A transient stall here must not be
@@ -2081,6 +2146,9 @@ impl Gateway {
             username: caller.username,
             password: caller.password,
             paper: caller.paper,
+            code_provider: caller.code_provider,
+            ib_key_timeout_secs: caller.ib_key_timeout_secs,
+            ib_key_token_sub_type: caller.ib_key_token_sub_type,
             session_key: self.session_token.clone(),
             session_token: self.session_token.clone(),
             server_session_id: self.server_session_id.clone(),
@@ -2633,6 +2701,9 @@ mod tests {
             username: String::new(),
             password: zeroize::Zeroizing::new(String::new()),
             paper: true,
+            code_provider: None,
+            ib_key_timeout_secs: crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
+            ib_key_token_sub_type: crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
             session_key: num_bigint::BigUint::from(0u32),
             session_token: num_bigint::BigUint::from(0u32),
             server_session_id: String::new(),
