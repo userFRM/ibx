@@ -429,11 +429,16 @@ fn tick_data_type(what_to_show: &str) -> &'static str {
 /// Build the XML query for a historical ticks request.
 ///
 /// Uses `<type>TickData</type>`, `<step>ticks</step>`, `<timeLength>{N} t</timeLength>`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_tick_query_xml(
     query_id: &str, con_id: i64, start_date_time: &str, end_date_time: &str,
     number_of_ticks: u32, what_to_show: &str, use_rth: bool,
+    sec_type: &str, exchange: &str,
 ) -> String {
-    let exchange = "BEST";
+    // Stated from the contract. Assuming a US stock routed BEST left every
+    // other kind asking for ticks under a description that is not its own.
+    let exchange = if exchange.is_empty() { "BEST" } else { exchange };
+    let sec_type = if sec_type.is_empty() { "CS" } else { sec_type };
     let rth = if use_rth { "true" } else { "false" };
     let data = tick_data_type(what_to_show);
 
@@ -452,7 +457,7 @@ pub fn build_tick_query_xml(
          <useRTH>{rth}</useRTH>\
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
-         <secType>CS</secType>\
+         <secType>{sec_type}</secType>\
          <expired>no</expired>\
          <type>TickData</type>\
          <data>{data}</data>\
@@ -1126,7 +1131,7 @@ mod tests {
 
     #[test]
     fn build_tick_query_xml_structure() {
-        let xml = build_tick_query_xml("tk_1", 265598, "", "20260312-15:00:00", 100, "TRADES", true);
+        let xml = build_tick_query_xml("tk_1", 265598, "", "20260312-15:00:00", 100, "TRADES", true, "CS", "BEST");
         assert!(xml.contains("<id>tk_1</id>"));
         assert!(xml.contains("<type>TickData</type>"));
         assert!(xml.contains("<data>AllLast</data>"));
@@ -1137,7 +1142,7 @@ mod tests {
 
     #[test]
     fn build_tick_query_xml_bid_ask() {
-        let xml = build_tick_query_xml("tk_2", 265598, "", "20260312-15:00:00", 50, "BID_ASK", false);
+        let xml = build_tick_query_xml("tk_2", 265598, "", "20260312-15:00:00", 50, "BID_ASK", false, "CS", "BEST");
         assert!(xml.contains("<data>BidAsk</data>"));
         assert!(xml.contains("<useRTH>false</useRTH>"));
     }

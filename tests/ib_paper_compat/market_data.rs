@@ -333,6 +333,8 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
         .send(ControlCommand::SubscribeTbt {
             con_id: 756733,
             symbol: "SPY".into(),
+            sec_type: "STK".to_string(),
+            exchange: "SMART".to_string(),
             tbt_type: TbtType::Last,
             reply_tx: None,
         })
@@ -909,6 +911,8 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
         .send(ControlCommand::SubscribeTbt {
             con_id: 756733,
             symbol: "SPY".into(),
+            sec_type: "STK".to_string(),
+            exchange: "SMART".to_string(),
             tbt_type: TbtType::Last,
             reply_tx: None,
         })
@@ -999,6 +1003,8 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
         .send(ControlCommand::SubscribeTbt {
             con_id: 756733,
             symbol: "SPY".into(),
+            sec_type: "STK".to_string(),
+            exchange: "SMART".to_string(),
             tbt_type: TbtType::Last,
             reply_tx: None,
         })

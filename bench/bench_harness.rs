@@ -137,11 +137,13 @@ impl BenchSession {
             .unwrap();
     }
 
-    pub fn subscribe_tbt(&self, con_id: i64, symbol: &str, tbt_type: TbtType) {
+    pub fn subscribe_tbt(&self, con_id: i64, symbol: &str, sec_type: &str, exchange: &str, tbt_type: TbtType) {
         self.control_tx
             .send(ControlCommand::SubscribeTbt {
                 con_id,
                 symbol: symbol.to_string(),
+                sec_type: sec_type.to_string(),
+                exchange: exchange.to_string(),
                 tbt_type,
                 reply_tx: None,
             })

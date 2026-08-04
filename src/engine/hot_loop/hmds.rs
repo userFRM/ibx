@@ -195,7 +195,10 @@ impl HmdsState {
             // to it, and every price after that would carry the error.
             self.tbt_price_state[instrument as usize] = (0, 0, 0);
             match market.con_id(instrument) {
-                Some(con_id) => self.send_tbt_subscribe(con_id, instrument, tbt_type, hmds_conn, hb),
+                Some(con_id) => {
+                    let (stype, venue) = market.order_routing(instrument);
+                    self.send_tbt_subscribe(con_id, instrument, tbt_type, &stype, &venue, hmds_conn, hb)
+                }
                 None => log::warn!(
                     "HMDS reconnect: instrument {instrument} has no contract id, \
                      leaving its tick-by-tick stream unsubscribed",
@@ -739,11 +742,14 @@ impl HmdsState {
         Some((bid, ask))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_tbt_subscribe(
         &mut self,
         con_id: i64,
         instrument: InstrumentId,
         tbt_type: TbtType,
+        sec_type: &str,
+        exchange: &str,
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
@@ -753,14 +759,19 @@ impl HmdsState {
             TbtType::Last => "AllLast",
             TbtType::BidAsk => "BidAsk",
         };
+        // The contract says what it is. A US stock routed BEST was assumed for
+        // every subscription, so an FX pair or a future asked for ticks under a
+        // description that was not its own.
+        let venue = hist_exchange(exchange);
+        let stype = hist_sec_type(sec_type);
         let xml = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
              <ListOfQueries>\
              <Query>\
              <id>tbt_{req_id}</id>\
              <contractID>{con_id}</contractID>\
-             <exchange>BEST</exchange>\
-             <secType>CS</secType>\
+             <exchange>{venue}</exchange>\
+             <secType>{stype}</secType>\
              <expired>no</expired>\
              <type>TickData</type>\
              <refresh>ticks</refresh>\
@@ -1224,12 +1235,14 @@ impl HmdsState {
         self.pending_histogram.push((query_id, req_id));
     }
 
-    pub(crate) fn send_historical_ticks_request(&mut self, req_id: u32, con_id: i64, start_date_time: &str, end_date_time: &str, number_of_ticks: u32, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn send_historical_ticks_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, start_date_time: &str, end_date_time: &str, number_of_ticks: u32, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
         let query_id = format!("tk_{qid}");
         let xml = crate::control::historical::build_tick_query_xml(
             &query_id, con_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth,
+            &hist_sec_type(sec_type), &hist_exchange(exchange),
         );
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();

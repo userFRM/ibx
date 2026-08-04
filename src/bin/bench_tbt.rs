@@ -47,7 +47,7 @@ fn main() {
         "[{:.3}s] Subscribing to TBT Last trades...",
         start.elapsed().as_secs_f64(),
     );
-    session.subscribe_tbt(config.con_id, config.symbol, TbtType::Last);
+    session.subscribe_tbt(config.con_id, config.symbol, "STK", "SMART", TbtType::Last);
 
     let trade_stats = collect_tbt_trades(
         &session.event_rx,
@@ -66,7 +66,7 @@ fn main() {
         "[{:.3}s] Subscribing to TBT BidAsk quotes...",
         start.elapsed().as_secs_f64(),
     );
-    session.subscribe_tbt(config.con_id, config.symbol, TbtType::BidAsk);
+    session.subscribe_tbt(config.con_id, config.symbol, "STK", "SMART", TbtType::BidAsk);
 
     let quote_stats = collect_tbt_quotes(
         &session.event_rx,

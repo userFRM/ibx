@@ -1052,7 +1052,7 @@ pub enum ControlCommand {
     /// Unsubscribe from market data for an instrument.
     Unsubscribe { instrument: InstrumentId },
     /// Subscribe to tick-by-tick data via historical data connection.
-    SubscribeTbt { con_id: i64, symbol: String, tbt_type: TbtType, reply_tx: Option<crossbeam_channel::Sender<Result<InstrumentId, String>>> },
+    SubscribeTbt { con_id: i64, symbol: String, sec_type: String, exchange: String, tbt_type: TbtType, reply_tx: Option<crossbeam_channel::Sender<Result<InstrumentId, String>>> },
     /// Unsubscribe from tick-by-tick data.
     UnsubscribeTbt { instrument: InstrumentId },
     /// Subscribe to per-contract news ticks via CCP (264=292).
@@ -1169,6 +1169,8 @@ pub enum ControlCommand {
     FetchHistoricalTicks {
         req_id: u32,
         con_id: i64,
+        sec_type: String,
+        exchange: String,
         start_date_time: String,
         end_date_time: String,
         number_of_ticks: u32,

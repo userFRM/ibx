@@ -549,6 +549,8 @@ pub(super) fn phase_historical_ticks(mut conns: Conns, gw: &Gateway, config: &Ga
     control_tx.send(ControlCommand::FetchHistoricalTicks {
         req_id: 2001,
         con_id: 756733,
+        sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(),
         start_date_time: String::new(),
         end_date_time: end_dt,
         number_of_ticks: 100,

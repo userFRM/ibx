@@ -758,12 +758,16 @@ impl ClientCore {
         req_id: i64,
         con_id: i64,
         symbol: &str,
+        sec_type: &str,
+        exchange: &str,
         tbt_type: TbtType,
     ) -> Result<InstrumentId, String> {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         control_tx.send(ControlCommand::SubscribeTbt {
             con_id,
             symbol: symbol.to_string(),
+            sec_type: sec_type.to_string(),
+            exchange: exchange.to_string(),
             tbt_type,
             reply_tx: Some(reply_tx),
         }).map_err(|e| format!("Engine stopped: {e}"))?;

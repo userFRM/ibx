@@ -212,6 +212,8 @@ impl EClient {
         self.send(ControlCommand::FetchHistoricalTicks {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
+            sec_type: contract.sec_type.clone(),
+            exchange: contract.exchange.clone(),
             start_date_time: start_date_time.into(),
             end_date_time: end_date_time.into(),
             number_of_ticks: number_of_ticks as u32,

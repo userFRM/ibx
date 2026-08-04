@@ -132,7 +132,10 @@ impl EClient {
         // the reply round trip (ibx#271).
         let con_id = contract.con_id;
         let symbol = contract.symbol.clone();
-        py.detach(|| self.core.register_tbt(&shared, &tx, req_id, con_id, &symbol, tbt_type))
+        let (sec_type, exchange) = (contract.sec_type.clone(), contract.exchange.clone());
+        py.detach(|| self.core.register_tbt(
+            &shared, &tx, req_id, con_id, &symbol, &sec_type, &exchange, tbt_type,
+        ))
             .map_err(PyRuntimeError::new_err)?;
 
         let _ = (number_of_ticks, ignore_size);
