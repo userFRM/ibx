@@ -110,6 +110,39 @@ impl Default for Contract {
     }
 }
 
+impl Contract {
+    /// The whole contract the engine holds, not the handful of fields a
+    /// callback happens to print: an option with no strike, right or expiry
+    /// names nothing the caller can act on. Combo legs and the delta-neutral
+    /// contract need a `Python` token to build and are dropped here exactly as
+    /// `Clone` drops them.
+    pub(crate) fn from_api(c: &crate::api::types::Contract) -> Self {
+        Self {
+            con_id: c.con_id,
+            symbol: c.symbol.clone(),
+            sec_type: c.sec_type.clone(),
+            exchange: c.exchange.clone(),
+            currency: c.currency.clone(),
+            last_trade_date_or_contract_month: c.last_trade_date_or_contract_month.clone(),
+            last_trade_date: c.last_trade_date.clone(),
+            strike: c.strike,
+            right: c.right.clone(),
+            multiplier: c.multiplier.clone(),
+            local_symbol: c.local_symbol.clone(),
+            primary_exchange: c.primary_exchange.clone(),
+            trading_class: c.trading_class.clone(),
+            include_expired: c.include_expired,
+            sec_id_type: c.sec_id_type.clone(),
+            sec_id: c.sec_id.clone(),
+            description: c.description.clone(),
+            issuer_id: c.issuer_id.clone(),
+            combo_legs_descrip: c.combo_legs_descrip.clone(),
+            combo_legs: Vec::new(),
+            delta_neutral_contract: None,
+        }
+    }
+}
+
 #[pymethods]
 impl Contract {
     #[new]

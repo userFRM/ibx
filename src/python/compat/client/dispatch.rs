@@ -130,14 +130,7 @@ impl EClient {
             };
 
             // Build Python contract for callback
-            let exec_contract = Contract {
-                con_id: api_contract.con_id,
-                symbol: api_contract.symbol.clone(),
-                sec_type: api_contract.sec_type.clone(),
-                exchange: api_contract.exchange.clone(),
-                currency: api_contract.currency.clone(),
-                ..Default::default()
-            };
+            let exec_contract = Contract::from_api(&api_contract);
 
             // Store for req_executions replay via shared core
             self.core.push_execution(req_id, api_contract, api_exec, api_commission);
@@ -328,14 +321,7 @@ impl EClient {
 
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {
-                let c = Contract {
-                    con_id: t.contract.con_id,
-                    symbol: t.contract.symbol,
-                    sec_type: t.contract.sec_type,
-                    exchange: t.contract.exchange,
-                    currency: t.contract.currency,
-                    ..Default::default()
-                };
+                let c = Contract::from_api(&t.contract);
                 let o = Order {
                     order_id: t.order.order_id,
                     action: t.order.action,
@@ -602,17 +588,8 @@ impl EClient {
             let portfolio = self.core.prepare_portfolio_updates(shared);
             for entry in &portfolio {
                 let contract = self.core.get_contract(entry.con_id, shared);
-                let c = contract.map(|ac| crate::python::compat::contract::Contract {
-                    con_id: ac.con_id,
-                    symbol: ac.symbol,
-                    sec_type: ac.sec_type,
-                    exchange: ac.exchange,
-                    currency: ac.currency,
-                    ..Default::default()
-                }).unwrap_or_else(|| crate::python::compat::contract::Contract {
-                    con_id: entry.con_id,
-                    ..Default::default()
-                });
+                let c = contract.map(|ac| Contract::from_api(&ac))
+                    .unwrap_or_else(|| Contract { con_id: entry.con_id, ..Default::default() });
                 let c_py = pyo3::Py::new(py, c).unwrap().into_any();
                 call_wrapper!(self.wrapper, py, "update_portfolio",
                     (&c_py, entry.position, entry.market_price, entry.market_value,

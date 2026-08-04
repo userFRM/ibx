@@ -92,6 +92,23 @@ impl EClient {
         Ok(())
     }
 
+    /// Cancel an order identified by `permId` — stable across sessions, unlike
+    /// the local order id. The cancel frame is orderId-only, so the local id is
+    /// looked up from the open-order cache; fails if `perm_id` is not tracked.
+    fn cancel_order_by_perm_id(&self, py: Python<'_>, perm_id: i64) -> PyResult<()> {
+        if perm_id == 0 {
+            return Err(PyRuntimeError::new_err("cancel_order_by_perm_id: perm_id must be non-zero"));
+        }
+        let shared = self.shared_state()?;
+        let order_id = self.core.collect_open_orders(&shared)
+            .into_iter()
+            .find(|(_, tracked)| tracked.order.perm_id == perm_id)
+            .map(|(oid, _)| oid)
+            .ok_or_else(|| PyRuntimeError::new_err(
+                format!("cancel_order_by_perm_id: permId {perm_id} not found in open orders")))?;
+        self.cancel_order(py, order_id as i64, "")
+    }
+
     /// Cancel all orders globally.
     fn req_global_cancel(&self, py: Python<'_>) -> PyResult<()> {
         let tx = self.tx()?;
@@ -122,14 +139,7 @@ impl EClient {
         let shared = self.shared_state()?;
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
-            let c_py = Py::new(py, Contract {
-                con_id: tracked.contract.con_id,
-                symbol: tracked.contract.symbol.clone(),
-                sec_type: tracked.contract.sec_type.clone(),
-                exchange: tracked.contract.exchange.clone(),
-                currency: tracked.contract.currency.clone(),
-                ..Default::default()
-            })?.into_any();
+            let c_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
             let o = Order {
                 order_id: tracked.order.order_id,
                 action: tracked.order.action.clone(),
@@ -215,14 +225,7 @@ impl EClient {
         // held, and re-entering a path that locks `executions` would freeze
         // the interpreter, not just this thread (ibx#265).
         for se in snapshot {
-            let c_py = Py::new(py, Contract {
-                con_id: se.contract.con_id,
-                symbol: se.contract.symbol.clone(),
-                sec_type: se.contract.sec_type.clone(),
-                exchange: se.contract.exchange.clone(),
-                currency: se.contract.currency.clone(),
-                ..Default::default()
-            })?.into_any();
+            let c_py = Py::new(py, Contract::from_api(&se.contract))?.into_any();
 
             let exec_obj = Execution {
                 exec_id: se.execution.exec_id.clone(),
@@ -341,14 +344,7 @@ impl EClient {
                 let state_py = Py::new(py, state)?.into_any();
 
                 let tracked = self.core.open_orders.lock().unwrap().get(&co.order_id).map(|o| {
-                    (Contract {
-                        con_id: o.contract.con_id,
-                        symbol: o.contract.symbol.clone(),
-                        sec_type: o.contract.sec_type.clone(),
-                        exchange: o.contract.exchange.clone(),
-                        currency: o.contract.currency.clone(),
-                        ..Default::default()
-                    }, {
+                    (Contract::from_api(&o.contract), {
                         Order {
                             order_id: o.order.order_id,
                             action: o.order.action.clone(),
@@ -371,14 +367,7 @@ impl EClient {
                     let o_py = Py::new(py, o)?.into_any();
                     self.wrapper.call_method1(py, "completed_order", (&c_py, &o_py, &state_py))?;
                 } else if let Some(info) = rich_info {
-                    let c = Contract {
-                        con_id: info.contract.con_id,
-                        symbol: info.contract.symbol,
-                        sec_type: info.contract.sec_type,
-                        exchange: info.contract.exchange,
-                        currency: info.contract.currency,
-                        ..Default::default()
-                    };
+                    let c = Contract::from_api(&info.contract);
                     let o = Order {
                         order_id: info.order.order_id,
                         action: info.order.action,
