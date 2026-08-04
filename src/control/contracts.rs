@@ -345,9 +345,13 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
         def.strike = v.parse().unwrap_or(0.0);
     }
     if let Some(v) = tags.get(&TAG_RIGHT) {
+        // The definition states this numerically — 1 for a call, 0 for a put —
+        // which is the same encoding the request carries. Reading only the
+        // letter form left every option's right unset, so a call and a put
+        // came back indistinguishable outside their local symbol.
         def.right = match v.as_str() {
-            "C" => Some(OptionRight::Call),
-            "P" => Some(OptionRight::Put),
+            "C" | "Call" | "1" => Some(OptionRight::Call),
+            "P" | "Put" | "0" => Some(OptionRight::Put),
             _ => None,
         };
     }
