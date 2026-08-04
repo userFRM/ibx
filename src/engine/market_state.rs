@@ -46,6 +46,13 @@ pub struct MarketState {
     sec_types: [Option<String>; MAX_INSTRUMENTS],
     /// Per-instrument requested exchange. Empty slot = default routing.
     exchanges: [Option<String>; MAX_INSTRUMENTS],
+    /// What separates two conId-less contracts on the same underlying: expiry,
+    /// strike, right, multiplier, joined. Symbol, security type and exchange
+    /// are equal for an option's call and put at different strikes, so matching
+    /// on those alone put both in one slot — the second contract's quotes and
+    /// its minTick landed on the first, and minTick is what snaps an order's
+    /// price (ibx#278). Empty for anything that carries no such identity.
+    option_keys: [Option<String>; MAX_INSTRUMENTS],
 }
 
 impl Default for MarketState {
@@ -68,6 +75,7 @@ impl MarketState {
             symbols: std::array::from_fn(|_| None),
             sec_types: std::array::from_fn(|_| None),
             exchanges: std::array::from_fn(|_| None),
+            option_keys: std::array::from_fn(|_| None),
         }
     }
 
@@ -96,28 +104,49 @@ impl MarketState {
     /// A field the caller left blank matches whatever the slot holds:
     /// tick-by-tick and news register with neither secType nor exchange, and
     /// must land on the slot the L1 subscription for that symbol already has.
-    pub fn try_register_contract(&mut self, con_id: i64, symbol: &str, sec_type: &str, exchange: &str) -> Option<InstrumentId> {
+    pub fn try_register_contract(
+        &mut self, con_id: i64, symbol: &str, sec_type: &str, exchange: &str, option_key: &str,
+    ) -> Option<InstrumentId> {
         if con_id != 0 {
             return self.try_register(con_id);
         }
-        if let Some(id) = self.instrument_by_descriptor(symbol, sec_type, exchange) {
+        if let Some(id) = self.instrument_by_descriptor(symbol, sec_type, exchange, option_key) {
+            // First caller to state an identity fixes it, so the next contract
+            // on the same underlying no longer matches this slot.
+            if !option_key.is_empty() && self.option_keys[id as usize].is_none() {
+                self.option_keys[id as usize] = Some(option_key.to_string());
+            }
             return Some(id);
         }
         let id = self.alloc_slot()?;
         self.instrument_to_con_id[id as usize] = 0;
+        self.option_keys[id as usize] =
+            if option_key.is_empty() { None } else { Some(option_key.to_string()) };
         Some(id)
     }
 
     /// The live conId-less slot this descriptor names, if it has one. Bounded
     /// by MAX_INSTRUMENTS and only ever reached from a control command, so a
     /// scan costs less than the map it would otherwise need.
-    fn instrument_by_descriptor(&self, symbol: &str, sec_type: &str, exchange: &str) -> Option<InstrumentId> {
+    fn instrument_by_descriptor(
+        &self, symbol: &str, sec_type: &str, exchange: &str, option_key: &str,
+    ) -> Option<InstrumentId> {
         (0..self.active_count).find(|&id| {
             let i = id as usize;
             self.instrument_to_con_id[i] == 0
                 && self.symbols[i].as_deref().unwrap_or("").eq_ignore_ascii_case(symbol)
                 && blank_or_eq(&self.sec_types[i], sec_type)
                 && blank_or_eq(&self.exchanges[i], exchange)
+                // A slot that has no identity yet matches anything and adopts
+                // the caller's below: the pre-flight registration carries none,
+                // so requiring an exact match there would strand its slot and
+                // allocate a second one for the same contract. A slot that does
+                // have one must match exactly, which is what keeps the call and
+                // the put apart.
+                && match self.option_keys[i].as_deref() {
+                    None | Some("") => true,
+                    Some(k) => k == option_key,
+                }
         })
     }
 
