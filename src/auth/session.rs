@@ -888,7 +888,14 @@ pub fn do_security_code_2fa<S: Read + Write>(
             Err(e) => return Err(e),
         };
 
-        if !sent {
+        // The code may only go out while the socket is quiet: no frame came
+        // back and none is half-read. Anything the server had already sent is
+        // then still unread, and the reader would credit it to the code —
+        // sending on a frame boundary is what leaves a waiting verdict looking
+        // like an answer.
+        let quiet = recv.is_none() && reader.buf.is_empty();
+
+        if !sent && quiet {
             match rx.try_recv() {
                 Ok(result) => {
                     let code = result?;
@@ -2337,6 +2344,36 @@ mod tests {
         let err = do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider))
             .expect_err("a 774 verdict read before the code was sent must not approve the login");
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
+    }
+
+    /// The server coalesces its keepalive with an unsolicited verdict, so both
+    /// are readable before anything is written. The gate finishes the probe,
+    /// sends the code on that same pass, and only then starts reading a verdict
+    /// that was already waiting — so recording the flag when the frame's first
+    /// byte is read still credits it to the code, as long as the send lands on
+    /// a frame boundary.
+    #[test]
+    fn security_code_gate_ignores_a_verdict_already_readable_when_the_code_went_out() {
+        let ready = Arc::new(AtomicBool::new(false));
+        let signal = ready.clone();
+        let provider: CodeProvider = Arc::new(move |_| {
+            signal.store(true, Ordering::SeqCst);
+            Ok("123456".to_string())
+        });
+        let mut incoming = ns::ns_build(NS_VERSION, NS_TEST_REQUEST, &["20260730-01:02:03"], "MISC");
+        incoming.extend_from_slice(&security_code_result(&["", "", "", "PASSED"]));
+        let mut stream = VerdictAfterCodeReady { incoming, pos: 0, ready, written: Vec::new() };
+
+        let err = do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider))
+            .expect_err("a verdict already readable when the code went out must not approve the login");
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
+        // Without the probe answered, the verdict never crossed a frame
+        // boundary and the test would pass on the ordering it is not about.
+        let heartbeat = ns_build_heart_beat(NS_VERSION, "20260730-01:02:03");
+        assert!(
+            stream.written.windows(heartbeat.len()).any(|w| w == heartbeat),
+            "the gate must have consumed the probe ahead of the verdict",
+        );
     }
 
     #[test]
