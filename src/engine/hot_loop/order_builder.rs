@@ -763,7 +763,15 @@ fn push_contract_identity(
     };
     if !expiry.is_empty() { fields.push((200, expiry)); }
     if strike.parse::<f64>().unwrap_or(0.0) > 0.0 { fields.push((202, strike)); }
-    if !right.is_empty() { fields.push((201, right)); }
+    // PutOrCall is a code on this wire, not the letter: Call = 1, Put = 0, the
+    // same mapping the security-definition request uses. Sending "C" would name
+    // no side the gateway recognises.
+    match right.to_ascii_uppercase().as_str() {
+        "C" | "CALL" | "1" => fields.push((201, "1".to_string())),
+        "P" | "PUT" | "0" => fields.push((201, "0".to_string())),
+        "" => {}
+        other => log::warn!("order for an option with an unrecognised right {other:?}; omitting tag 201"),
+    }
     if !multiplier.is_empty() { fields.push((231, multiplier)); }
 }
 
@@ -1707,7 +1715,7 @@ mod modify_wire_tests {
         assert!(sent.contains("|167=OPT|"), "the security type: {sent}");
         assert!(sent.contains("|200=20260619|"), "the expiry: {sent}");
         assert!(sent.contains("|202=230|"), "the strike: {sent}");
-        assert!(sent.contains("|201=C|"), "the right: {sent}");
+        assert!(sent.contains("|201=1|"), "the right, as the wire code for a call: {sent}");
         assert!(sent.contains("|231=100|"), "the multiplier: {sent}");
     }
 
