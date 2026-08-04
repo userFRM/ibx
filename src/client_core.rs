@@ -1831,7 +1831,18 @@ impl ClientCore {
     /// stock callers that omit the field are unaffected.
     /// See: https://github.com/deepentropy/ibx/issues/202
     pub fn validate_order_contract(sec_type: &str) -> Result<(), String> {
-        if sec_type.is_empty() || sec_type.eq_ignore_ascii_case("STK") {
+        // A currency pair is fully identified by what an order already carries:
+        // symbol, currency, security type and destination. There is no expiry,
+        // strike, right or multiplier to omit, so the silent mistrade this
+        // guard exists to prevent cannot happen for CASH — unlike OPT and FUT,
+        // whose orders would go out saying nothing about which strike or which
+        // contract month. Verified against a live IDEALPRO book: limit, stop
+        // limit, market-if-touched, limit-if-touched, trailing stop limit,
+        // relative and hidden all acknowledge and cancel cleanly.
+        if sec_type.is_empty()
+            || sec_type.eq_ignore_ascii_case("STK")
+            || sec_type.eq_ignore_ascii_case("CASH")
+        {
             return Ok(());
         }
         Err(format!(
@@ -2635,4 +2646,27 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod contract_gate_tests {
+    use super::ClientCore;
+
+    /// A currency pair carries no expiry, strike or right, so an order names it
+    /// completely with symbol, currency, security type and destination. Options
+    /// and futures do not, and an order for one would go out saying nothing
+    /// about which contract it meant.
+    #[test]
+    fn cash_is_admitted_and_the_underspecified_types_are_not() {
+        assert!(ClientCore::validate_order_contract("CASH").is_ok(), "an FX pair is fully named");
+        assert!(ClientCore::validate_order_contract("cash").is_ok(), "and the check is case-insensitive");
+        assert!(ClientCore::validate_order_contract("STK").is_ok());
+        assert!(ClientCore::validate_order_contract("").is_ok());
+
+        for st in ["OPT", "FUT", "BAG", "FOP"] {
+            let err = ClientCore::validate_order_contract(st)
+                .expect_err("an order cannot say which strike or contract month");
+            assert!(err.contains(st), "the refusal names the type: {err}");
+        }
+    }
 }
