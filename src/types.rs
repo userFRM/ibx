@@ -1103,6 +1103,7 @@ pub enum ControlCommand {
         location_code: String,
         scan_code: String,
         max_items: u32,
+        filters: Vec<(String, String)>,
     },
     /// Cancel a scanner subscription.
     CancelScanner { req_id: u32 },

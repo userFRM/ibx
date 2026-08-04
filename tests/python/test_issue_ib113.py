@@ -25,9 +25,6 @@ class ScannerSubscription:
         self.numberOfRows = num_rows
         self.instrument = instrument
         self.locationCode = location
-        self.abovePrice = 0
-        self.belowPrice = 0
-        self.aboveVolume = 0
 
 
 class MultiScannerWrapper(EWrapper):
