@@ -1540,6 +1540,11 @@ impl Order {
             order_type: self.order_type.clone(),
             lmt_price: self.lmt_price,
             aux_price: self.aux_price,
+            // Unset is f64::MAX on both sides, so leaving it to Default made a
+            // caller's offset indistinguishable from absent and the wire fell
+            // back to lmt_price: a TRAIL LIMIT could not set its offset from
+            // Python at all (ibx#395).
+            lmt_price_offset: self.lmt_price_offset,
             tif: self.tif.clone(),
             outside_rth: self.outside_rth,
             display_size: self.display_size,
@@ -2371,6 +2376,26 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A TRAIL LIMIT states how far its limit sits from the trigger. Unset is
+    /// `f64::MAX` on both sides, so a value dropped in conversion is not merely
+    /// lost, it is indistinguishable from absent, and the wire falls back to
+    /// `lmt_price` — the order goes out with an offset the caller never chose
+    /// (ibx#395).
+    #[test]
+    fn a_python_trail_limit_offset_survives_the_conversion() {
+        let mut o = Order::default();
+        o.order_type = "TRAIL LIMIT".into();
+        o.lmt_price_offset = 0.25;
+
+        let api = o.to_api();
+
+        assert_eq!(api.lmt_price_offset, 0.25, "the offset the caller set must reach the wire");
+        assert_ne!(
+            api.lmt_price_offset, f64::MAX,
+            "and must not arrive as the unset sentinel, which reads as never supplied",
+        );
+    }
 
     #[test]
     fn contract_default_values() {
