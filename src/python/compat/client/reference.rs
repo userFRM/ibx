@@ -36,6 +36,8 @@ impl EClient {
             Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
                 req_id: wire_req_id(req_id)?,
                 con_id: contract.con_id,
+                sec_type: contract.sec_type.clone(),
+                exchange: contract.exchange.clone(),
                 end_date_time: end_date_time.to_string(),
                 duration: duration_str.to_string(),
                 use_rth: use_rth != 0,
@@ -331,6 +333,8 @@ impl EClient {
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
+            sec_type: contract.sec_type.clone(),
+            exchange: contract.exchange.clone(),
             end_date_time: end_date_time.into(),
             duration: duration_str.into(),
             use_rth,
