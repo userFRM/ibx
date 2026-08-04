@@ -296,7 +296,7 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
             // well, including the other server tags in the same 35=P (ibx#302).
             // Stepping over it keeps the rest.
             if total_value_bits > 64 {
-                log::debug!("35=P: skipping a {}-byte tick value", byte_width);
+                log::debug!("35=P: skipping a {byte_width}-byte tick value");
                 if !reader.skip(total_value_bits) {
                     return;
                 }
@@ -777,7 +777,7 @@ mod tests {
         /// Finalize into the full body: [bit_count_hi, bit_count_lo, payload…]
         pub(super) fn build(&self) -> Vec<u8> {
             let bit_count = self.bits.len();
-            let byte_count = (bit_count + 7) / 8;
+            let byte_count = bit_count.div_ceil(8);
             let mut payload = vec![0u8; byte_count];
             for (i, &b) in self.bits.iter().enumerate() {
                 if b == 1 {
@@ -1165,7 +1165,7 @@ mod tests {
         push_lsb(&mut bits_lsb, 500, 16);   // volume=500
 
         // Convert bit stream to bytes (LSB first)
-        let byte_count = (bits_lsb.len() + 7) / 8;
+        let byte_count = bits_lsb.len().div_ceil(8);
         let mut reordered = vec![0u8; byte_count];
         for (i, &b) in bits_lsb.iter().enumerate() {
             if b == 1 {
@@ -1221,7 +1221,7 @@ mod tests {
         push_lsb(&mut bits_lsb, 1, 1);      // vol_flag=1 → 16-bit
         push_lsb(&mut bits_lsb, 1000, 16);  // volume=1000
 
-        let byte_count = (bits_lsb.len() + 7) / 8;
+        let byte_count = bits_lsb.len().div_ceil(8);
         let mut reordered = vec![0u8; byte_count];
         for (i, &b) in bits_lsb.iter().enumerate() {
             if b == 1 {

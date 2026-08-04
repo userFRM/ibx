@@ -72,14 +72,14 @@ fn pump<F: Fn(&State) -> bool>(c: &EClient, w: &mut W, s: &Arc<Mutex<State>>,
 }
 
 fn connect() -> Result<EClient, Box<dyn std::error::Error>> {
-    Ok(EClient::connect(&EClientConfig {
+    EClient::connect(&EClientConfig {
         username: env::var("IB_USERNAME")?,
         password: env::var("IB_PASSWORD")?,
         host: env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".into()),
         paper: true,
         core_id: None,
         code_provider: None,
-    })?)
+    })
 }
 
 fn spy() -> Contract {
@@ -134,7 +134,7 @@ fn phase_place() -> Result<(), Box<dyn std::error::Error>> {
     let snap = state.lock().unwrap();
     let (final_status, perm) = snap.statuses.iter()
         .filter(|(id, _, _)| *id == order_id)
-        .last()
+        .next_back()
         .map(|(_, s, p)| (s.clone(), *p))
         .unwrap_or_else(|| ("Unknown".into(), 0));
     write_state(order_id, perm, &final_status)?;

@@ -29,7 +29,7 @@ pub(super) fn phase_ccp_auth(gw: &Gateway, has_hmds: bool, connect_time: Duratio
         println!("  ushmds farm: NOT CONNECTED (non-fatal)");
     }
 
-    assert!(connect_time < Duration::from_secs(60), "Connection took too long: {:?}", connect_time);
+    assert!(connect_time < Duration::from_secs(60), "Connection took too long: {connect_time:?}");
     println!("  PASS ({:.3}s)\n", connect_time.as_secs_f64());
 }
 
@@ -95,7 +95,7 @@ pub(super) fn phase_graceful_shutdown(conns: Conns) -> Conns {
 
     assert!(
         shutdown_time < Duration::from_secs(2),
-        "Shutdown took too long: {:?}", shutdown_time
+        "Shutdown took too long: {shutdown_time:?}"
     );
 
     // Check that Disconnected event was emitted
@@ -148,10 +148,7 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
     let mut got_disconnect = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Event::Disconnected) => { got_disconnect = true; break; }
-            _ => {}
-        }
+        if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(200)) { got_disconnect = true; break; }
     }
 
     // The hot loop should exit on its own after detecting disconnect
@@ -166,7 +163,7 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
             (f, c, h)
         }
         Err(e) => {
-            panic!("Cannot continue compat suite without farm connection: {}", e);
+            panic!("Cannot continue compat suite without farm connection: {e}");
         }
     };
 
@@ -197,10 +194,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
     let mut got_ticks = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(_)) => { got_ticks = true; break; }
-            _ => {}
-        }
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) { got_ticks = true; break; }
     }
 
     // Shutdown the hot loop to simulate "disconnect"
@@ -228,15 +222,12 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
     let mut got_ticks_after = false;
 
     while Instant::now() < deadline2 {
-        match event_rx2.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(inst)) => {
-                let q = shared2.market.quote(inst);
-                println!("  Step 2: Tick after reconnect bid={:.4} ask={:.4}",
-                    q.bid as f64 / PRICE_SCALE as f64, q.ask as f64 / PRICE_SCALE as f64);
-                got_ticks_after = true;
-                break;
-            }
-            _ => {}
+        if let Ok(Event::Tick(inst)) = event_rx2.recv_timeout(Duration::from_millis(100)) {
+            let q = shared2.market.quote(inst);
+            println!("  Step 2: Tick after reconnect bid={:.4} ask={:.4}",
+                q.bid as f64 / PRICE_SCALE as f64, q.ask as f64 / PRICE_SCALE as f64);
+            got_ticks_after = true;
+            break;
         }
     }
 
@@ -267,9 +258,9 @@ pub(super) fn phase_auth_wrong_password(config: &GatewayConfig) {
 
     let err_msg = match result {
         Ok(_) => panic!("Gateway::connect with wrong password should fail"),
-        Err(e) => format!("{}", e),
+        Err(e) => format!("{e}"),
     };
-    println!("  Error: {}", err_msg);
+    println!("  Error: {err_msg}");
     println!("  Failed in {:.3}s (expected)", elapsed.as_secs_f64());
     assert!(elapsed < Duration::from_secs(30), "Auth failure should not take >30s");
     println!("  PASS\n");
@@ -298,7 +289,7 @@ pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
 
     // Verify instrument count increased
     let count = shared.market.instrument_count();
-    println!("  Instrument count after 3 registrations: {}", count);
+    println!("  Instrument count after 3 registrations: {count}");
 
     // Now subscribe to one of the registered instruments
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
@@ -316,8 +307,8 @@ pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    assert!(count >= 3, "Should have at least 3 registered instruments, got {}", count);
-    println!("  Events received: {}", got_event);
+    assert!(count >= 3, "Should have at least 3 registered instruments, got {count}");
+    println!("  Events received: {got_event}");
     println!("  PASS\n");
     conns
 }
@@ -359,25 +350,22 @@ pub(super) fn phase_update_param(conns: Conns) -> Conns {
     let mut terminal = false;
 
     while Instant::now() < deadline && !terminal {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        order_acked = true;
-                        if !cancel_sent {
-                            control_tx.send(ControlCommand::Order(
-                                OrderRequest::Cancel { order_id: oid }
-                            )).unwrap();
-                            cancel_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    order_acked = true;
+                    if !cancel_sent {
+                        control_tx.send(ControlCommand::Order(
+                            OrderRequest::Cancel { order_id: oid }
+                        )).unwrap();
+                        cancel_sent = true;
                     }
-                    OrderStatus::Cancelled | OrderStatus::Rejected => {
-                        terminal = true;
-                    }
-                    _ => {}
                 }
+                OrderStatus::Cancelled | OrderStatus::Rejected => {
+                    terminal = true;
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 

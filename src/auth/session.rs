@@ -91,7 +91,7 @@ pub fn get_session_id() -> String {
     let millis = now.as_millis() as u64;
     let secs = millis / 1000;
     let ms = millis % 1000;
-    format!("{:x}.{:04x}", secs, ms)
+    format!("{secs:x}.{ms:04x}")
 }
 
 /// Path of the persistent 8-hex machine_id file used in tag 6351.
@@ -128,14 +128,14 @@ fn read_or_create_hwid() -> String {
     if let Ok(v) = std::env::var("IBX_HWID") {
         let v = v.trim();
         if !v.is_empty() && v.chars().all(|c| c.is_ascii_hexdigit()) {
-            return format!("{:0>8}", v);
+            return format!("{v:0>8}");
         }
     }
     let path = hwid_path();
     if let Ok(s) = std::fs::read_to_string(&path) {
         let s = s.trim();
         if !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit()) {
-            return format!("{:0>8}", s);
+            return format!("{s:0>8}");
         }
     }
     let mut buf = [0u8; 4];
@@ -165,7 +165,7 @@ fn read_or_create_hwid() -> String {
 pub fn get_hw_info() -> String {
     let machine_id = read_or_create_hwid();
     let mac = first_real_mac().unwrap_or_else(|| "00:00:00:00:00:00".to_string());
-    format!("{}|{}", machine_id, mac)
+    format!("{machine_id}|{mac}")
 }
 
 /// Probe the OS for the first non-zero MAC address. Returns `None` if no NIC
@@ -212,7 +212,7 @@ pub fn send_secure<W: Write>(
 ) -> io::Result<()> {
     let ct = channel.encrypt(inner);
     let ct_b64 = B64.encode(&ct);
-    let outer = format!("{};{};{};", NS_VERSION, NS_SECURE_MESSAGE, ct_b64);
+    let outer = format!("{NS_VERSION};{NS_SECURE_MESSAGE};{ct_b64};");
     let payload = outer.as_bytes();
     let mut msg = Vec::with_capacity(8 + payload.len());
     msg.extend_from_slice(NS_MAGIC);
@@ -240,8 +240,7 @@ pub fn recv_secure<R: Read>(
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid msg type"))?;
 
     if msg_type == NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             format!("Auth error: {}", parts[2..].join(";")),
         ));
     }
@@ -249,13 +248,13 @@ pub fn recv_secure<R: Read>(
         let target = parts.get(2).unwrap_or(&"");
         return Err(io::Error::new(
             io::ErrorKind::ConnectionReset,
-            format!("REDIRECT:{}", target),
+            format!("REDIRECT:{target}"),
         ));
     }
     if msg_type != NS_SECURE_MESSAGE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("Expected 534, got {}: {}", msg_type, text),
+            format!("Expected 534, got {msg_type}: {text}"),
         ));
     }
 
@@ -343,7 +342,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
             if state != 2 {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("Expected SRP state 2, got {}", state),
+                    format!("Expected SRP state 2, got {state}"),
                 ));
             }
             fields
@@ -378,7 +377,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     let a_pub = g.modpow(&a_priv, &n);
 
     // State 3: Send client public key A
-    let a_hex = format!("{:x}", a_pub);
+    let a_hex = format!("{a_pub:x}");
     let msg3 = xyz::xyz_build_srp_v20(3, &[("L", &a_hex)]);
     stream.write_all(&xyz::xyz_wrap(&msg3))?;
 
@@ -396,15 +395,14 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
 
     if state4 == 7 {
         let result = fields4.get(9).map(|s| s.as_str()).unwrap_or("FAILED");
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("SRP early error (state 7): {}", result),
+        return Err(io::Error::other(
+            format!("SRP early error (state 7): {result}"),
         ));
     }
     if state4 != 4 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("Expected SRP state 4, got {}", state4),
+            format!("Expected SRP state 4, got {state4}"),
         ));
     }
 
@@ -440,7 +438,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     let m1 = srp::srp_compute_m1(&n, &g, username, &salt_int, &a_pub, &b_pub, &k);
 
     // State 5: Send client proof M1
-    let m1_hex = format!("{:x}", m1);
+    let m1_hex = format!("{m1:x}");
     let msg5 = xyz::xyz_build_srp_v20(5, &[("N", &m1_hex)]);
     stream.write_all(&xyz::xyz_wrap(&msg5))?;
 
@@ -466,14 +464,13 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     if state6 == 6 && result == "PASSED" {
         Ok(k)
     } else if result == "NEEDSSL" {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
+        Err(io::Error::other(
             "Server requires SSL upgrade (NEEDSSL)",
         ))
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("SRP Authentication FAILED (state={}): {}", state6, result),
+            format!("SRP Authentication FAILED (state={state6}): {result}"),
         ))
     }
 }
@@ -482,7 +479,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
 fn wrap_xyz_fix(xyz_payload: &[u8]) -> Vec<u8> {
     let tag35 = b"35=X\x01";
     let body_len = tag35.len() + xyz_payload.len();
-    let header = format!("8=1\x019={:04}\x01", body_len);
+    let header = format!("8=1\x019={body_len:04}\x01");
     let mut msg = Vec::with_capacity(header.len() + tag35.len() + xyz_payload.len());
     msg.extend_from_slice(header.as_bytes());
     msg.extend_from_slice(tag35);
@@ -564,7 +561,7 @@ fn try_frame_8eq1(buf: &[u8]) -> io::Result<Option<usize>> {
     if body_len > MAX_FARM_MSG_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("farm message body too large: {} bytes", body_len),
+            format!("farm message body too large: {body_len} bytes"),
         ));
     }
     let total = val_start + soh_off + 1 + body_len;
@@ -690,7 +687,7 @@ fn provider_panicked() -> io::Error {
 
 /// Compact hex dump for diagnostic logging.
 fn hex_dump(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+    bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
 }
 
 /// Default deadline for the second-factor gate, matching the server-side
@@ -785,7 +782,7 @@ impl GateReader {
         if len > MAX_GATE_FRAME {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("security-code gate: frame claims {} bytes", len),
+                format!("security-code gate: frame claims {len} bytes"),
             ));
         }
         if self.buf.len() < 8 + len {
@@ -960,7 +957,7 @@ pub fn do_security_code_2fa<S: Read + Write>(
                 let reason = if status.eq_ignore_ascii_case("FAILED") { "FAILED" } else { "unrecognized status" };
                 return Err(ib_key_err(
                     io::ErrorKind::PermissionDenied,
-                    format!("security code rejected ({})", reason),
+                    format!("security code rejected ({reason})"),
                 ));
             }
             RecvMsg::Xyz { msg_id, state, fields, .. }
@@ -990,12 +987,12 @@ pub fn do_security_code_2fa<S: Read + Write>(
             }
             RecvMsg::Xyz { msg_id, state, .. } if msg_id == xyz::XYZ_MSG_SECURITY_CODE => {
                 if !sent_before_read {
-                    log::debug!("security-code gate: 774 code {} before a code was sent", state);
+                    log::debug!("security-code gate: 774 code {state} before a code was sent");
                     continue;
                 }
                 return Err(ib_key_err(
                     io::ErrorKind::PermissionDenied,
-                    format!("security-code gate: server returned code {}", state),
+                    format!("security-code gate: server returned code {state}"),
                 ));
             }
             RecvMsg::Ns { msg_type, .. } if msg_type == NS_ERROR_RESPONSE
@@ -1003,7 +1000,7 @@ pub fn do_security_code_2fa<S: Read + Write>(
             {
                 return Err(ib_key_err(
                     io::ErrorKind::Other,
-                    format!("security-code gate: server error type={}", msg_type),
+                    format!("security-code gate: server error type={msg_type}"),
                 ));
             }
             RecvMsg::Ns { msg_type, fields, .. } if msg_type == NS_TEST_REQUEST => {
@@ -1012,9 +1009,9 @@ pub fn do_security_code_2fa<S: Read + Write>(
             }
             // Identifiers only. The derived `Debug` prints every field, and an
             // echoed frame can carry the code itself.
-            RecvMsg::Ns { msg_type, .. } => log::debug!("security-code gate: ns type={}", msg_type),
+            RecvMsg::Ns { msg_type, .. } => log::debug!("security-code gate: ns type={msg_type}"),
             RecvMsg::Xyz { msg_id, state, .. } => {
-                log::debug!("security-code gate: xyz id={} state={}", msg_id, state)
+                log::debug!("security-code gate: xyz id={msg_id} state={state}")
             }
         }
     }
@@ -1179,7 +1176,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                     let reason = if result.eq_ignore_ascii_case("FAILED") { "FAILED" } else { "unrecognized status" };
                     return Err(ib_key_err(
                         io::ErrorKind::PermissionDenied,
-                        format!("2FA gate: C/R code rejected (state=4 {})", reason),
+                        format!("2FA gate: C/R code rejected (state=4 {reason})"),
                     ));
                 }
             }
@@ -1220,14 +1217,14 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 let ts = fields.iter().find(|f| !f.is_empty()).cloned().unwrap_or_default();
                 let reply = ns_build_heart_beat(NS_VERSION, &ts);
                 stream.write_all(&reply)?;
-                log::debug!("2FA gate: heartbeat {} -> 531", ts);
+                log::debug!("2FA gate: heartbeat {ts} -> 531");
             }
             RecvMsg::Ns { msg_type, .. } if msg_type == NS_ERROR_RESPONSE
                 || msg_type == NS_SECURE_ERROR =>
             {
                 return Err(ib_key_err(
                     io::ErrorKind::Other,
-                    format!("2FA gate: server error type={}", msg_type),
+                    format!("2FA gate: server error type={msg_type}"),
                 ));
             }
             RecvMsg::Xyz { msg_id, state, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN => {
@@ -1237,15 +1234,15 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 // reason for the ~18 min the operator spends waiting.
                 return Err(ib_key_err(
                     io::ErrorKind::PermissionDenied,
-                    format!("2FA gate: unexpected SWCR_TOKEN state {}", state),
+                    format!("2FA gate: unexpected SWCR_TOKEN state {state}"),
                 ));
             }
             // Anything else is informational; keep looping. Identifiers only —
             // the derived `Debug` prints every field, and an echoed frame can
             // carry the code itself.
-            RecvMsg::Ns { msg_type, .. } => log::debug!("2FA gate: ns type={}", msg_type),
+            RecvMsg::Ns { msg_type, .. } => log::debug!("2FA gate: ns type={msg_type}"),
             RecvMsg::Xyz { msg_id, state, .. } => {
-                log::debug!("2FA gate: xyz id={} state={}", msg_id, state)
+                log::debug!("2FA gate: xyz id={msg_id} state={state}")
             }
         }
 
@@ -1308,7 +1305,7 @@ pub fn do_soft_token(
     if state2 != 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("SOFT_TOKEN: expected state 2, got {}", state2),
+            format!("SOFT_TOKEN: expected state 2, got {state2}"),
         ));
     }
 
@@ -1330,7 +1327,7 @@ pub fn do_soft_token(
     hasher.update(token_bytes);
     let digest = hasher.finalize();
     let response_int = BigUint::from_bytes_be(&digest);
-    let response_hex = format!("{:x}", response_int);
+    let response_hex = format!("{response_int:x}");
 
     // State 3: Send hash response (FIX-framed)
     let msg3 = xyz::xyz_build_soft_token(3, "", &response_hex, "");
@@ -1357,7 +1354,7 @@ pub fn do_soft_token(
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("SOFT_TOKEN auth failed: {}", result),
+            format!("SOFT_TOKEN auth failed: {result}"),
         ))
     }
 }
@@ -1387,7 +1384,7 @@ pub fn do_srp_farm(
     if state2 != 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("Farm SRP: expected state 2, got {}", state2),
+            format!("Farm SRP: expected state 2, got {state2}"),
         ));
     }
 
@@ -1412,7 +1409,7 @@ pub fn do_srp_farm(
     let a_pub = g.modpow(&a_priv, &n);
 
     // State 3: Send client public key A (FIX-framed)
-    let a_hex = format!("{:x}", a_pub);
+    let a_hex = format!("{a_pub:x}");
     let msg3 = xyz::xyz_build_srp_v20(3, &[("L", &a_hex)]);
     stream.write_all(&wrap_xyz_fix(&msg3))?;
 
@@ -1424,15 +1421,14 @@ pub fn do_srp_farm(
 
     if state4 == 7 {
         let result = fields4.get(9).map(|s| s.as_str()).unwrap_or("FAILED");
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Farm SRP early error (state 7): {}", result),
+        return Err(io::Error::other(
+            format!("Farm SRP early error (state 7): {result}"),
         ));
     }
     if state4 != 4 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("Farm SRP: expected state 4, got {}", state4),
+            format!("Farm SRP: expected state 4, got {state4}"),
         ));
     }
 
@@ -1463,7 +1459,7 @@ pub fn do_srp_farm(
     let m1 = srp::srp_compute_m1(&n, &g, username, &salt_int, &a_pub, &b_pub, &k);
 
     // State 5: Send client proof M1 (FIX-framed)
-    let m1_hex = format!("{:x}", m1);
+    let m1_hex = format!("{m1:x}");
     let msg5 = xyz::xyz_build_srp_v20(5, &[("N", &m1_hex)]);
     stream.write_all(&wrap_xyz_fix(&msg5))?;
 
@@ -1486,7 +1482,7 @@ pub fn do_srp_farm(
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("Farm SRP FAILED (state={}): {}", state6, result),
+            format!("Farm SRP FAILED (state={state6}): {result}"),
         ))
     }
 }
@@ -2267,7 +2263,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
-        assert!(!err.to_string().contains("timed out"), "got {}", err);
+        assert!(!err.to_string().contains("timed out"), "got {err}");
     }
 
     #[test]
@@ -2283,7 +2279,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
-        assert!(!err.to_string().contains("timed out"), "got {}", err);
+        assert!(!err.to_string().contains("timed out"), "got {err}");
     }
 
     #[test]
@@ -2297,7 +2293,7 @@ mod tests {
             Some(&code_provider_returning("123456")),
         )
         .unwrap_err();
-        assert!(!err.to_string().contains("123456"), "code leaked into: {}", err);
+        assert!(!err.to_string().contains("123456"), "code leaked into: {err}");
     }
 
     #[test]
@@ -2313,7 +2309,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
-        assert!(err.to_string().contains("before a code was sent"), "got {}", err);
+        assert!(err.to_string().contains("before a code was sent"), "got {err}");
     }
 
     #[test]
@@ -2591,7 +2587,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
-        assert!(err.to_string().contains("before a code was sent"), "got {}", err);
+        assert!(err.to_string().contains("before a code was sent"), "got {err}");
         assert!(stream.written.is_empty(), "nothing should have been sent");
     }
 
@@ -2607,7 +2603,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other);
-        assert!(!err.to_string().contains("timed out"), "got {}", err);
+        assert!(!err.to_string().contains("timed out"), "got {err}");
     }
 
     #[test]
@@ -2624,7 +2620,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
-        assert!(err.to_string().contains("code 4"), "got {}", err);
+        assert!(err.to_string().contains("code 4"), "got {err}");
     }
 
     #[test]
@@ -2729,7 +2725,7 @@ mod tests {
         // Per the canonical layout (see ib-agent#123), tokenSubType is the
         // last (and only non-empty) string field; preceding slots are empty.
         assert_eq!(fields.last().map(|s| s.as_str()), Some("2a"),
-            "tokenSubType must be the last field; got {:?}", fields);
+            "tokenSubType must be the last field; got {fields:?}");
     }
 
     #[test]
@@ -2753,7 +2749,7 @@ mod tests {
                 assert_eq!(session_id, "580 820");
                 let _ = soft_token_hex;
             }
-            other => panic!("expected Approved, got {:?}", other),
+            other => panic!("expected Approved, got {other:?}"),
         }
     }
 
@@ -2812,7 +2808,7 @@ mod tests {
         let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
         assert!(err.to_string().contains("18 min server-side deadline"),
-            "expected the long-deadline message; got {}", err);
+            "expected the long-deadline message; got {err}");
     }
 
     #[test]
@@ -2826,9 +2822,9 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
         let msg = err.to_string();
         assert!(msg.contains("before issuing a challenge"),
-            "expected rejection-style message; got {}", msg);
+            "expected rejection-style message; got {msg}");
         assert!(!msg.contains("18 min"),
-            "must not mention the 18 min deadline when no challenge was seen; got {}", msg);
+            "must not mention the 18 min deadline when no challenge was seen; got {msg}");
     }
 
     #[test]
@@ -2883,7 +2879,7 @@ mod tests {
                 assert_eq!(session_id, RUN_A_SESSION_ID);
                 assert_eq!(approval_url, RUN_A_AVTH_URL);
             }
-            other => panic!("expected Approved, got {:?}", other),
+            other => panic!("expected Approved, got {other:?}"),
         }
 
         // Provider must have received the parsed display_id + avth_url, and be
@@ -2964,7 +2960,7 @@ mod tests {
         let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), Some(&provider)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(err.to_string().contains("C/R code rejected"),
-            "expected C/R rejection message; got {}", err);
+            "expected C/R rejection message; got {err}");
         assert!(stream.written.windows(submission.len()).any(|f| f == submission),
             "the rejected code must have been submitted as state=3");
     }
@@ -3085,7 +3081,7 @@ mod tests {
             began.elapsed(),
         );
         assert!(!err.to_string().contains(ECHOED_CODE),
-            "the frame's fields must not reach the error text; got {}", err);
+            "the frame's fields must not reach the error text; got {err}");
     }
 
     /// Both rejection texts carry a field the server chose, next to the slot
@@ -3099,13 +3095,13 @@ mod tests {
         let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "got {err}");
         assert!(!err.to_string().contains(SERVER_TEXT),
-            "state=4 rejection must not echo the server's field; got {}", err);
+            "state=4 rejection must not echo the server's field; got {err}");
 
         let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 5, "user", &[SERVER_TEXT]);
         let mut stream = ScriptedStream::new(frame_xyz(&auth_finish));
         let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "got {err}");
         assert!(!err.to_string().contains(SERVER_TEXT),
-            "AUTH_FINISH rejection must not echo the server's field; got {}", err);
+            "AUTH_FINISH rejection must not echo the server's field; got {err}");
     }
 }

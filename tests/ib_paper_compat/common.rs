@@ -175,7 +175,7 @@ pub(super) fn ensure_ccp_alive(
             println!("  [reconnect] Gateway re-established (farm+ccp+hmds)");
         }
         Err(e) => {
-            println!("  [reconnect] Gateway reconnect failed: {} — continuing with dead CCP", e);
+            println!("  [reconnect] Gateway reconnect failed: {e} — continuing with dead CCP");
         }
     }
     conns
@@ -233,12 +233,12 @@ pub(super) fn market_session() -> (MarketSession, u16) {
     };
     let mar1_doy = if leap { 60 } else { 59 };
     let mar1_dow = ((jan1_dow as u16 + (mar1_doy % 7) as u16) % 7) as u8;
-    let first_sun_mar = if mar1_dow == 0 { 1 } else { (8 - mar1_dow) as u8 };
+    let first_sun_mar = if mar1_dow == 0 { 1 } else { 8 - mar1_dow };
     let second_sun_mar = first_sun_mar + 7;
 
     let nov1_doy = if leap { 305 } else { 304 };
     let nov1_dow = ((jan1_dow as u16 + (nov1_doy % 7) as u16) % 7) as u8;
-    let first_sun_nov = if nov1_dow == 0 { 1 } else { (8 - nov1_dow) as u8 };
+    let first_sun_nov = if nov1_dow == 0 { 1 } else { 8 - nov1_dow };
 
     let is_edt = match month {
         4..=10 => true,
@@ -302,7 +302,7 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let yy = if m <= 2 { y - 1 } else { y };
     let era = (if yy >= 0 { yy } else { yy - 399 }) / 400;
     let yoe = yy - era * 400;
-    let mp = if m > 2 { m - 3 } else { m + 9 } as u32;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
     let doy = (153 * mp as i64 + 2) / 5 + d as i64 - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146097 + doe - 719468
@@ -426,51 +426,6 @@ fn us_market_holiday(y: i64, m: u32, d: u32, dow: u32) -> Holiday {
     Holiday::Open
 }
 
-#[cfg(test)]
-mod holiday_tests {
-    use super::*;
-
-    fn kind(y: i64, m: u32, d: u32) -> Holiday {
-        us_market_holiday(y, m, d, dow(days_from_civil(y, m, d)))
-    }
-
-    #[test]
-    fn fixed_and_floating_2026_closures() {
-        assert_eq!(kind(2026, 1, 1), Holiday::Closed);   // New Year (Thu)
-        assert_eq!(kind(2026, 1, 19), Holiday::Closed);  // MLK — 3rd Mon Jan
-        assert_eq!(kind(2026, 2, 16), Holiday::Closed);  // Washington — 3rd Mon Feb
-        assert_eq!(kind(2026, 4, 3), Holiday::Closed);   // Good Friday
-        assert_eq!(kind(2026, 5, 25), Holiday::Closed);  // Memorial — last Mon May
-        assert_eq!(kind(2026, 6, 19), Holiday::Closed);  // Juneteenth (Fri)
-        assert_eq!(kind(2026, 9, 7), Holiday::Closed);   // Labor — 1st Mon Sep
-        assert_eq!(kind(2026, 11, 26), Holiday::Closed); // Thanksgiving — 4th Thu Nov
-        assert_eq!(kind(2026, 12, 25), Holiday::Closed); // Christmas (Fri)
-    }
-
-    #[test]
-    fn observed_weekend_rules() {
-        // Jul 4 2026 is a Saturday → observed Friday Jul 3 (full closure, not early close).
-        assert_eq!(dow(days_from_civil(2026, 7, 4)), 6);
-        assert_eq!(kind(2026, 7, 3), Holiday::Closed);
-        // Jan 1 2023 was a Sunday → observed Monday Jan 2.
-        assert_eq!(dow(days_from_civil(2023, 1, 1)), 0);
-        assert_eq!(kind(2023, 1, 2), Holiday::Closed);
-    }
-
-    #[test]
-    fn early_closes() {
-        // Black Friday 2026 = day after Thanksgiving (Nov 27).
-        assert_eq!(kind(2026, 11, 27), Holiday::EarlyClose);
-        // Christmas Eve 2025 (Wed) is an early close.
-        assert_eq!(kind(2025, 12, 24), Holiday::EarlyClose);
-    }
-
-    #[test]
-    fn normal_trading_day_is_open() {
-        assert_eq!(kind(2026, 7, 8), Holiday::Open); // ordinary Wednesday
-    }
-}
-
 /// Session-aware order-acknowledgment gate for order phases.
 ///
 /// On a Closed market, order acknowledgment is unavailable or unreliable: pegged
@@ -497,7 +452,7 @@ pub(super) fn run_submit_cancel_phase(
     order_req: OrderRequest,
     fill_or_cancel: bool,
 ) -> Conns {
-    println!("--- {} ---", phase_name);
+    println!("--- {phase_name} ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -523,44 +478,41 @@ pub(super) fn run_submit_cancel_phase(
     let mut order_inactive = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    // PreSubmitted (39=A) is the server's ack: received, not yet
-                    // working on the exchange. An at-the-open order stops there until
-                    // the auction and never reaches Submitted (39=0) intraday, so it
-                    // must count as the ack and fire the cancel, or the order rests
-                    // forever and the phase reports "never acknowledged" while the
-                    // acks were in fact arriving (ib-agent#164 timed them at ~120ms).
-                    // PendingSubmit is the local pre-ack state, kept for order types
-                    // that surface it.
-                    OrderStatus::PendingSubmit
-                    | OrderStatus::PreSubmitted
-                    | OrderStatus::Submitted => {
-                        order_acked = true;
-                        if !cancel_sent {
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                            cancel_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                // PreSubmitted (39=A) is the server's ack: received, not yet
+                // working on the exchange. An at-the-open order stops there until
+                // the auction and never reaches Submitted (39=0) intraday, so it
+                // must count as the ack and fire the cancel, or the order rests
+                // forever and the phase reports "never acknowledged" while the
+                // acks were in fact arriving (ib-agent#164 timed them at ~120ms).
+                // PendingSubmit is the local pre-ack state, kept for order types
+                // that surface it.
+                OrderStatus::PendingSubmit
+                | OrderStatus::PreSubmitted
+                | OrderStatus::Submitted => {
+                    order_acked = true;
+                    if !cancel_sent {
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                        cancel_sent = true;
                     }
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    // The venue parked it rather than refusing it outright: an
-                    // order type the instrument does not support lands here
-                    // instead of Rejected. Captured live, STP PRT on a
-                    // SMART-routed stock returns Inactive and then refuses the
-                    // cancel with 202. That is the gateway declining the
-                    // combination, not the client failing to submit it, so the
-                    // phase reports it rather than asserting against it.
-                    OrderStatus::Inactive => { order_inactive = true; break; }
-                    OrderStatus::Filled => {
-                        order_filled = true;
-                        if fill_or_cancel { break; }
-                    }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                // The venue parked it rather than refusing it outright: an
+                // order type the instrument does not support lands here
+                // instead of Rejected. Captured live, STP PRT on a
+                // SMART-routed stock returns Inactive and then refuses the
+                // cancel with 202. That is the gateway declining the
+                // combination, not the client failing to submit it, so the
+                // phase reports it rather than asserting against it.
+                OrderStatus::Inactive => { order_inactive = true; break; }
+                OrderStatus::Filled => {
+                    order_filled = true;
+                    if fill_or_cancel { break; }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -627,7 +579,7 @@ pub(super) fn now_ib_timestamp() -> String {
     let hour = (now % secs_per_day) / 3600;
     let min = (now % 3600) / 60;
     let sec = now % 60;
-    format!("{:04}{:02}{:02}-{:02}:{:02}:{:02}", y, m, day, hour, min, sec)
+    format!("{y:04}{m:02}{day:02}-{hour:02}:{min:02}:{sec:02}")
 }
 
 /// Format seconds since epoch as YYYYMMDD-HH:MM:SS UTC.
@@ -653,5 +605,50 @@ pub(super) fn format_utc_timestamp(epoch_secs: u64) -> String {
     let hour = (epoch_secs % secs_per_day) / 3600;
     let min = (epoch_secs % 3600) / 60;
     let sec = epoch_secs % 60;
-    format!("{:04}{:02}{:02}-{:02}:{:02}:{:02}", y, m, day, hour, min, sec)
+    format!("{y:04}{m:02}{day:02}-{hour:02}:{min:02}:{sec:02}")
+}
+
+#[cfg(test)]
+mod holiday_tests {
+    use super::*;
+
+    fn kind(y: i64, m: u32, d: u32) -> Holiday {
+        us_market_holiday(y, m, d, dow(days_from_civil(y, m, d)))
+    }
+
+    #[test]
+    fn fixed_and_floating_2026_closures() {
+        assert_eq!(kind(2026, 1, 1), Holiday::Closed);   // New Year (Thu)
+        assert_eq!(kind(2026, 1, 19), Holiday::Closed);  // MLK — 3rd Mon Jan
+        assert_eq!(kind(2026, 2, 16), Holiday::Closed);  // Washington — 3rd Mon Feb
+        assert_eq!(kind(2026, 4, 3), Holiday::Closed);   // Good Friday
+        assert_eq!(kind(2026, 5, 25), Holiday::Closed);  // Memorial — last Mon May
+        assert_eq!(kind(2026, 6, 19), Holiday::Closed);  // Juneteenth (Fri)
+        assert_eq!(kind(2026, 9, 7), Holiday::Closed);   // Labor — 1st Mon Sep
+        assert_eq!(kind(2026, 11, 26), Holiday::Closed); // Thanksgiving — 4th Thu Nov
+        assert_eq!(kind(2026, 12, 25), Holiday::Closed); // Christmas (Fri)
+    }
+
+    #[test]
+    fn observed_weekend_rules() {
+        // Jul 4 2026 is a Saturday → observed Friday Jul 3 (full closure, not early close).
+        assert_eq!(dow(days_from_civil(2026, 7, 4)), 6);
+        assert_eq!(kind(2026, 7, 3), Holiday::Closed);
+        // Jan 1 2023 was a Sunday → observed Monday Jan 2.
+        assert_eq!(dow(days_from_civil(2023, 1, 1)), 0);
+        assert_eq!(kind(2023, 1, 2), Holiday::Closed);
+    }
+
+    #[test]
+    fn early_closes() {
+        // Black Friday 2026 = day after Thanksgiving (Nov 27).
+        assert_eq!(kind(2026, 11, 27), Holiday::EarlyClose);
+        // Christmas Eve 2025 (Wed) is an early close.
+        assert_eq!(kind(2025, 12, 24), Holiday::EarlyClose);
+    }
+
+    #[test]
+    fn normal_trading_day_is_open() {
+        assert_eq!(kind(2026, 7, 8), Holiday::Open); // ordinary Wednesday
+    }
 }

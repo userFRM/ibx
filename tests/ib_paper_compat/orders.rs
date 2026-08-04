@@ -118,33 +118,30 @@ pub(super) fn phase_limit_order(conns: Conns) -> Conns {
     let mut cancel_conf_us = 0u64;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        if !order_acked {
-                            submit_ack_us = submit_time.elapsed().as_micros() as u64;
-                            order_acked = true;
-                        }
-                        if !cancel_sent {
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                            cancel_time = Some(Instant::now());
-                            cancel_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    if !order_acked {
+                        submit_ack_us = submit_time.elapsed().as_micros() as u64;
+                        order_acked = true;
                     }
-                    OrderStatus::Cancelled => {
-                        cancel_conf_us = cancel_time.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
-                        order_cancelled = true;
-                        break;
+                    if !cancel_sent {
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                        cancel_time = Some(Instant::now());
+                        cancel_sent = true;
                     }
-                    OrderStatus::Rejected => {
-                        order_rejected = true;
-                        break;
-                    }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => {
+                    cancel_conf_us = cancel_time.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
+                    order_cancelled = true;
+                    break;
+                }
+                OrderStatus::Rejected => {
+                    order_rejected = true;
+                    break;
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     let _ = submit_time; // suppress unused warning
@@ -208,27 +205,24 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
     let new_order_id = order_id;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        if modify_sent && !modify_acked {
-                            modify_acked = true;
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
-                        } else if !order_acked {
-                            order_acked = true;
-                            control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id, new_order_id, price: 2_00_000_000, qty: 1, outside_rth: false, stop_price: 0,
-                            })).unwrap();
-                            modify_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    if modify_sent && !modify_acked {
+                        modify_acked = true;
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
+                    } else if !order_acked {
+                        order_acked = true;
+                        control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                            order_id, new_order_id, price: 2_00_000_000, qty: 1, outside_rth: false, stop_price: 0,
+                        })).unwrap();
+                        modify_sent = true;
                     }
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -328,14 +322,14 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     let sp = sell_price as f64 / PRICE_SCALE as f64;
     let bc = buy_comm as f64 / PRICE_SCALE as f64;
     let sc = sell_comm as f64 / PRICE_SCALE as f64;
-    println!("  Buy:  ${:.2} commission=${:.4}", bp, bc);
-    println!("  Sell: ${:.2} commission=${:.4}", sp, sc);
+    println!("  Buy:  ${bp:.2} commission=${bc:.4}");
+    println!("  Sell: ${sp:.2} commission=${sc:.4}");
     assert!(buy_price > 0, "Buy fill price should be positive");
     assert!(sell_price > 0, "Sell fill price should be positive");
-    assert!((bp - sp).abs() / bp < 0.05, "Buy/sell prices should be within 5%: buy={} sell={}", bp, sp);
+    assert!((bp - sp).abs() / bp < 0.05, "Buy/sell prices should be within 5%: buy={bp} sell={sp}");
     if buy_comm > 0 {
-        assert!(bc < 10.0, "Commission unreasonably high: ${:.4}", bc);
-        println!("  PASS (commission=${:.4})\n", bc);
+        assert!(bc < 10.0, "Commission unreasonably high: ${bc:.4}");
+        println!("  PASS (commission=${bc:.4})\n");
     } else {
         println!("  PASS (commission=0 — paper account does not report tag 12)\n");
     }
@@ -370,27 +364,24 @@ pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
     let mut cancel_sent = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    // A resting stop is held by the gateway rather than worked,
-                    // and it acknowledges that as PreSubmitted: captured live,
-                    // this order goes PreSubmitted -> PendingCancel -> Cancelled
-                    // and never reports Submitted at all. The rest of the suite
-                    // already treats the two as one ack.
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        order_acked = true;
-                        if !cancel_sent {
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                            cancel_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                // A resting stop is held by the gateway rather than worked,
+                // and it acknowledges that as PreSubmitted: captured live,
+                // this order goes PreSubmitted -> PendingCancel -> Cancelled
+                // and never reports Submitted at all. The rest of the suite
+                // already treats the two as one ack.
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    order_acked = true;
+                    if !cancel_sent {
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                        cancel_sent = true;
                     }
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -440,27 +431,24 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        if modify_sent && !modify_acked_local {
-                            modify_acked_local = true;
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
-                        } else if !order_acked {
-                            order_acked = true;
-                            control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id, new_order_id, price: 1_00_000_000, qty: 2, outside_rth: false, stop_price: 0,
-                            })).unwrap();
-                            modify_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    if modify_sent && !modify_acked_local {
+                        modify_acked_local = true;
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
+                    } else if !order_acked {
+                        order_acked = true;
+                        control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                            order_id, new_order_id, price: 1_00_000_000, qty: 2, outside_rth: false, stop_price: 0,
+                        })).unwrap();
+                        modify_sent = true;
                     }
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -523,15 +511,12 @@ pub(super) fn phase_limit_ioc(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
-                }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -572,15 +557,12 @@ pub(super) fn phase_limit_fok(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
-                }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -680,25 +662,22 @@ pub(super) fn phase_bracket_order(conns: Conns) -> Conns {
     let mut cancel_sent = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        if update.order_id == parent_id { parent_acked = true; }
-                        if parent_acked && !cancel_sent {
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: parent_id })).unwrap();
-                            cancel_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    if update.order_id == parent_id { parent_acked = true; }
+                    if parent_acked && !cancel_sent {
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: parent_id })).unwrap();
+                        cancel_sent = true;
                     }
-                    OrderStatus::Cancelled => {
-                        cancelled_count += 1;
-                        if cancelled_count >= 1 { break; }
-                    }
-                    OrderStatus::Rejected => { any_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => {
+                    cancelled_count += 1;
+                    if cancelled_count >= 1 { break; }
+                }
+                OrderStatus::Rejected => { any_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -710,7 +689,7 @@ pub(super) fn phase_bracket_order(conns: Conns) -> Conns {
     }
     if skip_unacked_if_closed(parent_acked) { return conns; }
     assert!(parent_acked, "Parent order was never acknowledged");
-    println!("  Parent acked: {}, Cancelled: {} orders", parent_acked, cancelled_count);
+    println!("  Parent acked: {parent_acked}, Cancelled: {cancelled_count} orders");
     println!("  PASS\n");
     conns
 }
@@ -816,26 +795,23 @@ pub(super) fn phase_oca_group(conns: Conns) -> Conns {
     let mut cancel_sent = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        if update.order_id == id1 { order1_acked = true; }
-                        if update.order_id == id2 { order2_acked = true; }
-                        if order1_acked && order2_acked && !cancel_sent {
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: id1 })).unwrap();
-                            cancel_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    if update.order_id == id1 { order1_acked = true; }
+                    if update.order_id == id2 { order2_acked = true; }
+                    if order1_acked && order2_acked && !cancel_sent {
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: id1 })).unwrap();
+                        cancel_sent = true;
                     }
-                    OrderStatus::Cancelled => {
-                        cancelled_count += 1;
-                        if cancelled_count >= 1 { break; }
-                    }
-                    OrderStatus::Rejected => { any_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => {
+                    cancelled_count += 1;
+                    if cancelled_count >= 1 { break; }
+                }
+                OrderStatus::Rejected => { any_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -848,7 +824,7 @@ pub(super) fn phase_oca_group(conns: Conns) -> Conns {
     if skip_unacked_if_closed(order1_acked && order2_acked) { return conns; }
     assert!(order1_acked, "Order 1 never acked");
     assert!(order2_acked, "Order 2 never acked");
-    println!("  Order1 acked: {}, Order2 acked: {}, Cancelled: {}", order1_acked, order2_acked, cancelled_count);
+    println!("  Order1 acked: {order1_acked}, Order2 acked: {order2_acked}, Cancelled: {cancelled_count}");
     println!("  PASS\n");
     conns
 }
@@ -1149,13 +1125,10 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
     let mut response_snapshot: Option<WhatIfResponse> = None;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::WhatIf(response)) => {
-                response_snapshot = Some(response);
-                what_if_received = true;
-                break;
-            }
-            _ => {}
+        if let Ok(Event::WhatIf(response)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            response_snapshot = Some(response);
+            what_if_received = true;
+            break;
         }
     }
 
@@ -1182,12 +1155,12 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
         let mut w = RecordingWrapper::default();
         eclient.process_msgs(&mut w);
 
-        let open_event = w.events.iter().find(|e| e.starts_with(&format!("open_order:{}:", order_id)));
+        let open_event = w.events.iter().find(|e| e.starts_with(&format!("open_order:{order_id}:")));
         let status_event = w.events.iter().find(|e|
-            e.starts_with(&format!("order_status:{}:PreSubmitted", order_id)));
+            e.starts_with(&format!("order_status:{order_id}:PreSubmitted")));
         match (open_event, status_event) {
             (Some(oe), Some(_)) => {
-                println!("  Dispatcher: open_order fired with state: {}", oe);
+                println!("  Dispatcher: open_order fired with state: {oe}");
                 true
             }
             _ => {
@@ -1243,22 +1216,19 @@ pub(super) fn phase_cash_qty_order(conns: Conns) -> Conns {
     let mut cancel_sent = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        order_acked = true;
-                        if !cancel_sent {
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                            cancel_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    order_acked = true;
+                    if !cancel_sent {
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                        cancel_sent = true;
                     }
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -1303,22 +1273,19 @@ pub(super) fn phase_fractional_order(conns: Conns) -> Conns {
     let mut cancel_sent = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        order_acked = true;
-                        if !cancel_sent {
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                            cancel_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    order_acked = true;
+                    if !cancel_sent {
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                        cancel_sent = true;
                     }
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -1440,7 +1407,7 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
         println!("  SKIP: Bracket fill cascade rejected\n");
         return conns;
     }
-    println!("  Entry filled: {}, TP active: {}, SL active: {}", entry_filled, tp_active, sl_active);
+    println!("  Entry filled: {entry_filled}, TP active: {tp_active}, SL active: {sl_active}");
     if !entry_filled {
         println!("  SKIP: Entry did not fill — market may not have liquidity\n");
         return conns;
@@ -1527,7 +1494,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
     if order_rejected { println!("  SKIP: Order rejected\n"); return conns; }
     if !buy_filled { println!("  SKIP: No fill — market may not have liquidity\n"); return conns; }
 
-    println!("  Buy filled: {}, Sell filled: {}", buy_filled, sell_filled);
+    println!("  Buy filled: {buy_filled}, Sell filled: {sell_filled}");
     if pnl_updated {
         println!("  RealizedPnL changed: ${:.2}", realized_pnl as f64 / PRICE_SCALE as f64);
         println!("  PASS\n");
@@ -1645,34 +1612,31 @@ pub(super) fn phase_rapid_order_dedup(conns: Conns) -> Conns {
     let mut duplicate_acks = 0u32;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted => {
-                        if acked.contains(&update.order_id) {
-                            duplicate_acks += 1;
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted => {
+                    if acked.contains(&update.order_id) {
+                        duplicate_acks += 1;
+                    }
+                    acked.insert(update.order_id);
+                    // Once all 5 are acked, cancel them all
+                    if acked.len() == 5 && !cancel_batch_sent {
+                        for &oid in &order_ids {
+                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
                         }
-                        acked.insert(update.order_id);
-                        // Once all 5 are acked, cancel them all
-                        if acked.len() == 5 && !cancel_batch_sent {
-                            for &oid in &order_ids {
-                                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
-                            }
-                            cancel_batch_sent = true;
-                        }
+                        cancel_batch_sent = true;
                     }
-                    OrderStatus::Cancelled => {
-                        cancelled.insert(update.order_id);
-                        if cancelled.len() + rejected.len() >= order_ids.len() { break; }
-                    }
-                    OrderStatus::Rejected => {
-                        rejected.insert(update.order_id);
-                        if cancelled.len() + rejected.len() >= order_ids.len() { break; }
-                    }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => {
+                    cancelled.insert(update.order_id);
+                    if cancelled.len() + rejected.len() >= order_ids.len() { break; }
+                }
+                OrderStatus::Rejected => {
+                    rejected.insert(update.order_id);
+                    if cancelled.len() + rejected.len() >= order_ids.len() { break; }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -1727,28 +1691,25 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        if modify_sent && !modify_acked {
-                            modify_acked = true;
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
-                        } else if !order_acked {
-                            order_acked = true;
-                            // Modify BOTH price ($1→$2) and qty (1→3) in a single Modify
-                            control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id, new_order_id, price: 2_00_000_000, qty: 3, outside_rth: false, stop_price: 0,
-                            })).unwrap();
-                            modify_sent = true;
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    if modify_sent && !modify_acked {
+                        modify_acked = true;
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
+                    } else if !order_acked {
+                        order_acked = true;
+                        // Modify BOTH price ($1→$2) and qty (1→3) in a single Modify
+                        control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                            order_id, new_order_id, price: 2_00_000_000, qty: 3, outside_rth: false, stop_price: 0,
+                        })).unwrap();
+                        modify_sent = true;
                     }
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -1796,39 +1757,36 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted => {
-                        match phase {
-                            0 => {
-                                // Original order acked → modify to $2
-                                control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                    order_id, new_order_id: modify_id_1, price: 2_00_000_000, qty: 1, outside_rth: false, stop_price: 0,
-                                })).unwrap();
-                                phase = 1;
-                            }
-                            1 => {
-                                // First modify acked → modify again to $3
-                                control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                    order_id: modify_id_1, new_order_id: modify_id_2, price: 3_00_000_000, qty: 1, outside_rth: false, stop_price: 0,
-                                })).unwrap();
-                                phase = 2;
-                            }
-                            2 => {
-                                // Second modify acked → cancel
-                                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: modify_id_2 })).unwrap();
-                                phase = 3;
-                            }
-                            _ => {}
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted => {
+                    match phase {
+                        0 => {
+                            // Original order acked → modify to $2
+                            control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                                order_id, new_order_id: modify_id_1, price: 2_00_000_000, qty: 1, outside_rth: false, stop_price: 0,
+                            })).unwrap();
+                            phase = 1;
                         }
+                        1 => {
+                            // First modify acked → modify again to $3
+                            control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                                order_id: modify_id_1, new_order_id: modify_id_2, price: 3_00_000_000, qty: 1, outside_rth: false, stop_price: 0,
+                            })).unwrap();
+                            phase = 2;
+                        }
+                        2 => {
+                            // Second modify acked → cancel
+                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: modify_id_2 })).unwrap();
+                            phase = 3;
+                        }
+                        _ => {}
                     }
-                    OrderStatus::Cancelled => { order_cancelled = true; break; }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => { order_cancelled = true; break; }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -1839,7 +1797,7 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
         return conns;
     }
     if skip_unacked_if_closed(phase >= 3) { return conns; }
-    assert!(phase >= 3, "Did not complete double modify chain (reached phase {})", phase);
+    assert!(phase >= 3, "Did not complete double modify chain (reached phase {phase})");
     assert!(order_cancelled, "Final modified order was never cancelled");
     println!("  PASS\n");
     conns
@@ -1954,28 +1912,25 @@ pub(super) fn phase_global_cancel(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                match update.status {
-                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                        acked.insert(update.order_id);
-                        if acked.len() >= 3 && !cancel_all_sent {
-                            control_tx.send(ControlCommand::Order(
-                                OrderRequest::CancelAll { instrument: inst_id }
-                            )).unwrap();
-                            cancel_all_sent = true;
-                            println!("  CancelAll sent after {} orders acked", acked.len());
-                        }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    acked.insert(update.order_id);
+                    if acked.len() >= 3 && !cancel_all_sent {
+                        control_tx.send(ControlCommand::Order(
+                            OrderRequest::CancelAll { instrument: inst_id }
+                        )).unwrap();
+                        cancel_all_sent = true;
+                        println!("  CancelAll sent after {} orders acked", acked.len());
                     }
-                    OrderStatus::Cancelled => {
-                        cancelled.insert(update.order_id);
-                        if cancelled.len() >= 3 { break; }
-                    }
-                    OrderStatus::Rejected => { order_rejected = true; break; }
-                    _ => {}
                 }
+                OrderStatus::Cancelled => {
+                    cancelled.insert(update.order_id);
+                    if cancelled.len() >= 3 { break; }
+                }
+                OrderStatus::Rejected => { order_rejected = true; break; }
+                _ => {}
             }
-            _ => {}
         }
     }
 

@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         code_provider: None,
     };
 
-    println!("== Connecting to paper {} ...", host);
+    println!("== Connecting to paper {host} ...");
     let t0 = Instant::now();
     let (gw, _farm, ccp, _hmds) = Gateway::connect(&cfg)?;
     println!(

@@ -158,7 +158,7 @@ fn ccp_reconnect_with_cached_credentials() {
                 full_auth_ms as f64 / reconnect_ms.max(1) as f64);
         }
         Err(e) => {
-            println!("CCP reconnect failed after {}ms: {}", reconnect_ms, e);
+            println!("CCP reconnect failed after {reconnect_ms}ms: {e}");
             println!("INFO: Server requires full SRP for CCP — auto-reconnect not possible without password");
             // This is an expected outcome — don't fail the test, just report
         }

@@ -284,7 +284,7 @@ mod tests {
         let seed = b"seed value";
         for &len in &[16, 32, 48, 104] {
             let out = tls10_prf(secret, "test", seed, len);
-            assert_eq!(out.len(), len, "PRF output should be exactly {} bytes", len);
+            assert_eq!(out.len(), len, "PRF output should be exactly {len} bytes");
         }
     }
 
@@ -314,7 +314,7 @@ mod tests {
         assert_eq!(
             snapshot,
             {
-                let r = tls10_prf(&vec![0x42u8; 48], "key expansion", &vec![0x13u8; 32], 104);
+                let r = tls10_prf(&[0x42u8; 48], "key expansion", &[0x13u8; 32], 104);
                 let mut a = [0u8; 16];
                 a.copy_from_slice(&r[..16]);
                 a

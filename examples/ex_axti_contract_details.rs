@@ -35,11 +35,11 @@ impl Wrapper for ProbeWrapper {
         );
     }
     fn contract_details_end(&mut self, req_id: i64) {
-        println!("[contract_details_end] req_id={}", req_id);
+        println!("[contract_details_end] req_id={req_id}");
         self.state.lock().unwrap().end_seen = true;
     }
     fn error(&mut self, req_id: i64, code: i64, msg: &str, _adv: &str) {
-        eprintln!("[error] req_id={} code={} msg={}", req_id, code, msg);
+        eprintln!("[error] req_id={req_id} code={code} msg={msg}");
         self.state.lock().unwrap().last_error = Some((req_id, code, msg.into()));
     }
 }
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let password = env::var("IB_PASSWORD")?;
     let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
 
-    println!("== Connecting to paper ({})...", host);
+    println!("== Connecting to paper ({host})...");
     let t0 = Instant::now();
     let client = EClient::connect(&EClientConfig {
         username, password, host, paper: true, core_id: None, code_provider: None,
@@ -69,10 +69,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     let req_id: i64 = 1;
-    println!("== reqContractDetails AXTI/SMART/STK/USD by symbol (req_id={})", req_id);
+    println!("== reqContractDetails AXTI/SMART/STK/USD by symbol (req_id={req_id})");
     let t_req = Instant::now();
     client.req_contract_details(req_id, &axti)
-        .map_err(|e| format!("req_contract_details failed: {}", e))?;
+        .map_err(|e| format!("req_contract_details failed: {e}"))?;
 
     let probe_deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < probe_deadline {
@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  details_count : {}", s.details_count);
     println!("  end_seen      : {}", s.end_seen);
     if let Some((rid, code, msg)) = &s.last_error {
-        println!("  last_error    : req_id={} code={} msg={}", rid, code, msg);
+        println!("  last_error    : req_id={rid} code={code} msg={msg}");
     }
     let pass = s.end_seen && s.details_count > 0;
     drop(s);

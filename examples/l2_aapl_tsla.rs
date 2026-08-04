@@ -94,7 +94,7 @@ impl DepthWrapper {
 
 impl Wrapper for DepthWrapper {
     fn error(&mut self, req_id: i64, error_code: i64, error_string: &str, _: &str) {
-        eprintln!("  error req_id={} code={} msg={}", req_id, error_code, error_string);
+        eprintln!("  error req_id={req_id} code={error_code} msg={error_string}");
         self.errors.push((req_id, error_code, error_string.into()));
     }
 
@@ -150,7 +150,7 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(15);
 
-    println!("Connecting to {}...", host);
+    println!("Connecting to {host}...");
     let client = EClient::connect(&EClientConfig {
         username,
         password,
@@ -168,11 +168,11 @@ fn main() {
     let aapl_id: i64 = 1;
     let tsla_id: i64 = 2;
 
-    println!("Subscribing AAPL (req_id={})", aapl_id);
+    println!("Subscribing AAPL (req_id={aapl_id})");
     client.req_mkt_depth(aapl_id, &aapl(), num_rows, is_smart)
         .expect("Failed to subscribe AAPL depth");
 
-    println!("Subscribing TSLA (req_id={})", tsla_id);
+    println!("Subscribing TSLA (req_id={tsla_id})");
     client.req_mkt_depth(tsla_id, &tsla(), num_rows, is_smart)
         .expect("Failed to subscribe TSLA depth");
 
@@ -181,7 +181,7 @@ fn main() {
     let start = Instant::now();
     let timeout = Duration::from_secs(duration_secs);
 
-    println!("Collecting depth data for {}s...", duration_secs);
+    println!("Collecting depth data for {duration_secs}s...");
     while start.elapsed() < timeout {
         client.process_msgs(&mut wrapper);
         std::thread::sleep(Duration::from_millis(50));
@@ -193,7 +193,7 @@ fn main() {
     }
 
     let total = wrapper.total_updates();
-    println!("\nTotal depth updates: {}", total);
+    println!("\nTotal depth updates: {total}");
 
     // Cancel subscriptions
     let _ = client.cancel_mkt_depth(aapl_id);

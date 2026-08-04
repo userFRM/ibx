@@ -90,6 +90,12 @@ pub struct SeqQuote {
 unsafe impl Sync for SeqQuote {}
 unsafe impl Send for SeqQuote {}
 
+impl Default for SeqQuote {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SeqQuote {
     pub fn new() -> Self {
         Self {
@@ -904,6 +910,12 @@ pub struct SharedState {
     /// Notifier for waking consumers (e.g. Python event loop) when data arrives.
     notify_mutex: Mutex<bool>,
     notify_condvar: Condvar,
+}
+
+impl Default for SharedState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SharedState {

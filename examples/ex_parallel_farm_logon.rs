@@ -48,8 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         ("IB_USERNAME", "IB_PASSWORD")
     };
-    let username = env::var(user_var).map_err(|_| format!("{} not set", user_var))?;
-    let password = env::var(pass_var).map_err(|_| format!("{} not set", pass_var))?;
+    let username = env::var(user_var).map_err(|_| format!("{user_var} not set"))?;
+    let password = env::var(pass_var).map_err(|_| format!("{pass_var} not set"))?;
     let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
 
     let cfg = GatewayConfig {
@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let serial_total_ms = t_a.elapsed().as_millis();
     println!("   trading (usfarm): {} ms — {}", trading_a_ms, summarize(&trading_a));
     println!("   mktdata (ushmds): {} ms — {}", mktdata_a_ms, summarize(&mktdata_a));
-    println!("   serial total:     {} ms", serial_total_ms);
+    println!("   serial total:     {serial_total_ms} ms");
     let serial_ok = trading_a.is_ok() && mktdata_a.is_ok();
     drop(trading_a);
     drop(mktdata_a);
@@ -152,17 +152,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parallel_total_ms = t_b.elapsed().as_millis();
     println!("   trading (usfarm): {} ms — {}", trading_b_ms, summarize(&trading_b));
     println!("   mktdata (ushmds): {} ms — {}", mktdata_b_ms, summarize(&mktdata_b));
-    println!("   parallel total:   {} ms", parallel_total_ms);
+    println!("   parallel total:   {parallel_total_ms} ms");
     let parallel_ok = trading_b.is_ok() && mktdata_b.is_ok();
 
     // -------- Verdict --------
     println!("\n== Verdict");
-    println!("   serial   farms succeeded : {}", serial_ok);
-    println!("   parallel farms succeeded : {}", parallel_ok);
+    println!("   serial   farms succeeded : {serial_ok}");
+    println!("   parallel farms succeeded : {parallel_ok}");
     if parallel_ok {
         let saved = serial_total_ms.saturating_sub(parallel_total_ms);
-        println!("   parallel saved {} ms vs serial ({} → {})",
-            saved, serial_total_ms, parallel_total_ms);
+        println!("   parallel saved {saved} ms vs serial ({serial_total_ms} → {parallel_total_ms})");
         println!("\nPASS — server accepts parallel farm logon. Safe to parallelize gateway.rs:1485.");
     } else {
         println!("\nFAIL — at least one parallel farm logon failed. Keep serialization.");
@@ -173,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn summarize<T, E: std::fmt::Display>(r: &Result<T, E>) -> String {
     match r {
         Ok(_) => "OK".into(),
-        Err(e) => format!("ERR: {}", e),
+        Err(e) => format!("ERR: {e}"),
     }
 }
 

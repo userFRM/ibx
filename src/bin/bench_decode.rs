@@ -51,7 +51,7 @@ fn main() {
             (1, 2, 20055, false),
             (2, 2, 20052, false),
             (4, 2, 200, false),
-            (tick_decoder::O_VOLUME as u64, 4, 1_000_000, false),
+            (tick_decoder::O_VOLUME, 4, 1_000_000, false),
         ]),
     ]);
 
@@ -62,8 +62,8 @@ fn main() {
     println!("  Bench: Tick Decoder Hot Path");
     println!("========================================");
     println!();
-    println!("  Iterations:     {}", ITERATIONS);
-    println!("  Warmup:         {}", WARMUP);
+    println!("  Iterations:     {ITERATIONS}");
+    println!("  Warmup:         {WARMUP}");
     println!();
 
     // ── 1. Pure decode_ticks_35p ──
@@ -240,7 +240,7 @@ fn push_bits(bits: &mut Vec<u8>, val: u64, n: usize) {
 
 fn finalize_payload(bits: &[u8]) -> Vec<u8> {
     let bit_count = bits.len();
-    let byte_count = (bit_count + 7) / 8;
+    let byte_count = bit_count.div_ceil(8);
     let mut payload = vec![0u8; byte_count];
     for (i, &b) in bits.iter().enumerate() {
         if b == 1 {
@@ -256,10 +256,10 @@ fn finalize_payload(bits: &[u8]) -> Vec<u8> {
 
 fn build_fix_framed_35p(tick_payload: &[u8]) -> Vec<u8> {
     // Build: 8=O\x01 9=<len>\x01 35=P\x01 <tick_payload> \x01 8349=AABBCCDD\x01
-    let inner_body_str = format!("35=P\x01");
+    let inner_body_str = "35=P\x01".to_string();
     let inner_body = inner_body_str.as_bytes();
     let body_len = inner_body.len() + tick_payload.len() + 15; // +15 for 8349=AABBCCDD\x01
-    let header = format!("8=O\x019={}\x01", body_len);
+    let header = format!("8=O\x019={body_len}\x01");
     let mut msg = header.into_bytes();
     msg.extend_from_slice(inner_body);
     msg.extend_from_slice(tick_payload);

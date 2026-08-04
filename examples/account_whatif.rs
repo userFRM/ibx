@@ -80,14 +80,14 @@ fn pump_until<F: Fn(&State) -> bool>(
 fn connect() -> Result<EClient, Box<dyn std::error::Error>> {
     let host = env::var("IB_HOST").ok().filter(|h| !h.is_empty())
         .unwrap_or_else(|| "cdc1.ibllc.com".into());
-    Ok(EClient::connect(&EClientConfig {
+    EClient::connect(&EClientConfig {
         username: env::var("IB_USERNAME")?,
         password: env::var("IB_PASSWORD")?,
         host,
         paper: true,
         core_id: None,
         code_provider: None,
-    })?)
+    })
 }
 
 fn axti() -> Contract {

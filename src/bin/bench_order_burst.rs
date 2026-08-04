@@ -28,8 +28,8 @@ fn main() {
 
     print_header("Bench: Order Burst Throughput");
     println!("  Contract:       {} (con_id={})", config.symbol, config.con_id);
-    println!("  Burst size:     {} orders", burst_size);
-    println!("  Warmup:         {} ticks", warmup_ticks);
+    println!("  Burst size:     {burst_size} orders");
+    println!("  Warmup:         {warmup_ticks} ticks");
     println!();
 
     // Connect
@@ -148,7 +148,7 @@ fn main() {
         format_ns(submit_dur.as_nanos() as u64),
     );
     let submit_rate = burst_size as f64 / submit_dur.as_secs_f64();
-    println!("  Submit rate:    {:.0} orders/sec", submit_rate);
+    println!("  Submit rate:    {submit_rate:.0} orders/sec");
     println!();
 
     ack_stats.report("ACK LATENCY (submit → ack, per order)");
@@ -160,8 +160,8 @@ fn main() {
         format_ns(all_acked_dur.as_nanos() as u64),
     );
     let ack_rate = acked as f64 / all_acked_dur.as_secs_f64();
-    println!("  Ack throughput: {:.1} orders/sec", ack_rate);
-    println!("  Cancelled:      {}/{}", cancelled, acked);
+    println!("  Ack throughput: {ack_rate:.1} orders/sec");
+    println!("  Cancelled:      {cancelled}/{acked}");
 
     session.shutdown();
 }

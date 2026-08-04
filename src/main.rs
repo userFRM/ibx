@@ -54,7 +54,7 @@ fn main() {
         core_id: None,
         code_provider: None,
     }).unwrap_or_else(|e| {
-        eprintln!("Connection failed: {}", e);
+        eprintln!("Connection failed: {e}");
         std::process::exit(1);
     });
 

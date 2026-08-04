@@ -30,11 +30,11 @@ impl Wrapper for ProbeWrapper {
         avg_fill: f64, _perm_id: i64, _parent_id: i64, _last_fill: f64,
         _client_id: i64, _why_held: &str, _mkt_cap_price: f64,
     ) {
-        println!("[order_status] id={} status={} filled={} avgFill={:.2}", order_id, status, filled, avg_fill);
+        println!("[order_status] id={order_id} status={status} filled={filled} avgFill={avg_fill:.2}");
         self.state.lock().unwrap().statuses.push((order_id, status.into(), filled));
     }
     fn error(&mut self, req_id: i64, code: i64, msg: &str, _adv: &str) {
-        eprintln!("[error] req_id={} code={} msg={}", req_id, code, msg);
+        eprintln!("[error] req_id={req_id} code={code} msg={msg}");
         self.state.lock().unwrap().errors.push((req_id, code, msg.into()));
     }
 }
@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let password = env::var("IB_PASSWORD")?;
     let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
 
-    println!("== Connecting to paper ({})...", host);
+    println!("== Connecting to paper ({host})...");
     let client = EClient::connect(&EClientConfig {
         username, password, host, paper: true, core_id: None, code_provider: None,
     })?;
@@ -78,9 +78,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let order_id = std::process::id() as i64;
-    println!("== Placing BUY 1 SPY @ LMT 760 GTC outsideRTH (order_id={})", order_id);
+    println!("== Placing BUY 1 SPY @ LMT 760 GTC outsideRTH (order_id={order_id})");
     client.place_order(order_id, &spy, &order)
-        .map_err(|e| format!("place_order failed: {}", e))?;
+        .map_err(|e| format!("place_order failed: {e}"))?;
 
     let deadline = Instant::now() + Duration::from_secs(180);
     let mut filled = false;

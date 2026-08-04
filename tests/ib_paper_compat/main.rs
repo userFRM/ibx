@@ -39,7 +39,7 @@ fn compat_suite() {
     // US stocks have ticks during regular hours AND extended hours (pre-market + after-hours)
     let needs_ticks = matches!(session, MarketSession::Regular | MarketSession::PreMarket | MarketSession::AfterHours);
     let needs_moc = needs_ticks && et_min < 945;
-    println!("=== Compatibility Suite (session={:?}) ===\n", session);
+    println!("=== Compatibility Suite (session={session:?}) ===\n");
     let suite_start = Instant::now();
 
     let start = Instant::now();
@@ -106,17 +106,17 @@ fn compat_suite() {
                             let inner = fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default();
                             for m in &inner {
                                 let preview = String::from_utf8_lossy(&m[..std::cmp::min(150, m.len())]);
-                                println!("  {} inner (valid={}): {}", label, valid, preview);
+                                println!("  {label} inner (valid={valid}): {preview}");
                             }
                         } else {
                             let preview = String::from_utf8_lossy(&unsigned[..std::cmp::min(150, unsigned.len())]);
-                            println!("  {} (valid={}): {}", label, valid, preview);
+                            println!("  {label} (valid={valid}): {preview}");
                         }
                         got_data = true;
                     }
                 }
                 Err(e) => {
-                    println!("  recv error: {}", e);
+                    println!("  recv error: {e}");
                     break;
                 }
             }
@@ -136,7 +136,7 @@ fn compat_suite() {
         18,
         ) {
             Ok(c) => { conns.farm = c; println!("  farm reconnected"); }
-            Err(e) => { println!("  farm reconnect failed (may already be fresh): {}", e); }
+            Err(e) => { println!("  farm reconnect failed (may already be fresh): {e}"); }
         }
         match ibx::gateway::connect_farm(
             &config.host, "ushmds", &config.username, &config.password, config.paper,
@@ -144,11 +144,11 @@ fn compat_suite() {
         17,
         ) {
             Ok(c) => { conns.hmds = Some(c); println!("  hmds reconnected"); }
-            Err(e) => { println!("  hmds reconnect failed (may already be fresh): {}", e); }
+            Err(e) => { println!("  hmds reconnect failed (may already be fresh): {e}"); }
         }
         println!();
     } else {
-        println!("--- RAW SUBSCRIBE TEST ---\n  SKIP: {:?} — no ticks expected\n", session);
+        println!("--- RAW SUBSCRIBE TEST ---\n  SKIP: {session:?} — no ticks expected\n");
     }
 
     conns = account::phase_account_pnl(conns);
@@ -161,7 +161,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = account::phase_enriched_exec_details(conns);
     } else {
-        println!("--- Phase 133: Enriched exec_details ---\n  SKIP: {:?} — needs fills\n", session);
+        println!("--- Phase 133: Enriched exec_details ---\n  SKIP: {session:?} — needs fills\n");
     }
     conns = account::phase_pnl_subscription(conns);
     conns = account::phase_pnl_subscribe_command(conns);
@@ -186,9 +186,9 @@ fn compat_suite() {
         conns = market_data::phase_multi_instrument(conns);
         conns = account::phase_account_data(conns);
     } else {
-        println!("--- Phase 2: Market Data Ticks (AAPL) ---\n  SKIP: {:?} — no ticks expected\n", session);
-        println!("--- Phase 3: Multi-Instrument Subscription (AAPL+MSFT+SPY) ---\n  SKIP: {:?} — no ticks expected\n", session);
-        println!("--- Phase 4: Account Data Reception ---\n  SKIP: {:?} — needs ticks to trigger\n", session);
+        println!("--- Phase 2: Market Data Ticks (AAPL) ---\n  SKIP: {session:?} — no ticks expected\n");
+        println!("--- Phase 3: Multi-Instrument Subscription (AAPL+MSFT+SPY) ---\n  SKIP: {session:?} — no ticks expected\n");
+        println!("--- Phase 4: Account Data Reception ---\n  SKIP: {session:?} — needs ticks to trigger\n");
     }
 
     conns = orders::phase_outside_rth(conns);
@@ -257,8 +257,8 @@ fn compat_suite() {
         conns = orders::phase_moc_order(conns);
         conns = orders::phase_loc_order(conns);
     } else {
-        println!("--- Phase 27: MOC Order (SPY) ---\n  SKIP: {:?} et_min={} — only before 3:45 PM ET\n", session, et_min);
-        println!("--- Phase 28: LOC Order (SPY) ---\n  SKIP: {:?} et_min={} — only before 3:45 PM ET\n", session, et_min);
+        println!("--- Phase 27: MOC Order (SPY) ---\n  SKIP: {session:?} et_min={et_min} — only before 3:45 PM ET\n");
+        println!("--- Phase 28: LOC Order (SPY) ---\n  SKIP: {session:?} et_min={et_min} — only before 3:45 PM ET\n");
     }
 
     conns = market_data::phase_subscribe_unsubscribe(conns);
@@ -273,10 +273,10 @@ fn compat_suite() {
         conns = orders::phase_bracket_fill_cascade(conns);
         conns = orders::phase_pnl_after_round_trip(conns);
     } else {
-        println!("--- Phase 6: Market Order Round-Trip (SPY) ---\n  SKIP: {:?} — needs ticks+fills\n", session);
-        println!("--- Phase 17: Commission Tracking (GTC+OutsideRTH fill) ---\n  SKIP: {:?} — needs fills\n", session);
-        println!("--- Phase 51: Bracket Fill Cascade (SPY) ---\n  SKIP: {:?} — needs fills\n", session);
-        println!("--- Phase 52: PnL After Round Trip (SPY) ---\n  SKIP: {:?} — needs fills\n", session);
+        println!("--- Phase 6: Market Order Round-Trip (SPY) ---\n  SKIP: {session:?} — needs ticks+fills\n");
+        println!("--- Phase 17: Commission Tracking (GTC+OutsideRTH fill) ---\n  SKIP: {session:?} — needs fills\n");
+        println!("--- Phase 51: Bracket Fill Cascade (SPY) ---\n  SKIP: {session:?} — needs fills\n");
+        println!("--- Phase 52: PnL After Round Trip (SPY) ---\n  SKIP: {session:?} — needs fills\n");
     }
 
     // CCP may have died during the long-running fill phases. Reconnect the full
@@ -296,7 +296,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = account::phase_position_tracking(conns);
     } else {
-        println!("--- Phase 97: Position Tracking (SPY) ---\n  SKIP: {:?} — needs fills\n", session);
+        println!("--- Phase 97: Position Tracking (SPY) ---\n  SKIP: {session:?} — needs fills\n");
     }
     conns = connection::phase_connection_recovery(conns, &gw, &config);
     conns = ensure_ccp_alive(conns, &mut gw, &config);
@@ -309,14 +309,14 @@ fn compat_suite() {
     if needs_ticks {
         conns = market_data::phase_streaming_validation(conns);
     } else {
-        println!("--- Phase 102: Streaming Data Validation (SPY) ---\n  SKIP: {:?} — needs ticks\n", session);
+        println!("--- Phase 102: Streaming Data Validation (SPY) ---\n  SKIP: {session:?} — needs ticks\n");
     }
     conns = historical::phase_historical_ohlc_validation(conns, &gw, &config);
     conns = error_handling::phase_ib_error_handling(conns);
     if needs_ticks {
         conns = connection::phase_reconnection_state_recovery(conns, &gw, &config);
     } else {
-        println!("--- Phase 105: Reconnection State Recovery ---\n  SKIP: {:?} — needs ticks\n", session);
+        println!("--- Phase 105: Reconnection State Recovery ---\n  SKIP: {session:?} — needs ticks\n");
     }
     conns = account::phase_account_summary(conns);
 
@@ -324,7 +324,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = market_data::phase_tick_stress_test(conns);
     } else {
-        println!("--- Phase 110: Tick Stress Test (SPY+AAPL+MSFT) ---\n  SKIP: {:?} — needs ticks\n", session);
+        println!("--- Phase 110: Tick Stress Test (SPY+AAPL+MSFT) ---\n  SKIP: {session:?} — needs ticks\n");
     }
     conns = historical::phase_large_historical_dataset(conns, &gw, &config);
     conns = historical::phase_dst_boundary_historical(conns, &gw, &config);
@@ -346,7 +346,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = orders::phase_cancel_filled_order(conns);
     } else {
-        println!("--- Phase 124: Cancel Filled Order ---\n  SKIP: {:?} — needs fills\n", session);
+        println!("--- Phase 124: Cancel Filled Order ---\n  SKIP: {session:?} — needs fills\n");
     }
 
     // ── P1: Matching symbols via ControlCommand channel ──
@@ -373,7 +373,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = market_data::phase_concurrent_subscribe_stress(conns);
     } else {
-        println!("--- Phase 129: Concurrent Subscribe Stress ---\n  SKIP: {:?} — needs ticks\n", session);
+        println!("--- Phase 129: Concurrent Subscribe Stress ---\n  SKIP: {session:?} — needs ticks\n");
     }
 
     // ── P2: Historical data + live orders coexistence ──
@@ -466,7 +466,7 @@ fn cross_session_recovery_phase_live() {
     drop(gw_a); // gateway state not needed after sockets are out
 
     let order_id = common::next_order_id();
-    println!("  orderId = {}", order_id);
+    println!("  orderId = {order_id}");
 
     let session_a_acked = {
         let shared = std::sync::Arc::new(SharedState::new());
@@ -502,22 +502,22 @@ fn cross_session_recovery_phase_live() {
         let _ = join.join();
 
         if rejected {
-            panic!("Session A: order rejected — cleanup not possible automatically (check TWS for orderId={})", order_id);
+            panic!("Session A: order rejected — cleanup not possible automatically (check TWS for orderId={order_id})");
         }
         acked
     };
     // Conns A dropped → TCP sockets close → CCP session ends.
     assert!(session_a_acked, "Session A: LMT order never acked within 30s");
-    println!("  Session A: orderId={} acked + sockets closed", order_id);
+    println!("  Session A: orderId={order_id} acked + sockets closed");
 
     // IB throttles back-to-back Gateway::connect calls ("Never received data
     // start after auth" if too soon). Wait ~90s before attempting Session B.
     let wait_secs = 90u64;
-    println!("  Waiting {}s before Session B to clear IB auth throttle...\n", wait_secs);
+    println!("  Waiting {wait_secs}s before Session B to clear IB auth throttle...\n");
     std::thread::sleep(Duration::from_secs(wait_secs));
 
     // ─── Session B: fresh connect → expect 35=8 recovery push → cancel orderId ───
-    println!("Session B: fresh Gateway::connect → expect recovery push for orderId={}", order_id);
+    println!("Session B: fresh Gateway::connect → expect recovery push for orderId={order_id}");
     let (gw_b, farm_b, ccp_b, hmds_b) = Gateway::connect(&config)
         .expect("Session B: Gateway::connect failed");
     assert_eq!(account_id, gw_b.account_id, "Account ID changed between sessions");
@@ -538,7 +538,7 @@ fn cross_session_recovery_phase_live() {
     // Sleep a few seconds so handle_exec_report has time to populate last_clord.
     std::thread::sleep(Duration::from_secs(3));
 
-    println!("  Session B: sending Cancel(orderId={})", order_id);
+    println!("  Session B: sending Cancel(orderId={order_id})");
     let cancel_sent = Instant::now();
     control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
         .expect("Session B: send cancel failed");
@@ -561,13 +561,12 @@ fn cross_session_recovery_phase_live() {
     let _ = join.join();
 
     if cancel_rejected {
-        panic!("Session B: cancel rejected — recovery push did not populate last_clord for orderId={}", order_id);
+        panic!("Session B: cancel rejected — recovery push did not populate last_clord for orderId={order_id}");
     }
     assert!(cancelled,
-        "Session B: cancel not confirmed within 30s — recovery push likely not parsed correctly. Cleanup orderId={} via GUI.",
-        order_id);
+        "Session B: cancel not confirmed within 30s — recovery push likely not parsed correctly. Cleanup orderId={order_id} via GUI.");
 
-    println!("  Session B: cancel confirmed in {}ms", cancel_ms);
+    println!("  Session B: cancel confirmed in {cancel_ms}ms");
     println!("\n  PASS — cross-session cancel works (ibx#191 PR A validated)\n");
 }
 
@@ -592,7 +591,7 @@ fn cancel_by_perm_id_phase_live() {
     drop(gw);
 
     let order_id = common::next_order_id();
-    println!("  orderId = {}", order_id);
+    println!("  orderId = {order_id}");
 
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, event_rx) = crossbeam_channel::unbounded();
@@ -631,12 +630,11 @@ fn cancel_by_perm_id_phase_live() {
     if rejected {
         let _ = control_tx.send(ControlCommand::Shutdown);
         let _ = join.join();
-        panic!("order rejected — cleanup orderId={} via GUI", order_id);
+        panic!("order rejected — cleanup orderId={order_id} via GUI");
     }
     assert!(perm_id != 0,
-        "permId never surfaced via OrderUpdate within 30s — cleanup orderId={} via GUI",
-        order_id);
-    println!("  Captured permId={} for orderId={}", perm_id, order_id);
+        "permId never surfaced via OrderUpdate within 30s — cleanup orderId={order_id} via GUI");
+    println!("  Captured permId={perm_id} for orderId={order_id}");
 
     // Look up the local orderId by permId (mirrors EClient::cancel_order_by_perm_id).
     // collect_open_orders merges shared.orders.order_cache (populated by 35=8 ack)
@@ -650,15 +648,14 @@ fn cancel_by_perm_id_phase_live() {
         None => {
             let _ = control_tx.send(ControlCommand::Shutdown);
             let _ = join.join();
-            panic!("permId {} not found in open orders cache — cleanup orderId={} via GUI",
-                perm_id, order_id);
+            panic!("permId {perm_id} not found in open orders cache — cleanup orderId={order_id} via GUI");
         }
     };
     assert_eq!(resolved_order_id, order_id,
-        "permId→orderId lookup resolved to {} but expected {}", resolved_order_id, order_id);
-    println!("  Resolved permId={} → orderId={}", perm_id, resolved_order_id);
+        "permId→orderId lookup resolved to {resolved_order_id} but expected {order_id}");
+    println!("  Resolved permId={perm_id} → orderId={resolved_order_id}");
 
-    println!("  Sending Cancel(orderId={}) via permId-resolved path", resolved_order_id);
+    println!("  Sending Cancel(orderId={resolved_order_id}) via permId-resolved path");
     let cancel_sent = Instant::now();
     control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: resolved_order_id }))
         .expect("send cancel failed");
@@ -681,13 +678,12 @@ fn cancel_by_perm_id_phase_live() {
     let _ = join.join();
 
     if cancel_rejected {
-        panic!("cancel rejected — cleanup orderId={} via GUI", order_id);
+        panic!("cancel rejected — cleanup orderId={order_id} via GUI");
     }
     assert!(cancelled,
-        "cancel not confirmed within 30s — cleanup orderId={} via GUI",
-        order_id);
+        "cancel not confirmed within 30s — cleanup orderId={order_id} via GUI");
 
-    println!("  Cancel confirmed in {}ms", cancel_ms);
+    println!("  Cancel confirmed in {cancel_ms}ms");
     println!("\n  PASS — cancel_order_by_perm_id works (ibx#191 PR B validated)\n");
 }
 
@@ -720,7 +716,7 @@ fn submit_ex_bracket_child_phase_live() {
     let parent_id = common::next_order_id();
     let child_id = common::next_order_id();
     assert_ne!(parent_id, child_id, "order id collision — parent/child tracking would be meaningless");
-    println!("  parent orderId = {}, child orderId = {}", parent_id, child_id);
+    println!("  parent orderId = {parent_id}, child orderId = {child_id}");
 
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, event_rx) = crossbeam_channel::unbounded();
@@ -779,10 +775,10 @@ fn submit_ex_bracket_child_phase_live() {
         std::thread::sleep(Duration::from_secs(3));
         let _ = control_tx.send(ControlCommand::Shutdown);
         let _ = join.join();
-        panic!("order {} rejected — SubmitEx encoding not accepted; check GUI for leftovers", oid);
+        panic!("order {oid} rejected — SubmitEx encoding not accepted; check GUI for leftovers");
     }
-    assert!(parent_acked, "parent never acked within 30s — cleanup {}/{} via GUI", parent_id, child_id);
-    assert!(child_acked, "child never acked within 30s — the SubmitEx child likely vanished; cleanup {} via GUI", parent_id);
+    assert!(parent_acked, "parent never acked within 30s — cleanup {parent_id}/{child_id} via GUI");
+    assert!(child_acked, "child never acked within 30s — the SubmitEx child likely vanished; cleanup {parent_id} via GUI");
     println!("  Both acked. Cancelling parent, expecting child to cascade...");
 
     // Cancel the parent only. A linked child must cascade to Cancelled.
@@ -838,7 +834,7 @@ fn snap_to_tick_phase_live() {
     drop(gw);
 
     let order_id = common::next_order_id();
-    println!("  orderId = {}", order_id);
+    println!("  orderId = {order_id}");
 
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, event_rx) = crossbeam_channel::unbounded();
@@ -881,7 +877,7 @@ fn snap_to_tick_phase_live() {
         }
     }
     assert!(!rejected, "off-grid price was rejected — snap-to-tick did not apply (ibx#216)");
-    assert!(acked, "order never acked within 30s — cleanup orderId={} via GUI", order_id);
+    assert!(acked, "order never acked within 30s — cleanup orderId={order_id} via GUI");
 
     // Read the price back from the server-echoed open-order cache.
     std::thread::sleep(Duration::from_secs(2));
@@ -890,7 +886,7 @@ fn snap_to_tick_phase_live() {
         .into_iter()
         .find(|(oid, _)| *oid == order_id)
         .map(|(_, t)| t.order.lmt_price);
-    println!("  server-echoed lmt_price: {:?}", echoed);
+    println!("  server-echoed lmt_price: {echoed:?}");
 
     // Cleanup before asserting on the echo.
     control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
@@ -904,11 +900,11 @@ fn snap_to_tick_phase_live() {
     }
     let _ = control_tx.send(ControlCommand::Shutdown);
     let _ = join.join();
-    assert!(cancelled, "cancel not confirmed within 30s — cleanup orderId={} via GUI", order_id);
+    assert!(cancelled, "cancel not confirmed within 30s — cleanup orderId={order_id} via GUI");
 
     let echoed = echoed.expect("order missing from the open-order cache after ack");
     assert!((echoed - 1.00).abs() < 1e-9,
-        "server echoed lmt_price {} — expected the snapped 1.00 (ibx#216)", echoed);
+        "server echoed lmt_price {echoed} — expected the snapped 1.00 (ibx#216)");
 
     println!("\n  PASS — off-grid price snapped to the tick grid and accepted (ibx#216 validated)\n");
 }
@@ -960,7 +956,7 @@ fn timeout_sweeps_phase_live() {
                 _ => {}
             }
         }
-        println!("  {}: rows={} end={} row_after_end={}", label, rows, end, row_after_end);
+        println!("  {label}: rows={rows} end={end} row_after_end={row_after_end}");
         (rows, end, row_after_end)
     };
 
@@ -1001,12 +997,12 @@ fn timeout_sweeps_phase_live() {
             complete = data.is_complete;
         }
         for (rid, code, msg) in shared.reference.drain_historical_errors() {
-            if rid == 6003 { hist_err = Some(format!("error {}: {}", code, msg)); }
+            if rid == 6003 { hist_err = Some(format!("error {code}: {msg}")); }
         }
     }
-    println!("  historical SPY 5D/1day: bars={} complete={} err={:?}", bars, complete, hist_err);
-    assert!(hist_err.is_none(), "healthy historical request errored: {:?} (ibx#231 sweep too eager?)", hist_err);
-    assert!(complete && bars >= 3, "historical did not complete (bars={})", bars);
+    println!("  historical SPY 5D/1day: bars={bars} complete={complete} err={hist_err:?}");
+    assert!(hist_err.is_none(), "healthy historical request errored: {hist_err:?} (ibx#231 sweep too eager?)");
+    assert!(complete && bars >= 3, "historical did not complete (bars={bars})");
 
     let _ = control_tx.send(ControlCommand::Shutdown);
     let _ = join.join();
@@ -1055,18 +1051,18 @@ fn reclaim_and_symbol_search_phase_live() {
             reply_tx: Some(tx),
         }).expect("send subscribe failed");
         rx.recv_timeout(Duration::from_secs(10))
-            .unwrap_or_else(|_| panic!("{}: no registration reply", req))
-            .unwrap_or_else(|e| panic!("{}: registration rejected: {}", req, e))
+            .unwrap_or_else(|_| panic!("{req}: no registration reply"))
+            .unwrap_or_else(|e| panic!("{req}: registration rejected: {e}"))
     };
 
     // ── Part 1: reclaim + reuse ──
     let id1 = subscribe("first subscribe");
-    println!("  first subscribe: instrument id {}", id1);
+    println!("  first subscribe: instrument id {id1}");
     std::thread::sleep(Duration::from_secs(2));
     control_tx.send(ControlCommand::Unsubscribe { instrument: id1 }).expect("send unsubscribe failed");
     std::thread::sleep(Duration::from_secs(2));
     let id2 = subscribe("re-subscribe");
-    println!("  re-subscribe: instrument id {}", id2);
+    println!("  re-subscribe: instrument id {id2}");
     assert_eq!(id2, id1,
         "reclaimed slot must be reused — the cap would stay cumulative (ibx#233)");
 
@@ -1150,7 +1146,7 @@ fn rtt_ping_phase_live() {
 
     let rtt = rtt.expect("RTT sample never arrived within 15s (ibx#158)");
     println!("  measured RTT: {:.2} ms", rtt.as_secs_f64() * 1_000.0);
-    assert!(rtt.as_millis() < 10_000, "implausible RTT: {:?}", rtt);
+    assert!(rtt.as_millis() < 10_000, "implausible RTT: {rtt:?}");
 
     println!("
   PASS — on-demand RTT sample delivered (ibx#158 validated)

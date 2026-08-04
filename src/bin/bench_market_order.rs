@@ -27,8 +27,8 @@ fn main() {
 
     print_header("Bench: Market Order Round-Trip");
     println!("  Contract:       {} (con_id={})", config.symbol, config.con_id);
-    println!("  Iterations:     {} buy/sell pairs", iterations);
-    println!("  Warmup:         {} ticks", warmup_ticks);
+    println!("  Iterations:     {iterations} buy/sell pairs");
+    println!("  Warmup:         {warmup_ticks} ticks");
     println!("  WARNING:        Places REAL paper orders!");
     println!();
 

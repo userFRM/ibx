@@ -27,8 +27,8 @@ fn main() {
 
     print_header("Bench: Tick-by-Tick (35=E) Latency");
     println!("  Contract:       {} (con_id={})", config.symbol, config.con_id);
-    println!("  Collect:        {} events per stream", collect_ticks);
-    println!("  Warmup:         {} events", warmup_count);
+    println!("  Collect:        {collect_ticks} events per stream");
+    println!("  Warmup:         {warmup_count} events");
     println!();
 
     // Connect

@@ -35,7 +35,7 @@ impl Wrapper for PrintWrapper {
             3 => { c.delayed_frozen_ticks += 1; "delayed_frozen" }
             _ => "?",
         };
-        println!("[{:>14}] req_id={} price={:.4}", label, req_id, price);
+        println!("[{label:>14}] req_id={req_id} price={price:.4}");
     }
 
     fn tick_size(&mut self, req_id: i64, _tick_type: i32, size: f64) {
@@ -46,15 +46,15 @@ impl Wrapper for PrintWrapper {
             3 => { c.delayed_frozen_ticks += 1; "delayed_frozen" }
             _ => "?",
         };
-        println!("[{:>14}] req_id={} size={:.0}", label, req_id, size);
+        println!("[{label:>14}] req_id={req_id} size={size:.0}");
     }
 
     fn market_data_type(&mut self, req_id: i64, mdt: i32) {
-        println!("[market_data_type] req_id={} mdt={}", req_id, mdt);
+        println!("[market_data_type] req_id={req_id} mdt={mdt}");
     }
 
     fn error(&mut self, req_id: i64, code: i64, msg: &str, _adv: &str) {
-        eprintln!("[error] req_id={} code={} msg={}", req_id, code, msg);
+        eprintln!("[error] req_id={req_id} code={code} msg={msg}");
     }
 }
 
@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let contract = Contract { con_id, symbol: symbol.clone(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(), ..Default::default() };
 
-    println!("Subscribing to {} (con_id={}) on 3 parallel feeds...", symbol, con_id);
+    println!("Subscribing to {symbol} (con_id={con_id}) on 3 parallel feeds...");
     client.req_mkt_data_ex(1, &contract, "", false, false, 0)?;  // realtime
     client.req_mkt_data_ex(2, &contract, "", false, false, 2)?;  // frozen
     client.req_mkt_data_ex(3, &contract, "", false, false, 3)?;  // delayed_frozen
@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.disconnect();
 
     let c = counts.lock().unwrap();
-    println!("\n── Tick counts after {}s ──", duration);
+    println!("\n── Tick counts after {duration}s ──");
     println!("  realtime       : {}", c.realtime_ticks);
     println!("  frozen         : {}", c.frozen_ticks);
     println!("  delayed_frozen : {}", c.delayed_frozen_ticks);

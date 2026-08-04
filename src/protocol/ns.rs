@@ -37,7 +37,7 @@ pub const NS_HEART_BEAT: u32 = 531;
 pub fn ns_build(version: u32, msg_type: u32, fields: &[&str], prefix: &str) -> Vec<u8> {
     let mut payload = String::new();
     payload.push_str(prefix);
-    payload.push_str(&format!("{};{};", version, msg_type));
+    payload.push_str(&format!("{version};{msg_type};"));
     for f in fields {
         payload.push_str(f);
         payload.push(';');

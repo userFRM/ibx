@@ -81,8 +81,8 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
         // whether the slicing is off, the deflate stream is mid-message,
         // or the gateway sent genuinely corrupt bytes. Remove once the
         // upstream cause is identified.
-        let raw_hex: String = raw.iter().map(|b| format!("{:02x}", b)).collect();
-        let unsigned_hex: String = data.iter().map(|b| format!("{:02x}", b)).collect();
+        let raw_hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let unsigned_hex: String = data.iter().map(|b| format!("{b:02x}")).collect();
         log::warn!(
             "fixcomp tee: inflate failed ({}); unsigned_len={} raw_payload_len={} raw_hex={} unsigned_hex={}",
             e, data.len(), raw.len(), raw_hex, unsigned_hex,

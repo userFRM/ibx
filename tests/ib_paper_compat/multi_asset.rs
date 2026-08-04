@@ -30,7 +30,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     while Instant::now() < deadline && forex_con_id.is_none() {
         match ccp.try_recv() {
             Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
-            Err(e) => { println!("  CCP recv error: {}", e); break; }
+            Err(e) => { println!("  CCP recv error: {e}"); break; }
             Ok(_) => {}
         }
         for frame in ccp.extract_frames() {
@@ -88,24 +88,21 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                if update.order_id == oid {
-                    match update.status {
-                        OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                            order_acked = true;
-                            if !cancel_sent {
-                                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
-                                cancel_sent = true;
-                            }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if update.order_id == oid {
+                match update.status {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                        order_acked = true;
+                        if !cancel_sent {
+                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
+                            cancel_sent = true;
                         }
-                        OrderStatus::Cancelled => { order_cancelled = true; break; }
-                        OrderStatus::Rejected => { order_rejected = true; break; }
-                        _ => {}
                     }
+                    OrderStatus::Cancelled => { order_cancelled = true; break; }
+                    OrderStatus::Rejected => { order_rejected = true; break; }
+                    _ => {}
                 }
             }
-            _ => {}
         }
     }
 
@@ -146,7 +143,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     while Instant::now() < deadline && fut_contract.is_none() {
         match ccp.try_recv() {
             Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
-            Err(e) => { println!("  CCP recv error: {}", e); break; }
+            Err(e) => { println!("  CCP recv error: {e}"); break; }
             Ok(_) => {}
         }
         for frame in ccp.extract_frames() {
@@ -210,24 +207,21 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                if update.order_id == oid {
-                    match update.status {
-                        OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                            order_acked = true;
-                            if !cancel_sent {
-                                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
-                                cancel_sent = true;
-                            }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if update.order_id == oid {
+                match update.status {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                        order_acked = true;
+                        if !cancel_sent {
+                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
+                            cancel_sent = true;
                         }
-                        OrderStatus::Cancelled => { order_cancelled = true; break; }
-                        OrderStatus::Rejected => { order_rejected = true; break; }
-                        _ => {}
                     }
+                    OrderStatus::Cancelled => { order_cancelled = true; break; }
+                    OrderStatus::Rejected => { order_rejected = true; break; }
+                    _ => {}
                 }
             }
-            _ => {}
         }
     }
 
@@ -268,7 +262,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     while Instant::now() < deadline {
         match ccp.try_recv() {
             Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
-            Err(e) => { println!("  CCP recv error: {}", e); break; }
+            Err(e) => { println!("  CCP recv error: {e}"); break; }
             Ok(_) => {}
         }
         let mut got_end = false;
@@ -341,24 +335,21 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     let mut order_rejected = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                if update.order_id == oid {
-                    match update.status {
-                        OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                            order_acked = true;
-                            if !cancel_sent {
-                                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
-                                cancel_sent = true;
-                            }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if update.order_id == oid {
+                match update.status {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                        order_acked = true;
+                        if !cancel_sent {
+                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
+                            cancel_sent = true;
                         }
-                        OrderStatus::Cancelled => { order_cancelled = true; break; }
-                        OrderStatus::Rejected => { order_rejected = true; break; }
-                        _ => {}
                     }
+                    OrderStatus::Cancelled => { order_cancelled = true; break; }
+                    OrderStatus::Rejected => { order_rejected = true; break; }
+                    _ => {}
                 }
             }
-            _ => {}
         }
     }
 
@@ -415,28 +406,25 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     let oids = [oid1, oid2, oid3];
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                let idx = oids.iter().position(|&id| id == update.order_id);
-                if let Some(i) = idx {
-                    match update.status {
-                        OrderStatus::Submitted => {
-                            acked[i] = true;
-                            // Once all 3 are acked, cancel them all
-                            if acked.iter().all(|&a| a) && !cancel_sent {
-                                for &oid in &oids {
-                                    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
-                                }
-                                cancel_sent = true;
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            let idx = oids.iter().position(|&id| id == update.order_id);
+            if let Some(i) = idx {
+                match update.status {
+                    OrderStatus::Submitted => {
+                        acked[i] = true;
+                        // Once all 3 are acked, cancel them all
+                        if acked.iter().all(|&a| a) && !cancel_sent {
+                            for &oid in &oids {
+                                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
                             }
+                            cancel_sent = true;
                         }
-                        OrderStatus::Cancelled => { cancelled[i] = true; }
-                        OrderStatus::Rejected => { rejected = true; break; }
-                        _ => {}
                     }
+                    OrderStatus::Cancelled => { cancelled[i] = true; }
+                    OrderStatus::Rejected => { rejected = true; break; }
+                    _ => {}
                 }
             }
-            _ => {}
         }
         if cancelled.iter().all(|&c| c) { break; }
     }
@@ -450,7 +438,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
 
     let acked_count = acked.iter().filter(|&&a| a).count();
     let cancelled_count = cancelled.iter().filter(|&&c| c).count();
-    println!("  Acked: {}/3  Cancelled: {}/3", acked_count, cancelled_count);
+    println!("  Acked: {acked_count}/3  Cancelled: {cancelled_count}/3");
 
     assert_eq!(acked_count, 3, "All 3 orders should be acknowledged");
     assert_eq!(cancelled_count, 3, "All 3 orders should be cancelled");

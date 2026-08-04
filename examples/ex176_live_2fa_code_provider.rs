@@ -58,14 +58,14 @@ fn read_code_from_stdin(challenge: IbKeyChallenge) -> io::Result<String> {
             None,
         ),
     };
-    println!("{}", banner);
+    println!("{banner}");
     if !challenge.display_id.is_empty() {
         println!("   display_id : {}", challenge.display_id);
     }
     if !challenge.avth_url.is_empty() {
         println!("   avth_url   : {}", challenge.avth_url);
     }
-    print!("{}", prompt);
+    print!("{prompt}");
     io::stdout().flush()?;
 
     let mut line = String::new();
@@ -108,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         code_provider: Some(provider),
     };
 
-    println!("== Connecting LIVE ({}). Waiting for the second-factor challenge...", host);
+    println!("== Connecting LIVE ({host}). Waiting for the second-factor challenge...");
     let t0 = Instant::now();
     let (gw, _farm, _ccp, _hmds) = Gateway::connect(&config)?;
     let elapsed = t0.elapsed().as_secs_f64();

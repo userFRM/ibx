@@ -36,7 +36,7 @@ fn percentile(sorted: &[u64], p: f64) -> u64 {
 
 fn format_ns(ns: u64) -> String {
     if ns < 1_000 {
-        format!("{}ns", ns)
+        format!("{ns}ns")
     } else if ns < 1_000_000 {
         format!("{:.1}us", ns as f64 / 1_000.0)
     } else if ns < 1_000_000_000 {
@@ -73,7 +73,7 @@ fn print_report(
         let mean = samples.iter().sum::<u64>() / n as u64;
         let throughput = 1_000_000_000.0 / mean as f64;
 
-        println!("INTER-TICK TIME ({} samples, {:.1}s collection)", n, collect_dur_secs);
+        println!("INTER-TICK TIME ({n} samples, {collect_dur_secs:.1}s collection)");
         println!("  Min:            {}", format_ns(samples[0]));
         println!("  P50:            {}", format_ns(percentile(&samples, 0.50)));
         println!("  P95:            {}", format_ns(percentile(&samples, 0.95)));
@@ -81,7 +81,7 @@ fn print_report(
         println!("  P99.9:          {}", format_ns(percentile(&samples, 0.999)));
         println!("  Max:            {}", format_ns(samples[n - 1]));
         println!("  Mean:           {}", format_ns(mean));
-        println!("  Throughput:     ~{:.0} ticks/sec", throughput);
+        println!("  Throughput:     ~{throughput:.0} ticks/sec");
         println!();
     }
 
@@ -165,9 +165,9 @@ fn main() {
     println!("  IB Gateway Benchmark");
     println!("========================================");
     let symbol = match con_id { 756733 => "SPY", 265598 => "AAPL", 272093 => "MSFT", _ => "?" };
-    println!("  Contract:       {} (con_id={})", symbol, con_id);
-    println!("  Warmup ticks:   {}", warmup_ticks);
-    println!("  Collect ticks:  {}", collect_ticks);
+    println!("  Contract:       {symbol} (con_id={con_id})");
+    println!("  Warmup ticks:   {warmup_ticks}");
+    println!("  Collect ticks:  {collect_ticks}");
     println!("  Order test:     {}", if run_orders { "YES (paper)" } else { "no (set BENCH_ORDERS=1)" });
     println!("========================================");
     println!();
@@ -369,12 +369,11 @@ fn main() {
                 );
                 break;
             }
-        } else if order_phase == 2 {
-            if sell_submit_time.map(|t| t.elapsed() > Duration::from_secs(30)).unwrap_or(false) {
+        } else if order_phase == 2
+            && sell_submit_time.map(|t| t.elapsed() > Duration::from_secs(30)).unwrap_or(false) {
                 println!("[{:.3}s] Sell order timeout (30s)", start.elapsed().as_secs_f64());
                 break;
             }
-        }
     }
 
     // Shutdown

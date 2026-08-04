@@ -28,6 +28,12 @@ pub struct SecureChannel {
     read_mac_key: Option<Vec<u8>>,
 }
 
+impl Default for SecureChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SecureChannel {
     pub fn new() -> Self {
         let mut client_random = [0u8; 32];
@@ -61,7 +67,7 @@ impl SecureChannel {
 
     /// Build key exchange initiation message.
     pub fn build_secure_connect(&self, version: u32, negotiated_version: u32) -> Vec<u8> {
-        let cr_b64 = B64.encode(&self.client_random);
+        let cr_b64 = B64.encode(self.client_random);
 
         // Encode public key as 128-byte big-endian, zero-padded
         let pub_bytes = self.public_key.to_bytes_be();
@@ -77,8 +83,7 @@ impl SecureChannel {
         let pub_b64 = B64.encode(&pub_padded);
 
         let payload = format!(
-            "{};532;0;{};{};{};",
-            version, negotiated_version, cr_b64, pub_b64
+            "{version};532;0;{negotiated_version};{cr_b64};{pub_b64};"
         );
         let payload_bytes = payload.as_bytes();
         let mut msg = Vec::with_capacity(8 + payload_bytes.len());
@@ -286,7 +291,7 @@ mod tests {
         let mut dec_ch = make_test_channel();
 
         for i in 0..5 {
-            let msg = format!("message {}", i);
+            let msg = format!("message {i}");
             let encrypted = enc_ch.encrypt(msg.as_bytes());
             let decrypted = dec_ch.decrypt(&encrypted).unwrap();
             assert_eq!(decrypted, msg.as_bytes());
@@ -384,11 +389,10 @@ mod tests {
             let msg = ch.build_secure_connect(ver, neg_ver);
             assert_eq!(&msg[..4], NS_MAGIC);
             let payload = std::str::from_utf8(&msg[8..]).unwrap();
-            let expected_prefix = format!("{};532;0;{};", ver, neg_ver);
+            let expected_prefix = format!("{ver};532;0;{neg_ver};");
             assert!(
                 payload.starts_with(&expected_prefix),
-                "Expected prefix '{}' but got '{}'",
-                expected_prefix, payload
+                "Expected prefix '{expected_prefix}' but got '{payload}'"
             );
         }
     }

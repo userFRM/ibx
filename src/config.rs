@@ -111,8 +111,7 @@ pub fn unix_to_ib_datetime(secs: i64) -> String {
     let seconds = time_secs % 60;
     let (year, month, day) = days_to_ymd(days);
     format!(
-        "{:04}{:02}{:02} {:02}:{:02}:{:02}",
-        year, month, day, hours, minutes, seconds
+        "{year:04}{month:02}{day:02} {hours:02}:{minutes:02}:{seconds:02}"
     )
 }
 
@@ -160,7 +159,7 @@ pub fn parse_ib_expiry(input: &str) -> Result<Option<IbExpiry>, String> {
         return Ok(None);
     }
     if s.len() < 8 || !s.as_bytes()[..8].iter().all(|b| b.is_ascii_digit()) {
-        return Err(format!("expiry '{}': must start with YYYYMMDD", input));
+        return Err(format!("expiry '{input}': must start with YYYYMMDD"));
     }
     let ymd: u32 = s[..8].parse().unwrap(); // 8 ascii digits — infallible
     let year: i16 = s[0..4].parse().unwrap();
@@ -169,7 +168,7 @@ pub fn parse_ib_expiry(input: &str) -> Result<Option<IbExpiry>, String> {
 
     // Validate the date regardless of whether a time follows.
     let date = jiff::civil::Date::new(year, month, day)
-        .map_err(|e| format!("expiry '{}': {}", input, e))?;
+        .map_err(|e| format!("expiry '{input}': {e}"))?;
 
     // Strip the date, then an optional `-` or whitespace separator before the time.
     let rest = s[8..].strip_prefix('-').unwrap_or(&s[8..]).trim();
@@ -184,11 +183,11 @@ pub fn parse_ib_expiry(input: &str) -> Result<Option<IbExpiry>, String> {
 
     let tp: Vec<&str> = time_str.split(':').collect();
     if tp.len() != 3 {
-        return Err(format!("expiry '{}': time must be HH:MM:SS", input));
+        return Err(format!("expiry '{input}': time must be HH:MM:SS"));
     }
     let parse_u = |p: &str, what: &str| -> Result<i8, String> {
         p.parse::<i8>()
-            .map_err(|_| format!("expiry '{}': invalid {}", input, what))
+            .map_err(|_| format!("expiry '{input}': invalid {what}"))
     };
     let (h, mi, sec) = (
         parse_u(tp[0], "hour")?,
@@ -196,16 +195,15 @@ pub fn parse_ib_expiry(input: &str) -> Result<Option<IbExpiry>, String> {
         parse_u(tp[2], "second")?,
     );
     let time =
-        jiff::civil::Time::new(h, mi, sec, 0).map_err(|e| format!("expiry '{}': {}", input, e))?;
+        jiff::civil::Time::new(h, mi, sec, 0).map_err(|e| format!("expiry '{input}': {e}"))?;
     let dt = date.to_datetime(time);
 
     let zone = match tz {
         Some(z) => z,
         None => {
             log::warn!(
-                "good-till expiry '{}' has a time but no timezone; interpreting as UTC. \
-                 Pass an explicit zone (e.g. 'US/Eastern') or UTC.",
-                input
+                "good-till expiry '{input}' has a time but no timezone; interpreting as UTC. \
+                 Pass an explicit zone (e.g. 'US/Eastern') or UTC."
             );
             "UTC"
         }
@@ -217,7 +215,7 @@ pub fn parse_ib_expiry(input: &str) -> Result<Option<IbExpiry>, String> {
         Ok(zoned) => zoned,
         Err(_) => dt
             .in_tz(canonical_zone(zone))
-            .map_err(|e| format!("expiry '{}': unknown timezone '{}': {}", input, zone, e))?,
+            .map_err(|e| format!("expiry '{input}': unknown timezone '{zone}': {e}"))?,
     };
     Ok(Some(IbExpiry::Instant(zoned.timestamp().as_second())))
 }
@@ -265,7 +263,7 @@ mod expiry_tests {
     fn instant(s: &str) -> i64 {
         match parse_ib_expiry(s).unwrap().unwrap() {
             IbExpiry::Instant(secs) => secs,
-            other => panic!("expected Instant, got {:?}", other),
+            other => panic!("expected Instant, got {other:?}"),
         }
     }
 

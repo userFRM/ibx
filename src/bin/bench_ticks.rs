@@ -25,8 +25,8 @@ fn main() {
 
     print_header("Bench: Single-Instrument Tick Latency");
     println!("  Contract:       {} (con_id={})", config.symbol, config.con_id);
-    println!("  Warmup:         {} ticks", warmup_ticks);
-    println!("  Collect:        {} ticks", collect_ticks);
+    println!("  Warmup:         {warmup_ticks} ticks");
+    println!("  Collect:        {collect_ticks} ticks");
     println!();
 
     // Connect
@@ -61,7 +61,7 @@ fn main() {
 
     loop {
         if Instant::now() > deadline {
-            println!("Collection timed out, using {} samples", count);
+            println!("Collection timed out, using {count} samples");
             break;
         }
 
