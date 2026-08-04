@@ -280,9 +280,9 @@ pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
     let join = run_hot_loop(hot_loop);
 
     // Register 3 instruments via ControlCommand channel (not context_mut)
-    control_tx.send(ControlCommand::RegisterInstrument { con_id: 756733, symbol: "SPY".to_string(), sec_type: String::new(), exchange: String::new(), reply_tx: None }).unwrap();
-    control_tx.send(ControlCommand::RegisterInstrument { con_id: 265598, symbol: "AAPL".to_string(), sec_type: String::new(), exchange: String::new(), reply_tx: None }).unwrap();
-    control_tx.send(ControlCommand::RegisterInstrument { con_id: 272093, symbol: "MSFT".to_string(), sec_type: String::new(), exchange: String::new(), reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::RegisterInstrument { con_id: 756733, symbol: "SPY".to_string(), sec_type: String::new(), exchange: String::new(), identity: String::new(), reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::RegisterInstrument { con_id: 265598, symbol: "AAPL".to_string(), sec_type: String::new(), exchange: String::new(), identity: String::new(), reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::RegisterInstrument { con_id: 272093, symbol: "MSFT".to_string(), sec_type: String::new(), exchange: String::new(), identity: String::new(), reply_tx: None }).unwrap();
 
     // Give hot loop time to process
     std::thread::sleep(Duration::from_millis(500));

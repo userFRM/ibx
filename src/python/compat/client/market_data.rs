@@ -125,6 +125,7 @@ impl EClient {
             symbol: contract.symbol.clone(),
             sec_type: contract.sec_type.clone(),
             exchange: contract.exchange.clone(),
+            identity: String::new(),
             reply_tx: None,
         })?;
         // Same registration-wait hazard as req_mkt_data: release the GIL for

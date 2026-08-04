@@ -1047,7 +1047,12 @@ pub enum ControlCommand {
     /// Submit an order from external caller (bridge mode).
     Order(OrderRequest),
     /// Register an instrument from external caller (bridge mode).
-    RegisterInstrument { con_id: i64, symbol: String, sec_type: String, exchange: String, reply_tx: Option<crossbeam_channel::Sender<Result<InstrumentId, String>>> },
+    /// `identity` is what separates two contracts sharing a symbol: expiry,
+    /// strike, right and multiplier, joined. Empty for a stock or a currency
+    /// pair, which those four fields do not distinguish. An order names its
+    /// contract by the instrument, so the instrument has to know this or the
+    /// order goes out unable to say which strike or contract month it means.
+    RegisterInstrument { con_id: i64, symbol: String, sec_type: String, exchange: String, identity: String, reply_tx: Option<crossbeam_channel::Sender<Result<InstrumentId, String>>> },
     /// Request historical bar data via historical data connection.
     FetchHistorical {
         req_id: u32,

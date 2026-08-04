@@ -523,8 +523,8 @@ impl HotLoop {
                 ControlCommand::Order(req) => {
                     self.context.pending_orders.push(req);
                 }
-                ControlCommand::RegisterInstrument { con_id, symbol, sec_type, exchange, reply_tx } => {
-                    self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", &reply_tx);
+                ControlCommand::RegisterInstrument { con_id, symbol, sec_type, exchange, identity, reply_tx } => {
+                    self.register_or_reject(con_id, symbol, &sec_type, &exchange, &identity, &reply_tx);
                 }
                 ControlCommand::FetchHistorical { req_id, con_id, symbol, sec_type, exchange, end_date_time, duration, bar_size, what_to_show, use_rth, keep_up_to_date } => {
                     // keepUpToDate sends via CCP but bars/end arrive on HMDS — both

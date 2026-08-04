@@ -567,6 +567,18 @@ impl ClientCore {
         }
     }
 
+    /// What separates two contracts that share a symbol: expiry, strike, right
+    /// and multiplier. Empty for anything those do not distinguish, which is
+    /// every stock and every currency pair.
+    pub fn contract_identity(
+        last_trade_date: &str, strike: f64, right: &str, multiplier: &str,
+    ) -> String {
+        if last_trade_date.is_empty() && strike <= 0.0 && right.is_empty() {
+            return String::new();
+        }
+        format!("{last_trade_date}|{strike}|{right}|{multiplier}")
+    }
+
     /// Find instrument ID for a contract, registering if needed.
     /// Returns `Err` if the control channel is closed.
     pub fn find_or_register_instrument(
@@ -576,6 +588,7 @@ impl ClientCore {
         symbol: &str,
         exchange: &str,
         sec_type: &str,
+        identity: &str,
     ) -> Result<InstrumentId, String> {
         if let Some(iid) = self.cached_instrument(con_id) {
             return Ok(iid);
@@ -586,6 +599,7 @@ impl ClientCore {
         control_tx.send(ControlCommand::RegisterInstrument {
             con_id, symbol: symbol.to_string(),
             sec_type: sec_type.to_string(), exchange: exchange.to_string(),
+            identity: identity.to_string(),
             reply_tx: Some(reply_tx),
         }).map_err(|e| format!("Engine stopped: {e}"))?;
 
@@ -640,6 +654,7 @@ impl ClientCore {
         control_tx.send(ControlCommand::RegisterInstrument {
             con_id, symbol: symbol.to_string(),
             sec_type: sec_type.to_string(), exchange: exchange.to_string(),
+            identity: String::new(),
             reply_tx: None,
         }).map_err(|e| format!("Engine stopped: {e}"))?;
         control_tx.send(ControlCommand::Subscribe {
@@ -1830,7 +1845,7 @@ impl ClientCore {
     /// An empty `sec_type` is treated as STK (the engine default), so existing
     /// stock callers that omit the field are unaffected.
     /// See: https://github.com/deepentropy/ibx/issues/202
-    pub fn validate_order_contract(sec_type: &str) -> Result<(), String> {
+    pub fn validate_order_contract(sec_type: &str, identity: &str) -> Result<(), String> {
         // A currency pair is fully identified by what an order already carries:
         // symbol, currency, security type and destination. There is no expiry,
         // strike, right or multiplier to omit, so the silent mistrade this
@@ -1839,17 +1854,28 @@ impl ClientCore {
         // contract month. Verified against a live IDEALPRO book: limit, stop
         // limit, market-if-touched, limit-if-touched, trailing stop limit,
         // relative and hidden all acknowledge and cancel cleanly.
-        if sec_type.is_empty()
-            || sec_type.eq_ignore_ascii_case("STK")
-            || sec_type.eq_ignore_ascii_case("CASH")
-        {
+        // A symbol names a stock or a currency pair completely. Anything else
+        // needs its expiry, strike, right or multiplier, which an order now
+        // restates — so the question is not which type this is but whether the
+        // caller said enough to identify one contract.
+        let ty = sec_type.to_ascii_uppercase();
+        if matches!(ty.as_str(), "" | "STK" | "CASH") {
             return Ok(());
         }
+        if matches!(ty.as_str(), "OPT" | "FUT" | "FOP" | "IND" | "CFD") {
+            if !identity.is_empty() {
+                return Ok(());
+            }
+            return Err(format!(
+                "a {ty} contract needs its expiry, strike or right: the symbol alone \
+                 names a whole chain, and an order stating only the symbol would be \
+                 filled on whichever contract the gateway picked"
+            ));
+        }
         Err(format!(
-            "Unsupported contract sec_type '{sec_type}': only STK orders are supported. \
-             Non-STK contracts (OPT/FUT/BAG/…) are not yet wire-encoded and would \
-             otherwise be silently sent as a stock order on the underlying symbol. \
-             See https://github.com/deepentropy/ibx/issues/202"
+            "Unsupported contract sec_type '{sec_type}': a combo's legs have no wire \
+             encoding, so the order would go out as a single-leg order on the \
+             underlying symbol"
         ))
     }
 
@@ -2658,14 +2684,27 @@ mod contract_gate_tests {
     /// about which contract it meant.
     #[test]
     fn cash_is_admitted_and_the_underspecified_types_are_not() {
-        assert!(ClientCore::validate_order_contract("CASH").is_ok(), "an FX pair is fully named");
-        assert!(ClientCore::validate_order_contract("cash").is_ok(), "and the check is case-insensitive");
-        assert!(ClientCore::validate_order_contract("STK").is_ok());
-        assert!(ClientCore::validate_order_contract("").is_ok());
+        assert!(ClientCore::validate_order_contract("CASH", "").is_ok(), "an FX pair is fully named");
+        assert!(ClientCore::validate_order_contract("cash", "").is_ok(), "and the check is case-insensitive");
+        assert!(ClientCore::validate_order_contract("STK", "").is_ok());
+        assert!(ClientCore::validate_order_contract("", "").is_ok());
 
-        for st in ["OPT", "FUT", "BAG", "FOP"] {
-            let err = ClientCore::validate_order_contract(st)
-                .expect_err("an order cannot say which strike or contract month");
+        // Now that an order restates expiry, strike, right and multiplier, these
+        // name their contract and are admitted.
+        for st in ["OPT", "FUT", "FOP", "IND", "CFD"] {
+            assert!(
+                ClientCore::validate_order_contract(st, "20260619|230|C|100").is_ok(),
+                "{st} with an identity names one contract",
+            );
+            let err = ClientCore::validate_order_contract(st, "")
+                .expect_err("and without one it names a whole chain");
+            assert!(err.contains(st), "the refusal names the type: {err}");
+        }
+        // A combo does not: its legs have no encoding, so one would go out as a
+        // single-leg order on the underlying.
+        for st in ["BAG", "COMBO"] {
+            let err = ClientCore::validate_order_contract(st, "20260619|230|C|100")
+                .expect_err("a combo cannot state its legs");
             assert!(err.contains(st), "the refusal names the type: {err}");
         }
     }

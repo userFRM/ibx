@@ -285,6 +285,22 @@ impl MarketState {
     /// "BEST" at the encode boundary (ib-agent#165), and sending "SMART" was
     /// observed to produce NO ack at all for pre-market opening-auction orders
     /// while the gateway answers "BEST" in ~130ms (ib-agent#164).
+    /// The contract identity an order has to restate for anything a symbol does
+    /// not name on its own: expiry, strike, right, multiplier. `None` for a
+    /// stock or a currency pair, which those fields do not distinguish.
+    pub fn order_identity(&self, id: InstrumentId) -> Option<(String, String, String, String)> {
+        let key = self.option_keys.get(id as usize)?.as_deref()?;
+        let mut it = key.split('|');
+        let expiry = it.next().unwrap_or("").to_string();
+        let strike = it.next().unwrap_or("").to_string();
+        let right = it.next().unwrap_or("").to_string();
+        let multiplier = it.next().unwrap_or("").to_string();
+        if expiry.is_empty() && right.is_empty() && strike.parse::<f64>().unwrap_or(0.0) <= 0.0 {
+            return None;
+        }
+        Some((expiry, strike, right, multiplier))
+    }
+
     pub fn order_routing(&self, id: InstrumentId) -> (String, String) {
         let sec_type = self.sec_types[id as usize]
             .clone()
