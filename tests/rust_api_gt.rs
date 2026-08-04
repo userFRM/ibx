@@ -159,14 +159,6 @@ impl RecWrapper {
     fn new() -> Self { Self { events: Mutex::new(Vec::new()) } }
     fn push(&self, cb: Cb) { self.events.lock().unwrap().push(cb); }
     fn drain(&self) -> Vec<Cb> { std::mem::take(&mut *self.events.lock().unwrap()) }
-    fn wait_for<F: Fn(&Cb) -> bool>(&self, pred: F, timeout: Duration) -> bool {
-        let start = Instant::now();
-        while start.elapsed() < timeout {
-            if self.events.lock().unwrap().iter().any(&pred) { return true; }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        false
-    }
 }
 
 impl Wrapper for RecWrapper {

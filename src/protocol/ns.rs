@@ -370,6 +370,7 @@ mod tests {
         );
     }
 
+    #[test]
     /// What the prefix means, and why the change is confined to the panic.
     ///
     /// The prefix is an ASCII "MISC" in any casing. The old code uppercased
@@ -397,6 +398,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn stripping_leaves_the_defined_shapes_alone() {
         // Exactly the prefix and nothing else: the old code sliced to empty and
         // fell through to the field-count check.
