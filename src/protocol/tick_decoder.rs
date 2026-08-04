@@ -205,9 +205,8 @@ pub const O_OPEN_PRICE: u64 = 22;
 /// this feed. Retained under its old name until that something is identified.
 pub const O_LAST_TS: u64 = 23;
 
-/// Type 12 was read as the last size, which type 6 carries. Left undecoded
-/// rather than remapped, since nothing in the captures says what it is.
-
+// Type 12 was read as the last size, which type 6 carries. Left undecoded
+// rather than remapped, since nothing in the captures says what it is.
 
 /// A single decoded tick from a 35=P message.
 #[derive(Debug, Clone, Copy)]

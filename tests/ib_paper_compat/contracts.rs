@@ -34,7 +34,7 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
     while Instant::now() < deadline && contract.is_none() {
         if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
             if req_id == 1200 {
-                contract = Some(details);
+                contract = Some(*details);
             }
         }
     }
@@ -83,7 +83,7 @@ pub(super) fn phase_contract_details_by_symbol(conns: Conns) -> Conns {
 
     while Instant::now() < deadline && contract.is_none() {
         if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if req_id == 7800 { contract = Some(details); }
+            if req_id == 7800 { contract = Some(*details); }
         }
     }
 
@@ -230,7 +230,7 @@ pub(super) fn phase_market_rule_id(conns: Conns) -> Conns {
 
     while Instant::now() < deadline && contract.is_none() {
         if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if req_id == 8400 { contract = Some(details); }
+            if req_id == 8400 { contract = Some(*details); }
         }
     }
 

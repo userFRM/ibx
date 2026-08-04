@@ -213,8 +213,7 @@ mod tests {
 
     #[test]
     fn parse_invalid_numeric_falls_back_to_zero() {
-        let mut s = AccountSummary::default();
-        s.net_liquidation = 999.0; // set non-zero first
+        let mut s = AccountSummary { net_liquidation: 999.0, ..Default::default() }; // non-zero first
         parse_account_value("NetLiquidation", "not_a_number", &mut s);
         assert_eq!(s.net_liquidation, 0.0);
     }
@@ -251,9 +250,11 @@ mod tests {
 
     #[test]
     fn account_summary_clone() {
-        let mut s = AccountSummary::default();
-        s.account_id = "DU111".to_string();
-        s.net_liquidation = 50000.0;
+        let s = AccountSummary {
+            account_id: "DU111".to_string(),
+            net_liquidation: 50000.0,
+            ..Default::default()
+        };
         let cloned = s.clone();
         assert_eq!(cloned.account_id, "DU111");
         assert_eq!(cloned.net_liquidation, 50000.0);
@@ -413,9 +414,11 @@ mod tests {
 
     #[test]
     fn account_command_summary_update_variant() {
-        let mut summary = AccountSummary::default();
-        summary.account_id = "DU999".to_string();
-        summary.net_liquidation = 77777.0;
+        let summary = AccountSummary {
+            account_id: "DU999".to_string(),
+            net_liquidation: 77777.0,
+            ..Default::default()
+        };
         let cmd = AccountCommand::SummaryUpdate(summary);
         if let AccountCommand::SummaryUpdate(s) = cmd {
             assert_eq!(s.account_id, "DU999");
