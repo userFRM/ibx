@@ -1025,6 +1025,8 @@ pub fn do_security_code_2fa<S: Read + Write>(
 ///    keep looping
 /// 4. `deadline` expires → `TimedOut` error
 /// 5. Underlying socket close → `ConnectionAborted` error (server's deadline)
+/// 6. Any other `XYZ_MSG_SWCR_TOKEN` state → `PermissionDenied` error: the
+///    server refused in a shape this gate doesn't model
 ///
 /// If the server jumps straight to a non-XYZ NS message (e.g. CONNECT_RESPONSE),
 /// returns `Skipped` and logs the path — the unread NS message is then handled
@@ -1164,9 +1166,13 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 if result.eq_ignore_ascii_case("PASSED") {
                     log::info!("2FA gate: C/R code accepted (state=4 PASSED)");
                 } else {
+                    // Only echo a status we recognise. The reply's fields are
+                    // server-controlled and this one is adjacent to the slot the
+                    // code was sent in — never interpolate it blind.
+                    let reason = if result.eq_ignore_ascii_case("FAILED") { "FAILED" } else { "unrecognized status" };
                     return Err(ib_key_err(
                         io::ErrorKind::PermissionDenied,
-                        format!("2FA gate: C/R code rejected (state=4 {})", result),
+                        format!("2FA gate: C/R code rejected (state=4 {})", reason),
                     ));
                 }
             }
@@ -1198,10 +1204,9 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                         approval_url, session_id, soft_token_hex,
                     });
                 }
-                let result = fields.iter().rev().find(|s| !s.is_empty()).map(|s| s.as_str()).unwrap_or("");
                 return Err(ib_key_err(
                     io::ErrorKind::PermissionDenied,
-                    format!("2FA approval rejected: {}", result),
+                    "2FA approval rejected at AUTH_FINISH",
                 ));
             }
             RecvMsg::Ns { msg_type, fields, .. } if msg_type == NS_TEST_REQUEST => {
@@ -1218,10 +1223,22 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                     format!("2FA gate: server error type={}", msg_type),
                 ));
             }
-            other => {
-                // Unknown message during 2FA wait. Log and keep looping —
-                // the server may send other informational frames.
-                log::warn!("2FA gate: unexpected message {:?}", other);
+            RecvMsg::Xyz { msg_id, state, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN => {
+                // A state we don't model is the server refusing in a shape we
+                // haven't seen. Looping answers it with keepalives until the
+                // client deadline and then reports a timeout, which hides the
+                // reason for the ~18 min the operator spends waiting.
+                return Err(ib_key_err(
+                    io::ErrorKind::PermissionDenied,
+                    format!("2FA gate: unexpected SWCR_TOKEN state {}", state),
+                ));
+            }
+            // Anything else is informational; keep looping. Identifiers only —
+            // the derived `Debug` prints every field, and an echoed frame can
+            // carry the code itself.
+            RecvMsg::Ns { msg_type, .. } => log::debug!("2FA gate: ns type={}", msg_type),
+            RecvMsg::Xyz { msg_id, state, .. } => {
+                log::debug!("2FA gate: xyz id={} state={}", msg_id, state)
             }
         }
 
@@ -2998,5 +3015,60 @@ mod tests {
         });
         let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), Some(&provider)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+    }
+
+    /// A SWCR_TOKEN state the gate doesn't model is the server refusing in a
+    /// shape we haven't seen. Looping on it answers the refusal with keepalives
+    /// until the client deadline — 18 min by default — and then reports
+    /// TimedOut, so the operator retries against a server that already said no.
+    #[test]
+    fn ib_key_2fa_rejects_an_unexpected_swcr_token_state() {
+        const ECHOED_CODE: &str = "02226534";
+        let challenge = xyz::xyz_build(xyz::XYZ_MSG_SWCR_TOKEN, 2, "user", &[
+            "e7429fde5b4c26f81fff956be6749908a8653558e7429fde5b4c26f81fff956b",
+            "399 830",
+            "https://x.example/u",
+        ]);
+        // State 3 is the slot the code goes out in, so an echo of one is the
+        // frame whose fields must not reach the log or the error text.
+        let echo = xyz::xyz_build(xyz::XYZ_MSG_SWCR_TOKEN, 3, "user", &[ECHOED_CODE]);
+        let mut head = frame_xyz(&challenge);
+        head.extend_from_slice(&frame_xyz(&echo));
+        // Nothing is ever submitted, so this gateway probes until the deadline:
+        // only a terminating arm ends the attempt sooner.
+        let mut stream = ProbingGateway::new(head, Vec::new(), Vec::new());
+
+        let began = std::time::Instant::now();
+        let deadline = began + std::time::Duration::from_secs(1);
+        let err = do_ib_key_2fa(&mut stream, "2a", deadline, None).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "got {err}");
+        assert!(
+            began.elapsed() < std::time::Duration::from_millis(500),
+            "the refusal must end the attempt, not the deadline; took {:?}",
+            began.elapsed(),
+        );
+        assert!(!err.to_string().contains(ECHOED_CODE),
+            "the frame's fields must not reach the error text; got {}", err);
+    }
+
+    /// Both rejection texts carry a field the server chose, next to the slot
+    /// the code was sent in. Echo only a status the protocol defines.
+    #[test]
+    fn ib_key_2fa_rejections_do_not_echo_server_supplied_text() {
+        const SERVER_TEXT: &str = "02226534-not-a-status";
+
+        let state4 = xyz::xyz_build(xyz::XYZ_MSG_SWCR_TOKEN, 4, "user", &[SERVER_TEXT]);
+        let mut stream = ScriptedStream::new(frame_xyz(&state4));
+        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "got {err}");
+        assert!(!err.to_string().contains(SERVER_TEXT),
+            "state=4 rejection must not echo the server's field; got {}", err);
+
+        let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 5, "user", &[SERVER_TEXT]);
+        let mut stream = ScriptedStream::new(frame_xyz(&auth_finish));
+        let err = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "got {err}");
+        assert!(!err.to_string().contains(SERVER_TEXT),
+            "AUTH_FINISH rejection must not echo the server's field; got {}", err);
     }
 }
