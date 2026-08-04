@@ -1486,7 +1486,6 @@ impl Order {
             total_quantity: self.total_quantity,
             order_type: self.order_type.clone(),
             lmt_price: self.lmt_price,
-            lmt_price_offset: self.lmt_price_offset,
             aux_price: self.aux_price,
             // Unset is f64::MAX on both sides, so leaving it to Default made a
             // caller's offset indistinguishable from absent and the wire fell
