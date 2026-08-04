@@ -20,7 +20,7 @@ impl EClient {
         // Convert and validate order params first (fail fast, no connection needed)
         let mut api_order = order.to_api();
         api_order.conditions = order.convert_conditions(py);
-        ClientCore::validate_order(&api_order)
+        ClientCore::validate_order(&api_order, &self.account_id)
             .map_err(PyRuntimeError::new_err)?;
         ClientCore::validate_order_contract(&contract.sec_type)
             .map_err(PyRuntimeError::new_err)?;
