@@ -47,15 +47,37 @@ pub(crate) fn drain_and_send_orders(
         // A cancel or a replace names a version of an order the recovery may be
         // about to correct — a replace that failed left its attempted ClOrdID
         // in front of the one the broker actually holds. Sent now they would
-        // state that version and be refused, leaving the order live. They wait
-        // for the account of what is there, which a new socket alone is not.
-        if recovery_pending
-            && matches!(order_req, OrderRequest::Cancel { .. } | OrderRequest::Modify { .. })
-        {
+        // state that version and be refused, leaving the order live.
+        //
+        // Only where that order's state is actually in doubt. An order placed
+        // since the reconnect is not, and holding its cancel for the length of
+        // a recovery that has nothing to do with it can let it fill first.
+        // Cancel-all is included: it sends the same per-order frames, so it
+        // carries the same speculative versions.
+        let waits_for_recovery = recovery_pending && match order_req {
+            OrderRequest::Cancel { order_id } | OrderRequest::Modify { order_id, .. } => context
+                .order(order_id)
+                .is_some_and(|o| o.status == OrderStatus::Uncertain),
+            OrderRequest::CancelAll { .. } => context
+                .uncertain_orders()
+                .iter()
+                .any(|o| o.status == OrderStatus::Uncertain),
+            _ => false,
+        };
+        if waits_for_recovery {
             unsent.push(order_req);
             continue;
         }
         let oid = order_req.order_id();
+        // What the engine believed before this request touched anything. A
+        // replace writes its attempt into the tracked state ahead of the write,
+        // and a write that fails must not leave that attempt standing as though
+        // the broker had accepted it.
+        let before = context.order(oid).copied();
+        let speculative = match order_req {
+            OrderRequest::Modify { new_order_id, .. } => Some(new_order_id),
+            _ => None,
+        };
         // Snap every price to the contract's tick grid before encoding
         // (ibx#216). The tick comes from the market-data subscription ack;
         // without one it is 0 and prices pass through unchanged.
@@ -752,6 +774,17 @@ pub(crate) fn drain_and_send_orders(
                 // none of it, the sweep says so rather than this guessing.
                 log::error!("Failed to send order {oid}: {e} — its state is not known");
                 if oid != 0 {
+                    // Back to the last thing the broker was known to hold, and
+                    // marked as no longer known. The attempt is dropped: it was
+                    // never accepted, and hydration would otherwise read it as
+                    // the order's own truth for every field the recovery push
+                    // does not state.
+                    if let Some(new_id) = speculative {
+                        context.remove_order(new_id);
+                    }
+                    if let Some(prior) = before {
+                        context.insert_order(prior);
+                    }
                     context.set_order_status_forced(oid, OrderStatus::Uncertain);
                     shared.orders.push_order_update(OrderUpdate {
                         order_id: oid,
@@ -1473,6 +1506,9 @@ mod tests {
         context.insert_order(crate::types::Order::new(
             42, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
         ));
+        // This is the order in doubt: a write for it failed, so what the broker
+        // holds for it is exactly what the recovery is about to say.
+        context.set_order_status_forced(42, crate::types::OrderStatus::Uncertain);
         context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 42 });
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
@@ -1485,7 +1521,20 @@ mod tests {
             "nothing goes out while the recovery is still settling",
         );
 
-        // Once it has settled, the cancel goes as normal.
+        // An order placed since the reconnect is in no doubt, so its own cancel
+        // is not made to wait on a recovery that has nothing to do with it.
+        context.insert_order(crate::types::Order::new(
+            43, instrument, Side::Buy, 1, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
+        ));
+        context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 43 });
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true);
+        let n = std::io::Read::read(&mut peer, &mut buf).unwrap_or(0);
+        assert!(
+            String::from_utf8_lossy(&buf[..n]).contains("35=F"),
+            "the cancel for the order that is not in doubt goes now",
+        );
+
+        // Once it has settled, the held one goes too.
         drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
         let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
         assert!(
@@ -1536,6 +1585,14 @@ mod tests {
             context.order(42).is_some(),
             "and it stays tracked, for the recovery to account for",
         );
+        let kept = context.order(42).unwrap();
+        assert_eq!(
+            kept.tif, b'1',
+            "holding what the broker was last known to hold, not what the \
+             replace tried to make it: the attempt was never accepted",
+        );
+        assert_eq!(kept.price, 150 * crate::types::PRICE_SCALE, "nor its price");
+        assert!(context.order(43).is_none(), "and the attempt itself is not tracked");
     }
 
     /// A replace may now change the order type, and a stop that becomes a
