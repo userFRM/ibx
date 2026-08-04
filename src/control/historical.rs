@@ -363,7 +363,14 @@ pub fn parse_ticker_id(xml: &str) -> Option<String> {
     if !xml.contains("<ResultSetTickerId>") {
         return None;
     }
-    extract_xml_tag(xml, "tickerId").map(|s| s.to_string())
+    // The assignment comes back under either name: a bar subscription is
+    // answered with `tickerId` and a tick-by-tick one with `rtTickerId`.
+    // Reading only the first left every tick-by-tick assignment unmatched, so
+    // the ticker was never bound to the subscription and every tick that
+    // followed had nowhere to go.
+    extract_xml_tag(xml, "tickerId")
+        .or_else(|| extract_xml_tag(xml, "rtTickerId"))
+        .map(|s| s.to_string())
 }
 
 /// Parameters for a head timestamp request.
@@ -984,6 +991,15 @@ mod tests {
             <tickerId>42</tickerId>
         </ResultSetTickerId>"#;
         assert_eq!(super::parse_ticker_id(xml), Some("42".to_string()));
+    }
+
+    /// A tick-by-tick assignment names it differently, exactly as it arrives
+    /// from the server. Reading only `tickerId` left the subscription unbound
+    /// and no tick could be routed to it.
+    #[test]
+    fn parse_ticker_id_reads_the_tick_by_tick_spelling() {
+        let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\t<ResultSetTickerId>\n\t\t                   <id>tbt_1</id>\n\t\t<rtTickerId>1</rtTickerId>\n\t\t                   <minTick>0.00005</minTick>\n\t\t<sizeMinTick>1</sizeMinTick>\n\t\t                   <eoq>false</eoq>\n\t</ResultSetTickerId>\n";
+        assert_eq!(super::parse_ticker_id(xml), Some("1".to_string()));
     }
 
     #[test]
