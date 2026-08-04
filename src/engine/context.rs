@@ -1010,8 +1010,13 @@ impl Context {
         }
     }
 
+    /// Drop an order and everything keyed to it. The two ClOrdID maps only
+    /// serve orders that can still be cancelled or replaced, and a process
+    /// left running for weeks kept one entry per order ever placed.
     pub fn remove_order(&mut self, order_id: OrderId) {
         self.open_orders.remove(&order_id);
+        self.modify_versions.remove(&order_id);
+        self.last_clord.remove(&order_id);
     }
 
     /// Mark all live open orders as Uncertain (auth disconnect — status may have changed).
@@ -1354,8 +1359,13 @@ mod tests {
             tif: b'0',
             stop_price: 0,
         });
+        ctx.last_clord.insert(1, "1.0".to_string());
         ctx.remove_order(1);
         assert!(ctx.order(1).is_none());
+        // Nothing keyed to the order outlives it: a long-running process
+        // otherwise held one entry per order it had ever placed.
+        assert!(!ctx.modify_versions.contains_key(&1), "the version counter goes with it");
+        assert!(!ctx.last_clord.contains_key(&1), "and so does the ClOrdID");
     }
 
     // --- Market data through context ---
