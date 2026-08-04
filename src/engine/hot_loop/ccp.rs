@@ -1025,7 +1025,7 @@ impl CcpState {
                         response.init_margin_before as f64 / PRICE_SCALE as f64,
                         response.init_margin_after as f64 / PRICE_SCALE as f64,
                         response.commission as f64 / PRICE_SCALE as f64);
-                    context.remove_order(clord_id);
+                    context.retire_order(clord_id);
                     shared.orders.push_what_if(response);
                     emit(event_tx, Event::WhatIf(response));
                 }
@@ -1556,7 +1556,7 @@ impl CcpState {
                     timestamp_ns: context.now_ns(),
                 });
             }
-            context.remove_order(clord_id);
+            context.retire_order(clord_id);
         }
     }
 
@@ -1607,7 +1607,7 @@ impl CcpState {
                 // the untracked-fill path books it and moves the position
                 // (ibx#314).
                 context.set_order_status_forced(oid, crate::types::OrderStatus::Cancelled);
-                context.remove_order(oid);
+                context.retire_order(oid);
             } else {
                 let restore_status = if order.filled > 0 {
                     crate::types::OrderStatus::PartiallyFilled

@@ -1010,11 +1010,22 @@ impl Context {
         }
     }
 
-    /// Drop an order and everything keyed to it. The two ClOrdID maps only
-    /// serve orders that can still be cancelled or replaced, and a process
-    /// left running for weeks kept one entry per order ever placed.
+    /// Stop tracking an order, keeping its ClOrdID chain.
+    ///
+    /// Use this where the order may still exist at the broker — a replace that
+    /// failed to send leaves the previous version working, and a cancel for it
+    /// has to state the ClOrdID the broker last recorded.
     pub fn remove_order(&mut self, order_id: OrderId) {
         self.open_orders.remove(&order_id);
+    }
+
+    /// Drop an order and everything keyed to it, for an order that is over.
+    ///
+    /// The two ClOrdID maps only serve orders that can still be cancelled or
+    /// replaced, and nothing pruned them: a process left running for weeks
+    /// held one entry per order it had ever placed, in both.
+    pub fn retire_order(&mut self, order_id: OrderId) {
+        self.remove_order(order_id);
         self.modify_versions.remove(&order_id);
         self.last_clord.remove(&order_id);
     }
@@ -1362,8 +1373,15 @@ mod tests {
         ctx.last_clord.insert(1, "1.0".to_string());
         ctx.remove_order(1);
         assert!(ctx.order(1).is_none());
-        // Nothing keyed to the order outlives it: a long-running process
-        // otherwise held one entry per order it had ever placed.
+        // The chain survives an order that merely stopped being tracked: a
+        // replace that failed to send leaves the previous version working, and
+        // cancelling it means stating the ClOrdID the broker last recorded.
+        assert!(ctx.last_clord.contains_key(&1), "the ClOrdID outlives the tracking");
+
+        // Retiring it is what drops everything keyed to it. Nothing pruned
+        // these, so a process left running for weeks held one entry per order
+        // it had ever placed, in both maps.
+        ctx.retire_order(1);
         assert!(!ctx.modify_versions.contains_key(&1), "the version counter goes with it");
         assert!(!ctx.last_clord.contains_key(&1), "and so does the ClOrdID");
     }
