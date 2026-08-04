@@ -313,6 +313,17 @@ impl EClient {
             wrapper.contract_details_end(req_id as i64);
         }
 
+        // Depth exchanges → mkt_depth_exchanges
+        //
+        // The request was sent and the reply parsed, and then nothing carried
+        // it to the caller: this side never drained it, so the callback the
+        // Python surface fires had no counterpart here and the rows simply
+        // accumulated.
+        let depth_exchanges = self.shared.reference.drain_depth_exchanges();
+        if !depth_exchanges.is_empty() {
+            wrapper.mkt_depth_exchanges(&depth_exchanges);
+        }
+
         // Matching symbols → symbol_samples
         for (req_id, matches) in self.shared.reference.drain_matching_symbols() {
             let descriptions: Vec<ContractDescription> = matches.iter().map(|m| {
