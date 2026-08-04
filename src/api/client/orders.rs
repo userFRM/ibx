@@ -85,7 +85,7 @@ impl EClient {
             .into_iter()
             .find(|(_, tracked)| tracked.order.perm_id == perm_id)
             .map(|(oid, _)| oid)
-            .ok_or_else(|| format!("cancel_order_by_perm_id: permId {} not found in open orders", perm_id))?;
+            .ok_or_else(|| format!("cancel_order_by_perm_id: permId {perm_id} not found in open orders"))?;
         self.cancel_order(order_id as i64, "")
     }
 
@@ -203,9 +203,9 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             None => return Ok(0.0),
             Some(raw) => raw,
         };
-        let v: f64 = raw.parse().map_err(|_| format!("Invalid {} '{}': expected a number", key, raw))?;
+        let v: f64 = raw.parse().map_err(|_| format!("Invalid {key} '{raw}': expected a number"))?;
         if !v.is_finite() {
-            return Err(format!("Invalid {} '{}': must be a finite number", key, raw));
+            return Err(format!("Invalid {key} '{raw}': must be a finite number"));
         }
         Ok(v)
     };
@@ -217,7 +217,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         match raw.to_lowercase().as_str() {
             "0" | "false" => Ok(false),
             "1" | "true" => Ok(true),
-            _ => Err(format!("Invalid {} '{}': expected true/false or 1/0", key, raw)),
+            _ => Err(format!("Invalid {key} '{raw}': expected true/false or 1/0")),
         }
     };
 
@@ -251,7 +251,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         "darkice" | "dark_ice" => {
             let display_size = match get("displaySize") {
                 None => 100,
-                Some(raw) => raw.parse().map_err(|_| format!("Invalid displaySize '{}': expected a non-negative integer", raw))?,
+                Some(raw) => raw.parse().map_err(|_| format!("Invalid displaySize '{raw}': expected a non-negative integer"))?,
             };
             Ok(AlgoParams::DarkIce {
                 allow_past_end_time: get_bool("allowPastEndTime")?,
@@ -266,7 +266,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             start_time: get_str("startTime"),
             end_time: get_str("endTime"),
         }),
-        _ => Err(format!("Unsupported algo strategy: '{}'", strategy)),
+        _ => Err(format!("Unsupported algo strategy: '{strategy}'")),
     }
 }
 
@@ -285,7 +285,7 @@ fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, String> {
         "aggressive" => Ok(RiskAversion::Aggressive),
         "passive" => Ok(RiskAversion::Passive),
         _ => Err(format!(
-            "Unknown riskAversion '{}': expected Get_Done, Aggressive, Neutral or Passive", raw
+            "Unknown riskAversion '{raw}': expected Get_Done, Aggressive, Neutral or Passive"
         )),
     }
 }
