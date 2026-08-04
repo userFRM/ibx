@@ -234,7 +234,7 @@ impl HotLoop {
         exchange: &str,
         reply_tx: &Option<crossbeam_channel::Sender<Result<InstrumentId, String>>>,
     ) -> Option<InstrumentId> {
-        match self.context.market.try_register(con_id) {
+        match self.context.market.try_register_contract(con_id, &symbol, sec_type, exchange) {
             Some(id) => {
                 self.context.market.set_symbol(id, symbol);
                 self.context.market.set_routing(id, sec_type, exchange);
@@ -1572,6 +1572,29 @@ mod tests {
     use crate::bridge::{Event, SharedState};
     use crate::types::*;
     use std::time::Duration;
+
+    /// ibx#278: a contract specified the ordinary ibapi way — symbol, secType,
+    /// exchange, no conId — arrives here with conId 0. Keyed on that, every
+    /// such contract resolves to whichever one registered first: quotes land
+    /// in one slot and an order built from it goes out under the first
+    /// contract's symbol.
+    #[test]
+    fn con_id_less_contracts_do_not_share_one_slot() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let aapl = hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", &None).expect("AAPL");
+        let qqq = hl.register_or_reject(0, "QQQ".into(), "STK", "SMART", &None).expect("QQQ");
+
+        assert_ne!(aapl, qqq, "two symbols must not resolve to one instrument");
+        assert_eq!(hl.context.market.symbol(aapl), "AAPL");
+        assert_eq!(hl.context.market.symbol(qqq), "QQQ", "an order on this slot names QQQ");
+
+        // The same contract again is the same slot, or every re-registration
+        // burns another one.
+        assert_eq!(hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", &None), Some(aapl));
+        // Tick-by-tick and news register with neither secType nor exchange,
+        // and must land on the slot the L1 subscription already has.
+        assert_eq!(hl.register_or_reject(0, "QQQ".into(), "", "", &None), Some(qqq));
+    }
 
     // ibx#214: f64::from_str accepts "nan"/"inf", so a not-available sentinel
     // of "nan" collapsed to price 0 (and "inf" saturated to i64::MAX) instead

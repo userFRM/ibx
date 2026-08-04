@@ -740,6 +740,31 @@ fn req_mkt_data_duplicate_instrument_is_rejected() {
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
 }
 
+// ibx#278: a contract given the ordinary ibapi way carries conId 0. Cached as
+// an identity it maps every later symbol onto the first one's instrument, and
+// the ibx#233 guard above then refuses them all — a symbol-only client could
+// hold exactly one subscription.
+#[test]
+fn a_second_symbol_is_not_a_duplicate_of_the_first_con_id_less_contract() {
+    let (client, rx, _shared) = test_client();
+    // What a live symbol-only subscription under req_id 1 used to leave behind.
+    client.core.con_id_to_instrument.lock().unwrap().insert(0, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+
+    let qqq = Contract {
+        symbol: "QQQ".into(), sec_type: "STK".into(), exchange: "SMART".into(),
+        ..Default::default()
+    };
+    let err = client.req_mkt_data(2, &qqq, "", false, false).unwrap_err();
+    assert!(!err.contains("req_id 1"), "QQQ is not the live contract: {err}");
+    match rx.try_recv().expect("the registration reaches the engine") {
+        ControlCommand::RegisterInstrument { con_id, symbol, .. } => {
+            assert_eq!((con_id, symbol.as_str()), (0, "QQQ"));
+        }
+        other => panic!("expected RegisterInstrument, got {other:?}"),
+    }
+}
+
 #[test]
 fn cancel_mkt_data_sends_unsubscribe() {
     let (client, rx, _shared) = test_client();

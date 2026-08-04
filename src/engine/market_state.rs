@@ -5,6 +5,13 @@ use crate::types::{InstrumentId, Price, Qty, Quote, PRICE_SCALE, MAX_INSTRUMENTS
 /// with a real conId (0 occurs in practice for conId-less contracts).
 const FREE_SLOT: i64 = i64::MIN;
 
+/// Descriptor-field match: a field the caller left blank, or one the slot has
+/// never had set, does not distinguish two contracts. `set_routing` stores
+/// these uppercased, so the comparison ignores case.
+fn blank_or_eq(stored: &Option<String>, incoming: &str) -> bool {
+    incoming.is_empty() || stored.as_ref().is_none_or(|s| s.eq_ignore_ascii_case(incoming))
+}
+
 /// Pre-allocated quote storage indexed by InstrumentId.
 /// All quotes live in a contiguous array for cache efficiency.
 pub struct MarketState {
@@ -64,27 +71,67 @@ impl MarketState {
         }
     }
 
-    /// Register an IB contract, returns the assigned InstrumentId, or None
-    /// when MAX_INSTRUMENTS distinct contracts are live concurrently
+    /// Register an IB contract by conId, returns the assigned InstrumentId, or
+    /// None when MAX_INSTRUMENTS distinct contracts are live concurrently
     /// (ibx#233). Freed slots are reused first, so unsubscribed contracts
-    /// no longer count against the cap.
+    /// no longer count against the cap. Callers holding a contract that may
+    /// carry no conId want `try_register_contract`.
     pub fn try_register(&mut self, con_id: i64) -> Option<InstrumentId> {
         if let Some(&id) = self.con_id_to_instrument.get(&con_id) {
             return Some(id);
         }
-        let id = match self.free_ids.pop() {
-            Some(id) => id,
-            None => {
-                if (self.active_count as usize) >= MAX_INSTRUMENTS {
-                    return None;
-                }
-                let id = self.active_count;
-                self.active_count += 1;
-                id
-            }
-        };
+        let id = self.alloc_slot()?;
         self.con_id_to_instrument.insert(con_id, id);
         self.instrument_to_con_id[id as usize] = con_id;
+        Some(id)
+    }
+
+    /// Register a client-supplied contract, which may carry no conId. `0` is
+    /// not an identity (ibx#278): keyed on it, every contract specified the
+    /// ordinary way — symbol, secType, exchange — collapses into the slot the
+    /// first one took, and orders on it go out under that contract's symbol.
+    /// Match the descriptor across the live slots instead, and leave `0` out
+    /// of the conId map.
+    ///
+    /// A field the caller left blank matches whatever the slot holds:
+    /// tick-by-tick and news register with neither secType nor exchange, and
+    /// must land on the slot the L1 subscription for that symbol already has.
+    pub fn try_register_contract(&mut self, con_id: i64, symbol: &str, sec_type: &str, exchange: &str) -> Option<InstrumentId> {
+        if con_id != 0 {
+            return self.try_register(con_id);
+        }
+        if let Some(id) = self.instrument_by_descriptor(symbol, sec_type, exchange) {
+            return Some(id);
+        }
+        let id = self.alloc_slot()?;
+        self.instrument_to_con_id[id as usize] = 0;
+        Some(id)
+    }
+
+    /// The live conId-less slot this descriptor names, if it has one. Bounded
+    /// by MAX_INSTRUMENTS and only ever reached from a control command, so a
+    /// scan costs less than the map it would otherwise need.
+    fn instrument_by_descriptor(&self, symbol: &str, sec_type: &str, exchange: &str) -> Option<InstrumentId> {
+        (0..self.active_count).find(|&id| {
+            let i = id as usize;
+            self.instrument_to_con_id[i] == 0
+                && self.symbols[i].as_deref().unwrap_or("").eq_ignore_ascii_case(symbol)
+                && blank_or_eq(&self.sec_types[i], sec_type)
+                && blank_or_eq(&self.exchanges[i], exchange)
+        })
+    }
+
+    /// Take a slot: a reclaimed one first, else the next unused one, else None
+    /// at the cap.
+    fn alloc_slot(&mut self) -> Option<InstrumentId> {
+        if let Some(id) = self.free_ids.pop() {
+            return Some(id);
+        }
+        if (self.active_count as usize) >= MAX_INSTRUMENTS {
+            return None;
+        }
+        let id = self.active_count;
+        self.active_count += 1;
         Some(id)
     }
 
