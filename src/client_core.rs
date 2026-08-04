@@ -590,8 +590,16 @@ impl ClientCore {
         sec_type: &str,
         identity: &str,
     ) -> Result<InstrumentId, String> {
-        if let Some(iid) = self.cached_instrument(con_id) {
-            return Ok(iid);
+        // The cache is skipped when the caller states an identity, because the
+        // slot may have been allocated by a market-data subscription that had
+        // none — and the engine is where the identity is stored. Short-circuiting
+        // here sent the order with a correct security type and destination but no
+        // expiry, so a future named its exchange and not its month. Registration
+        // is idempotent: the engine returns the same slot and adopts the identity.
+        if identity.is_empty() {
+            if let Some(iid) = self.cached_instrument(con_id) {
+                return Ok(iid);
+            }
         }
 
         // Register new — only allocates an InstrumentId slot, does not subscribe to market data.

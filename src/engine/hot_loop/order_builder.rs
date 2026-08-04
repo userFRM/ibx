@@ -1712,6 +1712,29 @@ mod modify_wire_tests {
     }
 
     /// A stock names itself with its symbol, so none of those tags belong on it.
+    /// A contract known by conId still has to restate its identity on the wire.
+    /// Recording it only on the conId-less path sent a future naming its
+    /// exchange and not its month, which the gateway parked.
+    #[test]
+    fn a_future_known_by_con_id_still_names_its_month() {
+        let mut context = Context::new();
+        let instrument = context.market
+            .try_register_contract(793_356_217, "MES", "FUT", "CME", "202609|0||5")
+            .expect("slot");
+        context.market.set_symbol(instrument, "MES".into());
+        context.market.set_routing(instrument, "FUT", "CME");
+
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7, instrument, side: Side::Buy, qty: 1,
+            kind: crate::types::OrderKind::Limit { price: 3827 * crate::types::PRICE_SCALE },
+            tif: b'0', attrs: crate::types::OrderAttrs::default(),
+        });
+        let sent = drain(&mut context);
+        assert!(sent.contains("|167=FUT|"), "the security type: {sent}");
+        assert!(sent.contains("|200=202609|"), "and the contract month: {sent}");
+        assert!(sent.contains("|231=5|"), "and the multiplier: {sent}");
+    }
+
     #[test]
     fn a_stock_order_carries_no_option_identity() {
         let mut context = Context::new();
