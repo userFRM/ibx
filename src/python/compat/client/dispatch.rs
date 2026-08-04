@@ -61,6 +61,13 @@ impl EClient {
             self.connected.store(false, Ordering::Release);
             call_wrapper!(self.wrapper, py, "error", (-1i64, 1100i64, "Connectivity between client and server has been lost", ""));
         }
+        // 1102 rather than 1101: the reconnect re-establishes the
+        // subscriptions itself, so the caller has nothing to re-request. A
+        // client that stood down on 1100 and never saw this stayed down.
+        if events.iter().any(|e| matches!(e, Event::Reconnected)) {
+            self.connected.store(true, Ordering::Release);
+            call_wrapper!(self.wrapper, py, "error", (-1i64, 1102i64, "Connectivity between client and server has been restored - data maintained", ""));
+        }
 
         // Drain fills -> execDetails + orderStatus
         let fills = shared.orders.drain_fills();

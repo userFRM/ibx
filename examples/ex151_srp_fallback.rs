@@ -46,6 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         username: username.clone(),
         password: Zeroizing::new(password.clone()),
         paper: true,
+        // The SRP the server falls back to may want the second factor with it;
+        // the reconnect answers from these exactly as the first login does.
+        code_provider: cfg.code_provider.clone(),
+        ib_key_timeout_secs: cfg.ib_key_timeout_secs,
+        ib_key_token_sub_type: cfg.ib_key_token_sub_type.clone(),
         session_key: gw.session_token.clone(),
         session_token: gw.session_token.clone(),
         server_session_id: gw.server_session_id.clone(),

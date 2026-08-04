@@ -66,6 +66,11 @@ pub enum Event {
     PositionUpdate { instrument: InstrumentId, con_id: i64, position: i64, avg_cost: Price },
     /// Connection lost.
     Disconnected,
+    /// A transport that had announced its loss is carrying traffic again, with
+    /// the subscriptions the reconnect re-established. Emitted only after a
+    /// `Disconnected`, so a client that stood down on one has the signal to
+    /// resume — without it an overnight outage leaves it stood down for good.
+    Reconnected,
     /// Gateway logon completed. `ccp_session_id` matches the `x-ccp-session-id` header
     /// expected by webapp REST endpoints. `misc_urls` maps logical names (e.g. `region_dam`)
     /// to host URLs as pushed by the gateway during logon. The map is empty when the
@@ -907,6 +912,10 @@ pub struct SharedState {
     /// (ibx#242). The `Event::Disconnected` channel path is optional; this
     /// flag is always populated.
     connection_lost: AtomicBool,
+    /// Set when a reconnect recovered a loss that was announced. Read-and-clear
+    /// like `connection_lost`, so a client with no event channel still learns
+    /// it is back.
+    connection_restored: AtomicBool,
     /// Notifier for waking consumers (e.g. Python event loop) when data arrives.
     notify_mutex: Mutex<bool>,
     notify_condvar: Condvar,
@@ -927,6 +936,7 @@ impl SharedState {
             portfolio: PortfolioState::new(),
             ccp_rtt_ns: AtomicU64::new(0),
             connection_lost: AtomicBool::new(false),
+            connection_restored: AtomicBool::new(false),
             notify_mutex: Mutex::new(false),
             notify_condvar: Condvar::new(),
         }
@@ -945,6 +955,20 @@ impl SharedState {
     #[inline]
     pub fn take_connection_lost(&self) -> bool {
         self.connection_lost.swap(false, Ordering::AcqRel)
+    }
+
+    /// Signal that an announced loss has been recovered. Hot-loop side.
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_connection_restored(&self) {
+        self.connection_restored.store(true, Ordering::Release);
+        self.notify();
+    }
+
+    /// Read and clear the connection-restored flag.
+    #[inline]
+    pub fn take_connection_restored(&self) -> bool {
+        self.connection_restored.swap(false, Ordering::AcqRel)
     }
 
     /// Record an auth-connection RTT sample (ibx#158). Hot-loop side.
