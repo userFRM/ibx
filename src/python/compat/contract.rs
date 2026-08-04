@@ -1486,6 +1486,7 @@ impl Order {
             total_quantity: self.total_quantity,
             order_type: self.order_type.clone(),
             lmt_price: self.lmt_price,
+            lmt_price_offset: self.lmt_price_offset,
             aux_price: self.aux_price,
             // Unset is f64::MAX on both sides, so leaving it to Default made a
             // caller's offset indistinguishable from absent and the wire fell
@@ -2325,6 +2326,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client_core::ClientCore;
 
     /// A TRAIL LIMIT states how far its limit sits from the trigger. Unset is
     /// `f64::MAX` on both sides, so a value dropped in conversion is not merely
@@ -2416,6 +2418,34 @@ mod tests {
         assert_eq!(attrs.display_size, 50);
         assert!(attrs.hidden);
         assert_eq!(attrs.discretionary_amt, (0.05 * PRICE_SCALE_F) as Price);
+    }
+
+    /// A TRAIL LIMIT carries all three fields `to_api` used to drop, and each
+    /// reaches the wire as a distinct value, so the assertions can't pass on a
+    /// default: the limit offset is tag 6370 and falls back to `lmt_price`
+    /// when unset, which is why the two are set to different numbers here.
+    #[test]
+    fn to_api_carries_oca_type_trail_stop_and_lmt_price_offset() {
+        let mut o = Order::default();
+        o.action = "BUY".into();
+        o.total_quantity = 1.0;
+        o.order_type = "TRAIL LIMIT".into();
+        o.lmt_price = 10.0;
+        o.lmt_price_offset = 0.5;
+        o.aux_price = 1.0;
+        o.trail_stop_price = 99.0;
+        o.oca_type = 2;
+
+        let cmd = ClientCore::build_order_request(&o.to_api(), 1, 0).unwrap();
+        let ControlCommand::Order(OrderRequest::SubmitEx {
+            kind: OrderKind::TrailingStopLimit { lmt_offset, trail_stop_price, .. },
+            attrs,
+            ..
+        }) = cmd else { panic!("TRAIL LIMIT must build a TrailingStopLimit request") };
+
+        assert_eq!(lmt_offset, (0.5 * PRICE_SCALE_F) as Price);
+        assert_eq!(trail_stop_price, (99.0 * PRICE_SCALE_F) as Price);
+        assert_eq!(attrs.oca_type, 2);
     }
 
     #[test]
