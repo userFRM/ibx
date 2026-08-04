@@ -272,9 +272,10 @@ mod tests {
         let wrong_key = [0xFFu8; 16];
         // Decrypt with wrong key — should either produce garbage or fail unpadding, but must not panic
         let result = aes_cbc_decrypt(&wrong_key, &iv, &ct);
-        match result {
-            Ok(pt) => assert_ne!(pt, b"hello world12345"),
-            Err(_) => {} // unpadding failure is acceptable
+        // An unpadding failure is acceptable; a successful decrypt must not
+        // reproduce the plaintext.
+        if let Ok(pt) = result {
+            assert_ne!(pt, b"hello world12345");
         }
     }
 
