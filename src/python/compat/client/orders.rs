@@ -20,7 +20,12 @@ impl EClient {
         // Convert and validate order params first (fail fast, no connection needed)
         let mut api_order = order.to_api();
         api_order.conditions = order.convert_conditions(py);
-        ClientCore::validate_order(&api_order, &self.account_id)
+        // Empty before connect, so a named account cannot match and is refused.
+        // That is the right answer either way: the field reaches no encoder, so
+        // an order naming one would fill somewhere else whether or not a session
+        // exists to compare against.
+        let connected = self.account_id.lock().unwrap().clone().unwrap_or_default();
+        ClientCore::validate_order(&api_order, &connected)
             .map_err(PyRuntimeError::new_err)?;
         ClientCore::validate_order_contract(&contract.sec_type)
             .map_err(PyRuntimeError::new_err)?;
