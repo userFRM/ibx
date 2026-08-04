@@ -2379,6 +2379,7 @@ impl CcpState {
                         con_id, position: qty, avg_cost, ..Default::default()
                     });
                     if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
+                        adopt_position(context, instrument, qty);
                         shared.portfolio.set_position(instrument, qty);
                         emit(event_tx, Event::PositionUpdate { instrument, con_id, position: qty, avg_cost });
                     }
@@ -2405,6 +2406,7 @@ impl CcpState {
                 con_id, position: qty, avg_cost, ..Default::default()
             });
             if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
+                adopt_position(context, instrument, qty);
                 shared.portfolio.set_position(instrument, qty);
                 emit(event_tx, Event::PositionUpdate { instrument, con_id, position: qty, avg_cost });
             }
@@ -2513,6 +2515,21 @@ impl CcpState {
                 idx += 1;
             }
         }
+    }
+}
+
+
+/// Take the server's position as the engine's own.
+///
+/// The callback side reads `context.position`, and a snapshot that reached
+/// only the portfolio left it deciding from a number the account had not held
+/// since before the connection — flat, on a process that restarted holding
+/// stock. The server is the authority here, so the difference is adopted
+/// rather than accumulated.
+fn adopt_position(context: &mut Context, instrument: InstrumentId, position: i64) {
+    let delta = position - context.position(instrument);
+    if delta != 0 {
+        context.update_position(instrument, delta);
     }
 }
 
@@ -3001,6 +3018,35 @@ mod tests {
         assert_eq!(silent.qty_midnight, None, "absent is unknown, not flat");
         assert_eq!(silent.money_traded, -10.0, "the figures it did state survive");
         assert_eq!(silent.realized_pnl, 2.5);
+    }
+
+    /// The feed is the account's own statement of what it holds. It reached the
+    /// portfolio and the event, and not the table the callback side reads — so
+    /// a process that restarted holding stock ran its first decisions against
+    /// flat, and a strategy sizing from `position()` bought what it already had.
+    #[test]
+    fn a_position_feed_is_adopted_by_the_engine_not_only_published() {
+        let mut ccp = CcpState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(265598);
+        assert_eq!(context.position(instrument), 0, "the engine starts knowing nothing");
+
+        ccp.handle_position_feed(
+            "6008=265598\x016064=500\x016101=151.0\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
+        );
+
+        assert_eq!(context.position(instrument), 500, "the account holds 500 and so does the engine");
+        assert_eq!(shared.portfolio.position(instrument), 500);
+
+        // A later statement is adopted too, not accumulated on top.
+        ccp.handle_position_feed(
+            "6008=265598\x016064=300\x016101=151.0\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
+        );
+        assert_eq!(context.position(instrument), 300, "the server's number wins, it is not added");
     }
 
     /// ibx#296: the 75 feed defaulted its running quantity to zero, so an entry
