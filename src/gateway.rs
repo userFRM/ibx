@@ -783,7 +783,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     };
 
     // Parse AUTH_START field[5] for auth mode: 2=SOFT_TOKEN, 0=SRP required
-    let auth_text = String::from_utf8_lossy(&auth_start);
+    let auth_text = auth_start_text(&auth_start)?;
     let auth_fields: Vec<&str> = auth_text.split(';').collect();
     let auth_mode: u32 = auth_fields.get(5).and_then(|s| s.parse().ok()).unwrap_or(0);
 
@@ -1008,6 +1008,27 @@ enum SecondFactorRoute {
     /// A type this client has no exchange for. Better to say so than to send
     /// the wrong message and report whatever the server does about it.
     Unsupported,
+}
+
+/// The text of a decrypted frame that is `AUTH_START`, and an error for one
+/// that is not.
+///
+/// `recv_secure` clears the outer envelope only. Everything taken out of the
+/// frame after it is taken by position — the second-factor type and sub-type,
+/// the auth mode — so another message type at that point in the handshake
+/// supplies those from fields that mean something else, and the login fails
+/// later as a rejected token or a closed socket rather than as the wrong frame
+/// it was.
+fn auth_start_text(payload: &[u8]) -> io::Result<String> {
+    let text = String::from_utf8_lossy(payload).into_owned();
+    let msg_type: u32 = text.split(';').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    if msg_type != ns::NS_AUTH_START {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Expected AUTH_START ({}), got {}", ns::NS_AUTH_START, msg_type),
+        ));
+    }
+    Ok(text)
 }
 
 /// The second-factor token AUTH_START names, as `(type, sub-type)`.
@@ -1253,7 +1274,7 @@ impl Gateway {
         // other account has its SWCR_TOKEN rejected and the socket closed
         // before a challenge is issued (ibx#279).
         let (server_token_type, server_token_sub_type) =
-            parse_auth_start_token(&String::from_utf8_lossy(&auth_start));
+            parse_auth_start_token(&auth_start_text(&auth_start)?);
 
         // Authentication
         log::info!("Starting auth for {}", config.username);
@@ -2197,6 +2218,26 @@ mod tests {
         // Short or absent field 4 yields no type rather than a wrong one.
         assert_eq!(parse_auth_start_token("a;b;c"), ("".into(), None));
         assert_eq!(parse_auth_start_token(&frame("")), ("".into(), None));
+    }
+
+    /// `recv_secure` clears the outer envelope and stops there. Field 4 of what
+    /// it hands back was read as the second-factor declaration whatever the
+    /// frame actually was, so another message at that point in the handshake
+    /// supplied the type and sub-type from fields that mean something else.
+    #[test]
+    fn a_frame_that_is_not_auth_start_is_refused() {
+        // 50;520;...;<type>.<sub-type>;<auth mode>;
+        let auth_start = auth_start_text(b"50;520;a;b;5.2i;2;").unwrap();
+        assert_eq!(parse_auth_start_token(&auth_start), ("5".into(), Some("2i".into())));
+
+        // Same shape, another type. NS_CONNECT_RESPONSE's field 4 is not a
+        // second-factor declaration, and reading it as one picks an exchange.
+        let err = auth_start_text(b"50;523;a;b;5.2i;2;").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("523"), "{}", err);
+
+        // Too short to state a type is not AUTH_START either.
+        assert!(auth_start_text(b"50;").is_err());
     }
 
     #[test]
