@@ -180,8 +180,10 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
             }
             Ok(Event::OrderUpdate(update)) => {
                 if update.status == OrderStatus::Rejected {
-                    println!("  SKIP: Order rejected — market closed\n");
+                    // Shut down first: the engine records the reason after it
+                    // emits the update, so reading it here would race the write.
                     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+                    println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, update.order_id));
                     return conns;
                 }
             }
@@ -784,8 +786,8 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
                 break;
             }
             Ok(Event::OrderUpdate(u)) if u.status == OrderStatus::Rejected => {
-                println!("  SKIP: Order rejected\n");
                 let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+                println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, u.order_id));
                 return conns;
             }
             _ => {}
