@@ -203,6 +203,9 @@ impl MarketState {
         self.exchanges[instrument as usize] = None;
         self.min_ticks[instrument as usize] = 0.0;
         self.min_tick_scaled[instrument as usize] = 0;
+        // The contract identity goes with the rest of the slot: a call left
+        // behind here would match the put that reused it.
+        self.option_keys[instrument as usize] = None;
         self.clear_server_tags_for(instrument);
         self.free_ids.push(instrument);
         Some(con_id)
@@ -663,6 +666,7 @@ mod tests {
         ms.set_min_tick(id, 0.01);
         ms.register_server_tag(42, id);
         ms.quote_mut(id).bid = 150 * PRICE_SCALE;
+        ms.try_register_contract(100, "AAPL", "OPT", "SMART", "20260918|150|C|100");
 
         assert_eq!(ms.unregister(id), Some(100));
         assert_eq!(ms.symbol(id), "?");
@@ -670,6 +674,7 @@ mod tests {
         assert_eq!(ms.min_tick_scaled(id), 0);
         assert_eq!(ms.instrument_by_server_tag(42), None);
         assert_eq!(ms.quote(id).bid, 0, "stale quote must not survive into a reused slot");
+        assert_eq!(ms.order_identity(id), None, "nor the contract identity");
     }
 
     #[test]
