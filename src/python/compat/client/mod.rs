@@ -16,6 +16,7 @@ use crossbeam_channel::{Receiver, Sender};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
+use crate::auth::session::{CodeProvider, IbKeyChallenge, SecondFactor};
 use crate::bridge::{Event, SharedState};
 use crate::client_core::ClientCore;
 use crate::gateway::{Gateway, GatewayConfig};
@@ -89,6 +90,24 @@ impl Drop for EClient {
     }
 }
 
+/// Adapt a Python callable to the second-factor [`CodeProvider`] the login gate
+/// calls. The gate runs it on a thread of its own, so it takes the GIL itself;
+/// `connect` has released it for the whole login. A raising callback becomes an
+/// error the gate reports, not a panic.
+fn code_provider_from_py(cb: Py<PyAny>) -> CodeProvider {
+    Arc::new(move |challenge: IbKeyChallenge| {
+        Python::attach(|py| {
+            let factor = match challenge.factor {
+                SecondFactor::IbKeyChallengeResponse => "ibkey",
+                SecondFactor::AuthenticatorCode => "authenticator",
+            };
+            cb.call1(py, (factor, challenge.display_id, challenge.avth_url))
+                .and_then(|code| code.extract::<String>(py))
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        })
+    })
+}
+
 #[pymethods]
 impl EClient {
     #[new]
@@ -118,11 +137,20 @@ impl EClient {
     /// thread with your own timeout. Paper logins skip the gate entirely. Set
     /// ``RUST_LOG=info`` to see a log line when the wait begins.
     ///
+    /// ``code_provider`` answers that factor with a typed code instead:
+    /// ``code_provider(factor, display_id, avth_url) -> str``, where ``factor``
+    /// is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or
+    /// ``"authenticator"`` (return the account's current code; ``display_id``
+    /// and ``avth_url`` are empty). An authenticator account has no push to
+    /// fall back to and cannot log in without this. It is called once, on a
+    /// thread of its own, and holds the GIL while it runs — return the code,
+    /// don't block on input. One wrong code ends the login; there is no retry.
+    ///
     /// Multiple ``EClient`` instances can run concurrently in one process; each
     /// owns its own state, sockets, and engine thread, and ``connect()`` does
     /// not serialize across instances. If you pin engines via ``core_id``, give
     /// each a distinct value. See ibx#203 / ibx#207.
-    #[pyo3(signature = (host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None))]
+    #[pyo3(signature = (host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None))]
     fn connect(
         &self,
         py: Python<'_>,
@@ -135,10 +163,13 @@ impl EClient {
         core_id: Option<usize>,
         ib_key_timeout_secs: Option<u64>,
         ib_key_token_sub_type: Option<String>,
+        code_provider: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
+
+        let code_provider = code_provider.map(code_provider_from_py);
 
         let config = GatewayConfig {
             username,
@@ -150,7 +181,7 @@ impl EClient {
                 .unwrap_or(crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS),
             ib_key_token_sub_type: ib_key_token_sub_type
                 .unwrap_or_else(|| crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into()),
-            code_provider: None,
+            code_provider,
         };
 
         let result = py.detach(|| Gateway::connect(&config));
@@ -343,5 +374,41 @@ mod tests {
         assert_eq!(get("maxPctVol"), "0.1");
         assert_eq!(get("startTime"), "09:30:00");
         assert_eq!(get("missing"), "");
+    }
+
+    /// The gate hands the callback the factor it is asking for, and an
+    /// authenticator account has no push to fall back on if the answer is
+    /// wrong, so the label and the argument order are the whole contract.
+    #[test]
+    fn code_provider_passes_the_challenge_and_returns_the_code() {
+        Python::initialize();
+        Python::attach(|py| {
+            let echo = py
+                .eval(c"lambda factor, display_id, avth_url: f'{factor}/{display_id}/{avth_url}'", None, None)
+                .unwrap()
+                .unbind();
+            let provider = code_provider_from_py(echo);
+
+            let code = provider(IbKeyChallenge {
+                factor: SecondFactor::AuthenticatorCode,
+                display_id: String::new(),
+                avth_url: String::new(),
+            }).unwrap();
+            assert_eq!(code, "authenticator//");
+
+            let code = provider(IbKeyChallenge {
+                factor: SecondFactor::IbKeyChallengeResponse,
+                display_id: "AB12".into(),
+                avth_url: "https://clientam.com/x".into(),
+            }).unwrap();
+            assert_eq!(code, "ibkey/AB12/https://clientam.com/x");
+
+            // A raising callback comes back as an error carrying its message.
+            // Escaping as a panic instead would leave the gate reporting only
+            // that the provider died.
+            let boom = py.eval(c"lambda *a: (_ for _ in ()).throw(ValueError('no code'))", None, None).unwrap().unbind();
+            let err = code_provider_from_py(boom)(IbKeyChallenge::default()).unwrap_err();
+            assert!(err.to_string().contains("no code"), "got {err}");
+        });
     }
 }
