@@ -556,9 +556,11 @@ impl HotLoop {
                     }
                     self.try_reclaim_instrument(instrument);
                 }
-                ControlCommand::SubscribeTbt { con_id, symbol, tbt_type, reply_tx } => {
-                    if let Some(id) = self.register_or_reject(con_id, symbol, "", "", "", &reply_tx) {
-                        self.hmds.send_tbt_subscribe(con_id, id, tbt_type, &mut self.hmds_conn, &mut self.hb);
+                ControlCommand::SubscribeTbt { con_id, symbol, sec_type, exchange, tbt_type, reply_tx } => {
+                    // Registered with what the contract is, so the slot carries
+                    // it and the subscription can state it.
+                    if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", &reply_tx) {
+                        self.hmds.send_tbt_subscribe(con_id, id, tbt_type, &sec_type, &exchange, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::UnsubscribeTbt { instrument } => {
@@ -709,11 +711,11 @@ impl HotLoop {
                         self.hmds.pending_histogram.remove(pos);
                     }
                 }
-                ControlCommand::FetchHistoricalTicks { req_id, con_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth } => {
+                ControlCommand::FetchHistoricalTicks { req_id, con_id, sec_type, exchange, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
-                        self.hmds.send_historical_ticks_request(req_id, con_id, &start_date_time, &end_date_time, number_of_ticks, &what_to_show, use_rth, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_historical_ticks_request(req_id, con_id, &sec_type, &exchange, &start_date_time, &end_date_time, number_of_ticks, &what_to_show, use_rth, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::SubscribeRealTimeBar { req_id, con_id, symbol, sec_type, exchange, what_to_show, use_rth } => {

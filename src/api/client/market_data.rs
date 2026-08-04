@@ -74,7 +74,8 @@ impl EClient {
         };
         self.core.register_tbt(
             &self.shared, &self.control_tx, req_id,
-            contract.con_id, &contract.symbol, tbt_type,
+            contract.con_id, &contract.symbol,
+            &contract.sec_type, &contract.exchange, tbt_type,
         )?;
         Ok(())
     }
