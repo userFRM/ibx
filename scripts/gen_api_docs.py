@@ -72,6 +72,8 @@ PARAM_DOCS: dict[str, str] = {
     "instrument_id": "Internal instrument ID (dense, 0..256).",
     "location_code": "Scanner location (e.g. `\"STK.US.MAJOR\"`).",
     "scan_code": "Scanner code (e.g. `\"TOP_PERC_GAIN\"`, `\"HIGH_OPT_IMP_VOLAT\"`).",
+    "filters": "Scanner filter tags from `req_scanner_parameters`, e.g. `priceAbove` = `\"10\"`.",
+    "scanner_subscription_filter_options": "Scanner filter tags from `req_scanner_parameters`, e.g. `priceAbove` = `\"10\"`.",
     "pattern": "Symbol search pattern.",
     "period": "Histogram period, e.g. `\"1week\"`, `\"1month\"`.",
     "tags": "Comma-separated account tags: `\"NetLiquidation,BuyingPower,...\"`.",

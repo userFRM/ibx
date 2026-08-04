@@ -2,7 +2,7 @@
 
 use crate::types::*;
 
-use super::{wire_req_id, Contract, EClient};
+use super::{wire_req_id, Contract, EClient, TagValue};
 use crate::client_core::ClientCore;
 
 impl EClient {
@@ -120,9 +120,12 @@ impl EClient {
     }
 
     /// Subscribe to a market scanner. Matches `reqScannerSubscription` in C++.
+    ///
+    /// `filters` are the scanner filter tags named by `req_scanner_parameters`,
+    /// e.g. `priceAbove` = `"10"` or `stkTypes` = `"inc:ETF"`.
     pub fn req_scanner_subscription(
         &self, req_id: i64, instrument: &str, location_code: &str,
-        scan_code: &str, max_items: u32,
+        scan_code: &str, max_items: u32, filters: &[TagValue],
     ) -> Result<(), String> {
         self.send(ControlCommand::SubscribeScanner {
             req_id: wire_req_id(req_id)?,
@@ -130,6 +133,7 @@ impl EClient {
             location_code: location_code.into(),
             scan_code: scan_code.into(),
             max_items,
+            filters: filters.iter().map(|f| (f.tag.clone(), f.value.clone())).collect(),
         })
     }
 

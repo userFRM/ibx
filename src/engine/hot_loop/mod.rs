@@ -574,11 +574,11 @@ impl HotLoop {
                 ControlCommand::FetchScannerParams => {
                     self.hmds.send_scanner_params_request(&mut self.hmds_conn, &mut self.hb);
                 }
-                ControlCommand::SubscribeScanner { req_id, instrument, location_code, scan_code, max_items } => {
+                ControlCommand::SubscribeScanner { req_id, instrument, location_code, scan_code, max_items, filters } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
-                        self.hmds.send_scanner_subscribe(req_id, &instrument, &location_code, &scan_code, max_items, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_scanner_subscribe(req_id, &instrument, &location_code, &scan_code, max_items, filters, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::CancelScanner { req_id } => {
