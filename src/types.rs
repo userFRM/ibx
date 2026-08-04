@@ -1180,6 +1180,8 @@ pub enum ControlCommand {
         req_id: u32,
         con_id: i64,
         symbol: String,
+        sec_type: String,
+        exchange: String,
         what_to_show: String,
         use_rth: bool,
     },

@@ -236,6 +236,8 @@ impl EClient {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
             symbol: contract.symbol.clone(),
+            sec_type: contract.sec_type.clone(),
+            exchange: contract.exchange.clone(),
             what_to_show: what_to_show.to_string(),
             use_rth: use_rth != 0,
         })?;
