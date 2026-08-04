@@ -2164,6 +2164,55 @@ fn req_historical_data_accepts_streamable_keep_up_to_date_size() {
     assert!(matches!(rx.try_recv().unwrap(), ControlCommand::FetchHistorical { keep_up_to_date: true, .. }));
 }
 
+/// A req_id reaches these requests' wire form as u32. `next_order_id()` hands
+/// out ids near 1.7e12, so a caller running one counter for orders and
+/// requests — the ibapi idiom — had every one of these wrap: the gateway saw
+/// an id nobody chose, and the callback came back tagged with that id instead
+/// of the one the caller asked under.
+#[test]
+fn an_unwireable_req_id_is_refused() {
+    type Call = fn(&EClient, i64) -> Result<(), String>;
+    let calls: &[(&str, Call)] = &[
+        ("req_historical_data", |c, id| c.req_historical_data(id, &spy(), "", "1 D", "1 min", "TRADES", true, 1, false)),
+        ("cancel_historical_data", |c, id| c.cancel_historical_data(id)),
+        ("req_head_time_stamp", |c, id| c.req_head_time_stamp(id, &spy(), "TRADES", true, 1)),
+        ("cancel_head_time_stamp", |c, id| c.cancel_head_time_stamp(id)),
+        ("req_contract_details", |c, id| c.req_contract_details(id, &spy())),
+        ("req_matching_symbols", |c, id| c.req_matching_symbols(id, "SP")),
+        ("req_scanner_subscription", |c, id| c.req_scanner_subscription(id, "STK", "STK.US", "TOP_PERC_GAIN", 10)),
+        ("cancel_scanner_subscription", |c, id| c.cancel_scanner_subscription(id)),
+        ("req_historical_news", |c, id| c.req_historical_news(id, 756733, "BRFG", "", "", 10)),
+        ("req_news_article", |c, id| c.req_news_article(id, "BRFG", "BRFG$1")),
+        ("req_fundamental_data", |c, id| c.req_fundamental_data(id, &spy(), "ReportSnapshot")),
+        ("cancel_fundamental_data", |c, id| c.cancel_fundamental_data(id)),
+        ("req_histogram_data", |c, id| c.req_histogram_data(id, &spy(), true, "3 days")),
+        ("cancel_histogram_data", |c, id| c.cancel_histogram_data(id)),
+        ("req_historical_ticks", |c, id| c.req_historical_ticks(id, &spy(), "", "", 100, "TRADES", true)),
+        ("req_historical_schedule", |c, id| c.req_historical_schedule(id, &spy(), "", "1 D", true)),
+        ("req_mkt_depth", |c, id| c.req_mkt_depth(id, &spy(), 5, false)),
+        ("cancel_mkt_depth", |c, id| c.cancel_mkt_depth(id)),
+        ("req_real_time_bars", |c, id| c.req_real_time_bars(id, &spy(), 5, "TRADES", true)),
+        ("cancel_real_time_bars", |c, id| c.cancel_real_time_bars(id)),
+    ];
+    for (name, call) in calls {
+        for bad in [u32::MAX as i64 + 1, -1] {
+            let (client, rx, _shared) = test_client();
+            let err = match call(&client, bad) {
+                Err(e) => e,
+                Ok(()) => panic!("{name}({bad}) must be refused"),
+            };
+            assert!(err.contains("req_id"), "{name}: the error names the field: {err}");
+            assert!(rx.try_recv().is_err(), "{name}: and nothing reaches the wire");
+        }
+        // The largest id the wire can carry is still a request, not an error.
+        let (client, rx, _shared) = test_client();
+        if let Err(e) = call(&client, u32::MAX as i64) {
+            panic!("{name}: the largest carryable id must still request: {e}");
+        }
+        assert!(rx.try_recv().is_ok(), "{name}: and it reaches the wire");
+    }
+}
+
 #[test]
 fn cancel_historical_data_sends_cancel() {
     let (client, rx, _shared) = test_client();

@@ -145,6 +145,19 @@ impl Drop for EClient {
     }
 }
 
+/// Narrow a caller's req_id to the width the request carries on the wire.
+///
+/// `EClient` takes req_id as `i64` for ibapi parity, but these requests encode
+/// it as a `u32`, and the callbacks report back whatever was encoded. A cast
+/// would answer under an id the caller never used — and `next_order_id()`
+/// hands out ids well past `u32::MAX`, so the ibapi idiom of one counter for
+/// orders and requests hit it on the first call. Refuse instead (ibx#285).
+pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, String> {
+    u32::try_from(req_id).map_err(|_| {
+        format!("req_id {req_id} is outside the range this request can carry (0..={})", u32::MAX)
+    })
+}
+
 /// The gateway's view of an [`EClientConfig`].
 ///
 /// Extracted so the forwarding is checkable without opening a socket: the
