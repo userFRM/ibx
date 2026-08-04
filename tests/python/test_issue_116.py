@@ -1,8 +1,10 @@
 """
 Regression test for issue #116: place_order() during CCP disconnect.
 
-The engine fix (disconnect guard + send_fix error → Rejected OrderUpdate) is
-tested at the Rust unit test level. This Python test verifies:
+The engine fix (disconnect guard, and a send error reported as an order of
+unknown state rather than a rejection, since a failed write does not establish
+that the broker has nothing) is tested at the Rust unit test level. This Python
+test verifies:
 
 1. Normal orders produce order_status callbacks (not silently dropped)
 2. Orders on an unconnected client raise RuntimeError (not silent None)

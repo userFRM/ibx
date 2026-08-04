@@ -199,6 +199,13 @@ impl Connection {
         !self.buf.is_empty()
     }
 
+    /// Whether a write left the stream mid-frame and the transport was given
+    /// up. Nothing more can go out on it, so the socket is dead in the only
+    /// direction that matters even where the peer is still sending.
+    pub fn write_failed(&self) -> bool {
+        self.write_failed
+    }
+
     /// Non-blocking read from the socket into the internal buffer.
     /// Returns the number of bytes read, or 0 if no data available (WouldBlock).
     pub fn try_recv(&mut self) -> io::Result<usize> {

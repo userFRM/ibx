@@ -869,7 +869,15 @@ impl CcpState {
         // The sentinel is dropped further down, but this recovery insert runs
         // first — without the guard, a `11='*'` terminator registers a conId
         // and inserts the reserved order id 0 before being "discarded".
-        if is_new_ack && clord_id != 0 && context.order(clord_id).is_none() {
+        // An order whose state is not known is also hydrated from this echo,
+        // not just an absent one. A replace overwrites the tracked record
+        // before it goes out, so a replace that failed left the attempted
+        // definition in place; the server's account of the order is the
+        // authority and replaces it. Anything with a status the engine still
+        // believes is left alone.
+        let unknown = context.order(clord_id)
+            .is_some_and(|o| o.status == crate::types::OrderStatus::Uncertain);
+        if is_new_ack && clord_id != 0 && (context.order(clord_id).is_none() || unknown) {
             let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
             // The side has to be stated. A guess does not stay in the recovered
             // record: every later fill for the order books through the tracked
@@ -2392,7 +2400,10 @@ impl CcpState {
             // Flush previous position if any
             if count > 0 && con_id != 0 {
                 if let Some(qty) = qty {
-                    let avg_cost = basis_for(shared, con_id, avg_cost_raw, qty);
+                    let avg_cost = basis_for(
+                        shared, con_id,
+                        avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
+                    );
                     shared.portfolio.set_position_info(PositionInfo {
                         con_id, position: qty, avg_cost, ..Default::default()
                     });
@@ -2419,7 +2430,10 @@ impl CcpState {
     // Flush last position
     if count > 0 && con_id != 0 {
         if let Some(qty) = qty {
-            let avg_cost = basis_for(shared, con_id, avg_cost_raw, qty);
+            let avg_cost = basis_for(
+                shared, con_id,
+                avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
+            );
             shared.portfolio.set_position_info(PositionInfo {
                 con_id, position: qty, avg_cost, ..Default::default()
             });
@@ -2543,12 +2557,15 @@ impl CcpState {
 /// standing, since an absent cost is not a cost of zero — but only while the
 /// holding is open: a row closing it takes the basis with it, or the next
 /// position in the same contract would inherit the last one's.
-fn basis_for(shared: &SharedState, con_id: i64, stated: Option<f64>, qty: i64) -> Price {
-    if let Some(c) = stated {
-        return (c * PRICE_SCALE as f64) as Price;
-    }
+fn basis_for(shared: &SharedState, con_id: i64, stated: Option<Price>, qty: i64) -> Price {
+    // A closed holding has no basis, and a row closing one has been seen to
+    // carry the cost it was closed at. Keeping that leaves the next position
+    // in the contract opening against the last one's price.
     if qty == 0 {
         return 0;
+    }
+    if let Some(c) = stated {
+        return c;
     }
     shared.portfolio.position_info(con_id).map(|p| p.avg_cost).unwrap_or(0)
 }
@@ -2627,9 +2644,7 @@ pub(crate) fn handle_position_update(
     };
 
     // Always store position info for reqPositions/pnlSingle, regardless of instrument registry.
-    let avg_cost = avg_cost
-        .or_else(|| shared.portfolio.position_info(con_id).map(|p| p.avg_cost))
-        .unwrap_or(0);
+    let avg_cost = basis_for(shared, con_id, avg_cost, position);
     shared.portfolio.set_position_info(PositionInfo {
         con_id, position, avg_cost,
         symbol, sec_type, currency, multiplier,
@@ -3094,8 +3109,22 @@ mod tests {
             "the basis on file stands where the row states none",
         );
 
-        // A row that closes the holding takes the basis with it, or the next
-        // position in this contract would open against the last one's cost.
+        // A row that closes the holding takes the basis with it, whether or not
+        // it states one, or the next position in this contract opens against
+        // the last one's cost.
+        ccp.handle_position_feed(
+            "6008=265598\x016064=0\x016101=151.0\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
+        );
+        assert_eq!(
+            shared.portfolio.position_info(265598).map(|i| i.avg_cost), Some(0),
+            "a closed holding keeps no basis, not even one the row states",
+        );
+        ccp.handle_position_feed(
+            "6008=265598\x016064=100\x016101=150.0\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
+        );
+
         ccp.handle_position_feed(
             "6008=265598\x016064=0\x01".as_bytes(),
             &mut None, &mut context, &shared, &None, &mut hb,

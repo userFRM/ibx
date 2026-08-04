@@ -393,6 +393,13 @@ impl HotLoop {
                 self.ccp.disconnected, &self.shared,
             );
 
+            // A write that abandoned the transport leaves it unable to carry
+            // anything out while the peer may still be sending, so nothing
+            // read-side would ever notice. Without this the liveness deadline
+            // never fires, no reconnect is scheduled, and the session sits
+            // write-dead while reporting itself connected.
+            self.disconnect_write_dead_transports();
+
             // 3. Busy-poll auth socket for execution reports
             let ccp_was_ok = !self.ccp.disconnected;
             self.ccp.poll_executions(
@@ -931,6 +938,28 @@ impl HotLoop {
     /// Replace the auth connection (after reconnection) and reconcile order state.
     pub fn reconnect_ccp(&mut self, conn: Connection) {
         self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.context.market);
+    }
+
+    /// Give up any transport a write has abandoned.
+    fn disconnect_write_dead_transports(&mut self) {
+        if !self.ccp.disconnected
+            && self.ccp_conn.as_ref().is_some_and(|c| c.write_failed())
+        {
+            log::error!("CCP transport can no longer be written to — giving it up");
+            self.ccp.handle_disconnect(&mut self.context, &self.shared, &self.event_tx);
+        }
+        if !self.farm.disconnected
+            && self.farm_conn.as_ref().is_some_and(|c| c.write_failed())
+        {
+            log::error!("Farm transport can no longer be written to — giving it up");
+            self.farm.handle_disconnect(&mut self.context, &self.event_tx);
+        }
+        if !self.hmds.disconnected
+            && self.hmds_conn.as_ref().is_some_and(|c| c.write_failed())
+        {
+            log::error!("HMDS transport can no longer be written to — giving it up");
+            self.hmds.disconnect(&mut self.hmds_conn);
+        }
     }
 
     /// Tell the client a transport it was told about is carrying traffic

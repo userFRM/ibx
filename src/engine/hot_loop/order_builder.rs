@@ -31,7 +31,17 @@ pub(crate) fn drain_and_send_orders(
         None => return,
     };
     let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
+    let mut unsent: Vec<OrderRequest> = Vec::new();
     for mut order_req in orders {
+        // Once a write has abandoned the transport nothing else can leave on
+        // it, and the pre-write guard refuses the rest before they touch the
+        // wire. Those are not in doubt the way the failed one is: they were
+        // never sent, so they go back to wait for the reconnect rather than
+        // being reported as orders of unknown state.
+        if conn.write_failed() {
+            unsent.push(order_req);
+            continue;
+        }
         let oid = order_req.order_id();
         // Snap every price to the contract's tick grid before encoding
         // (ibx#216). The tick comes from the market-data subscription ack;
@@ -744,6 +754,7 @@ pub(crate) fn drain_and_send_orders(
             }
         }
     }
+    context.pending_orders.requeue_front(unsent);
 }
 
 /// Convert Side to FIX tag 54 value.
