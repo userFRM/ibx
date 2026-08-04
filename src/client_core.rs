@@ -650,13 +650,13 @@ impl ClientCore {
             reply_tx: Some(reply_tx),
         }).map_err(|e| format!("Engine stopped: {}", e))?;
 
+        // The engine answers this one. A conId-less contract has no client-side
+        // identity, so a duplicate can only be settled against the slot the
+        // engine resolved — and refusing here, after `Subscribe` had already
+        // gone out, left a live subscription the caller was told did not happen
+        // and held no req_id to cancel by (ibx#278). The engine now refuses
+        // before the subscribe reaches the wire and that refusal arrives here.
         let instrument_id = Self::recv_registration(reply_rx)?;
-        // A conId-less contract has no client-side identity, so this is the
-        // first point at which the guard above can be applied to it: the
-        // engine's answer is what says whether the slot is already taken.
-        if let Some(refusal) = self.duplicate_sub_refusal(instrument_id, req_id, symbol) {
-            return Err(refusal);
-        }
         self.cache_instrument(con_id, instrument_id);
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
         self.instrument_to_req.lock().unwrap().insert(instrument_id, req_id);

@@ -232,9 +232,10 @@ impl HotLoop {
         symbol: String,
         sec_type: &str,
         exchange: &str,
+        option_key: &str,
         reply_tx: &Option<crossbeam_channel::Sender<Result<InstrumentId, String>>>,
     ) -> Option<InstrumentId> {
-        match self.context.market.try_register_contract(con_id, &symbol, sec_type, exchange) {
+        match self.context.market.try_register_contract(con_id, &symbol, sec_type, exchange, option_key) {
             Some(id) => {
                 self.context.market.set_symbol(id, symbol);
                 self.context.market.set_routing(id, sec_type, exchange);
@@ -416,14 +417,47 @@ impl HotLoop {
         for cmd in cmds {
             match cmd {
                 ControlCommand::Subscribe { con_id, symbol, exchange, sec_type, last_trade_date, strike, right, multiplier, mode_9887, reply_tx } => {
-                    if let Some(id) = self.register_or_reject(con_id, symbol.clone(), &sec_type, &exchange, &reply_tx) {
-                        self.farm.send_mktdata_subscribe(
-                            con_id, &symbol, &exchange, &sec_type,
-                            &last_trade_date, strike, &right, &multiplier,
-                            id, mode_9887,
-                            &mut self.farm_conn,
-                            &mut self.hb,
-                        );
+                    // What tells two conId-less contracts on one underlying apart. Absent for
+                    // anything that is not an option, which leaves the key empty.
+                    let option_key = if strike > 0.0 || !right.is_empty() || !last_trade_date.is_empty() {
+                        format!("{last_trade_date}|{strike}|{right}|{multiplier}")
+                    } else {
+                        String::new()
+                    };
+                    // Registered without answering yet: a contract with no conId
+                    // has no client-side identity, so whether this is a duplicate
+                    // can only be settled here, against the slot the engine just
+                    // resolved. Refusing after the subscribe had already gone out
+                    // left the caller told it failed while a live subscription
+                    // bound the second contract's tag and minTick onto the first,
+                    // with no id to cancel it by (ibx#278).
+                    match self.register_or_reject(con_id, symbol.clone(), &sec_type, &exchange, &option_key, &None) {
+                        None => {
+                            if let Some(tx) = &reply_tx {
+                                let _ = tx.send(Err(format!(
+                                    "instrument table full: cannot subscribe to {symbol}"
+                                )));
+                            }
+                        }
+                        Some(id) if self.farm.holds_market_data(id) => {
+                            if let Some(tx) = &reply_tx {
+                                let _ = tx.send(Err(format!(
+                                    "{symbol} already has a live market data subscription"
+                                )));
+                            }
+                        }
+                        Some(id) => {
+                            if let Some(tx) = &reply_tx {
+                                let _ = tx.send(Ok(id));
+                            }
+                            self.farm.send_mktdata_subscribe(
+                                con_id, &symbol, &exchange, &sec_type,
+                                &last_trade_date, strike, &right, &multiplier,
+                                id, mode_9887,
+                                &mut self.farm_conn,
+                                &mut self.hb,
+                            );
+                        }
                     }
                 }
                 ControlCommand::Unsubscribe { instrument } => {
@@ -445,7 +479,7 @@ impl HotLoop {
                     self.try_reclaim_instrument(instrument);
                 }
                 ControlCommand::SubscribeTbt { con_id, symbol, tbt_type, reply_tx } => {
-                    if let Some(id) = self.register_or_reject(con_id, symbol, "", "", &reply_tx) {
+                    if let Some(id) = self.register_or_reject(con_id, symbol, "", "", "", &reply_tx) {
                         self.hmds.send_tbt_subscribe(con_id, id, tbt_type, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
@@ -454,7 +488,7 @@ impl HotLoop {
                     self.try_reclaim_instrument(instrument);
                 }
                 ControlCommand::SubscribeNews { con_id, symbol, providers, reply_tx } => {
-                    if let Some(id) = self.register_or_reject(con_id, symbol, "", "", &reply_tx) {
+                    if let Some(id) = self.register_or_reject(con_id, symbol, "", "", "", &reply_tx) {
                         // Allocate req_id from farm's counter (shared ID space)
                         let req_id = self.farm.next_md_req_id;
                         self.farm.next_md_req_id += 1;
@@ -490,7 +524,7 @@ impl HotLoop {
                     self.context.pending_orders.push(req);
                 }
                 ControlCommand::RegisterInstrument { con_id, symbol, sec_type, exchange, reply_tx } => {
-                    self.register_or_reject(con_id, symbol, &sec_type, &exchange, &reply_tx);
+                    self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", &reply_tx);
                 }
                 ControlCommand::FetchHistorical { req_id, con_id, symbol, sec_type, exchange, end_date_time, duration, bar_size, what_to_show, use_rth, keep_up_to_date } => {
                     // keepUpToDate sends via CCP but bars/end arrive on HMDS — both
@@ -1588,11 +1622,50 @@ mod tests {
     /// such contract resolves to whichever one registered first: quotes land
     /// in one slot and an order built from it goes out under the first
     /// contract's symbol.
+    /// Two conId-less options on one underlying differ only by strike and right,
+    /// which the descriptor did not carry: both landed in one slot, so the put's
+    /// quotes and its minTick overwrote the call's — and minTick is what snaps an
+    /// order's price (ibx#278).
+    #[test]
+    fn two_conid_less_options_on_one_underlying_do_not_share_a_slot() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let call = hl.register_or_reject(
+            0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", &None).expect("call");
+        let put = hl.register_or_reject(
+            0, "AAPL".into(), "OPT", "SMART", "20260619|240|P|100", &None).expect("put");
+        assert_ne!(call, put, "the call and the put must not resolve to one slot");
+
+        // The same option still resolves to its own slot rather than a third.
+        assert_eq!(
+            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", &None),
+            Some(call), "the same contract keeps its slot",
+        );
+    }
+
+    /// A slot allocated before any identity was stated — which is what the
+    /// pre-flight registration does — must be adopted by the first caller that
+    /// states one, not stranded while a second slot is allocated for the same
+    /// contract.
+    #[test]
+    fn a_slot_with_no_identity_is_adopted_by_the_first_that_states_one() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let pre = hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "", &None).expect("pre");
+        assert_eq!(
+            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", &None),
+            Some(pre), "the identity-less slot is adopted, not stranded",
+        );
+        // And once adopted it belongs to that contract alone.
+        assert_ne!(
+            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|240|P|100", &None),
+            Some(pre), "a different contract does not inherit it",
+        );
+    }
+
     #[test]
     fn con_id_less_contracts_do_not_share_one_slot() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        let aapl = hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", &None).expect("AAPL");
-        let qqq = hl.register_or_reject(0, "QQQ".into(), "STK", "SMART", &None).expect("QQQ");
+        let aapl = hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", "", &None).expect("AAPL");
+        let qqq = hl.register_or_reject(0, "QQQ".into(), "STK", "SMART", "", &None).expect("QQQ");
 
         assert_ne!(aapl, qqq, "two symbols must not resolve to one instrument");
         assert_eq!(hl.context.market.symbol(aapl), "AAPL");
@@ -1600,10 +1673,10 @@ mod tests {
 
         // The same contract again is the same slot, or every re-registration
         // burns another one.
-        assert_eq!(hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", &None), Some(aapl));
+        assert_eq!(hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", "", &None), Some(aapl));
         // Tick-by-tick and news register with neither secType nor exchange,
         // and must land on the slot the L1 subscription already has.
-        assert_eq!(hl.register_or_reject(0, "QQQ".into(), "", "", &None), Some(qqq));
+        assert_eq!(hl.register_or_reject(0, "QQQ".into(), "", "", "", &None), Some(qqq));
     }
 
     // ibx#214: f64::from_str accepts "nan"/"inf", so a not-available sentinel
