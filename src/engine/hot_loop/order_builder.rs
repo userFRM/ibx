@@ -569,6 +569,7 @@ pub(crate) fn drain_and_send_orders(
                 // restating a price this one just moved.
                 let trigger_only = is_trigger_only(ord_type);
                 let orig_stop = orig.map_or(0, |o| o.stop_price);
+                let type_changed = orig.is_some_and(|o| o.ord_type != ord_type);
                 // A two-legged type can have its trigger moved, but only if it
                 // has one: b'K' is Limit-if-Touched and Market-to-Limit both,
                 // and the tracked trigger is what separates them. Every other
@@ -585,6 +586,11 @@ pub(crate) fn drain_and_send_orders(
                     price
                 } else if carries_trigger && stop_price != 0 {
                     stop_price
+                } else if type_changed && !carries_trigger {
+                    // The replace moved the order to a type with no trigger.
+                    // The resting order's must not ride along on tag 99 —
+                    // a limit order does not have one.
+                    0
                 } else {
                     orig_stop
                 };
@@ -1388,6 +1394,42 @@ mod tests {
             Some(format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100).to_string()),
             "the trigger must be on the grid: {}", msg,
         );
+    }
+
+    /// A replace may now change the order type, and a stop that becomes a
+    /// limit has no trigger to state. Carrying the resting one anyway put a
+    /// tag 99 on a limit order.
+    #[test]
+    fn a_replace_that_drops_the_trigger_does_not_carry_it() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        // A resting stop with a trigger at 149.
+        context.insert_order(crate::types::Order::new(
+            42, instrument, Side::Sell, 100, 150 * crate::types::PRICE_SCALE,
+            b'3', b'1', 149 * crate::types::PRICE_SCALE,
+        ));
+
+        // Replaced as a plain limit at 151.
+        context.modify_ex(42, 151 * crate::types::PRICE_SCALE, 100, false, b'2', 0, 0);
+        let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+        let shared = std::sync::Arc::new(SharedState::new());
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared);
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+        assert_eq!(tag("40=").as_deref(), Some("2"), "the stated type: {}", msg);
+        assert_eq!(tag("44=").as_deref(), Some(&*format_price(151 * crate::types::PRICE_SCALE)),
+            "the limit price: {}", msg);
+        assert_eq!(tag("99="), None, "and no trigger from the order it replaced: {}", msg);
     }
 
     /// A modify that states none of them leaves what the resting order holds in

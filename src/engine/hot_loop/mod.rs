@@ -876,6 +876,11 @@ impl HotLoop {
     /// reconnect handles on its own stay invisible.
     fn announce_reconnected(&mut self) {
         if !self.loss_announced { return; }
+        // Both transports answer to the one notice, so the one that comes back
+        // first must not speak for the other: a network cut takes down both,
+        // and announcing on the first recovery told the caller everything was
+        // back while half of it still was not.
+        if self.farm.disconnected || self.ccp.disconnected { return; }
         self.loss_announced = false;
         log::info!("Connection restored — subscriptions re-established");
         self.shared.set_connection_restored();
@@ -1681,7 +1686,13 @@ mod tests {
         hl.announce_reconnected();
         assert!(!shared.take_connection_restored(), "nothing was announced to recover from");
 
+        // One transport back is not the connection back.
         hl.loss_announced = true;
+        hl.ccp.disconnected = true;
+        hl.announce_reconnected();
+        assert!(!shared.take_connection_restored(), "the other transport is still down");
+
+        hl.ccp.disconnected = false;
         hl.announce_reconnected();
         assert!(shared.take_connection_restored(), "the recovery reaches the client");
 
