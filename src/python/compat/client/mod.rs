@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
@@ -20,7 +20,7 @@ use crate::bridge::{Event, SharedState};
 use crate::client_core::ClientCore;
 use crate::gateway::{Gateway, GatewayConfig};
 use crate::types::*;
-use super::contract::{Contract, Order};
+use super::contract::Contract;
 
 /// ibapi-compatible EClient class.
 /// Wraps the internal engine and dispatches events to an EWrapper subclass.
@@ -155,7 +155,7 @@ impl EClient {
 
         let result = py.detach(|| Gateway::connect(&config));
         let (gw, farm_conn, ccp_conn, hmds_conn) = result
-            .map_err(|e| PyRuntimeError::new_err(format!("Connection failed: {}", e)))?;
+            .map_err(|e| PyRuntimeError::new_err(format!("Connection failed: {e}")))?;
 
         *self.account_id.lock().unwrap() = Some(gw.account_id.clone());
         let shared = Arc::new(SharedState::new());
@@ -186,7 +186,7 @@ impl EClient {
             .spawn(move || {
                 hot_loop.run_with_panic_recovery();
             })
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to spawn hot loop: {}", e)))?;
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to spawn hot loop: {e}")))?;
 
         *self.shared.lock().unwrap() = Some(shared);
         *self.control_tx.lock().unwrap() = Some(control_tx);
@@ -285,7 +285,7 @@ impl EClient {
     /// the time it's built (never touching Python state once detached).
     pub(crate) fn send_control(py: Python<'_>, tx: &Sender<ControlCommand>, cmd: ControlCommand) -> PyResult<()> {
         py.detach(|| tx.send(cmd))
-            .map_err(|e| PyRuntimeError::new_err(format!("Engine stopped: {}", e)))
+            .map_err(|e| PyRuntimeError::new_err(format!("Engine stopped: {e}")))
     }
 
     /// Clone the shared state Arc, or return "Not connected".
@@ -310,7 +310,7 @@ impl EClient {
         let exchange = contract.exchange.clone();
         let sec_type = contract.sec_type.clone();
         py.detach(|| self.core.find_or_register_instrument(&tx, con_id, &symbol, &exchange, &sec_type))
-            .map_err(|e| PyRuntimeError::new_err(e))
+            .map_err(PyRuntimeError::new_err)
     }
 }
 
@@ -322,17 +322,14 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::contract::TagValue;
 
     #[test]
     fn eclient_default_state() {
         // Can't construct without Python, but we can test the parsing helpers
-        let tv = vec![
-            TagValue { tag: "maxPctVol".into(), value: "0.1".into() },
+        let tv = [TagValue { tag: "maxPctVol".into(), value: "0.1".into() },
             TagValue { tag: "startTime".into(), value: "09:30:00".into() },
-            TagValue { tag: "endTime".into(), value: "16:00:00".into() },
-        ];
+            TagValue { tag: "endTime".into(), value: "16:00:00".into() }];
 
         let get = |key: &str| -> String {
             tv.iter()

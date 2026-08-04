@@ -10,7 +10,7 @@ use crate::client_core::order_status_str;
 use crate::types::*;
 
 use crate::api::types::{
-    Contract as ApiContract, Execution as ApiExecution,
+    Execution as ApiExecution,
     CommissionAndFeesReport as ApiCommissionAndFeesReport,
 };
 use super::EClient;
@@ -311,18 +311,20 @@ impl EClient {
         let what_ifs = shared.orders.drain_what_if_responses();
         for wi in what_ifs {
             let fmt = |p: Price| format!("{:.2}", p as f64 / PRICE_SCALE_F);
-            let mut state = OrderState::default();
-            state.status = "PreSubmitted".into();
-            state.init_margin_before = fmt(wi.init_margin_before);
-            state.maint_margin_before = fmt(wi.maint_margin_before);
-            state.equity_with_loan_before = fmt(wi.equity_with_loan_before);
-            state.init_margin_change = fmt(wi.init_margin_after - wi.init_margin_before);
-            state.maint_margin_change = fmt(wi.maint_margin_after - wi.maint_margin_before);
-            state.equity_with_loan_change = fmt(wi.equity_with_loan_after - wi.equity_with_loan_before);
-            state.init_margin_after = fmt(wi.init_margin_after);
-            state.maint_margin_after = fmt(wi.maint_margin_after);
-            state.equity_with_loan_after = fmt(wi.equity_with_loan_after);
-            state.commission_and_fees = wi.commission as f64 / PRICE_SCALE_F;
+            let state = OrderState {
+                status: "PreSubmitted".into(),
+                init_margin_before: fmt(wi.init_margin_before),
+                maint_margin_before: fmt(wi.maint_margin_before),
+                equity_with_loan_before: fmt(wi.equity_with_loan_before),
+                init_margin_change: fmt(wi.init_margin_after - wi.init_margin_before),
+                maint_margin_change: fmt(wi.maint_margin_after - wi.maint_margin_before),
+                equity_with_loan_change: fmt(wi.equity_with_loan_after - wi.equity_with_loan_before),
+                init_margin_after: fmt(wi.init_margin_after),
+                maint_margin_after: fmt(wi.maint_margin_after),
+                equity_with_loan_after: fmt(wi.equity_with_loan_after),
+                commission_and_fees: wi.commission as f64 / PRICE_SCALE_F,
+                ..Default::default()
+            };
 
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {
@@ -334,15 +336,17 @@ impl EClient {
                     currency: t.contract.currency,
                     ..Default::default()
                 };
-                let mut o = Order::default();
-                o.order_id = t.order.order_id;
-                o.action = t.order.action;
-                o.total_quantity = t.order.total_quantity;
-                o.order_type = t.order.order_type;
-                o.lmt_price = t.order.lmt_price;
-                o.aux_price = t.order.aux_price;
-                o.tif = t.order.tif;
-                o.what_if = t.order.what_if;
+                let o = Order {
+                    order_id: t.order.order_id,
+                    action: t.order.action,
+                    total_quantity: t.order.total_quantity,
+                    order_type: t.order.order_type,
+                    lmt_price: t.order.lmt_price,
+                    aux_price: t.order.aux_price,
+                    tif: t.order.tif,
+                    what_if: t.order.what_if,
+                    ..Default::default()
+                };
                 (Py::new(py, c)?.into_any(), Py::new(py, o)?.into_any())
             } else {
                 (Py::new(py, Contract::default())?.into_any(),
@@ -598,18 +602,16 @@ impl EClient {
             let portfolio = self.core.prepare_portfolio_updates(shared);
             for entry in &portfolio {
                 let contract = self.core.get_contract(entry.con_id, shared);
-                let c = contract.map(|ac| {
-                    let mut c = crate::python::compat::contract::Contract::default();
-                    c.con_id = ac.con_id;
-                    c.symbol = ac.symbol;
-                    c.sec_type = ac.sec_type;
-                    c.exchange = ac.exchange;
-                    c.currency = ac.currency;
-                    c
-                }).unwrap_or_else(|| {
-                    let mut c = crate::python::compat::contract::Contract::default();
-                    c.con_id = entry.con_id;
-                    c
+                let c = contract.map(|ac| crate::python::compat::contract::Contract {
+                    con_id: ac.con_id,
+                    symbol: ac.symbol,
+                    sec_type: ac.sec_type,
+                    exchange: ac.exchange,
+                    currency: ac.currency,
+                    ..Default::default()
+                }).unwrap_or_else(|| crate::python::compat::contract::Contract {
+                    con_id: entry.con_id,
+                    ..Default::default()
                 });
                 let c_py = pyo3::Py::new(py, c).unwrap().into_any();
                 call_wrapper!(self.wrapper, py, "update_portfolio",

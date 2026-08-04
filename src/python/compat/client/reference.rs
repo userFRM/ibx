@@ -30,7 +30,7 @@ impl EClient {
         let _ = (format_date, chart_options);
         if !what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             ClientCore::validate_historical_args(bar_size_setting, what_to_show, keep_up_to_date)
-                .map_err(|e| PyRuntimeError::new_err(e))?;
+                .map_err(PyRuntimeError::new_err)?;
         }
         if what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
@@ -287,13 +287,13 @@ impl EClient {
                 let increments: Vec<(f64, f64)> = rule.price_increments.iter()
                     .map(|pi| (pi.low_edge, pi.increment)).collect();
                 let list = pyo3::types::PyList::new(py, increments.iter().map(|(low, inc)| {
-                    pyo3::types::PyTuple::new(py, &[*low, *inc]).unwrap()
+                    pyo3::types::PyTuple::new(py, [*low, *inc]).unwrap()
                 }))?;
                 self.wrapper.call_method1(py, "market_rule", (market_rule_id as i64, list.as_any()))?;
                 return Ok(());
             }
         }
-        log::warn!("req_market_rule: rule {} not in cache", market_rule_id);
+        log::warn!("req_market_rule: rule {market_rule_id} not in cache");
         Ok(())
     }
 

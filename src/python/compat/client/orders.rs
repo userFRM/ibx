@@ -6,7 +6,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::api::types::{
-    Contract as ApiContract, Order as ApiOrder, ExecutionFilter,
+    Contract as ApiContract, ExecutionFilter,
 };
 use crate::client_core::ClientCore;
 use crate::types::*;
@@ -21,9 +21,9 @@ impl EClient {
         let mut api_order = order.to_api();
         api_order.conditions = order.convert_conditions(py);
         ClientCore::validate_order(&api_order)
-            .map_err(|e| PyRuntimeError::new_err(e))?;
+            .map_err(PyRuntimeError::new_err)?;
         ClientCore::validate_order_contract(&contract.sec_type)
-            .map_err(|e| PyRuntimeError::new_err(e))?;
+            .map_err(PyRuntimeError::new_err)?;
 
         let tx = self.tx()?;
 
@@ -57,7 +57,7 @@ impl EClient {
             })
         } else {
             ClientCore::build_order_request(&api_order, oid, instrument)
-                .map_err(|e| PyRuntimeError::new_err(e))?
+                .map_err(PyRuntimeError::new_err)?
         };
         Self::send_control(py, &tx, cmd)?;
 
@@ -125,23 +125,27 @@ impl EClient {
                 currency: tracked.contract.currency.clone(),
                 ..Default::default()
             })?.into_any();
-            let mut o = Order::default();
-            o.order_id = tracked.order.order_id;
-            o.action = tracked.order.action.clone();
-            o.total_quantity = tracked.order.total_quantity;
-            o.order_type = tracked.order.order_type.clone();
-            o.lmt_price = tracked.order.lmt_price;
-            o.aux_price = tracked.order.aux_price;
-            o.tif = tracked.order.tif.clone();
-            o.account = tracked.order.account.clone();
-            o.perm_id = tracked.order.perm_id;
-            o.oca_type = tracked.order.oca_type;
-            o.use_price_mgmt_algo = tracked.order.use_price_mgmt_algo;
-            o.trail_stop_price = tracked.order.trail_stop_price;
-            o.algo_strategy = tracked.order.algo_strategy.clone();
+            let o = Order {
+                order_id: tracked.order.order_id,
+                action: tracked.order.action.clone(),
+                total_quantity: tracked.order.total_quantity,
+                order_type: tracked.order.order_type.clone(),
+                lmt_price: tracked.order.lmt_price,
+                aux_price: tracked.order.aux_price,
+                tif: tracked.order.tif.clone(),
+                account: tracked.order.account.clone(),
+                perm_id: tracked.order.perm_id,
+                oca_type: tracked.order.oca_type,
+                use_price_mgmt_algo: tracked.order.use_price_mgmt_algo,
+                trail_stop_price: tracked.order.trail_stop_price,
+                algo_strategy: tracked.order.algo_strategy.clone(),
+                ..Default::default()
+            };
             let o_py = Py::new(py, o)?.into_any();
-            let mut state = super::super::contract::OrderState::default();
-            state.status = tracked.status.clone();
+            let state = super::super::contract::OrderState {
+                status: tracked.status.clone(),
+                ..Default::default()
+            };
             let state_py = Py::new(py, state)?.into_any();
             self.wrapper.call_method(
                 py, "open_order",
@@ -324,9 +328,10 @@ impl EClient {
                         order_allocations: allocations,
                     }
                 } else {
-                    let mut s = super::super::contract::OrderState::default();
-                    s.status = status_str.into();
-                    s
+                    super::super::contract::OrderState {
+                        status: status_str.into(),
+                        ..Default::default()
+                    }
                 };
                 let state_py = Py::new(py, state)?.into_any();
 
@@ -339,20 +344,21 @@ impl EClient {
                         currency: o.contract.currency.clone(),
                         ..Default::default()
                     }, {
-                        let mut ord = Order::default();
-                        ord.order_id = o.order.order_id;
-                        ord.action = o.order.action.clone();
-                        ord.total_quantity = o.order.total_quantity;
-                        ord.order_type = o.order.order_type.clone();
-                        ord.lmt_price = o.order.lmt_price;
-                        ord.aux_price = o.order.aux_price;
-                        ord.tif = o.order.tif.clone();
-                        ord.account = o.order.account.clone();
-                        ord.perm_id = o.order.perm_id;
-                        // The value ibx#309 corrected; without it a completed
-                        // order reads as entirely unfilled on this surface.
-                        ord.filled_quantity = o.order.filled_quantity;
-                        ord
+                        Order {
+                            order_id: o.order.order_id,
+                            action: o.order.action.clone(),
+                            total_quantity: o.order.total_quantity,
+                            order_type: o.order.order_type.clone(),
+                            lmt_price: o.order.lmt_price,
+                            aux_price: o.order.aux_price,
+                            tif: o.order.tif.clone(),
+                            account: o.order.account.clone(),
+                            perm_id: o.order.perm_id,
+                            // The value ibx#309 corrected; without it a completed
+                            // order reads as entirely unfilled on this surface.
+                            filled_quantity: o.order.filled_quantity,
+                            ..Default::default()
+                        }
                     })
                 });
                 if let Some((c, o)) = tracked {
@@ -368,17 +374,19 @@ impl EClient {
                         currency: info.contract.currency,
                         ..Default::default()
                     };
-                    let mut o = Order::default();
-                    o.order_id = info.order.order_id;
-                    o.action = info.order.action;
-                    o.total_quantity = info.order.total_quantity;
-                    o.order_type = info.order.order_type;
-                    o.lmt_price = info.order.lmt_price;
-                    o.aux_price = info.order.aux_price;
-                    o.tif = info.order.tif;
-                    o.account = info.order.account;
-                    o.perm_id = info.order.perm_id;
-                    o.filled_quantity = info.order.filled_quantity;
+                    let o = Order {
+                        order_id: info.order.order_id,
+                        action: info.order.action,
+                        total_quantity: info.order.total_quantity,
+                        order_type: info.order.order_type,
+                        lmt_price: info.order.lmt_price,
+                        aux_price: info.order.aux_price,
+                        tif: info.order.tif,
+                        account: info.order.account,
+                        perm_id: info.order.perm_id,
+                        filled_quantity: info.order.filled_quantity,
+                        ..Default::default()
+                    };
                     let c_py = Py::new(py, c)?.into_any();
                     let o_py = Py::new(py, o)?.into_any();
                     self.wrapper.call_method1(py, "completed_order", (&c_py, &o_py, &state_py))?;

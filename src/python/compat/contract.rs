@@ -1,7 +1,6 @@
 //! ibapi-compatible Contract, Order, TagValue, and condition classes.
 
 use pyo3::prelude::*;
-use pyo3::exceptions::PyRuntimeError;
 
 use crate::types::*;
 use super::super::types::PRICE_SCALE_F;
@@ -1405,7 +1404,7 @@ impl Order {
             val: self.soft_dollar_tier_val.clone(),
             display_name: self.soft_dollar_tier_display_name.clone(),
         };
-        Ok(Py::new(py, tier)?.into_any().into())
+        Ok(Py::new(py, tier)?.into_any())
     }
     #[getter(startingPrice)]
     fn get_starting_price_alias(&self) -> f64 { self.starting_price }
@@ -1461,59 +1460,7 @@ impl Order {
     fn set_what_if_type_alias(&mut self, v: i32) { self.what_if_type = v; }
 }
 
-/// Delegate conversion helpers to the Rust API types.
-impl Order {
-    /// Parse the action string to Side. Delegates to `api::Order::side()`.
-    pub fn side(&self) -> PyResult<Side> {
-        self.to_api().side()
-            .map_err(|e| PyRuntimeError::new_err(e))
-    }
-
-    /// Parse the TIF string to FIX byte. Delegates to `api::Order::tif_byte()`.
-    pub fn tif_byte(&self) -> u8 {
-        self.to_api().tif_byte()
-    }
-
-    /// Build OrderAttrs from Order fields. Delegates to `api::Order::attrs()`.
-    pub fn attrs(&self) -> OrderAttrs {
-        self.to_api().attrs()
-    }
-
-    /// Check if the order has any extended attributes set. Delegates to `api::Order::has_extended_attrs()`.
-    pub fn has_extended_attrs(&self) -> bool {
-        self.to_api().has_extended_attrs()
-    }
-}
-
 // ── Conversions between Python compat types and Rust API types ──
-
-impl Contract {
-    /// Convert to Rust API Contract.
-    pub fn to_api(&self) -> crate::api::types::Contract {
-        crate::api::types::Contract {
-            con_id: self.con_id,
-            symbol: self.symbol.clone(),
-            sec_type: self.sec_type.clone(),
-            exchange: self.exchange.clone(),
-            currency: self.currency.clone(),
-            last_trade_date_or_contract_month: self.last_trade_date_or_contract_month.clone(),
-            strike: self.strike,
-            right: self.right.clone(),
-            multiplier: self.multiplier.clone(),
-            local_symbol: self.local_symbol.clone(),
-            primary_exchange: self.primary_exchange.clone(),
-            trading_class: self.trading_class.clone(),
-            last_trade_date: self.last_trade_date.clone(),
-            include_expired: self.include_expired,
-            sec_id_type: self.sec_id_type.clone(),
-            sec_id: self.sec_id.clone(),
-            description: self.description.clone(),
-            issuer_id: self.issuer_id.clone(),
-            combo_legs_descrip: self.combo_legs_descrip.clone(),
-            ..Default::default()
-        }
-    }
-}
 
 impl Order {
     /// Convert Py<PyAny> conditions to internal OrderCondition list.
@@ -2101,20 +2048,22 @@ impl ContractDetails {
     }
 
     pub fn from_definition(py: Python<'_>, def: &crate::control::contracts::ContractDefinition) -> Self {
-        let mut c = Contract::default();
-        c.con_id = def.con_id as i64;
-        // Official API string ("STK"), not the Debug derive ("Stock"): the
-        // returned Contract must round-trip into another request (ibx#230).
-        c.sec_type = def.sec_type.to_api_str().to_string();
-        c.symbol = def.symbol.clone();
-        c.exchange = def.exchange.clone();
-        c.primary_exchange = def.primary_exchange.clone();
-        c.currency = def.currency.clone();
-        c.local_symbol = def.local_symbol.clone();
-        c.trading_class = def.trading_class.clone();
-        c.last_trade_date_or_contract_month = def.last_trade_date.clone();
-        c.strike = def.strike;
-        c.multiplier = if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() };
+        let c = Contract {
+            con_id: def.con_id as i64,
+            // Official API string ("STK"), not the Debug derive ("Stock"): the
+            // returned Contract must round-trip into another request (ibx#230).
+            sec_type: def.sec_type.to_api_str().to_string(),
+            symbol: def.symbol.clone(),
+            exchange: def.exchange.clone(),
+            primary_exchange: def.primary_exchange.clone(),
+            currency: def.currency.clone(),
+            local_symbol: def.local_symbol.clone(),
+            trading_class: def.trading_class.clone(),
+            last_trade_date_or_contract_month: def.last_trade_date.clone(),
+            strike: def.strike,
+            multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
+            ..Default::default()
+        };
 
         Self {
             contract: Py::new(py, c).expect("Contract allocation failed"),
@@ -2128,7 +2077,7 @@ impl ContractDetails {
             multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
             market_rule_id: def.market_rule_id.map(|id| id as i64).unwrap_or(-1),
             strike: def.strike,
-            right: def.right.map(|r| format!("{:?}", r)).unwrap_or_default(),
+            right: def.right.map(|r| format!("{r:?}")).unwrap_or_default(),
             primary_exchange: def.primary_exchange.clone(),
             local_symbol: def.local_symbol.clone(),
             trading_class: def.trading_class.clone(),
@@ -2426,45 +2375,44 @@ mod tests {
 
     #[test]
     fn order_side_parsing() {
-        let mut o = Order::default();
-        o.action = "BUY".into();
-        assert_eq!(o.side().unwrap(), Side::Buy);
+        let mut o = Order { action: "BUY".into(), ..Default::default() };
+        assert_eq!(o.to_api().side().unwrap(), Side::Buy);
         o.action = "SELL".into();
-        assert_eq!(o.side().unwrap(), Side::Sell);
+        assert_eq!(o.to_api().side().unwrap(), Side::Sell);
         o.action = "SSHORT".into();
-        assert_eq!(o.side().unwrap(), Side::ShortSell);
+        assert_eq!(o.to_api().side().unwrap(), Side::ShortSell);
     }
 
     #[test]
     fn order_tif_byte_mapping() {
-        let mut o = Order::default();
-        o.tif = "DAY".into();
-        assert_eq!(o.tif_byte(), b'0');
+        let mut o = Order { tif: "DAY".into(), ..Default::default() };
+        assert_eq!(o.to_api().tif_byte(), b'0');
         o.tif = "GTC".into();
-        assert_eq!(o.tif_byte(), b'1');
+        assert_eq!(o.to_api().tif_byte(), b'1');
         o.tif = "IOC".into();
-        assert_eq!(o.tif_byte(), b'3');
+        assert_eq!(o.to_api().tif_byte(), b'3');
         o.tif = "FOK".into();
-        assert_eq!(o.tif_byte(), b'4');
+        assert_eq!(o.to_api().tif_byte(), b'4');
     }
 
     #[test]
     fn order_has_extended_attrs() {
         let o = Order::default();
-        assert!(!o.has_extended_attrs());
+        assert!(!o.to_api().has_extended_attrs());
 
-        let mut o2 = Order::default();
-        o2.hidden = true;
-        assert!(o2.has_extended_attrs());
+        let o2 = Order { hidden: true, ..Default::default() };
+        assert!(o2.to_api().has_extended_attrs());
     }
 
     #[test]
     fn order_attrs_conversion() {
-        let mut o = Order::default();
-        o.display_size = 50;
-        o.hidden = true;
-        o.discretionary_amt = 0.05;
-        let attrs = o.attrs();
+        let o = Order {
+            display_size: 50,
+            hidden: true,
+            discretionary_amt: 0.05,
+            ..Default::default()
+        };
+        let attrs = o.to_api().attrs();
         assert_eq!(attrs.display_size, 50);
         assert!(attrs.hidden);
         assert_eq!(attrs.discretionary_amt, (0.05 * PRICE_SCALE_F) as Price);
