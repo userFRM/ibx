@@ -529,6 +529,39 @@ impl ClientCore {
             .map_err(|_| "Registration timed out".to_string())?
     }
 
+    /// The instrument this conId is already known to hold. `0` means the
+    /// contract carries no conId (ibx#278) and answers for no one: the engine
+    /// resolves those by descriptor, so only it can say which slot they got.
+    fn cached_instrument(&self, con_id: i64) -> Option<InstrumentId> {
+        if con_id == 0 {
+            return None;
+        }
+        self.con_id_to_instrument.lock().unwrap().get(&con_id).copied()
+    }
+
+    /// Cache the engine's answer for later lookups. Caching it under `0` would
+    /// point every conId-less contract at the first one's slot.
+    fn cache_instrument(&self, con_id: i64, instrument: InstrumentId) {
+        if con_id != 0 {
+            self.con_id_to_instrument.lock().unwrap().insert(con_id, instrument);
+        }
+    }
+
+    /// `instrument_to_req` maps ONE req_id per instrument: a second live
+    /// subscription would clobber the first's reverse mapping and orphan it
+    /// silently — no ticks, no error (ibx#233). Names the refusal, or None
+    /// when this request is free to take the slot.
+    fn duplicate_sub_refusal(&self, instrument: InstrumentId, req_id: i64, symbol: &str) -> Option<String> {
+        match self.instrument_to_req.lock().unwrap().get(&instrument) {
+            Some(&existing) if existing != req_id => Some(format!(
+                "{} already has a live market-data subscription under \
+                 req_id {existing}: cancel it first or reuse that req_id",
+                if symbol.is_empty() { "this contract" } else { symbol },
+            )),
+            _ => None,
+        }
+    }
+
     /// Find instrument ID for a contract, registering if needed.
     /// Returns `Err` if the control channel is closed.
     pub fn find_or_register_instrument(
@@ -539,12 +572,8 @@ impl ClientCore {
         exchange: &str,
         sec_type: &str,
     ) -> Result<InstrumentId, String> {
-        // Check if already mapped by con_id
-        {
-            let map = self.con_id_to_instrument.lock().unwrap();
-            if let Some(&iid) = map.get(&con_id) {
-                return Ok(iid);
-            }
+        if let Some(iid) = self.cached_instrument(con_id) {
+            return Ok(iid);
         }
 
         // Register new — only allocates an InstrumentId slot, does not subscribe to market data.
@@ -556,7 +585,7 @@ impl ClientCore {
         }).map_err(|e| format!("Engine stopped: {}", e))?;
 
         let id = Self::recv_registration(reply_rx)?;
-        self.con_id_to_instrument.lock().unwrap().insert(con_id, id);
+        self.cache_instrument(con_id, id);
         Ok(id)
     }
 
@@ -594,23 +623,12 @@ impl ClientCore {
             });
         }
 
-        // instrument_to_req maps ONE req_id per instrument: a second live
-        // subscription would clobber the first's reverse mapping and orphan
-        // it silently — no ticks, no error (ibx#233). Reject up front via
-        // the client-side conId cache, before anything reaches the engine.
+        // Reject a duplicate before anything reaches the engine, whenever the
+        // conId cache can say which slot this contract holds.
+        if let Some(refusal) = self.cached_instrument(con_id)
+            .and_then(|iid| self.duplicate_sub_refusal(iid, req_id, symbol))
         {
-            let cache = self.con_id_to_instrument.lock().unwrap();
-            if let Some(&iid) = cache.get(&con_id) {
-                if let Some(&existing) = self.instrument_to_req.lock().unwrap().get(&iid) {
-                    if existing != req_id {
-                        return Err(format!(
-                            "contract (con_id {}) already has a live market-data \
-                             subscription under req_id {}: cancel it first or \
-                             reuse that req_id", con_id, existing,
-                        ));
-                    }
-                }
-            }
+            return Err(refusal);
         }
 
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
@@ -633,7 +651,13 @@ impl ClientCore {
         }).map_err(|e| format!("Engine stopped: {}", e))?;
 
         let instrument_id = Self::recv_registration(reply_rx)?;
-        self.con_id_to_instrument.lock().unwrap().insert(con_id, instrument_id);
+        // A conId-less contract has no client-side identity, so this is the
+        // first point at which the guard above can be applied to it: the
+        // engine's answer is what says whether the slot is already taken.
+        if let Some(refusal) = self.duplicate_sub_refusal(instrument_id, req_id, symbol) {
+            return Err(refusal);
+        }
+        self.cache_instrument(con_id, instrument_id);
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
         self.instrument_to_req.lock().unwrap().insert(instrument_id, req_id);
         if snapshot {
@@ -717,7 +741,7 @@ impl ClientCore {
         }).map_err(|e| format!("Engine stopped: {}", e))?;
 
         let instrument_id = Self::recv_registration(reply_rx)?;
-        self.con_id_to_instrument.lock().unwrap().insert(con_id, instrument_id);
+        self.cache_instrument(con_id, instrument_id);
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
         self.instrument_to_req.lock().unwrap().insert(instrument_id, req_id);
         Ok(instrument_id)
