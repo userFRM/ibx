@@ -2256,7 +2256,7 @@ fn an_unwireable_req_id_is_refused() {
         ("cancel_head_time_stamp", |c, id| c.cancel_head_time_stamp(id)),
         ("req_contract_details", |c, id| c.req_contract_details(id, &spy())),
         ("req_matching_symbols", |c, id| c.req_matching_symbols(id, "SP")),
-        ("req_scanner_subscription", |c, id| c.req_scanner_subscription(id, "STK", "STK.US", "TOP_PERC_GAIN", 10)),
+        ("req_scanner_subscription", |c, id| c.req_scanner_subscription(id, "STK", "STK.US", "TOP_PERC_GAIN", 10, &[])),
         ("cancel_scanner_subscription", |c, id| c.cancel_scanner_subscription(id)),
         ("req_historical_news", |c, id| c.req_historical_news(id, 756733, "BRFG", "", "", 10)),
         ("req_news_article", |c, id| c.req_news_article(id, "BRFG", "BRFG$1")),
@@ -2440,13 +2440,15 @@ fn req_scanner_parameters_sends_fetch() {
 #[test]
 fn req_scanner_subscription_sends_subscribe() {
     let (client, rx, _shared) = test_client();
-    client.req_scanner_subscription(3, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 25).unwrap();
+    client.req_scanner_subscription(3, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 25,
+        &[TagValue { tag: "priceAbove".into(), value: "10".into() }]).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::SubscribeScanner { req_id, scan_code, max_items, .. } => {
+        ControlCommand::SubscribeScanner { req_id, scan_code, max_items, filters, .. } => {
             assert_eq!(req_id, 3);
             assert_eq!(scan_code, "TOP_PERC_GAIN");
             assert_eq!(max_items, 25);
+            assert_eq!(filters, vec![("priceAbove".to_string(), "10".to_string())]);
         }
         _ => panic!("expected SubscribeScanner"),
     }

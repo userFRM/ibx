@@ -137,12 +137,13 @@ impl EClient {
     }
 
     /// Request scanner subscription.
-    #[pyo3(signature = (req_id, subscription, scanner_subscription_options=Vec::new()))]
+    #[pyo3(signature = (req_id, subscription, scanner_subscription_options=Vec::new(), scanner_subscription_filter_options=Vec::new()))]
     fn req_scanner_subscription(
         &self,
         req_id: i64,
         subscription: Py<PyAny>,
         scanner_subscription_options: Vec<Py<PyAny>>,
+        scanner_subscription_filter_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = scanner_subscription_options;
         let tx = self.tx()?;
@@ -155,8 +156,9 @@ impl EClient {
                 .and_then(|v| v.extract::<String>(py)).unwrap_or_else(|_| "TOP_PERC_GAIN".to_string());
             let max_items = subscription.getattr(py, "numberOfRows")
                 .and_then(|v| v.extract::<u32>(py)).unwrap_or(50);
+            let filters = scanner_filters(py, &subscription, &scanner_subscription_filter_options);
             Self::send_control(py, &tx, ControlCommand::SubscribeScanner {
-                req_id: req_id as u32, instrument, location_code, scan_code, max_items,
+                req_id: req_id as u32, instrument, location_code, scan_code, max_items, filters,
             })
         })
     }
@@ -332,5 +334,128 @@ impl EClient {
             use_rth,
         })?;
         Ok(())
+    }
+}
+
+/// `ScannerSubscription` attribute -> the scanner filter code it selects. Everything a
+/// caller sets beyond instrument / location / scan code is a filter, and a filter the
+/// subscription drops is a different result set.
+const SCANNER_FILTERS: &[(&str, &str)] = &[
+    ("abovePrice", "priceAbove"),
+    ("belowPrice", "priceBelow"),
+    ("aboveVolume", "volumeAbove"),
+    ("marketCapAbove", "marketCapAbove1e6"),
+    ("marketCapBelow", "marketCapBelow1e6"),
+    ("moodyRatingAbove", "moodyRatingAbove"),
+    ("moodyRatingBelow", "moodyRatingBelow"),
+    ("spRatingAbove", "spRatingAbove"),
+    ("spRatingBelow", "spRatingBelow"),
+    ("maturityDateAbove", "maturityDateAbove"),
+    ("maturityDateBelow", "maturityDateBelow"),
+    ("couponRateAbove", "couponRateAbove"),
+    ("couponRateBelow", "couponRateBelow"),
+    ("averageOptionVolumeAbove", "avgOptVolumeAbove"),
+];
+
+/// `stockTypeFilter` name -> its filter value. Anything else, `ALL` included, is no filter.
+fn stk_types_code(name: &str) -> &'static str {
+    match name.to_ascii_uppercase().as_str() {
+        "STOCK" => "exc:ETF",
+        "ETF" => "inc:ETF",
+        "CORP" => "inc:CORP",
+        "ADR" => "inc:ADR",
+        "REIT" => "inc:REIT",
+        "CEF" => "inc:CEF",
+        _ => "",
+    }
+}
+
+/// One filter value, or `None` when the attribute is missing or left at its unset default.
+fn scanner_filter_value(py: Python<'_>, sub: &Py<PyAny>, attr: &str) -> Option<String> {
+    let value = sub.getattr(py, attr).ok()?;
+    if let Ok(n) = value.extract::<f64>(py) {
+        // An unset numeric filter arrives as `sys.float_info.max` or `2**31 - 1`, and
+        // sending either as a bound would empty the scan.
+        if n == f64::MAX || n == f64::from(i32::MAX) {
+            return None;
+        }
+        return Some(n.to_string());
+    }
+    let text = value.extract::<String>(py).ok()?;
+    (!text.is_empty()).then_some(text)
+}
+
+/// Collect the subscription's filters, then the caller's explicit filter tags, which win
+/// over the named attribute selecting the same code.
+fn scanner_filters(py: Python<'_>, sub: &Py<PyAny>, filter_options: &[Py<PyAny>]) -> Vec<(String, String)> {
+    let mut filters: Vec<(String, String)> = SCANNER_FILTERS.iter()
+        .filter_map(|(attr, code)| Some(((*code).to_string(), scanner_filter_value(py, sub, attr)?)))
+        .collect();
+
+    if sub.getattr(py, "excludeConvertible").and_then(|v| v.extract::<bool>(py)).unwrap_or(false) {
+        filters.push(("excludeConvertible".to_string(), "true".to_string()));
+    }
+    let stk_types = sub.getattr(py, "stockTypeFilter")
+        .and_then(|v| v.extract::<String>(py)).unwrap_or_default();
+    let stk_types = stk_types_code(&stk_types);
+    if !stk_types.is_empty() {
+        filters.push(("stkTypes".to_string(), stk_types.to_string()));
+    }
+
+    for option in filter_options {
+        let (Ok(tag), Ok(value)) = (
+            option.getattr(py, "tag").and_then(|v| v.extract::<String>(py)),
+            option.getattr(py, "value").and_then(|v| v.extract::<String>(py)),
+        ) else { continue };
+        if tag.is_empty() {
+            continue;
+        }
+        filters.retain(|(code, _)| *code != tag);
+        filters.push((tag, value));
+    }
+    filters
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn namespace(py: Python<'_>, fields: &str) -> Py<PyAny> {
+        py.eval(&std::ffi::CString::new(format!("__import__('types').SimpleNamespace({fields})")).unwrap(), None, None)
+            .unwrap().unbind()
+    }
+
+    #[test]
+    fn scanner_subscription_attributes_become_filters() {
+        Python::initialize();
+        Python::attach(|py| {
+            let sub = namespace(py, "abovePrice=10.0, belowPrice=1.7976931348623157e+308, \
+                aboveVolume=2147483647, marketCapAbove=1.7976931348623157e+308, \
+                moodyRatingAbove='', spRatingAbove='A', averageOptionVolumeAbove=500, \
+                excludeConvertible=True, stockTypeFilter='etf'");
+            assert_eq!(scanner_filters(py, &sub, &[]), vec![
+                ("priceAbove".to_string(), "10".to_string()),
+                ("spRatingAbove".to_string(), "A".to_string()),
+                ("avgOptVolumeAbove".to_string(), "500".to_string()),
+                ("excludeConvertible".to_string(), "true".to_string()),
+                ("stkTypes".to_string(), "inc:ETF".to_string()),
+            ]);
+        });
+    }
+
+    #[test]
+    fn explicit_filter_tags_replace_the_attribute_for_the_same_code() {
+        Python::initialize();
+        Python::attach(|py| {
+            let sub = namespace(py, "abovePrice=10.0, excludeConvertible=False, stockTypeFilter='ALL'");
+            let options = [
+                namespace(py, "tag='priceAbove', value='20'"),
+                namespace(py, "tag='usdMarketCapAbove', value='10000'"),
+            ];
+            assert_eq!(scanner_filters(py, &sub, &options), vec![
+                ("priceAbove".to_string(), "20".to_string()),
+                ("usdMarketCapAbove".to_string(), "10000".to_string()),
+            ]);
+        });
     }
 }

@@ -902,7 +902,7 @@ fn api_gt_suite() {
     {
         print!("  req_scanner_subscription (TOP_PERC_GAIN)... ");
         wrapper.drain();
-        client.req_scanner_subscription(460, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 10).unwrap();
+        client.req_scanner_subscription(460, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 10, &[]).unwrap();
         poll_until(&client, &mut wrapper,
             |cbs| cbs.iter().any(|c| matches!(c, Cb::ScannerDataEnd { .. } | Cb::Error { .. })),
             Duration::from_secs(20));
@@ -1141,7 +1141,7 @@ fn api_gt_suite() {
         print!("  cancel methods batch... ");
         // Subscribe to scanner, verify data, cancel, verify no more data
         wrapper.drain();
-        client.req_scanner_subscription(600, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 5).unwrap();
+        client.req_scanner_subscription(600, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 5, &[]).unwrap();
         poll_until(&client, &mut wrapper,
             |cbs| cbs.iter().any(|c| matches!(c, Cb::ScannerDataEnd { .. } | Cb::Error { .. })),
             Duration::from_secs(15));

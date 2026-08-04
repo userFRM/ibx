@@ -4,7 +4,7 @@ Subscribe to the `TOP_PERC_GAIN` scanner over US major stocks and print the top 
 
 ## What this shows
 
-- Building a `ScannerSubscription`-shaped object (IBX reads attributes via `getattr`).
+- Building a `ScannerSubscription`-shaped object (IBX reads attributes via `getattr`), including its filter attributes such as `abovePrice`.
 - Reading `scanner_data` rows (rank + `ContractDetails`) until `scanner_data_end`.
 - Cancelling cleanly with `cancel_scanner_subscription` before disconnecting.
 

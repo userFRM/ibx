@@ -13,6 +13,9 @@ pub struct ScannerSubscription {
     pub location_code: String,
     pub scan_code: String,
     pub max_items: u32,
+    /// Filter code / value pairs, named exactly as `req_scanner_parameters` names them
+    /// (`priceAbove`, `usdMarketCapAbove`, `stkTypes`, …).
+    pub filters: Vec<(String, String)>,
 }
 
 /// One entry from a scanner result.
@@ -46,6 +49,14 @@ pub fn build_scanner_params_request(seq: u32) -> Vec<u8> {
 
 /// Build the XML payload for a scanner subscription request.
 pub fn build_scanner_subscribe_xml(sub: &ScannerSubscription, scan_id: &str) -> String {
+    let mut filter = String::new();
+    if !sub.filters.is_empty() {
+        filter.push_str("<Filter varName=\"filter\">");
+        for (code, value) in &sub.filters {
+            filter.push_str(&format!("<{code}>{value}</{code}>"));
+        }
+        filter.push_str("</Filter>");
+    }
     format!(
         "<ScanSubscription>\
          <id>{id}</id>\
@@ -54,6 +65,7 @@ pub fn build_scanner_subscribe_xml(sub: &ScannerSubscription, scan_id: &str) -> 
          <scanCode>{scan_code}</scanCode>\
          <source>API</source>\
          <maxItems>{max_items}</maxItems>\
+         {filter}\
          <suspend>no</suspend>\
          <inclRestrictedLocations>yes</inclRestrictedLocations>\
          <apiManual>no</apiManual>\
@@ -136,8 +148,10 @@ mod tests {
             location_code: "STK.US.MAJOR".to_string(),
             scan_code: "TOP_PERC_GAIN".to_string(),
             max_items: 50,
+            filters: Vec::new(),
         };
         let xml = build_scanner_subscribe_xml(&sub, "APISCAN1:1");
+        assert!(!xml.contains("<Filter"), "no filters means no filter element: {xml}");
         assert!(xml.contains("<id>APISCAN1:1</id>"));
         assert!(xml.contains("<instrument>STK</instrument>"));
         assert!(xml.contains("<locations>STK.US.MAJOR</locations>"));
@@ -145,6 +159,31 @@ mod tests {
         assert!(xml.contains("<maxItems>50</maxItems>"));
         assert!(xml.contains("<source>API</source>"));
         assert!(xml.contains("<aggGroup>-1</aggGroup>"));
+    }
+
+    /// Filters are what a scan code is worth: `TOP_PERC_GAIN` unfiltered is a penny-stock
+    /// list. They ride as one element per filter code inside the subscription's filter.
+    #[test]
+    fn scanner_subscribe_xml_carries_filters() {
+        let sub = ScannerSubscription {
+            instrument: "STK".to_string(),
+            location_code: "STK.US.MAJOR".to_string(),
+            scan_code: "TOP_PERC_GAIN".to_string(),
+            max_items: 50,
+            filters: vec![
+                ("priceAbove".to_string(), "10".to_string()),
+                ("stkTypes".to_string(), "inc:ETF".to_string()),
+            ],
+        };
+        let xml = build_scanner_subscribe_xml(&sub, "APISCAN1:1");
+        assert!(xml.contains("<Filter varName=\"filter\">"), "{xml}");
+        assert!(xml.contains("<priceAbove>10</priceAbove>"), "{xml}");
+        assert!(xml.contains("<stkTypes>inc:ETF</stkTypes>"), "{xml}");
+        assert!(xml.contains("</Filter>"), "{xml}");
+        // The filter sits between maxItems and suspend, where the subscription declares it.
+        let filter_at = xml.find("<Filter").unwrap();
+        assert!(xml.find("<maxItems>").unwrap() < filter_at, "{xml}");
+        assert!(filter_at < xml.find("<suspend>").unwrap(), "{xml}");
     }
 
     #[test]

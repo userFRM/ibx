@@ -755,7 +755,7 @@ def req_matching_symbols(req_id, pattern)
 Request scanner subscription.
 
 ```python
-def req_scanner_subscription(req_id, subscription, scanner_subscription_options=Vec::new()))
+def req_scanner_subscription(req_id, subscription, scanner_subscription_options=Vec::new(), scanner_subscription_filter_options=Vec::new()))
 ```
 
 | Parameter | Type | Description |
@@ -763,6 +763,7 @@ def req_scanner_subscription(req_id, subscription, scanner_subscription_options=
 | `req_id` | `int` | Request identifier. Used to match responses to requests. |
 | `subscription` | `Py<PyAny>` | Scanner subscription parameters. |
 | `scanner_subscription_options` | `list` |  |
+| `scanner_subscription_filter_options` | `list` | Scanner filter tags from `req_scanner_parameters`, e.g. `priceAbove` = `"10"`. |
 
 ---
 

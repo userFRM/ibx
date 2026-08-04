@@ -359,6 +359,7 @@ pub(super) fn phase_scanner_subscription(mut conns: Conns, gw: &Gateway, config:
         location_code: "STK.US.MAJOR".into(),
         scan_code: "TOP_PERC_GAIN".into(),
         max_items: 10,
+        filters: vec![("priceAbove".into(), "1".into())],
     }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -1012,6 +1013,7 @@ pub(super) fn phase_scanner_params(mut conns: Conns, gw: &Gateway, config: &Gate
         location_code: "STK.US.MAJOR".to_string(),
         scan_code: "HOT_BY_VOLUME".to_string(),
         max_items: 10,
+        filters: Vec::new(),
     }).unwrap();
     let join = run_hot_loop(hot_loop);
 

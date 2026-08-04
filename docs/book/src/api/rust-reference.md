@@ -1014,10 +1014,10 @@ pub fn req_scanner_parameters(&self) -> Result<(), String>
 
 #### `req_scanner_subscription`
 
-Subscribe to a market scanner.
+Subscribe to a market scanner. `filters` are the scanner filter tags named by `req_scanner_parameters`, e.g. `priceAbove` = `"10"` or `stkTypes` = `"inc:ETF"`.
 
 ```rust
-pub fn req_scanner_subscription( &self, req_id: i64, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, ) -> Result<(), String>
+pub fn req_scanner_subscription( &self, req_id: i64, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, filters: &[TagValue], ) -> Result<(), String>
 ```
 
 | Parameter | Type | Description |
@@ -1027,6 +1027,7 @@ pub fn req_scanner_subscription( &self, req_id: i64, instrument: &str, location_
 | `location_code` | `&str` | Scanner location (e.g. `"STK.US.MAJOR"`). |
 | `scan_code` | `&str` | Scanner code (e.g. `"TOP_PERC_GAIN"`, `"HIGH_OPT_IMP_VOLAT"`). |
 | `max_items` | `u32` | Maximum number of scanner results. |
+| `filters` | `&[TagValue]` | Scanner filter tags from `req_scanner_parameters`, e.g. `priceAbove` = `"10"`. |
 
 **Returns:** `Result<(), String>`
 

@@ -492,7 +492,7 @@ impl Order {
 
 // ── TagValue ──
 
-/// ibapi-compatible TagValue for algo parameters.
+/// ibapi-compatible TagValue for algo and scanner filter parameters.
 #[derive(Clone, Debug)]
 pub struct TagValue {
     pub tag: String,
