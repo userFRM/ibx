@@ -1152,6 +1152,38 @@ fn place_order_transmit_false_is_rejected() {
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
 }
 
+// ── ibx#96: FA allocation must be rejected, not silently dropped ──
+
+/// No encoder reads an FA field, so an accepted one fills the whole size on
+/// the connected account instead of spreading it across the advisor group.
+/// The algo case is the ordering proof: `validate_order` returns Ok early for
+/// an algo order, so a guard placed after that check lets FA+Adaptive through.
+#[test]
+fn place_order_fa_allocation_is_rejected() {
+    let cases: Vec<OrderCase> = vec![
+        ("fa_group", |o| o.fa_group = "AllAccounts".into()),
+        ("fa_method", |o| o.fa_method = "EqualQuantity".into()),
+        ("fa_percentage", |o| o.fa_percentage = "50".into()),
+        ("fa_group with an algo", |o| {
+            o.fa_group = "AllAccounts".into();
+            o.algo_strategy = "Adaptive".into();
+        }),
+    ];
+    for (name, set) in cases {
+        let (client, rx, _shared) = test_client();
+        let mut order = Order {
+            action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+            lmt_price: 150.0, ..Default::default()
+        };
+        set(&mut order);
+        let Err(err) = client.place_order(1, &spy(), &order) else {
+            panic!("{name} must be refused");
+        };
+        assert!(err.contains("fa_group"), "{name}: {err}");
+        assert!(rx.try_recv().is_err(), "{name}: nothing reaches the engine");
+    }
+}
+
 #[test]
 fn place_order_unknown_tif_is_rejected() {
     let (client, rx, shared) = test_client();
