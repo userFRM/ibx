@@ -192,7 +192,7 @@ impl LatencyStats {
 
     pub fn report(&self, label: &str) {
         if self.samples.is_empty() {
-            println!("  {} (no samples)", label);
+            println!("  {label} (no samples)");
             return;
         }
         let mut sorted = self.samples.clone();
@@ -200,7 +200,7 @@ impl LatencyStats {
         let n = sorted.len();
         let mean = sorted.iter().sum::<u64>() / n as u64;
 
-        println!("{} ({} samples)", label, n);
+        println!("{label} ({n} samples)");
         println!("  Min:            {}", format_ns(sorted[0]));
         println!("  P50:            {}", format_ns(percentile(&sorted, 0.50)));
         println!("  P95:            {}", format_ns(percentile(&sorted, 0.95)));
@@ -215,8 +215,8 @@ impl LatencyStats {
         if !self.samples.is_empty() {
             let mean = self.samples.iter().sum::<u64>() / self.samples.len() as u64;
             let throughput = 1_000_000_000.0 / mean as f64;
-            println!("  Throughput:     ~{:.0} events/sec", throughput);
-            println!("  Duration:       {:.1}s", duration_secs);
+            println!("  Throughput:     ~{throughput:.0} events/sec");
+            println!("  Duration:       {duration_secs:.1}s");
         }
     }
 }
@@ -231,7 +231,7 @@ pub fn percentile(sorted: &[u64], p: f64) -> u64 {
 
 pub fn format_ns(ns: u64) -> String {
     if ns < 1_000 {
-        format!("{}ns", ns)
+        format!("{ns}ns")
     } else if ns < 1_000_000 {
         format!("{:.1}us", ns as f64 / 1_000.0)
     } else if ns < 1_000_000_000 {
@@ -244,7 +244,7 @@ pub fn format_ns(ns: u64) -> String {
 pub fn print_header(name: &str) {
     println!();
     println!("========================================");
-    println!("  {}", name);
+    println!("  {name}");
     println!("========================================");
     println!();
 }

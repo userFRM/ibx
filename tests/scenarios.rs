@@ -259,9 +259,9 @@ fn order_lifecycle_algo_vwap_partial_fills() {
         let remaining = 1000 - total_filled;
         shared.orders.push_fill(Fill {
             instrument: 0, order_id: 110, side: Side::Buy,
-            price: prices[i as usize], qty: qtys[i] as i64, remaining,
+            price: prices[i], qty: qtys[i], remaining,
             commission: PRICE_SCALE / 10, timestamp_ns: (i as u64 + 1) * 1000,
-            cum_qty: qtys[i] as i64, avg_price: prices[i as usize],
+            cum_qty: qtys[i], avg_price: prices[i],
         });
     }
 
@@ -1057,7 +1057,7 @@ fn account_summary_one_shot_delivery() {
 
     // Should have exactly 3 account_summary events + 1 end
     let summaries: Vec<_> = w.events.iter().filter(|e| e.starts_with("account_summary:5:")).collect();
-    assert_eq!(summaries.len(), 3, "Expected 3 summary tags, got {:?}", summaries);
+    assert_eq!(summaries.len(), 3, "Expected 3 summary tags, got {summaries:?}");
     assert!(w.events.iter().any(|e| e == "account_summary_end:5"));
 
     // Verify specific tags

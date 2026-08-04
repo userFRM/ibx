@@ -33,11 +33,11 @@ impl Wrapper for ProbeWrapper {
         );
     }
     fn contract_details_end(&mut self, req_id: i64) {
-        println!("[contract_details_end] req_id={}", req_id);
+        println!("[contract_details_end] req_id={req_id}");
         self.state.lock().unwrap().end_seen = true;
     }
     fn error(&mut self, req_id: i64, code: i64, msg: &str, _adv: &str) {
-        eprintln!("[error] req_id={} code={} msg={}", req_id, code, msg);
+        eprintln!("[error] req_id={req_id} code={code} msg={msg}");
         self.state.lock().unwrap().last_error = Some((req_id, code, msg.into()));
     }
 }
@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
     let hold_secs: u64 = env::var("HOLD_SECS").unwrap_or_else(|_| "20".to_string()).parse()?;
 
-    println!("== ex134_ccp_grace: connecting to paper ({})...", host);
+    println!("== ex134_ccp_grace: connecting to paper ({host})...");
     let t0 = Instant::now();
     let client = EClient::connect(&EClientConfig {
         username, password, host, paper: true, core_id: None, code_provider: None,
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(Mutex::new(State::default()));
     let mut wrapper = ProbeWrapper { state: state.clone() };
 
-    println!("== Holding session for {}s (CCP would historically FIN at ~12s)...", hold_secs);
+    println!("== Holding session for {hold_secs}s (CCP would historically FIN at ~12s)...");
     let hold_deadline = Instant::now() + Duration::from_secs(hold_secs);
     while Instant::now() < hold_deadline {
         client.process_msgs(&mut wrapper);
@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let req_id: i64 = 1;
     client.req_contract_details(req_id, &aapl)
-        .map_err(|e| format!("req_contract_details failed: {}", e))?;
+        .map_err(|e| format!("req_contract_details failed: {e}"))?;
 
     let probe_deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < probe_deadline {
@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  details_count : {}", s.details_count);
     println!("  end_seen      : {}", s.end_seen);
     if let Some((rid, code, msg)) = &s.last_error {
-        println!("  last_error    : req_id={} code={} msg={}", rid, code, msg);
+        println!("  last_error    : req_id={rid} code={code} msg={msg}");
     }
     let pass = s.end_seen && s.details_count > 0;
     drop(s);

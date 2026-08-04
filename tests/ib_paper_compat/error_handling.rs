@@ -99,11 +99,10 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
         // Check for historical data responses
         let data = shared.reference.drain_historical_data();
         for (req_id, resp) in &data {
-            if *req_id >= 14000 && *req_id < 14000 + num_requests {
-                if resp.is_complete {
+            if *req_id >= 14000 && *req_id < 14000 + num_requests
+                && resp.is_complete {
                     responses_received.insert(*req_id);
                 }
-            }
         }
 
         // Check for error events (pacing violations)
@@ -124,13 +123,13 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     println!("  Responses received: {}/{}", responses_received.len(), num_requests);
-    println!("  Errors: {}", errors_received);
+    println!("  Errors: {errors_received}");
 
     if responses_received.is_empty() {
         // Historical server may be fully rate-limited from prior historical phases
         println!("  SKIP: No responses — HMDS likely pacing-limited from prior phases\n");
     } else if responses_received.len() == num_requests as usize {
-        println!("  PASS (all {} requests completed)\n", num_requests);
+        println!("  PASS (all {num_requests} requests completed)\n");
     } else {
         println!("  PASS ({}/{} completed — pacing may have throttled some)\n", responses_received.len(), num_requests);
     }

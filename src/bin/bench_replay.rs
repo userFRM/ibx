@@ -60,7 +60,7 @@ fn main() {
         (2, &[
             (0, 2, 20050, false), (1, 2, 20055, false),
             (2, 2, 20052, false), (4, 2, 200, false),
-            (tick_decoder::O_VOLUME as u64, 4, 1_000_000, false),
+            (tick_decoder::O_VOLUME, 4, 1_000_000, false),
         ]),
     ]);
 
@@ -83,8 +83,8 @@ fn main() {
     println!("  Bench: Replay Pipeline (no network)");
     println!("========================================");
     println!();
-    println!("  Iterations:  {}", ITERATIONS);
-    println!("  Warmup:      {}", WARMUP);
+    println!("  Iterations:  {ITERATIONS}");
+    println!("  Warmup:      {WARMUP}");
     if let Some(ref msgs) = fixture_msgs {
         println!("  Fixture:     {} messages loaded", msgs.len());
     } else {
@@ -281,9 +281,9 @@ fn main() {
             if frac == 0 {
                 let _ = whole.to_string();
             } else {
-                let frac_str = format!("{:08}", frac);
+                let frac_str = format!("{frac:08}");
                 let trimmed = frac_str.trim_end_matches('0');
-                let _ = format!("{}.{}", whole, trimmed);
+                let _ = format!("{whole}.{trimmed}");
             }
         });
 
@@ -387,7 +387,7 @@ fn main() {
         market.set_min_tick(id, 0.01);
 
         let mut idx = 0usize;
-        bench(&format!("fixture replay ({} msgs, cycled)", n), iters, || {
+        bench(&format!("fixture replay ({n} msgs, cycled)"), iters, || {
             let msg = &msgs[idx % n];
             // Decode body directly (fixture messages are already unsigned)
             if let Some(body) = find_body_after_tag(msg, b"35=P\x01") {
@@ -421,7 +421,7 @@ fn main() {
 
     for (label, data, stage) in &stages {
         let ns = measure_stage(*stage, data, &mut market, id);
-        println!("    {:<45} {:>6} ns", label, ns);
+        println!("    {label:<45} {ns:>6} ns");
     }
 
     // Measure full pipeline
@@ -518,7 +518,7 @@ fn load_fixture(path: &str) -> Option<Vec<Vec<u8>>> {
 
         if let Some(b64) = extract_json_string(&line, "raw_b64") {
             use base64::Engine;
-            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&b64) {
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
                 messages.push(bytes);
             }
         }
@@ -528,7 +528,7 @@ fn load_fixture(path: &str) -> Option<Vec<Vec<u8>>> {
 }
 
 fn extract_json_string<'a>(json: &'a str, key: &str) -> Option<&'a str> {
-    let needle = format!("\"{}\":\"", key);
+    let needle = format!("\"{key}\":\"");
     let start = json.find(&needle)? + needle.len();
     let end = json[start..].find('"')? + start;
     Some(&json[start..end])
@@ -577,7 +577,7 @@ fn push_bits(bits: &mut Vec<u8>, val: u64, n: usize) {
 
 fn finalize_payload(bits: &[u8]) -> Vec<u8> {
     let bit_count = bits.len();
-    let byte_count = (bit_count + 7) / 8;
+    let byte_count = bit_count.div_ceil(8);
     let mut payload = vec![0u8; byte_count];
     for (i, &b) in bits.iter().enumerate() {
         if b == 1 {
@@ -593,10 +593,10 @@ fn finalize_payload(bits: &[u8]) -> Vec<u8> {
 
 fn build_fix_tick_message(tick_payload: &[u8]) -> Vec<u8> {
     // Build: 8=O\x01 9=<len>\x01 35=P\x01 <tick_payload>
-    let body = format!("35=P\x01");
+    let body = "35=P\x01".to_string();
     let body_bytes = body.as_bytes();
     let body_len = body_bytes.len() + tick_payload.len();
-    let header = format!("8=O\x019={:04}\x01", body_len);
+    let header = format!("8=O\x019={body_len:04}\x01");
     let mut msg = header.into_bytes();
     msg.extend_from_slice(body_bytes);
     msg.extend_from_slice(tick_payload);

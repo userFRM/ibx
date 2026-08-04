@@ -32,13 +32,10 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(15);
 
     while Instant::now() < deadline && contract.is_none() {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::ContractDetails { req_id, details }) => {
-                if req_id == 1200 {
-                    contract = Some(details);
-                }
+        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if req_id == 1200 {
+                contract = Some(details);
             }
-            _ => {}
         }
     }
 
@@ -85,11 +82,8 @@ pub(super) fn phase_contract_details_by_symbol(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(15);
 
     while Instant::now() < deadline && contract.is_none() {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::ContractDetails { req_id, details }) => {
-                if req_id == 7800 { contract = Some(details); }
-            }
-            _ => {}
+        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if req_id == 7800 { contract = Some(details); }
         }
     }
 
@@ -118,7 +112,7 @@ pub(super) fn phase_trading_hours(conns: &mut Conns) {
         (6008, "265598"), (207, "BEST"), (167, "CS"),
         (264, "442"), (6088, "Socket"), (9830, "1"), (9839, "1"),
     ]) {
-        println!("  SKIP: farm subscribe failed: {}\n", e);
+        println!("  SKIP: farm subscribe failed: {e}\n");
         return;
     }
     println!("  Subscribed AAPL on farm, listening on CCP for schedule");
@@ -127,13 +121,10 @@ pub(super) fn phase_trading_hours(conns: &mut Conns) {
     let deadline = Instant::now() + Duration::from_secs(15);
 
     while Instant::now() < deadline && schedule.is_none() {
-        match conns.farm.try_recv() {
-            Ok(_) => { conns.farm.extract_frames(); }
-            Err(_) => {}
-        }
+        if conns.farm.try_recv().is_ok() { conns.farm.extract_frames(); }
         match conns.ccp.try_recv() {
             Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
-            Err(e) => { println!("  CCP recv error: {}", e); break; }
+            Err(e) => { println!("  CCP recv error: {e}"); break; }
             Ok(_) => {}
         }
         for frame in conns.ccp.extract_frames() {
@@ -238,11 +229,8 @@ pub(super) fn phase_market_rule_id(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(15);
 
     while Instant::now() < deadline && contract.is_none() {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::ContractDetails { req_id, details }) => {
-                if req_id == 8400 { contract = Some(details); }
-            }
-            _ => {}
+        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if req_id == 8400 { contract = Some(details); }
         }
     }
 
@@ -286,7 +274,7 @@ pub(super) fn phase_matching_symbols_channel(conns: Conns) -> Conns {
         for (req_id, matches) in &results {
             if *req_id == 2001 {
                 match_count = matches.len();
-                println!("  {} matches for 'AAPL'", match_count);
+                println!("  {match_count} matches for 'AAPL'");
                 for m in matches.iter().take(3) {
                     println!("    {} ({:?}) conId={} exchange={}", m.symbol, m.sec_type, m.con_id, m.primary_exchange);
                 }
@@ -351,11 +339,8 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
     if got_details && !got_end {
         let end_deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < end_deadline {
-            match event_rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(Event::ContractDetailsEnd(req_id)) => {
-                    if req_id == 1001 { got_end = true; break; }
-                }
-                _ => {}
+            if let Ok(Event::ContractDetailsEnd(req_id)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+                if req_id == 1001 { got_end = true; break; }
             }
         }
     }

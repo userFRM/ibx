@@ -111,6 +111,7 @@ impl OrderStatus {
 /// Current quote for an instrument. Cache-line aligned for hot-path access.
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
+#[derive(Default)]
 pub struct Quote {
     pub bid: Price,
     pub ask: Price,
@@ -131,27 +132,6 @@ pub struct Quote {
     pub last_exch_mask: i64,
 }
 
-impl Default for Quote {
-    fn default() -> Self {
-        Self {
-            bid: 0,
-            ask: 0,
-            last: 0,
-            bid_size: 0,
-            ask_size: 0,
-            last_size: 0,
-            volume: 0,
-            open: 0,
-            high: 0,
-            low: 0,
-            close: 0,
-            timestamp_ns: 0,
-            bid_exch_mask: 0,
-            ask_exch_mask: 0,
-            last_exch_mask: 0,
-        }
-    }
-}
 
 /// Execution fill report.
 #[derive(Debug, Clone, Copy)]
@@ -806,6 +786,12 @@ pub struct OrderBuffer {
     buf: Vec<OrderRequest>,
 }
 
+impl Default for OrderBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OrderBuffer {
     pub fn new() -> Self {
         Self {
@@ -1271,7 +1257,7 @@ mod tests {
         for wire in [0i64, 1, 2, 7, 500, 10_000, 1_000_000] {
             let stored = qty_from_wire(wire);
             let delivered = stored as f64 / QTY_SCALE as f64;
-            assert_eq!(delivered, wire as f64, "wire quantity {} came back as {}", wire, delivered);
+            assert_eq!(delivered, wire as f64, "wire quantity {wire} came back as {delivered}");
         }
     }
 
@@ -1805,7 +1791,7 @@ mod tests {
             init_margin_after: 8957_86 * (PRICE_SCALE / 100),
             maint_margin_after: 8143_51 * (PRICE_SCALE / 100),
             equity_with_loan_after: 754_255_14 * (PRICE_SCALE / 100),
-            commission: 1 * PRICE_SCALE,
+            commission: PRICE_SCALE,
         };
         let r2 = r; // Copy
         assert_eq!(r.init_margin_after, r2.init_margin_after);

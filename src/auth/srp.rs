@@ -17,11 +17,11 @@ pub fn srp_n() -> BigUint {
 
 /// x = SHA1(strip(salt) || SHA1(username:password))
 pub fn srp_compute_x(salt: &[u8], username: &str, password: &str) -> BigUint {
-    let inner = Sha1::digest(format!("{}:{}", username, password).as_bytes());
+    let inner = Sha1::digest(format!("{username}:{password}").as_bytes());
 
     let mut outer = Sha1::new();
     outer.update(strip_leading_zeros(salt));
-    outer.update(&inner);
+    outer.update(inner);
     BigUint::from_bytes_be(&outer.finalize())
 }
 
@@ -79,7 +79,7 @@ pub fn srp_compute_m1(
 
     let mut h = Sha1::new();
     h.update(&xor_ng);
-    h.update(&sha1_user);
+    h.update(sha1_user);
     h.update(strip_leading_zeros(&salt.to_bytes_be()));
     h.update(strip_leading_zeros(&a_pub.to_bytes_be()));
     h.update(strip_leading_zeros(&b_pub.to_bytes_be()));
@@ -107,9 +107,9 @@ pub fn token_short_hash(session_token: &BigUint) -> String {
 pub fn token_hash_slots(session_token: &BigUint, paper: bool) -> String {
     let h = token_short_hash(session_token);
     if paper {
-        format!(";;{};", h)
+        format!(";;{h};")
     } else {
-        format!("{};;;", h)
+        format!("{h};;;")
     }
 }
 

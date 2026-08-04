@@ -27,8 +27,8 @@ fn main() {
 
     print_header("Bench: Order Modify (Amend) Latency");
     println!("  Contract:       {} (con_id={})", config.symbol, config.con_id);
-    println!("  Iterations:     {}", iterations);
-    println!("  Warmup:         {} ticks", warmup_ticks);
+    println!("  Iterations:     {iterations}");
+    println!("  Warmup:         {warmup_ticks} ticks");
     println!();
 
     // Connect
@@ -58,7 +58,7 @@ fn main() {
         instrument,
         side: Side::Buy,
         qty: 1,
-        price: 1 * PRICE_SCALE,
+        price: PRICE_SCALE,
         outside_rth: true,
     });
 

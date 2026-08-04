@@ -33,7 +33,7 @@ impl Wrapper for ProbeWrapper {
         self.state.lock().unwrap().end_seen = true;
     }
     fn error(&mut self, req_id: i64, code: i64, msg: &str, _adv: &str) {
-        eprintln!("[error] req_id={} code={} msg={}", req_id, code, msg);
+        eprintln!("[error] req_id={req_id} code={code} msg={msg}");
     }
 }
 
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let password = env::var("IB_PASSWORD")?;
     let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
 
-    println!("== Connecting fresh to paper ({})", host);
+    println!("== Connecting fresh to paper ({host})");
     let client = EClient::connect(&EClientConfig {
         username, password, host, paper: true, core_id: None, code_provider: None,
     })?;

@@ -1331,7 +1331,7 @@ mod tests {
         for st in [SecurityType::Stock, SecurityType::Option, SecurityType::Future,
                    SecurityType::Forex, SecurityType::Index, SecurityType::Bond,
                    SecurityType::Warrant] {
-            assert_eq!(SecurityType::from_fix(st.to_api_str()), st, "{:?}", st);
+            assert_eq!(SecurityType::from_fix(st.to_api_str()), st, "{st:?}");
         }
     }
 

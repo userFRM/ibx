@@ -344,7 +344,7 @@ fn xor_fold(data: &[u8]) -> String {
     }
     result
         .iter()
-        .map(|b| format!("{:02X}", b))
+        .map(|b| format!("{b:02X}"))
         .collect::<String>()
 }
 
@@ -375,7 +375,7 @@ fn xor_fold_sequential() {
             r[i] ^= data[off + i];
         }
     }
-    let expected: String = r.iter().map(|b| format!("{:02X}", b)).collect();
+    let expected: String = r.iter().map(|b| format!("{b:02X}")).collect();
     assert_eq!(result, expected);
 }
 

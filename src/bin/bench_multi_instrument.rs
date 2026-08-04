@@ -40,8 +40,8 @@ fn main() {
     print_header("Bench: Multi-Instrument Tick Throughput");
     println!("  Instruments:    {} ({:?})", n_instruments,
         instruments.iter().map(|(_, s)| *s).collect::<Vec<_>>());
-    println!("  Warmup:         {} ticks", warmup_ticks);
-    println!("  Collect:        {} ticks (aggregate)", collect_ticks);
+    println!("  Warmup:         {warmup_ticks} ticks");
+    println!("  Collect:        {collect_ticks} ticks (aggregate)");
     println!();
 
     // Connect
@@ -56,7 +56,7 @@ fn main() {
     // Subscribe to all instruments
     for &(con_id, symbol) in instruments {
         session.subscribe(con_id, symbol);
-        println!("  Subscribed: {} ({})", symbol, con_id);
+        println!("  Subscribed: {symbol} ({con_id})");
     }
 
     let start = Instant::now();
@@ -81,7 +81,7 @@ fn main() {
 
     loop {
         if Instant::now() > deadline {
-            println!("Collection timed out, using {} samples", count);
+            println!("Collection timed out, using {count} samples");
             break;
         }
 
@@ -129,12 +129,12 @@ fn main() {
     stats.report_throughput("AGGREGATE INTER-TICK TIME", collect_dur);
     println!();
 
-    println!("PER-INSTRUMENT TICK COUNTS ({:.1}s)", collect_dur);
+    println!("PER-INSTRUMENT TICK COUNTS ({collect_dur:.1}s)");
     let mut entries: Vec<_> = per_instrument.iter().collect();
     entries.sort_by_key(|(_, c)| std::cmp::Reverse(**c));
     for (instrument, count) in &entries {
         let rate = **count as f64 / collect_dur;
-        println!("  instrument={:<3}  ticks={:<6}  rate={:.1}/sec", instrument, count, rate);
+        println!("  instrument={instrument:<3}  ticks={count:<6}  rate={rate:.1}/sec");
     }
 
     session.shutdown();

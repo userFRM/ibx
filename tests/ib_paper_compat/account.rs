@@ -35,19 +35,16 @@ pub(super) fn phase_account_data(conns: Conns) -> Conns {
     let mut net_liq = 0i64;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Event::Tick(_)) => {
-                if !account_checked {
-                    let acct = shared.portfolio.account();
-                    if acct.net_liquidation != 0 {
-                        net_liq = acct.net_liquidation;
-                        println!("  ACCOUNT: net_liq={:.2}", net_liq as f64 / PRICE_SCALE as f64);
-                        account_checked = true;
-                        break;
-                    }
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(200)) {
+            if !account_checked {
+                let acct = shared.portfolio.account();
+                if acct.net_liquidation != 0 {
+                    net_liq = acct.net_liquidation;
+                    println!("  ACCOUNT: net_liq={:.2}", net_liq as f64 / PRICE_SCALE as f64);
+                    account_checked = true;
+                    break;
                 }
             }
-            _ => {}
         }
     }
 
@@ -117,16 +114,13 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
                 account_received = true;
             }
         }
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) {
-                    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                }
-                if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected) {
-                    probe_done = true;
-                }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) {
+                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
             }
-            _ => {}
+            if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected) {
+                probe_done = true;
+            }
         }
     }
 
@@ -202,13 +196,13 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
     } else if phase == 2 && got_position_update {
         // After buy+sell round trip, position should return to 0 (or near it)
         let pos = shared.portfolio.position(0);
-        println!("  Final position: {}", pos);
-        assert!(pos.abs() <= 1, "Position after round trip should be 0 (±1 for timing), got {}", pos);
-        println!("  PASS (position returned to {})\n", pos);
+        println!("  Final position: {pos}");
+        assert!(pos.abs() <= 1, "Position after round trip should be 0 (±1 for timing), got {pos}");
+        println!("  PASS (position returned to {pos})\n");
     } else if phase == 2 {
         println!("  SKIP: Fills completed but no PositionUpdate events\n");
     } else {
-        println!("  SKIP: Only reached phase {} (buy may not have filled)\n", phase);
+        println!("  SKIP: Only reached phase {phase} (buy may not have filled)\n");
     }
     conns
 }
@@ -232,43 +226,40 @@ pub(super) fn phase_account_summary(conns: Conns) -> Conns {
     let mut has_account_data = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Event::Tick(_)) => {
-                let acct = shared.portfolio.account();
-                if acct.net_liquidation > 0 {
-                    // Verify individual fields
-                    println!("  NetLiquidation:    {:.2}", acct.net_liquidation as f64 / PRICE_SCALE as f64);
-                    println!("  BuyingPower:       {:.2}", acct.buying_power as f64 / PRICE_SCALE as f64);
-                    println!("  TotalCashValue:    {:.2}", acct.total_cash_value as f64 / PRICE_SCALE as f64);
-                    println!("  SettledCash:       {:.2}", acct.settled_cash as f64 / PRICE_SCALE as f64);
-                    println!("  AvailableFunds:    {:.2}", acct.available_funds as f64 / PRICE_SCALE as f64);
-                    println!("  ExcessLiquidity:   {:.2}", acct.excess_liquidity as f64 / PRICE_SCALE as f64);
-                    println!("  InitMarginReq:     {:.2}", acct.init_margin_req as f64 / PRICE_SCALE as f64);
-                    println!("  MaintMarginReq:    {:.2}", acct.maint_margin_req as f64 / PRICE_SCALE as f64);
-                    println!("  EquityWithLoan:    {:.2}", acct.equity_with_loan as f64 / PRICE_SCALE as f64);
-                    println!("  Cushion:           {:.4}", acct.cushion as f64 / PRICE_SCALE as f64);
-                    println!("  Leverage:          {:.4}", acct.leverage as f64 / PRICE_SCALE as f64);
-                    println!("  DayTradesRemain:   {}", acct.day_trades_remaining);
-                    println!("  UnrealizedPnL:     {:.2}", acct.unrealized_pnl as f64 / PRICE_SCALE as f64);
-                    println!("  RealizedPnL:       {:.2}", acct.realized_pnl as f64 / PRICE_SCALE as f64);
-                    println!("  DailyPnL:          {:.2}", acct.daily_pnl as f64 / PRICE_SCALE as f64);
-                    has_account_data = true;
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(200)) {
+            let acct = shared.portfolio.account();
+            if acct.net_liquidation > 0 {
+                // Verify individual fields
+                println!("  NetLiquidation:    {:.2}", acct.net_liquidation as f64 / PRICE_SCALE as f64);
+                println!("  BuyingPower:       {:.2}", acct.buying_power as f64 / PRICE_SCALE as f64);
+                println!("  TotalCashValue:    {:.2}", acct.total_cash_value as f64 / PRICE_SCALE as f64);
+                println!("  SettledCash:       {:.2}", acct.settled_cash as f64 / PRICE_SCALE as f64);
+                println!("  AvailableFunds:    {:.2}", acct.available_funds as f64 / PRICE_SCALE as f64);
+                println!("  ExcessLiquidity:   {:.2}", acct.excess_liquidity as f64 / PRICE_SCALE as f64);
+                println!("  InitMarginReq:     {:.2}", acct.init_margin_req as f64 / PRICE_SCALE as f64);
+                println!("  MaintMarginReq:    {:.2}", acct.maint_margin_req as f64 / PRICE_SCALE as f64);
+                println!("  EquityWithLoan:    {:.2}", acct.equity_with_loan as f64 / PRICE_SCALE as f64);
+                println!("  Cushion:           {:.4}", acct.cushion as f64 / PRICE_SCALE as f64);
+                println!("  Leverage:          {:.4}", acct.leverage as f64 / PRICE_SCALE as f64);
+                println!("  DayTradesRemain:   {}", acct.day_trades_remaining);
+                println!("  UnrealizedPnL:     {:.2}", acct.unrealized_pnl as f64 / PRICE_SCALE as f64);
+                println!("  RealizedPnL:       {:.2}", acct.realized_pnl as f64 / PRICE_SCALE as f64);
+                println!("  DailyPnL:          {:.2}", acct.daily_pnl as f64 / PRICE_SCALE as f64);
+                has_account_data = true;
 
-                    // Validate sanity
-                    assert!(acct.net_liquidation > 0, "NetLiquidation should be positive");
-                    assert!(acct.buying_power >= 0, "BuyingPower should be non-negative");
-                    assert!(acct.available_funds >= 0, "AvailableFunds should be non-negative");
-                    assert!(acct.excess_liquidity >= 0, "ExcessLiquidity should be non-negative");
-                    // EquityWithLoanValue should be close to NetLiquidation for paper accounts
-                    if acct.equity_with_loan > 0 {
-                        let ratio = acct.equity_with_loan as f64 / acct.net_liquidation as f64;
-                        assert!(ratio > 0.5 && ratio < 2.0,
-                            "EquityWithLoan/NetLiq ratio {:.2} seems wrong", ratio);
-                    }
-                    break;
+                // Validate sanity
+                assert!(acct.net_liquidation > 0, "NetLiquidation should be positive");
+                assert!(acct.buying_power >= 0, "BuyingPower should be non-negative");
+                assert!(acct.available_funds >= 0, "AvailableFunds should be non-negative");
+                assert!(acct.excess_liquidity >= 0, "ExcessLiquidity should be non-negative");
+                // EquityWithLoanValue should be close to NetLiquidation for paper accounts
+                if acct.equity_with_loan > 0 {
+                    let ratio = acct.equity_with_loan as f64 / acct.net_liquidation as f64;
+                    assert!(ratio > 0.5 && ratio < 2.0,
+                        "EquityWithLoan/NetLiq ratio {ratio:.2} seems wrong");
                 }
+                break;
             }
-            _ => {}
         }
     }
 
@@ -313,18 +304,15 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
     let mut terminal = false;
 
     while Instant::now() < deadline && !terminal {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                println!("  OrderUpdate: id={} status={:?}", update.order_id, update.status);
-                if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) && !cancel_sent {
-                    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                    cancel_sent = true;
-                }
-                if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Filled) {
-                    terminal = true;
-                }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            println!("  OrderUpdate: id={} status={:?}", update.order_id, update.status);
+            if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) && !cancel_sent {
+                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                cancel_sent = true;
             }
-            _ => {}
+            if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Filled) {
+                terminal = true;
+            }
         }
     }
 
@@ -415,17 +403,14 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
     let mut terminal = false;
 
     while Instant::now() < deadline && !terminal {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) && !cancel_sent {
-                    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                    cancel_sent = true;
-                }
-                if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Filled) {
-                    terminal = true;
-                }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) && !cancel_sent {
+                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                cancel_sent = true;
             }
-            _ => {}
+            if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Filled) {
+                terminal = true;
+            }
         }
     }
 
@@ -611,7 +596,7 @@ pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
     // Validate — GT: contract has conId/symbol/secType/currency, order has action/qty/type/tif/account/lmtPrice
     let mut pass = true;
     if let Some((oid, c, o, s)) = wrapper.orders.first() {
-        println!("  open_order callback received (orderId={}):", oid);
+        println!("  open_order callback received (orderId={oid}):");
         println!("    contract.conId      = {} (GT: 756733)", c.con_id);
         println!("    contract.symbol     = '{}' (GT: 'SPY')", c.symbol);
         println!("    contract.secType    = '{}' (GT: 'STK')", c.sec_type);
@@ -685,7 +670,7 @@ pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Event::PositionUpdate { con_id, position, .. }) if con_id == 756733 => {
-                println!("  PositionUpdate: con_id={} position={}", con_id, position);
+                println!("  PositionUpdate: con_id={con_id} position={position}");
                 got_pos = true;
                 break;
             }
@@ -717,12 +702,12 @@ pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
     let mut pass = true;
     if let Some((acct, c, pos, avg_cost)) = wrapper.positions.iter().find(|(_, c, _, _)| c.con_id == 756733) {
         println!("  position callback received:");
-        println!("    account             = '{}' (GT: '{}')", acct, gt_account);
+        println!("    account             = '{acct}' (GT: '{gt_account}')");
         println!("    contract.conId      = {} (GT: 756733)", c.con_id);
         println!("    contract.symbol     = '{}' (GT: 'SPY')", c.symbol);
         println!("    contract.secType    = '{}' (GT: 'STK')", c.sec_type);
-        println!("    position            = {} (GT: dynamic)", pos);
-        println!("    avgCost             = {:.3} (GT: dynamic)", avg_cost);
+        println!("    position            = {pos} (GT: dynamic)");
+        println!("    avgCost             = {avg_cost:.3} (GT: dynamic)");
 
         if c.con_id != 756733 { println!("    FAIL: conId"); pass = false; }
         if c.symbol != "SPY" { println!("    FAIL: symbol"); pass = false; }
@@ -731,12 +716,12 @@ pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
         // May not have SPY position — check any position has enriched contract
         if let Some((acct, c, pos, avg_cost)) = wrapper.positions.first() {
             println!("  position callback (no SPY, checking first):");
-            println!("    account             = '{}'", acct);
+            println!("    account             = '{acct}'");
             println!("    contract.conId      = {}", c.con_id);
             println!("    contract.symbol     = '{}'", c.symbol);
             println!("    contract.secType    = '{}'", c.sec_type);
-            println!("    position            = {}", pos);
-            println!("    avgCost             = {:.3}", avg_cost);
+            println!("    position            = {pos}");
+            println!("    avgCost             = {avg_cost:.3}");
             if c.con_id == 0 { println!("    FAIL: conId is 0"); pass = false; }
         } else {
             println!("  No position callbacks at all");
@@ -1006,7 +991,7 @@ pub(super) fn phase_pnl_subscribe_command(conns: Conns) -> Conns {
     // The assertion is the lifecycle itself: a malformed 6040=142 would have
     // dropped the CCP session, and shutdown_and_reclaim's ccp_keepalive (plus the
     // CCP-dependent phases that follow) would then fail.
-    println!("  midnight seeds received: {}", seeds_seen);
+    println!("  midnight seeds received: {seeds_seen}");
     println!("  PASS\n");
     conns
 }
@@ -1048,9 +1033,9 @@ pub(super) fn phase_news_bulletins(conns: Conns) -> Conns {
 
     // News bulletins are sporadic — we may or may not receive any.
     // The test validates the drain mechanism works without panicking.
-    println!("  Total bulletins received: {}", total_bulletins);
+    println!("  Total bulletins received: {total_bulletins}");
     if total_bulletins > 0 {
-        println!("  PASS (received {} bulletins)\n", total_bulletins);
+        println!("  PASS (received {total_bulletins} bulletins)\n");
     } else {
         println!("  PASS (no bulletins during test window — drain mechanism verified)\n");
     }

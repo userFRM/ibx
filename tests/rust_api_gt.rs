@@ -420,7 +420,7 @@ fn poll_until(client: &EClient, wrapper: &mut RecWrapper, pred: impl Fn(&[Cb]) -
 fn assert_field(name: &str, actual: &str, gt_key: &str, gt: &serde_json::Value) -> bool {
     if let Some(expected) = gt.get(gt_key).and_then(|v| v.as_str()) {
         if actual != expected {
-            println!("    FAIL {}: '{}' != GT '{}'", name, actual, expected);
+            println!("    FAIL {name}: '{actual}' != GT '{expected}'");
             return false;
         }
     }
@@ -430,7 +430,7 @@ fn assert_field(name: &str, actual: &str, gt_key: &str, gt: &serde_json::Value) 
 fn assert_field_i64(name: &str, actual: i64, gt_key: &str, gt: &serde_json::Value) -> bool {
     if let Some(expected) = gt.get(gt_key).and_then(|v| v.as_i64()) {
         if actual != expected {
-            println!("    FAIL {}: {} != GT {}", name, actual, expected);
+            println!("    FAIL {name}: {actual} != GT {expected}");
             return false;
         }
     }
@@ -571,13 +571,13 @@ fn api_gt_suite() {
             for expected in &["NetLiquidation", "TotalCashValue", "BuyingPower"] {
                 let tags: Vec<_> = summaries.iter().map(|(t, _)| t.as_str()).collect();
                 if !tags.contains(expected) {
-                    println!("FAIL (missing tag: {})", expected);
+                    println!("FAIL (missing tag: {expected})");
                     ok = false;
                 }
             }
             if ok {
                 println!("PASS ({} tags)", summaries.len());
-                for (t, v) in &summaries { println!("    {}={}", t, v); }
+                for (t, v) in &summaries { println!("    {t}={v}"); }
                 pass_count += 1;
             } else { fail_count += 1; }
         }
@@ -854,7 +854,7 @@ fn api_gt_suite() {
             let gt_count = gt["responses"][0]["args"]["ticks"].as_array().map(|a| a.len()).unwrap_or(0);
             let gt_done = gt["responses"][0]["args"]["done"].as_bool().unwrap_or(false);
             if ht[0] && gt_done {
-                println!("PASS (done=true, GT had {} ticks)", gt_count);
+                println!("PASS (done=true, GT had {gt_count} ticks)");
                 pass_count += 1;
             } else {
                 println!("FAIL (done={} vs GT done={})", ht[0], gt_done);
@@ -995,7 +995,7 @@ fn api_gt_suite() {
     // ── 17. News Article ──
     {
         if let Some((ref provider, ref article_id)) = news_article_info {
-            print!("  req_news_article ({}/{})... ", provider, article_id);
+            print!("  req_news_article ({provider}/{article_id})... ");
             wrapper.drain();
             client.req_news_article(490, provider, article_id).unwrap();
             poll_until(&client, &mut wrapper,
@@ -1042,7 +1042,7 @@ fn api_gt_suite() {
             let has_bp = values.iter().any(|(k, _)| k == "BuyingPower");
             if has_nlv && has_bp {
                 println!("PASS ({} values)", values.len());
-                for (k, v) in &values { println!("    {}={}", k, v); }
+                for (k, v) in &values { println!("    {k}={v}"); }
                 pass_count += 1;
             } else {
                 println!("FAIL (missing NetLiquidation or BuyingPower)");
@@ -1058,10 +1058,10 @@ fn api_gt_suite() {
         let oid1 = client.next_order_id();
         let oid2 = client.next_order_id();
         if connected && oid2 > oid1 {
-            println!("PASS (connected={}, oid1={}, oid2={})", connected, oid1, oid2);
+            println!("PASS (connected={connected}, oid1={oid1}, oid2={oid2})");
             pass_count += 1;
         } else {
-            println!("FAIL (connected={}, oid1={}, oid2={})", connected, oid1, oid2);
+            println!("FAIL (connected={connected}, oid1={oid1}, oid2={oid2})");
             fail_count += 1;
         }
     }
@@ -1430,10 +1430,10 @@ fn api_gt_suite() {
         } else {
             let (rid, wbid) = &ui[0];
             if *rid == 902 {
-                println!("PASS (whiteBrandingId='{}')", wbid);
+                println!("PASS (whiteBrandingId='{wbid}')");
                 pass_count += 1;
             } else {
-                println!("FAIL (wrong req_id: {})", rid);
+                println!("FAIL (wrong req_id: {rid})");
                 fail_count += 1;
             }
         }

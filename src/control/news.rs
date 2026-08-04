@@ -44,8 +44,8 @@ pub struct NewsHeadline {
 
 /// Extract a simple XML tag value: `<tag>value</tag>` -> `value`.
 fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{}>", tag);
-    let close = format!("</{}>", tag);
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
     let start = xml.find(&open)? + open.len();
     let end = xml[start..].find(&close)? + start;
     Some(&xml[start..end])
@@ -85,7 +85,7 @@ pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
     let tags = if req.con_id > 0 {
         format!("@@{}:ALL_SUB@", req.con_id)
     } else {
-        format!("@@0:{}@", providers_star)
+        format!("@@0:{providers_star}@")
     };
 
     let query_raw = format!(
@@ -116,12 +116,10 @@ pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
          <needTotalValue>false</needTotalValue>\
          <wholeDays>false</wholeDays>\
          <delay>auto</delay>\
-         <query>{query}</query>\
+         <query>{query_encoded}</query>\
          <currency>*</currency>\
          </NewsHMDSQuery>\
          </ListOfQueries>",
-        id = id,
-        query = query_encoded,
     )
 }
 
@@ -152,12 +150,10 @@ pub fn build_article_request_xml(req: &NewsArticleRequest) -> String {
          <needTotalValue>false</needTotalValue>\
          <wholeDays>false</wholeDays>\
          <delay>auto</delay>\
-         <query>{query}</query>\
+         <query>{query_encoded}</query>\
          <currency>*</currency>\
          </NewsHMDSQuery>\
          </ListOfQueries>",
-        id = id,
-        query = query_encoded,
     )
 }
 

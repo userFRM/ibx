@@ -36,11 +36,11 @@ impl Wrapper for ProbeWrapper {
         _why_held: &str,
         _mkt_cap_price: f64,
     ) {
-        println!("[order_status] id={} status={}", order_id, status);
+        println!("[order_status] id={order_id} status={status}");
         self.state.lock().unwrap().statuses.push((order_id, status.into()));
     }
     fn error(&mut self, req_id: i64, code: i64, msg: &str, _adv: &str) {
-        eprintln!("[error] req_id={} code={} msg={}", req_id, code, msg);
+        eprintln!("[error] req_id={req_id} code={code} msg={msg}");
         self.state.lock().unwrap().rejects.push((req_id, code, msg.into()));
     }
 }
@@ -65,12 +65,12 @@ fn run_one(
     order: Order,
     accept_pending_submit: bool,
 ) -> bool {
-    println!("\n== {} (order_id={})", label, order_id);
+    println!("\n== {label} (order_id={order_id})");
     state.lock().unwrap().statuses.clear();
     state.lock().unwrap().rejects.clear();
 
     if let Err(e) = client.place_order(order_id, &aapl(), &order) {
-        eprintln!("  place_order failed: {}", e);
+        eprintln!("  place_order failed: {e}");
         return false;
     }
 
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let password = env::var("IB_PASSWORD")?;
     let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
 
-    println!("== Connecting to paper ({})...", host);
+    println!("== Connecting to paper ({host})...");
     let t0 = Instant::now();
     let client = EClient::connect(&EClientConfig {
         username, password, host, paper: true, core_id: None, code_provider: None,

@@ -262,7 +262,7 @@ impl Connection {
                     // just a 64-byte prefix.
                     let full_hex: String = self.buf
                         .iter()
-                        .map(|b| format!("{:02x}", b))
+                        .map(|b| format!("{b:02x}"))
                         .collect();
                     let head_n = self.buf.len().min(64);
                     let head_ascii: String = self.buf[..head_n]
@@ -672,7 +672,7 @@ mod tests {
         assert_eq!(frames.len(), 1);
         match &frames[0] {
             Frame::FixComp(data) => assert_eq!(data, &comp),
-            other => panic!("expected Frame::FixComp, got {:?}", other),
+            other => panic!("expected Frame::FixComp, got {other:?}"),
         }
     }
 
@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(frames.len(), 1);
         match &frames[0] {
             Frame::Fix(data) => assert_eq!(data, &msg),
-            other => panic!("expected Frame::Fix, got {:?}", other),
+            other => panic!("expected Frame::Fix, got {other:?}"),
         }
     }
 
@@ -712,11 +712,11 @@ mod tests {
         assert_eq!(frames.len(), 2);
         match &frames[0] {
             Frame::Fix(data) => assert_eq!(data, &msg1),
-            other => panic!("expected Frame::Fix for msg1, got {:?}", other),
+            other => panic!("expected Frame::Fix for msg1, got {other:?}"),
         }
         match &frames[1] {
             Frame::Fix(data) => assert_eq!(data, &msg2),
-            other => panic!("expected Frame::Fix for msg2, got {:?}", other),
+            other => panic!("expected Frame::Fix for msg2, got {other:?}"),
         }
     }
 
@@ -731,7 +731,7 @@ mod tests {
         assert_eq!(frames.len(), 1);
         match &frames[0] {
             Frame::Binary(data) => assert_eq!(data, &msg),
-            other => panic!("expected Frame::Binary, got {:?}", other),
+            other => panic!("expected Frame::Binary, got {other:?}"),
         }
     }
 
@@ -752,7 +752,7 @@ mod tests {
         assert_eq!(frames.len(), 1);
         match &frames[0] {
             Frame::Control(data) => assert_eq!(data, &msg),
-            other => panic!("expected Frame::Control, got {:?}", other),
+            other => panic!("expected Frame::Control, got {other:?}"),
         }
         assert_eq!(conn.buffered(), 0, "no bytes should be left buffered");
     }
@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(frames.len(), 1);
         match &frames[0] {
             Frame::Control(data) => assert_eq!(data, &msg),
-            other => panic!("expected Frame::Control, got {:?}", other),
+            other => panic!("expected Frame::Control, got {other:?}"),
         }
         assert_eq!(conn.buffered(), 0);
     }
@@ -788,11 +788,11 @@ mod tests {
         assert_eq!(frames.len(), 2, "control + fixcomp should both extract");
         match &frames[0] {
             Frame::Control(data) => assert_eq!(data, &control),
-            other => panic!("expected Frame::Control first, got {:?}", other),
+            other => panic!("expected Frame::Control first, got {other:?}"),
         }
         match &frames[1] {
             Frame::FixComp(data) => assert_eq!(data, &comp),
-            other => panic!("expected Frame::FixComp second, got {:?}", other),
+            other => panic!("expected Frame::FixComp second, got {other:?}"),
         }
         assert_eq!(conn.buffered(), 0);
     }
@@ -911,7 +911,7 @@ mod tests {
         let mut conn = Connection::new_raw(stream).unwrap();
         assert_eq!(conn.unsign(&plain), Some(plain.clone()), "no key configured");
 
-        let mut conn = signed_conn(b"0123456789abcdef", &vec![0u8; 16]);
+        let mut conn = signed_conn(b"0123456789abcdef", &[0u8; 16]);
         assert_eq!(conn.unsign(&plain), Some(plain), "no 8349 tag on the frame");
     }
 
@@ -923,7 +923,7 @@ mod tests {
     fn an_unsigned_frame_quoting_the_signature_tag_is_not_verified() {
         let quoting = fix_build(&[(35, "8"), (58, "rejected: 8349= missing")], 1);
 
-        let mut conn = signed_conn(b"0123456789abcdef", &vec![0u8; 16]);
+        let mut conn = signed_conn(b"0123456789abcdef", &[0u8; 16]);
         assert_eq!(
             conn.unsign(&quoting),
             Some(quoting.clone()),

@@ -37,28 +37,24 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
     let mut first_tick = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(instrument)) => {
-                tick_count += 1;
-                if !first_tick {
-                    let q = shared.market.quote(instrument);
-                    let bid = q.bid as f64 / PRICE_SCALE as f64;
-                    let ask = q.ask as f64 / PRICE_SCALE as f64;
-                    let last = q.last as f64 / PRICE_SCALE as f64;
-                    println!(
-                        "  FIRST TICK: instrument={} bid={:.2} ask={:.2} last={:.2}",
-                        instrument, bid, ask, last
-                    );
-                    // Value assertions
-                    if q.bid > 0 && q.ask > 0 {
-                        assert!(bid > 50.0 && bid < 1000.0, "AAPL bid out of range: {}", bid);
-                        assert!(ask > 50.0 && ask < 1000.0, "AAPL ask out of range: {}", ask);
-                        assert!(ask >= bid, "Crossed market: bid={} ask={}", bid, ask);
-                    }
-                    first_tick = true;
+        if let Ok(Event::Tick(instrument)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            tick_count += 1;
+            if !first_tick {
+                let q = shared.market.quote(instrument);
+                let bid = q.bid as f64 / PRICE_SCALE as f64;
+                let ask = q.ask as f64 / PRICE_SCALE as f64;
+                let last = q.last as f64 / PRICE_SCALE as f64;
+                println!(
+                    "  FIRST TICK: instrument={instrument} bid={bid:.2} ask={ask:.2} last={last:.2}"
+                );
+                // Value assertions
+                if q.bid > 0 && q.ask > 0 {
+                    assert!(bid > 50.0 && bid < 1000.0, "AAPL bid out of range: {bid}");
+                    assert!(ask > 50.0 && ask < 1000.0, "AAPL ask out of range: {ask}");
+                    assert!(ask >= bid, "Crossed market: bid={bid} ask={ask}");
                 }
+                first_tick = true;
             }
-            _ => {}
         }
         if first_tick {
             break;
@@ -78,7 +74,7 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-    println!("  PASS ({} ticks)\n", tick_count);
+    println!("  PASS ({tick_count} ticks)\n");
     conns
 }
 
@@ -129,14 +125,11 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
     let mut first_tick = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(_)) => {
-                tick_count += 1;
-                if !first_tick {
-                    first_tick = true;
-                }
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            tick_count += 1;
+            if !first_tick {
+                first_tick = true;
             }
-            _ => {}
         }
         if first_tick {
             break;
@@ -162,25 +155,22 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
             instruments_with_data += 1;
             let bid = q.bid as f64 / PRICE_SCALE as f64;
             let ask = q.ask as f64 / PRICE_SCALE as f64;
-            println!("  Instrument {}: bid={:.2} ask={:.2}", id, bid, ask);
+            println!("  Instrument {id}: bid={bid:.2} ask={ask:.2}");
         }
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     if tick_count <= 3 {
         println!(
-            "  SKIP: Only {} ticks — insufficient for multi-instrument test\n",
-            tick_count
+            "  SKIP: Only {tick_count} ticks — insufficient for multi-instrument test\n"
         );
     } else {
         assert!(
             instruments_with_data >= 2,
-            "At least 2 of 3 instruments should have data, got {}",
-            instruments_with_data
+            "At least 2 of 3 instruments should have data, got {instruments_with_data}"
         );
         println!(
-            "  PASS ({} ticks, {} instruments with data)\n",
-            tick_count, instruments_with_data
+            "  PASS ({tick_count} ticks, {instruments_with_data} instruments with data)\n"
         );
     }
     conns
@@ -214,11 +204,8 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
     let mut tick_count = 0u32;
     let sub_deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < sub_deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(_)) => {
-                tick_count += 1;
-            }
-            _ => {}
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            tick_count += 1;
         }
     }
 
@@ -228,7 +215,7 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
     std::thread::sleep(Duration::from_secs(3));
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-    println!("  Total ticks: {}", tick_count);
+    println!("  Total ticks: {tick_count}");
     println!("  PASS\n");
     conns
 }
@@ -306,10 +293,7 @@ pub(super) fn phase_news_ticks(conns: Conns) -> Conns {
     let mut news_events = 0u32;
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(150)) {
-            Ok(Event::News(_)) => news_events += 1,
-            _ => {}
-        }
+        if let Ok(Event::News(_)) = event_rx.recv_timeout(Duration::from_millis(150)) { news_events += 1 }
     }
 
     control_tx
@@ -400,8 +384,7 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
     std::thread::sleep(Duration::from_secs(5));
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     println!(
-        "  PASS ({} trades, {} quotes)\n",
-        tbt_trade_count, tbt_quote_count
+        "  PASS ({tbt_trade_count} trades, {tbt_quote_count} quotes)\n"
     );
     conns
 }
@@ -440,45 +423,42 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
     let mut price_reasonable = true;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(instrument)) => {
-                tick_count += 1;
-                let q = shared.market.quote(instrument);
-                let bid = q.bid as f64 / PRICE_SCALE as f64;
-                let ask = q.ask as f64 / PRICE_SCALE as f64;
+        if let Ok(Event::Tick(instrument)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            tick_count += 1;
+            let q = shared.market.quote(instrument);
+            let bid = q.bid as f64 / PRICE_SCALE as f64;
+            let ask = q.ask as f64 / PRICE_SCALE as f64;
 
-                if q.bid > 0 {
-                    bid_positive = true;
-                }
-                if q.ask > 0 {
-                    ask_positive = true;
-                }
-
-                // Validate spread: ask >= bid (when both are set)
-                // Tolerate up to 5 cents of momentary crossing — bid/ask ticks
-                // arrive in separate messages so the SeqLock snapshot can show
-                // a transient cross until the next tick updates the other side.
-                let cross_tolerance = 0.05 * PRICE_SCALE as f64; // 5 cents
-                if q.bid > 0 && q.ask > 0 && (q.bid - q.ask) as f64 > cross_tolerance {
-                    spread_valid = false;
-                    println!("  WARNING: Crossed market bid={:.4} ask={:.4}", bid, ask);
-                }
-
-                // SPY should be between $50 and $1000
-                if q.bid > 0 && (bid < 50.0 || bid > 1000.0) {
-                    price_reasonable = false;
-                    println!("  WARNING: Bid out of range: {:.4}", bid);
-                }
-                if q.ask > 0 && (ask < 50.0 || ask > 1000.0) {
-                    price_reasonable = false;
-                    println!("  WARNING: Ask out of range: {:.4}", ask);
-                }
-
-                if tick_count >= 20 {
-                    break;
-                }
+            if q.bid > 0 {
+                bid_positive = true;
             }
-            _ => {}
+            if q.ask > 0 {
+                ask_positive = true;
+            }
+
+            // Validate spread: ask >= bid (when both are set)
+            // Tolerate up to 5 cents of momentary crossing — bid/ask ticks
+            // arrive in separate messages so the SeqLock snapshot can show
+            // a transient cross until the next tick updates the other side.
+            let cross_tolerance = 0.05 * PRICE_SCALE as f64; // 5 cents
+            if q.bid > 0 && q.ask > 0 && (q.bid - q.ask) as f64 > cross_tolerance {
+                spread_valid = false;
+                println!("  WARNING: Crossed market bid={bid:.4} ask={ask:.4}");
+            }
+
+            // SPY should be between $50 and $1000
+            if q.bid > 0 && !(50.0..=1000.0).contains(&bid) {
+                price_reasonable = false;
+                println!("  WARNING: Bid out of range: {bid:.4}");
+            }
+            if q.ask > 0 && !(50.0..=1000.0).contains(&ask) {
+                price_reasonable = false;
+                println!("  WARNING: Ask out of range: {ask:.4}");
+            }
+
+            if tick_count >= 20 {
+                break;
+            }
         }
     }
 
@@ -490,8 +470,7 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
     }
 
     println!(
-        "  {} ticks: bid_positive={} ask_positive={} spread_valid={} price_reasonable={}",
-        tick_count, bid_positive, ask_positive, spread_valid, price_reasonable
+        "  {tick_count} ticks: bid_positive={bid_positive} ask_positive={ask_positive} spread_valid={spread_valid} price_reasonable={price_reasonable}"
     );
     assert!(bid_positive, "Should have seen at least one positive bid");
     assert!(ask_positive, "Should have seen at least one positive ask");
@@ -599,36 +578,33 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
     let mut ask_seen = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(instrument)) => {
-                tick_count += 1;
-                let q = shared.market.quote(instrument);
-                if q.bid > 0 {
-                    bid_seen = true;
-                }
-                if q.ask > 0 {
-                    ask_seen = true;
-                }
-
-                if tick_count == 1 {
-                    println!(
-                        "  FIRST TICK: bid={:.5} ask={:.5}",
-                        q.bid as f64 / PRICE_SCALE as f64,
-                        q.ask as f64 / PRICE_SCALE as f64
-                    );
-                }
-
-                // Validate spread only after both bid and ask have been seen
-                // (early ticks may have one side at zero while the other updates)
-                if bid_seen && ask_seen && q.bid > 0 && q.ask > 0 {
-                    assert!(q.ask >= q.bid, "Crossed market: ask < bid");
-                }
-
-                if tick_count >= 10 {
-                    break;
-                }
+        if let Ok(Event::Tick(instrument)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            tick_count += 1;
+            let q = shared.market.quote(instrument);
+            if q.bid > 0 {
+                bid_seen = true;
             }
-            _ => {}
+            if q.ask > 0 {
+                ask_seen = true;
+            }
+
+            if tick_count == 1 {
+                println!(
+                    "  FIRST TICK: bid={:.5} ask={:.5}",
+                    q.bid as f64 / PRICE_SCALE as f64,
+                    q.ask as f64 / PRICE_SCALE as f64
+                );
+            }
+
+            // Validate spread only after both bid and ask have been seen
+            // (early ticks may have one side at zero while the other updates)
+            if bid_seen && ask_seen && q.bid > 0 && q.ask > 0 {
+                assert!(q.ask >= q.bid, "Crossed market: ask < bid");
+            }
+
+            if tick_count >= 10 {
+                break;
+            }
         }
     }
 
@@ -638,13 +614,11 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
         println!("  SKIP: No forex ticks (weekend or forex market closed)\n");
     } else if !bid_seen || !ask_seen {
         println!(
-            "  SKIP: {} ticks but bid_seen={} ask_seen={} (prices not yet populated)\n",
-            tick_count, bid_seen, ask_seen
+            "  SKIP: {tick_count} ticks but bid_seen={bid_seen} ask_seen={ask_seen} (prices not yet populated)\n"
         );
     } else {
         println!(
-            "  {} ticks received, bid_seen={} ask_seen={}",
-            tick_count, bid_seen, ask_seen
+            "  {tick_count} ticks received, bid_seen={bid_seen} ask_seen={ask_seen}"
         );
         println!("  PASS\n");
     }
@@ -683,25 +657,21 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
     let mut spread_valid = true;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(instrument)) => {
-                tick_count += 1;
-                let q = shared.market.quote(instrument);
-                let bid = q.bid as f64 / PRICE_SCALE as f64;
-                let ask = q.ask as f64 / PRICE_SCALE as f64;
+        if let Ok(Event::Tick(instrument)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            tick_count += 1;
+            let q = shared.market.quote(instrument);
+            let bid = q.bid as f64 / PRICE_SCALE as f64;
+            let ask = q.ask as f64 / PRICE_SCALE as f64;
 
-                if q.bid > 0 && q.ask > 0 {
-                    if q.ask < q.bid {
-                        spread_valid = false;
-                        println!("  WARNING: Crossed spread bid={:.5} ask={:.5}", bid, ask);
-                    }
+            if q.bid > 0 && q.ask > 0
+                && q.ask < q.bid {
+                    spread_valid = false;
+                    println!("  WARNING: Crossed spread bid={bid:.5} ask={ask:.5}");
                 }
 
-                if tick_count >= 15 {
-                    break;
-                }
+            if tick_count >= 15 {
+                break;
             }
-            _ => {}
         }
     }
 
@@ -711,7 +681,7 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
         println!("  SKIP: No forex ticks (weekend or forex market closed)\n");
     } else {
         assert!(spread_valid, "Spread should not be crossed");
-        println!("  {} ticks, spread_valid={}", tick_count, spread_valid);
+        println!("  {tick_count} ticks, spread_valid={spread_valid}");
         println!("  PASS\n");
     }
     conns
@@ -747,12 +717,9 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut got_ticks = false;
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(_)) => {
-                got_ticks = true;
-                break;
-            }
-            _ => {}
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            got_ticks = true;
+            break;
         }
     }
 
@@ -790,18 +757,15 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
     let deadline2 = Instant::now() + Duration::from_secs(15);
     let mut got_ticks_after = false;
     while Instant::now() < deadline2 {
-        match event_rx2.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(inst)) => {
-                let q = shared2.market.quote(inst);
-                println!(
-                    "  Step 2: Tick after reconnect bid={:.5} ask={:.5}",
-                    q.bid as f64 / PRICE_SCALE as f64,
-                    q.ask as f64 / PRICE_SCALE as f64
-                );
-                got_ticks_after = true;
-                break;
-            }
-            _ => {}
+        if let Ok(Event::Tick(inst)) = event_rx2.recv_timeout(Duration::from_millis(100)) {
+            let q = shared2.market.quote(inst);
+            println!(
+                "  Step 2: Tick after reconnect bid={:.5} ask={:.5}",
+                q.bid as f64 / PRICE_SCALE as f64,
+                q.ask as f64 / PRICE_SCALE as f64
+            );
+            got_ticks_after = true;
+            break;
         }
     }
 
@@ -869,29 +833,26 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
     let mut first_tick = false;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(instrument)) => {
-                total_ticks += 1;
-                let idx = instrument as usize;
-                if idx < 3 {
-                    per_instrument[idx] += 1;
-                    let q = shared.market.quote(instrument);
-                    if q.timestamp_ns > 0 && q.timestamp_ns < last_timestamp[idx] {
-                        monotonic_violations += 1;
-                    }
-                    if q.timestamp_ns > 0 {
-                        last_timestamp[idx] = q.timestamp_ns;
-                    }
+        if let Ok(Event::Tick(instrument)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            total_ticks += 1;
+            let idx = instrument as usize;
+            if idx < 3 {
+                per_instrument[idx] += 1;
+                let q = shared.market.quote(instrument);
+                if q.timestamp_ns > 0 && q.timestamp_ns < last_timestamp[idx] {
+                    monotonic_violations += 1;
                 }
-                if !first_tick {
-                    first_tick = true;
-                    println!(
-                        "  First tick at +{:.1}s",
-                        run_duration.as_secs_f64() - (deadline - Instant::now()).as_secs_f64()
-                    );
+                if q.timestamp_ns > 0 {
+                    last_timestamp[idx] = q.timestamp_ns;
                 }
             }
-            _ => {}
+            if !first_tick {
+                first_tick = true;
+                println!(
+                    "  First tick at +{:.1}s",
+                    run_duration.as_secs_f64() - (deadline - Instant::now()).as_secs_f64()
+                );
+            }
         }
     }
 
@@ -904,19 +865,18 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
 
     let elapsed = run_duration.as_secs_f64();
     let rate = total_ticks as f64 / elapsed;
-    println!("  Total ticks: {} ({:.1}/sec)", total_ticks, rate);
+    println!("  Total ticks: {total_ticks} ({rate:.1}/sec)");
     println!(
         "  SPY={} AAPL={} MSFT={}",
         per_instrument[0], per_instrument[1], per_instrument[2]
     );
-    println!("  Monotonic violations: {}", monotonic_violations);
+    println!("  Monotonic violations: {monotonic_violations}");
 
     // At least 2 instruments should have received ticks
     let instruments_with_ticks = per_instrument.iter().filter(|&&c| c > 0).count();
     assert!(
         instruments_with_ticks >= 2,
-        "At least 2 instruments should receive ticks, got {}",
-        instruments_with_ticks
+        "At least 2 instruments should receive ticks, got {instruments_with_ticks}"
     );
     assert_eq!(
         monotonic_violations, 0,
@@ -976,8 +936,7 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
         return conns;
     }
     println!(
-        "  Step 1: {} TBT events received before unsubscribe",
-        tbt_before
+        "  Step 1: {tbt_before} TBT events received before unsubscribe"
     );
 
     // Step 2: Unsubscribe — instrument 0 is the first registered (SPY)
@@ -998,14 +957,12 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     println!(
-        "  Step 2: {} TBT events after unsubscribe (expect 0 or near-0)",
-        tbt_after
+        "  Step 2: {tbt_after} TBT events after unsubscribe (expect 0 or near-0)"
     );
     // Allow a small number of in-flight events that were already queued
     assert!(
         tbt_after <= 3,
-        "Too many TBT events after unsubscribe: {} (expected <=3)",
-        tbt_after
+        "Too many TBT events after unsubscribe: {tbt_after} (expected <=3)"
     );
     println!("  PASS\n");
     conns
@@ -1107,8 +1064,7 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
     }
 
     println!(
-        "  Regular ticks: {}  TBT trades: {}  TBT quotes: {}",
-        tick_count, tbt_trade_count, tbt_quote_count
+        "  Regular ticks: {tick_count}  TBT trades: {tbt_trade_count}  TBT quotes: {tbt_quote_count}"
     );
 
     if got_tick && got_tbt {
@@ -1171,12 +1127,9 @@ pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
     let mut total_ticks = 0u64;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Tick(instrument)) => {
-                total_ticks += 1;
-                *per_instrument.entry(instrument).or_insert(0u64) += 1;
-            }
-            _ => {}
+        if let Ok(Event::Tick(instrument)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            total_ticks += 1;
+            *per_instrument.entry(instrument).or_insert(0u64) += 1;
         }
         // Stop early if we have ticks from at least 5 instruments
         if per_instrument.len() >= 5 && total_ticks >= 50 {
@@ -1197,7 +1150,7 @@ pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
         per_instrument.len()
     );
     for (&inst, &count) in &per_instrument {
-        println!("    instrument {} → {} ticks", inst, count);
+        println!("    instrument {inst} → {count} ticks");
     }
 
     // At least 3 instruments should receive ticks when 10 are subscribed

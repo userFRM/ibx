@@ -1,14 +1,9 @@
 //! Historical data, scanner, news, and fundamental data test phases.
 
 use super::common::*;
-use ibx::control::fundamental;
-use ibx::control::historical::{self, BarDataType, BarSize, HeadTimestampRequest, HistoricalRequest};
-use ibx::control::news;
+use ibx::control::historical::{self};
 use ibx::control::scanner;
 use ibx::gateway::{connect_farm, Gateway, GatewayConfig};
-use ibx::protocol::fix;
-use ibx::protocol::fixcomp;
-use ibx::protocol::connection::Frame;
 
 pub(super) fn phase_historical_data(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
     println!("--- Phase 11: Historical Data Bars (SPY, 1 day of 5-min bars) ---");
@@ -22,7 +17,7 @@ pub(super) fn phase_historical_data(mut conns: Conns, gw: &Gateway, config: &Gat
     ) {
         Ok(c) => { println!("  HMDS reconnected"); c }
         Err(e) => {
-            println!("  SKIP: ushmds reconnect failed: {}\n", e);
+            println!("  SKIP: ushmds reconnect failed: {e}\n");
             return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id };
         }
     };
@@ -94,7 +89,7 @@ pub(super) fn phase_historical_daily_bars(mut conns: Conns, gw: &Gateway, config
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     // Step 1: Create HotLoop with HMDS connection
@@ -161,7 +156,7 @@ pub(super) fn phase_cancel_historical(mut conns: Conns, gw: &Gateway, config: &G
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -225,7 +220,7 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns, gw: &Gateway, config:
     ) {
         Ok(c) => { println!("  HMDS reconnected"); c }
         Err(e) => {
-            println!("  SKIP: ushmds reconnect failed: {}\n", e);
+            println!("  SKIP: ushmds reconnect failed: {e}\n");
             return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id };
         }
     };
@@ -259,7 +254,7 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns, gw: &Gateway, config:
     while Instant::now() < deadline {
         for (rid, code, msg) in shared.reference.drain_historical_errors() {
             if rid == REQ_ID {
-                println!("  HMDS error: code={} msg={:?}", code, msg);
+                println!("  HMDS error: code={code} msg={msg:?}");
                 error = Some((rid, code, msg));
             }
         }
@@ -280,8 +275,7 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns, gw: &Gateway, config:
             // Either the gateway accepted the combo (rare — would deliver bars)
             // or HMDS was throttled. Don't fail the suite for an upstream policy
             // change; surface as SKIP with diagnostic.
-            println!("  SKIP: no QueryError received (bars_seen={}, end={})\n",
-                bars_seen, got_end_sentinel);
+            println!("  SKIP: no QueryError received (bars_seen={bars_seen}, end={got_end_sentinel})\n");
         }
         Some((_, code, msg)) => {
             assert_eq!(code, 162, "expected canonical HMDS error code 162");
@@ -303,7 +297,7 @@ pub(super) fn phase_head_timestamp(mut conns: Conns, gw: &Gateway, config: &Gate
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -350,7 +344,7 @@ pub(super) fn phase_scanner_subscription(mut conns: Conns, gw: &Gateway, config:
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -394,7 +388,7 @@ pub(super) fn phase_scanner_subscription(mut conns: Conns, gw: &Gateway, config:
     assert!(!r.scan_time.is_empty(), "Scanner should have scan_time");
     println!("  Scanner: {} contracts at {}", r.con_ids.len(), r.scan_time);
     for (i, cid) in r.con_ids.iter().enumerate().take(3) {
-        println!("  Rank {}: conId={}", i, cid);
+        println!("  Rank {i}: conId={cid}");
     }
     println!("  PASS ({} contracts)\n", r.con_ids.len());
     conns
@@ -406,7 +400,7 @@ pub(super) fn phase_fundamental_data(mut conns: Conns, gw: &Gateway, config: &Ga
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: HMDS reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: HMDS reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -466,7 +460,7 @@ pub(super) fn phase_historical_news(mut conns: Conns, gw: &Gateway, config: &Gat
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     // Step 1: Create HotLoop with ALL real connections (farm + CCP + HMDS)
@@ -539,7 +533,7 @@ pub(super) fn phase_historical_ticks(mut conns: Conns, gw: &Gateway, config: &Ga
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -595,7 +589,7 @@ pub(super) fn phase_historical_ticks(mut conns: Conns, gw: &Gateway, config: &Ga
                         }
                     }
                 }
-                println!("  Received ticks (what={}, done={}, total={})", what, done, tick_count);
+                println!("  Received ticks (what={what}, done={done}, total={tick_count})");
                 if *done { break; }
             }
         }
@@ -609,7 +603,7 @@ pub(super) fn phase_historical_ticks(mut conns: Conns, gw: &Gateway, config: &Ga
         println!("  SKIP: No historical ticks received\n");
     } else {
         assert_eq!(monotonic_violations, 0, "Timestamps should be monotonically increasing");
-        println!("  PASS ({} ticks, timestamps monotonic)\n", tick_count);
+        println!("  PASS ({tick_count} ticks, timestamps monotonic)\n");
     }
     conns
 }
@@ -620,7 +614,7 @@ pub(super) fn phase_histogram_data(mut conns: Conns, gw: &Gateway, config: &Gate
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -672,7 +666,7 @@ pub(super) fn phase_historical_schedule(mut conns: Conns, gw: &Gateway, config: 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -729,7 +723,7 @@ pub(super) fn phase_realtime_bars(mut conns: Conns, gw: &Gateway, config: &Gatew
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -785,7 +779,7 @@ pub(super) fn phase_news_article(mut conns: Conns, gw: &Gateway, config: &Gatewa
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -847,7 +841,7 @@ pub(super) fn phase_news_article(mut conns: Conns, gw: &Gateway, config: &Gatewa
                     if *art_type == 0 && body.contains('<') && body.contains('>') {
                         println!("  Format: HTML");
                     } else {
-                        println!("  Format: plain text (art_type={})", art_type);
+                        println!("  Format: plain text (art_type={art_type})");
                     }
                     println!("  Preview: {}", &body[..body.len().min(120)]);
                     got_article = true;
@@ -877,7 +871,7 @@ pub(super) fn phase_fundamental_data_channel(mut conns: Conns, gw: &Gateway, con
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -924,7 +918,7 @@ pub(super) fn phase_parallel_historical(mut conns: Conns, gw: &Gateway, config: 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -987,7 +981,7 @@ pub(super) fn phase_parallel_historical(mut conns: Conns, gw: &Gateway, config: 
     if count == 3 {
         println!("  PASS (all 3 responses received)\n");
     } else if count > 0 {
-        println!("  PARTIAL: {}/3 responses received\n", count);
+        println!("  PARTIAL: {count}/3 responses received\n");
     } else {
         println!("  SKIP: No responses received\n");
     }
@@ -1000,7 +994,7 @@ pub(super) fn phase_scanner_params(mut conns: Conns, gw: &Gateway, config: &Gate
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1164,7 +1158,7 @@ pub(super) fn phase_large_historical_dataset(mut conns: Conns, gw: &Gateway, con
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1219,9 +1213,9 @@ pub(super) fn phase_large_historical_dataset(mut conns: Conns, gw: &Gateway, con
         println!("  SKIP: No bars received\n");
         return conns;
     }
-    println!("  Total bars: {} (complete={})", total_bars, complete);
-    println!("  Duplicate timestamps: {}", duplicate_timestamps);
-    assert!(total_bars >= 200, "1 year should have 200+ trading days, got {}", total_bars);
+    println!("  Total bars: {total_bars} (complete={complete})");
+    println!("  Duplicate timestamps: {duplicate_timestamps}");
+    assert!(total_bars >= 200, "1 year should have 200+ trading days, got {total_bars}");
     assert_eq!(duplicate_timestamps, 0, "No duplicate bar timestamps expected");
     println!("  PASS\n");
     conns
@@ -1235,7 +1229,7 @@ pub(super) fn phase_dst_boundary_historical(mut conns: Conns, gw: &Gateway, conf
     ccp_keepalive(&mut conns.ccp);
     let hmds = match connect_farm(&config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, 17) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {}\n", e); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1294,7 +1288,7 @@ pub(super) fn phase_dst_boundary_historical(mut conns: Conns, gw: &Gateway, conf
         assert!(bar.open > 0.0, "Bar {}: zero/negative open", bar.time);
     }
 
-    println!("  {} bars received ({} unique timestamps, {} duplicates, complete={})", original_count, unique_count, duplicates, complete);
+    println!("  {original_count} bars received ({unique_count} unique timestamps, {duplicates} duplicates, complete={complete})");
     assert_eq!(duplicates, 0, "No duplicate timestamps at DST boundary");
 
     // 2 weeks of RTH = ~10 trading days * ~7 hours = ~70 bars
@@ -1317,7 +1311,7 @@ pub(super) fn phase_cancel_data_requests(mut conns: Conns, gw: &Gateway, config:
     ) {
         Ok(c) => { println!("  HMDS reconnected"); Some(c) }
         Err(e) => {
-            println!("  SKIP: ushmds reconnect failed: {}\n", e);
+            println!("  SKIP: ushmds reconnect failed: {e}\n");
             return conns;
         }
     };
@@ -1405,7 +1399,7 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config
     ) {
         Ok(c) => { println!("  HMDS reconnected"); Some(c) }
         Err(e) => {
-            println!("  SKIP: ushmds reconnect failed: {}\n", e);
+            println!("  SKIP: ushmds reconnect failed: {e}\n");
             return conns;
         }
     };
@@ -1457,26 +1451,23 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config
             }
         }
 
-        match event_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::OrderUpdate(update)) => {
-                if update.order_id == oid {
-                    match update.status {
-                        OrderStatus::Submitted | OrderStatus::PreSubmitted => {
-                            order_acked = true;
-                            if !cancel_sent {
-                                control_tx.send(ControlCommand::Order(
-                                    OrderRequest::Cancel { order_id: oid }
-                                )).unwrap();
-                                cancel_sent = true;
-                            }
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if update.order_id == oid {
+                match update.status {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                        order_acked = true;
+                        if !cancel_sent {
+                            control_tx.send(ControlCommand::Order(
+                                OrderRequest::Cancel { order_id: oid }
+                            )).unwrap();
+                            cancel_sent = true;
                         }
-                        OrderStatus::Cancelled => { order_cancelled = true; }
-                        OrderStatus::Rejected => { order_rejected = true; }
-                        _ => {}
                     }
+                    OrderStatus::Cancelled => { order_cancelled = true; }
+                    OrderStatus::Rejected => { order_rejected = true; }
+                    _ => {}
                 }
             }
-            _ => {}
         }
 
         if order_cancelled && hist_responses.len() >= 3 { break; }
@@ -1484,8 +1475,7 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    println!("  Order: acked={} cancelled={} rejected={}",
-        order_acked, order_cancelled, order_rejected);
+    println!("  Order: acked={order_acked} cancelled={order_cancelled} rejected={order_rejected}");
     println!("  Historical responses: {}/5", hist_responses.len());
 
     if order_rejected {

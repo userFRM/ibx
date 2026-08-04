@@ -75,8 +75,8 @@ pub fn build_histogram_fix_request(req: &HistogramRequest, seq: u32) -> Vec<u8> 
 
 /// Extract a simple XML tag value: `<tag>value</tag>` → `value`.
 fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{}>", tag);
-    let close = format!("</{}>", tag);
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
     let start = xml.find(&open)? + open.len();
     let end = xml[start..].find(&close)? + start;
     Some(&xml[start..end])
@@ -120,7 +120,7 @@ pub fn parse_histogram_response(xml: &str) -> Option<Vec<HistogramEntry>> {
 /// HMDS accepts: S (seconds), D (days), M (months), Y (years) — NOT W (weeks).
 /// Weeks are converted to days: "1 week" → "7 D", "2 weeks" → "14 D".
 fn convert_period(period: &str) -> String {
-    let parts: Vec<&str> = period.trim().split_whitespace().collect();
+    let parts: Vec<&str> = period.split_whitespace().collect();
     if parts.len() != 2 {
         return period.to_string();
     }
@@ -129,11 +129,11 @@ fn convert_period(period: &str) -> String {
         Err(_) => return period.to_string(),
     };
     match parts[1].to_lowercase().as_str() {
-        "second" | "seconds" | "secs" | "sec" | "s" => format!("{} S", num),
-        "day" | "days" | "d" => format!("{} D", num),
+        "second" | "seconds" | "secs" | "sec" | "s" => format!("{num} S"),
+        "day" | "days" | "d" => format!("{num} D"),
         "week" | "weeks" | "w" => format!("{} D", num * 7),
-        "month" | "months" | "m" => format!("{} M", num),
-        "year" | "years" | "y" => format!("{} Y", num),
+        "month" | "months" | "m" => format!("{num} M"),
+        "year" | "years" | "y" => format!("{num} Y"),
         _ => period.to_string(),
     }
 }

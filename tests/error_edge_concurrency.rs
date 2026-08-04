@@ -9,7 +9,7 @@ use std::thread;
 use ibx::api::client::{EClient, Contract, Order};
 use ibx::api::wrapper::tests::RecordingWrapper;
 use ibx::bridge::SharedState;
-use ibx::control::historical::{HistoricalResponse, HistoricalBar};
+use ibx::control::historical::HistoricalResponse;
 use ibx::engine::hot_loop::HotLoop;
 use ibx::protocol::fix;
 use ibx::types::*;
@@ -740,5 +740,5 @@ fn concurrent_drain_fills_no_duplicates() {
     let count2 = h2.join().unwrap();
 
     // Total should be exactly 100 — no duplicates, no lost fills
-    assert_eq!(count1 + count2, 100, "Total fills should be 100, got {} + {}", count1, count2);
+    assert_eq!(count1 + count2, 100, "Total fills should be 100, got {count1} + {count2}");
 }

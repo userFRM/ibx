@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn account_summary_debug() {
         let s = AccountSummary::default();
-        let debug_str = format!("{:?}", s);
+        let debug_str = format!("{s:?}");
         assert!(debug_str.contains("AccountSummary"));
     }
 
@@ -278,7 +278,7 @@ mod tests {
             avg_cost: 5.0,
             market_value: 50.0,
         };
-        let debug_str = format!("{:?}", p);
+        let debug_str = format!("{p:?}");
         assert!(debug_str.contains("PositionUpdate"));
     }
 

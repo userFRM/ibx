@@ -63,7 +63,7 @@ pub fn fmt_pipe(bytes: &[u8]) -> String {
         match b {
             SOH => s.push('|'),
             0x20..=0x7e => s.push(b as char),
-            _ => s.push_str(&format!("\\x{:02x}", b)),
+            _ => s.push_str(&format!("\\x{b:02x}")),
         }
     }
     s
@@ -161,7 +161,7 @@ pub fn fix_parse(data: &[u8]) -> HashMap<u32, String> {
 /// Fold 20-byte HMAC digest to 4 bytes → 8-char uppercase hex.
 pub fn xor_fold(h: &[u8]) -> String {
     let r = xor_fold_bytes(h);
-    r.iter().map(|b| format!("{:02X}", b)).collect()
+    r.iter().map(|b| format!("{b:02X}")).collect()
 }
 
 /// Fold 20-byte HMAC digest to 4 bytes (no heap allocation).
@@ -218,7 +218,7 @@ fn find_after_tag(data: &[u8], tag_num: u32) -> Option<usize> {
         9 => find_after_tag_bytes(data, b"9="),
         35 => find_after_tag_bytes(data, b"35="),
         _ => {
-            let needle = format!("{}=", tag_num);
+            let needle = format!("{tag_num}=");
             find_after_tag_bytes(data, needle.as_bytes())
         }
     }
@@ -556,7 +556,7 @@ mod tests {
                 r[i] ^= data[off + i];
             }
         }
-        let expected: String = r.iter().map(|b| format!("{:02X}", b)).collect();
+        let expected: String = r.iter().map(|b| format!("{b:02X}")).collect();
         assert_eq!(result, expected);
     }
 
@@ -632,8 +632,7 @@ mod tests {
             assert_eq!(
                 parsed.get(tag),
                 Some(&val.to_string()),
-                "tag {} missing or wrong",
-                tag
+                "tag {tag} missing or wrong"
             );
         }
         // Auto-generated tags must also be present
@@ -822,10 +821,10 @@ mod tests {
             0xAA, 0xBB, 0xCC, 0xDD, // group 4
         ];
         let r0 = 0x01 ^ 0x10 ^ 0x05 ^ 0xFF ^ 0xAA;
-        let r1 = 0x02 ^ 0x20 ^ 0x06 ^ 0x00 ^ 0xBB;
+        let r1 = (0x02 ^ 0x20 ^ 0x06) ^ 0xBB;
         let r2 = 0x03 ^ 0x30 ^ 0x07 ^ 0xFF ^ 0xCC;
-        let r3 = 0x04 ^ 0x40 ^ 0x08 ^ 0x00 ^ 0xDD;
-        let expected = format!("{:02X}{:02X}{:02X}{:02X}", r0, r1, r2, r3);
+        let r3 = (0x04 ^ 0x40 ^ 0x08) ^ 0xDD;
+        let expected = format!("{r0:02X}{r1:02X}{r2:02X}{r3:02X}");
         assert_eq!(xor_fold(&digest), expected);
     }
 }

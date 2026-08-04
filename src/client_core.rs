@@ -307,8 +307,7 @@ fn require_finite_price(field: &str, v: f64) -> Result<(), String> {
     // instead of being refused. `>=` excludes that boundary.
     if !v.is_finite() || (v * PRICE_SCALE_F).abs() >= i64::MAX as f64 {
         return Err(format!(
-            "{} must be a finite number representable on the wire, got {}",
-            field, v
+            "{field} must be a finite number representable on the wire, got {v}"
         ));
     }
     Ok(())
@@ -325,7 +324,7 @@ fn adaptive_priority(params: &[TagValue]) -> Result<AdaptivePriority, String> {
             "Normal" => Ok(AdaptivePriority::Normal),
             "Urgent" => Ok(AdaptivePriority::Urgent),
             other => Err(format!(
-                "Unknown adaptivePriority '{}': expected Patient, Normal or Urgent", other
+                "Unknown adaptivePriority '{other}': expected Patient, Normal or Urgent"
             )),
         },
     }
@@ -459,6 +458,12 @@ pub struct ClientCore {
     pub contract_cache: Mutex<HashMap<i64, ApiContract>>,
 }
 
+impl Default for ClientCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClientCore {
     pub fn new() -> Self {
         Self {
@@ -582,7 +587,7 @@ impl ClientCore {
             con_id, symbol: symbol.to_string(),
             sec_type: sec_type.to_string(), exchange: exchange.to_string(),
             reply_tx: Some(reply_tx),
-        }).map_err(|e| format!("Engine stopped: {}", e))?;
+        }).map_err(|e| format!("Engine stopped: {e}"))?;
 
         let id = Self::recv_registration(reply_rx)?;
         self.cache_instrument(con_id, id);
@@ -636,7 +641,7 @@ impl ClientCore {
             con_id, symbol: symbol.to_string(),
             sec_type: sec_type.to_string(), exchange: exchange.to_string(),
             reply_tx: None,
-        }).map_err(|e| format!("Engine stopped: {}", e))?;
+        }).map_err(|e| format!("Engine stopped: {e}"))?;
         control_tx.send(ControlCommand::Subscribe {
             con_id,
             symbol: symbol.to_string(),
@@ -648,7 +653,7 @@ impl ClientCore {
             multiplier: multiplier.to_string(),
             mode_9887,
             reply_tx: Some(reply_tx),
-        }).map_err(|e| format!("Engine stopped: {}", e))?;
+        }).map_err(|e| format!("Engine stopped: {e}"))?;
 
         // The engine answers this one. A conId-less contract has no client-side
         // identity, so a duplicate can only be settled against the slot the
@@ -738,7 +743,7 @@ impl ClientCore {
             symbol: symbol.to_string(),
             tbt_type,
             reply_tx: Some(reply_tx),
-        }).map_err(|e| format!("Engine stopped: {}", e))?;
+        }).map_err(|e| format!("Engine stopped: {e}"))?;
 
         let instrument_id = Self::recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);
@@ -811,10 +816,9 @@ impl ClientCore {
     pub fn set_market_data_type(&self, mdt: i32) {
         if mdt != MDT_REALTIME {
             log::warn!(
-                "req_market_data_type({}) is not supported: the type is not \
+                "req_market_data_type({mdt}) is not supported: the type is not \
                  sent to the gateway and subscriptions remain realtime; \
                  delayed tick variants are never emitted (ibx#234)",
-                mdt,
             );
         }
         self.market_data_type.store(mdt, Ordering::Relaxed);
@@ -1724,8 +1728,7 @@ impl ClientCore {
             "" | "DAY" | "GTC" | "IOC" | "FOK" | "OPG" | "GTD" | "DTC" | "AUC" => {}
             other => {
                 return Err(format!(
-                    "Unsupported tif '{}': use DAY, GTC, IOC, FOK, OPG, GTD, DTC or AUC",
-                    other
+                    "Unsupported tif '{other}': use DAY, GTC, IOC, FOK, OPG, GTD, DTC or AUC"
                 ));
             }
         }
@@ -1808,9 +1811,8 @@ impl ClientCore {
         crate::control::historical::BarDataType::from_api_str(what_to_show)?;
         if keep_up_to_date && !bs.supports_keep_up_to_date() {
             return Err(format!(
-                "bar_size '{}' is not supported with keep_up_to_date=true: \
+                "bar_size '{bar_size}' is not supported with keep_up_to_date=true: \
                  supported sizes are 1 secs, 5 secs, 5 mins, 1 hour, 1 day",
-                bar_size,
             ));
         }
         Ok(())
@@ -1833,11 +1835,10 @@ impl ClientCore {
             return Ok(());
         }
         Err(format!(
-            "Unsupported contract sec_type '{}': only STK orders are supported. \
+            "Unsupported contract sec_type '{sec_type}': only STK orders are supported. \
              Non-STK contracts (OPT/FUT/BAG/…) are not yet wire-encoded and would \
              otherwise be silently sent as a stock order on the underlying symbol. \
-             See https://github.com/deepentropy/ibx/issues/202",
-            sec_type
+             See https://github.com/deepentropy/ibx/issues/202"
         ))
     }
 
@@ -1897,7 +1898,7 @@ impl ClientCore {
                 "STP LMT" => AdjustedOrderType::StopLimit,
                 "TRAIL" => AdjustedOrderType::Trail,
                 "TRAIL LIMIT" => AdjustedOrderType::TrailLimit,
-                other => return Err(format!("unknown adjustedOrderType '{}'", other)),
+                other => return Err(format!("unknown adjustedOrderType '{other}'")),
             };
             let scale = |v: f64| (v * PRICE_SCALE_F) as i64;
             // adjusted_trailing_amount defaults to f64::MAX when unset.

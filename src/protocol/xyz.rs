@@ -87,7 +87,7 @@ pub fn xyz_build_srp_v20(state: u32, named_fields: &[(&str, &str)]) -> Vec<u8> {
     for name in &field_names {
         let val = named_fields
             .iter()
-            .find(|(k, _)| k.len() == 1 && k.chars().next() == Some(*name))
+            .find(|(k, _)| k.len() == 1 && k.starts_with(*name))
             .map(|(_, v)| *v)
             .unwrap_or("");
         xyz_write_string(&mut buf, val);
@@ -263,7 +263,7 @@ pub fn xyz_write_string(buf: &mut Vec<u8>, s: &str) {
     buf.extend_from_slice(data);
     let remainder = data.len() % 4;
     if remainder > 0 {
-        buf.extend(std::iter::repeat(0u8).take(4 - remainder));
+        buf.extend(std::iter::repeat_n(0u8, 4 - remainder));
     }
 }
 
@@ -425,7 +425,7 @@ mod tests {
         // The parser reads the 5th header slot (str_len=0) as fields[0], then
         // M.x="" at fields[1], M.z=code at fields[2], M.A="" at fields[3].
         assert!(fields.iter().any(|f| f == "02226534"),
-            "code must appear in parsed fields; got {:?}", fields);
+            "code must appear in parsed fields; got {fields:?}");
     }
 
     #[test]

@@ -47,7 +47,7 @@ fn raw_farm_subscribe_test() {
     let mut total_msgs = 0;
     while start.elapsed() < Duration::from_secs(15) {
         match farm.try_recv() {
-            Ok(n) if n > 0 => eprintln!("  recv {} bytes", n),
+            Ok(n) if n > 0 => eprintln!("  recv {n} bytes"),
             _ => {}
         }
 
@@ -91,5 +91,5 @@ fn raw_farm_subscribe_test() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    eprintln!("\nTotal: {} messages in 15s", total_msgs);
+    eprintln!("\nTotal: {total_msgs} messages in 15s");
 }

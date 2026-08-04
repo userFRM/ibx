@@ -37,9 +37,9 @@ impl BarDataType {
             "OPTION_IMPLIED_VOLATILITY" => Self::ImpliedVolatility,
             other => {
                 return Err(format!(
-                    "Unsupported what_to_show '{}': expected TRADES, MIDPOINT, \
+                    "Unsupported what_to_show '{other}': expected TRADES, MIDPOINT, \
                      BID, ASK, BID_ASK, ADJUSTED_LAST, HISTORICAL_VOLATILITY \
-                     or OPTION_IMPLIED_VOLATILITY", other,
+                     or OPTION_IMPLIED_VOLATILITY",
                 ));
             }
         })
@@ -116,11 +116,11 @@ impl BarSize {
             "1 month" | "1M" => Self::Month1,
             other => {
                 return Err(format!(
-                    "Unsupported bar_size '{}': expected one of 1 secs, 5 secs, \
+                    "Unsupported bar_size '{other}': expected one of 1 secs, 5 secs, \
                      10 secs, 15 secs, 30 secs, 1 min, 2 mins, 3 mins, 5 mins, \
                      10 mins, 15 mins, 20 mins, 30 mins, 1 hour, 2 hours, \
                      3 hours, 4 hours, 8 hours, 1 day, 1 week, 1 month \
-                     (case-sensitive)", other,
+                     (case-sensitive)",
                 ));
             }
         })
@@ -278,10 +278,9 @@ pub fn build_cancel_request(ticker_id: &str, seq: u32) -> Vec<u8> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <ListOfCancelQueries>\
          <CancelQuery>\
-         <id>ticker:{tid}</id>\
+         <id>ticker:{ticker_id}</id>\
          </CancelQuery>\
          </ListOfCancelQueries>",
-        tid = ticker_id,
     );
     fix::fix_build(
         &[
@@ -294,8 +293,8 @@ pub fn build_cancel_request(ticker_id: &str, seq: u32) -> Vec<u8> {
 
 /// Extract a simple XML tag value: `<tag>value</tag>` → `value`.
 pub fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{}>", tag);
-    let close = format!("</{}>", tag);
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
     let start = xml.find(&open)? + open.len();
     let end = xml[start..].find(&close)? + start;
     Some(&xml[start..end])
@@ -440,16 +439,16 @@ pub fn build_tick_query_xml(
 
     // Use endTime if provided, otherwise startTime
     let time_tag = if !end_date_time.is_empty() {
-        format!("<endTime>{}</endTime>", end_date_time)
+        format!("<endTime>{end_date_time}</endTime>")
     } else {
-        format!("<endTime>{}</endTime>", start_date_time)
+        format!("<endTime>{start_date_time}</endTime>")
     };
 
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <ListOfQueries>\
          <Query>\
-         <id>{id}</id>\
+         <id>{query_id}</id>\
          <useRTH>{rth}</useRTH>\
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
@@ -457,17 +456,14 @@ pub fn build_tick_query_xml(
          <expired>no</expired>\
          <type>TickData</type>\
          <data>{data}</data>\
-         {time}\
-         <timeLength>{n} t</timeLength>\
+         {time_tag}\
+         <timeLength>{number_of_ticks} t</timeLength>\
          <step>ticks</step>\
          <source>API</source>\
          <wholeDays>true</wholeDays>\
          <delay>auto</delay>\
          </Query>\
          </ListOfQueries>",
-        id = query_id,
-        n = number_of_ticks,
-        time = time_tag,
     )
 }
 
@@ -560,7 +556,7 @@ pub fn build_realtime_bar_xml(query_id: &str, con_id: i64, what_to_show: &str, u
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <ListOfQueries>\
          <Query>\
-         <id>{id}</id>\
+         <id>{query_id}</id>\
          <useRTH>{rth}</useRTH>\
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
@@ -574,7 +570,6 @@ pub fn build_realtime_bar_xml(query_id: &str, con_id: i64, what_to_show: &str, u
          <wholeDays>false</wholeDays>\
          </Query>\
          </ListOfQueries>",
-        id = query_id,
     )
 }
 
@@ -686,23 +681,19 @@ pub fn build_schedule_xml(query_id: &str, con_id: i64, end_time: &str, duration:
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <ListOfQueries>\
          <Query>\
-         <id>{id}</id>\
+         <id>{query_id}</id>\
          <useRTH>{rth}</useRTH>\
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
          <secType>STK</secType>\
          <type>BarData</type>\
          <data>Schedule</data>\
-         <endTime>{end}</endTime>\
-         <timeLength>{dur}</timeLength>\
+         <endTime>{end_time}</endTime>\
+         <timeLength>{duration}</timeLength>\
          <step>1 day</step>\
          <scheduleOnly>true</scheduleOnly>\
          </Query>\
          </ListOfQueries>",
-        id = query_id,
-        con_id = con_id,
-        end = end_time,
-        dur = duration,
     )
 }
 
@@ -801,7 +792,7 @@ mod tests {
             "8 hours", "1 day", "1 week", "1 month",
         ];
         for s in all {
-            assert!(BarSize::from_api_str(s).is_ok(), "'{}' must parse", s);
+            assert!(BarSize::from_api_str(s).is_ok(), "'{s}' must parse");
         }
         assert_eq!(BarSize::from_api_str("1 min").unwrap(), BarSize::Min1);
     }
@@ -811,7 +802,7 @@ mod tests {
         // The issue's exact repro: "1 Min" silently became 5-minute bars.
         for s in ["1 Min", "1min", "1 minute", "7 mins", ""] {
             let err = BarSize::from_api_str(s).unwrap_err();
-            assert!(err.contains("bar_size"), "'{}' -> {}", s, err);
+            assert!(err.contains("bar_size"), "'{s}' -> {err}");
         }
     }
 
@@ -1013,9 +1004,9 @@ mod tests {
             keep_up_to_date: false,
         };
         let xml = build_query_xml(&req);
-        assert!(xml.contains("<secType>FUT</secType>"), "got: {}", xml);
-        assert!(xml.contains("<exchange>CME</exchange>"), "got: {}", xml);
-        assert!(!xml.contains("BEST"), "a futures query must not be routed to BEST: {}", xml);
+        assert!(xml.contains("<secType>FUT</secType>"), "got: {xml}");
+        assert!(xml.contains("<exchange>CME</exchange>"), "got: {xml}");
+        assert!(!xml.contains("BEST"), "a futures query must not be routed to BEST: {xml}");
     }
 
     /// SMART still maps to BEST, which is what stock callers relied on.
@@ -1035,8 +1026,8 @@ mod tests {
             keep_up_to_date: false,
         };
         let xml = build_query_xml(&req);
-        assert!(xml.contains("<exchange>BEST</exchange>"), "got: {}", xml);
-        assert!(xml.contains("<secType>CS</secType>"), "got: {}", xml);
+        assert!(xml.contains("<exchange>BEST</exchange>"), "got: {xml}");
+        assert!(xml.contains("<secType>CS</secType>"), "got: {xml}");
     }
 
     #[test]

@@ -113,20 +113,19 @@ pub(super) fn phase_endpoint_coverage(conns: Conns) -> Conns {
     if !KNOWN_CONTROL_COMMAND_GAPS.is_empty() {
         println!("  Known command gaps:");
         for (name, why) in KNOWN_CONTROL_COMMAND_GAPS {
-            println!("    - {}: {}", name, why);
+            println!("    - {name}: {why}");
         }
     }
     if !KNOWN_RUST_API_GAPS.is_empty() {
         println!("  Known API gaps:");
         for (name, why) in KNOWN_RUST_API_GAPS {
-            println!("    - {}: {}", name, why);
+            println!("    - {name}: {why}");
         }
     }
 
     assert!(
         missing.is_empty(),
-        "Untracked ControlCommand variants in coverage manifest: {:?}",
-        missing
+        "Untracked ControlCommand variants in coverage manifest: {missing:?}"
     );
     println!("  PASS\n");
     conns
@@ -134,7 +133,7 @@ pub(super) fn phase_endpoint_coverage(conns: Conns) -> Conns {
 
 fn enum_variants_from_types(enum_name: &str) -> Vec<String> {
     let src = include_str!("../../src/types.rs");
-    let marker = format!("pub enum {} {{", enum_name);
+    let marker = format!("pub enum {enum_name} {{");
     let start = src
         .find(&marker)
         .expect("enum declaration not found in src/types.rs");
@@ -185,7 +184,6 @@ fn control_command_manifest_tracks_all_variants() {
         .collect();
     assert!(
         missing.is_empty(),
-        "Missing coverage mapping for variants: {:?}",
-        missing
+        "Missing coverage mapping for variants: {missing:?}"
     );
 }

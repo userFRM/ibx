@@ -139,7 +139,7 @@ pub fn token_short_hash(session_token: &BigUint) -> String {
     let digest = Sha1::digest(stripped);
     // Take last 4 bytes as u32 (Java BigInteger.intValue() truncates to low 32 bits)
     let hash_int = u32::from_be_bytes([digest[16], digest[17], digest[18], digest[19]]);
-    format!("{:08x}", hash_int)
+    format!("{hash_int:08x}")
 }
 
 /// Build auth server logon message.
@@ -199,11 +199,11 @@ pub fn build_farm_encrypted_logon(
     encoded: &str,
     slot: u32,
 ) -> Vec<u8> {
-    let display_name = format!("S{}", username);
-    let farm_id = format!("{}/{}/{}", display_name, slot, farm_name);
+    let display_name = format!("S{username}");
+    let farm_id = format!("{display_name}/{slot}/{farm_name}");
     let farm_id_len = farm_id.len().to_string();
     let token_hash = token_short_hash(session_token);
-    let ns_range = format!("{}..{}", NS_VERSION_MIN, NS_VERSION);
+    let ns_range = format!("{NS_VERSION_MIN}..{NS_VERSION}");
     let now = chrono_free_timestamp();
     let hb_str = FARM_HEARTBEAT.to_string();
     let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
@@ -239,12 +239,12 @@ pub fn build_farm_encrypted_logon(
 
     // Outer wrapper: 8=FIX.4.1|9=<bodylen>|90=<b64_len>|91=<b64>|10=<cksum>
     let b64_len_str = b64_str.len().to_string();
-    let body = format!("90={}\x0191={}\x01", b64_len_str, b64_str);
+    let body = format!("90={b64_len_str}\x0191={b64_str}\x01");
     let header = format!("8=FIX.4.1\x019={:04}\x01", body.len());
-    let pre_cksum = format!("{}{}", header, body);
+    let pre_cksum = format!("{header}{body}");
     let cksum = fix::fix_checksum(pre_cksum.as_bytes());
     let mut wrapper = pre_cksum.into_bytes();
-    wrapper.extend_from_slice(format!("10={}\x01", cksum).as_bytes());
+    wrapper.extend_from_slice(format!("10={cksum}\x01").as_bytes());
     wrapper
 }
 
@@ -374,7 +374,7 @@ pub fn farm_logon_exchange(
                 let text = fields.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("Farm logon rejected: {}", text),
+                    format!("Farm logon rejected: {text}"),
                 ));
             }
         } else if msg.starts_with(b"8=1\x01") {
@@ -527,13 +527,13 @@ pub fn connect_farm(
 ) -> io::Result<Connection> {
     let port = misc_port();
     let farm_host = farm_host_override().unwrap_or_else(|| host.to_string());
-    log::info!("Connecting to {} {}:{}", farm_id, farm_host, port);
-    let addr = format!("{}:{}", farm_host, port)
+    log::info!("Connecting to {farm_id} {farm_host}:{port}");
+    let addr = format!("{farm_host}:{port}")
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
     let farm_tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_FARM_CONNECT))
-        .map_err(|e| io::Error::new(e.kind(), format!("{} TCP connect: {}", farm_id, e)))?;
+        .map_err(|e| io::Error::new(e.kind(), format!("{farm_id} TCP connect: {e}")))?;
     farm_tcp.set_nodelay(true)?;
     farm_tcp.set_read_timeout(Some(Duration::from_secs(TIMEOUT_FARM_CONNECT)))?;
 
@@ -550,11 +550,11 @@ pub fn connect_farm(
     if msg_type != ns::NS_SECURE_CONNECTION_START {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("{} DH: expected 533, got {}", farm_id, msg_type),
+            format!("{farm_id} DH: expected 533, got {msg_type}"),
         ));
     }
     channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
-    log::info!("{} key exchange complete", farm_id);
+    log::info!("{farm_id} key exchange complete");
 
     // Encrypted logon
     let farm_session_id = if server_session_id.is_empty() {
@@ -567,7 +567,7 @@ pub fn connect_farm(
         &farm_session_id, session_key, hw_info, encoded, slot,
     );
     stream.write_all(&logon_bytes)?;
-    log::info!("{} encrypted logon sent", farm_id);
+    log::info!("{farm_id} encrypted logon sent");
 
     // Logon exchange: challenge → token auth → logon ACK
     let read_mac_key = channel.key_block().map(|kb| kb[84..104].to_vec()).unwrap_or_default();
@@ -594,7 +594,7 @@ pub fn connect_farm(
     let (signed, new_sign_iv) = fix::fix_sign(&wrapped, &sign_mac_key, &sign_iv);
     stream.write_all(&signed)?;
     let final_sign_iv = new_sign_iv;
-    log::info!("{} sent routing request (6556={})", farm_id, channel_id);
+    log::info!("{farm_id} sent routing request (6556={channel_id})");
 
     // Read routing response. Frame-based termination: poll with a short
     // timeout, break as soon as we have at least one complete FIXCOMP frame
@@ -641,13 +641,13 @@ pub fn connect_farm(
             crate::protocol::connection::Frame::FixComp(raw) => {
                 let Some(unsigned) = conn.unsign(raw) else { continue };
                 let inner = fixcomp::fixcomp_decompress(&unsigned).unwrap_or_else(|e| {
-                    log::warn!("{}: dropping malformed FIXCOMP frame: {}", farm_id, e);
+                    log::warn!("{farm_id}: dropping malformed FIXCOMP frame: {e}");
                     Vec::new()
                 });
                 for m in &inner {
                     let parsed = fix_parse(m);
                     let mt = parsed.get(&35).map(|s| s.as_str()).unwrap_or("");
-                    log::debug!("{} routing compressed inner 35={}", farm_id, mt);
+                    log::debug!("{farm_id} routing compressed inner 35={mt}");
                     if mt == "1" {
                         let test_id = parsed.get(&112).cloned().unwrap_or_default();
                         let ts = chrono_free_timestamp();
@@ -663,7 +663,7 @@ pub fn connect_farm(
                 let Some(unsigned) = conn.unsign(raw) else { continue };
                 let parsed = fix_parse(&unsigned);
                 let mt = parsed.get(&35).map(|s| s.as_str()).unwrap_or("");
-                log::debug!("{} routing FIX 35={}", farm_id, mt);
+                log::debug!("{farm_id} routing FIX 35={mt}");
                 if mt == "1" {
                     let test_id = parsed.get(&112).cloned().unwrap_or_default();
                     let ts = chrono_free_timestamp();
@@ -702,22 +702,22 @@ pub fn reconnect_ccp(auth: &ReconnectAuth) -> io::Result<Connection> {
 
 fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, depth: u32) -> io::Result<Connection> {
     if depth > 5 {
-        return Err(io::Error::new(io::ErrorKind::Other, "CCP reconnect: too many redirects"));
+        return Err(io::Error::other("CCP reconnect: too many redirects"));
     }
     log::info!("CCP reconnect to {}:{} (attempt {})", host, AUTH_PORT, depth + 1);
 
     // TLS + DH key exchange
-    let addr = format!("{}:{}", host, AUTH_PORT)
+    let addr = format!("{host}:{AUTH_PORT}")
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
     let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH))?;
     let connector = TlsConnector::builder()
         .build()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     let mut tls = connector
         .connect(host, tcp)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     let mut channel = SecureChannel::new();
     let dh_msg = channel.build_secure_connect(NS_VERSION, NS_VERSION);
@@ -730,7 +730,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     if msg_type != ns::NS_SECURE_CONNECTION_START {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("CCP reconnect DH: expected 533, got {}", msg_type),
+            format!("CCP reconnect DH: expected 533, got {msg_type}"),
         ));
     }
     channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
@@ -771,7 +771,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         Err(e) if e.to_string().starts_with("REDIRECT:") => {
             let target = e.to_string().replace("REDIRECT:", "");
             let redirect_host = target.split(':').next().unwrap_or(&target).to_string();
-            log::info!("CCP reconnect redirected to {}", redirect_host);
+            log::info!("CCP reconnect redirected to {redirect_host}");
             drop(tls);
             // Floor before following (ibx#218): this runs on the background
             // reconnect thread, and an instant re-dial chain risks the same
@@ -795,13 +795,13 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         match session::recv_msg(&mut tls) {
             Ok(session::RecvMsg::Xyz { state, fields, .. }) => {
                 let result = fields.iter().rev().find(|s| !s.is_empty()).map(|s| s.as_str()).unwrap_or("");
-                log::info!("CCP reconnect AUTH_FINISH: state={} result={}", state, result);
+                log::info!("CCP reconnect AUTH_FINISH: state={state} result={result}");
             }
             Ok(session::RecvMsg::Ns { msg_type, .. }) => {
-                log::info!("CCP reconnect post-auth NS type={}", msg_type);
+                log::info!("CCP reconnect post-auth NS type={msg_type}");
             }
             Err(e) => {
-                log::warn!("CCP reconnect AUTH_FINISH recv: {}", e);
+                log::warn!("CCP reconnect AUTH_FINISH recv: {e}");
             }
         }
     } else {
@@ -820,7 +820,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         let (payload, _) = match ns::ns_recv(&mut tls) {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("CCP reconnect post-auth recv: {}", e);
+                log::warn!("CCP reconnect post-auth recv: {e}");
                 break;
             }
         };
@@ -848,8 +848,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
             fix_ready = true;
             break;
         } else if msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 format!("CCP reconnect post-auth error: {}", inner_parts[2..].join(";")),
             ));
         }
@@ -857,7 +856,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     }
     tls.get_ref().set_read_timeout(None)?;
     if !fix_ready {
-        return Err(io::Error::new(io::ErrorKind::Other, "CCP reconnect: no FIX_START after auth"));
+        return Err(io::Error::other("CCP reconnect: no FIX_START after auth"));
     }
 
     // FIX Logon
@@ -879,7 +878,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
                 let reason = fields.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("CCP reconnect logon rejected: {}", reason),
+                    format!("CCP reconnect logon rejected: {reason}"),
                 ));
             }
             "A" | "U" => break,
@@ -953,7 +952,7 @@ fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &BigUint) -> 
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("CCP SOFT_TOKEN auth failed: {}", result),
+            format!("CCP SOFT_TOKEN auth failed: {result}"),
         ))
     }
 }
@@ -1131,7 +1130,7 @@ fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
             if let Some(total_len) = fixcomp::fixcomp_length(&init_data[cursor..]) {
                 let segment = &init_data[cursor..cursor + total_len.min(init_data.len() - cursor)];
                 let inflated = fixcomp::fixcomp_decompress(segment).unwrap_or_else(|e| {
-                    log::warn!("Init FIXCOMP segment at offset {}: dropping malformed frame: {}", cursor, e);
+                    log::warn!("Init FIXCOMP segment at offset {cursor}: dropping malformed frame: {e}");
                     Vec::new()
                 });
                 let inflated_bytes: usize = inflated.iter().map(|m| m.len() + 1).sum();
@@ -1166,8 +1165,7 @@ impl Gateway {
         redirect_depth: u32,
     ) -> io::Result<(Self, Connection, Connection, Option<Connection>)> {
         if redirect_depth > 3 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 "Too many redirects during auth",
             ));
         }
@@ -1180,14 +1178,14 @@ impl Gateway {
         // the whole string for full control.
         let encoded = std::env::var("IBX_ENCODED").unwrap_or_else(|_| {
             match std::env::var("IBX_LOCALE") {
-                Ok(loc) if !loc.is_empty() => format!("17.0.10.0.101/W/{}/G", loc),
+                Ok(loc) if !loc.is_empty() => format!("17.0.10.0.101/W/{loc}/G"),
                 _ => IB_ENCODED.to_string(),
             }
         });
 
         // --- Phase 1: TLS + auth ---
-        log::info!("Connecting to auth server {}:{}", host, AUTH_PORT);
-        let addr = format!("{}:{}", host, AUTH_PORT)
+        log::info!("Connecting to auth server {host}:{AUTH_PORT}");
+        let addr = format!("{host}:{AUTH_PORT}")
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
@@ -1196,10 +1194,10 @@ impl Gateway {
         let connector = TlsConnector::builder()
             .danger_accept_invalid_certs(config.accept_invalid_certs)
             .build()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         let mut tls = connector
             .connect(host, tcp)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         // Key exchange
         let mut channel = SecureChannel::new();
@@ -1211,15 +1209,14 @@ impl Gateway {
         let parts: Vec<&str> = text.split(';').collect();
         let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
         if msg_type == ns::NS_SECURE_ERROR {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 format!("DH error: {}", parts[2..].join(";")),
             ));
         }
         if msg_type != ns::NS_SECURE_CONNECTION_START {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Expected 533, got {}", msg_type),
+                format!("Expected 533, got {msg_type}"),
             ));
         }
         channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
@@ -1260,7 +1257,7 @@ impl Gateway {
                 let target = e.to_string().strip_prefix("REDIRECT:").unwrap().to_string();
                 // Extract host (strip port if present — auth always uses AUTH_PORT)
                 let redirect_host = target.split(':').next().unwrap_or(&target);
-                log::info!("Redirected to {}, reconnecting...", redirect_host);
+                log::info!("Redirected to {redirect_host}, reconnecting...");
                 drop(tls);
                 return Self::connect_to_host(config, redirect_host, redirect_depth + 1);
             }
@@ -1297,8 +1294,7 @@ impl Gateway {
         let route = second_factor_route(config.paper, &server_token_type);
         if !config.paper {
             log::debug!(
-                "second factor: AUTH_START type {:?} sub {:?} -> {:?}",
-                server_token_type, server_token_sub_type, route,
+                "second factor: AUTH_START type {server_token_type:?} sub {server_token_sub_type:?} -> {route:?}",
             );
         }
         if route == SecondFactorRoute::SecurityCode {
@@ -1412,11 +1408,11 @@ impl Gateway {
                     if e.kind() == io::ErrorKind::WouldBlock
                         || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    log::warn!("Post-auth recv timeout, retrying until deadline: {}", e);
+                    log::warn!("Post-auth recv timeout, retrying until deadline: {e}");
                     continue;
                 }
                 Err(e) => {
-                    log::warn!("Post-auth recv error: {}", e);
+                    log::warn!("Post-auth recv error: {e}");
                     break;
                 }
             };
@@ -1431,14 +1427,13 @@ impl Gateway {
                 channel.decrypt(&ct)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
             } else if raw_type == ns::NS_SECURE_ERROR {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     format!("Post-auth secure error: {}", parts[2..].join(";")),
                 ));
             } else if raw_type == ns::NS_REDIRECT {
                 let target = parts.get(2).unwrap_or(&"");
                 let redirect_host = target.split(':').next().unwrap_or(target);
-                log::info!("Post-auth redirect to {}, reconnecting...", redirect_host);
+                log::info!("Post-auth redirect to {redirect_host}, reconnecting...");
                 drop(tls);
                 return Self::connect_to_host(config, redirect_host, redirect_depth + 1);
             } else {
@@ -1450,22 +1445,21 @@ impl Gateway {
             let msg_type: u32 = inner_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
 
             if msg_type == ns::NS_CONNECT_RESPONSE {
-                log::info!("NS_CONNECT_RESPONSE: {}", inner_text);
+                log::info!("NS_CONNECT_RESPONSE: {inner_text}");
                 // Send port type change (required before data start)
                 let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
                 session::send_secure(&mut tls, &mut channel, newcomm.as_bytes())?;
                 log::info!("Port type change sent");
             } else if msg_type == ns::NS_FIX_START {
-                log::info!("Data start: {}", inner_text);
+                log::info!("Data start: {inner_text}");
                 fix_ready = true;
                 break;
             } else if msg_type == ns::NS_ERROR_RESPONSE {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     format!("Post-auth error: {}", inner_parts[2..].join(";")),
                 ));
             } else {
-                log::info!("Post-auth msg type={}: {}", msg_type, inner_text);
+                log::info!("Post-auth msg type={msg_type}: {inner_text}");
             }
         }
         if !fix_ready {
@@ -1532,7 +1526,7 @@ impl Gateway {
                 msg_type, raw_response.len(), response.len());
             for tag in [6144u32, 6145, 6146, 6147, 6171, 6172, 8008, 8009, 6160, 6161] {
                 if let Some(v) = fields.get(&tag) {
-                    log::info!("Auth msg type={} tag={}: {:?}", msg_type, tag, v);
+                    log::info!("Auth msg type={msg_type} tag={tag}: {v:?}");
                 }
             }
 
@@ -1541,7 +1535,7 @@ impl Gateway {
                     let reason = fields.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        format!("FIX Logon rejected: {}", reason),
+                        format!("FIX Logon rejected: {reason}"),
                     ));
                 }
                 _ => {}
@@ -1584,19 +1578,19 @@ impl Gateway {
             if let Some(v) = fields.get(&6145) {
                 if trading_route.is_empty() {
                     trading_route = v.clone();
-                    log::info!("Auth: trading farm route = {}", trading_route);
+                    log::info!("Auth: trading farm route = {trading_route}");
                 }
             }
             if let Some(v) = fields.get(&6171) {
                 if mktdata_route.is_empty() {
                     mktdata_route = v.clone();
-                    log::info!("Auth: market-data farm route = {}", mktdata_route);
+                    log::info!("Auth: market-data farm route = {mktdata_route}");
                 }
             }
             if let Some(v) = fields.get(&8008) {
                 if secdef_route.is_empty() {
                     secdef_route = v.clone();
-                    log::info!("Auth: secdef farm route = {}", secdef_route);
+                    log::info!("Auth: secdef farm route = {secdef_route}");
                 }
             }
 
@@ -1647,8 +1641,7 @@ impl Gateway {
         }
 
         log::info!(
-            "Auth logon: account={} session_id={} hb={}s",
-            account_id, server_session_id, heartbeat_interval
+            "Auth logon: account={account_id} session_id={server_session_id} hb={heartbeat_interval}s"
         );
 
         // --- Post-logon init sequence ---
@@ -1718,18 +1711,17 @@ impl Gateway {
         // "farm" or "hmds" so we can locate the routing tags.
         for part in init_str.split('\x01') {
             if part.contains("farm") || part.contains("hmds") || part.contains("secdef") {
-                log::info!("Init scan: routing-shaped part = {:?}", part);
+                log::info!("Init scan: routing-shaped part = {part:?}");
             }
         }
         for part in init_str.split('\x01') {
             if part.starts_with("1=") && part.len() > 2 {
                 let val = &part[2..];
-                if val.starts_with("DU") || val.starts_with("DF") || val.starts_with("U") {
-                    if account_id.is_empty() || account_id == config.username {
+                if (val.starts_with("DU") || val.starts_with("DF") || val.starts_with("U"))
+                    && (account_id.is_empty() || account_id == config.username) {
                         account_id = val.to_string();
-                        log::info!("Found account ID from init response: {}", account_id);
+                        log::info!("Found account ID from init response: {account_id}");
                     }
-                }
             } else if part.starts_with("6560=") && raw_soft_dollar_tiers.is_empty() {
                 raw_soft_dollar_tiers = part[5..].to_string();
                 log::info!("Found soft dollar tiers from init response ({} bytes)", raw_soft_dollar_tiers.len());
@@ -1747,13 +1739,13 @@ impl Gateway {
                 log::info!("Found misc URLs from init response ({} bytes)", raw_misc_urls.len());
             } else if part.starts_with("6145=") && trading_route.is_empty() {
                 trading_route = part[5..].to_string();
-                log::info!("Found trading farm route in init response: {}", trading_route);
+                log::info!("Found trading farm route in init response: {trading_route}");
             } else if part.starts_with("6171=") && mktdata_route.is_empty() {
                 mktdata_route = part[5..].to_string();
-                log::info!("Found market-data farm route in init response: {}", mktdata_route);
+                log::info!("Found market-data farm route in init response: {mktdata_route}");
             } else if part.starts_with("8008=") && secdef_route.is_empty() {
                 secdef_route = part[5..].to_string();
-                log::info!("Found secdef farm route in init response: {}", secdef_route);
+                log::info!("Found secdef farm route in init response: {secdef_route}");
             }
         }
 
@@ -1840,8 +1832,7 @@ impl Gateway {
         tls.write_all(&core_msg)?;
         tls.flush()?;
         log::info!(
-            "CCP post-burst grace messages sent (AR+H+PLR+DR+74), seq now {}",
-            ccp_seq
+            "CCP post-burst grace messages sent (AR+H+PLR+DR+74), seq now {ccp_seq}"
         );
 
         tls.get_ref().set_read_timeout(None)?;
@@ -1890,10 +1881,8 @@ impl Gateway {
         let (trading_host, trading_farm) = parsed_trading.clone()
             .unwrap_or_else(|| (host.to_string(), DEFAULT_TRADING_FARM.to_string()));
         let (mktdata_host, mktdata_farm) = parse_farm_route(&mktdata_route)
-            .map(|(h, f)| (h, f))
             .unwrap_or_else(|| (host.to_string(), "ushmds".to_string()));
-        log::info!("Farm routing: trading={}/{}, mktdata={}/{}",
-            trading_host, trading_farm, mktdata_host, mktdata_farm);
+        log::info!("Farm routing: trading={trading_host}/{trading_farm}, mktdata={mktdata_host}/{mktdata_farm}");
 
         // Retain HMDS routing for the reconnect loop (ibx#187) — the values
         // below are moved into the thread::scope closures.
@@ -1929,7 +1918,7 @@ impl Gateway {
         let farm_conn = farm_conn?;
         let hmds_conn = match hmds_conn {
             Ok(c) => { log::info!("Historical data farm connected"); Some(c) }
-            Err(e) => { log::warn!("Historical data farm connection failed (non-fatal): {}", e); None }
+            Err(e) => { log::warn!("Historical data farm connection failed (non-fatal): {e}"); None }
         };
 
         let gw = Gateway {
@@ -2026,7 +2015,7 @@ impl Gateway {
                         display_name: parts[2].to_string(),
                     })
                 } else {
-                    log::warn!("Unexpected soft dollar tier format: {}", entry);
+                    log::warn!("Unexpected soft dollar tier format: {entry}");
                     None
                 }
             }).collect()
@@ -2046,7 +2035,7 @@ impl Gateway {
                         family_code_str: parts[1].to_string(),
                     })
                 } else {
-                    log::warn!("Unexpected family code format: {}", entry);
+                    log::warn!("Unexpected family code format: {entry}");
                     None
                 }
             }).collect()
@@ -2263,7 +2252,7 @@ mod tests {
         assert_eq!(second_factor_route(false, "banana"), Unsupported);
         // Paper never presents one, whatever the field says.
         for t in ["", "3", "4", "5"] {
-            assert_eq!(second_factor_route(true, t), None, "paper, type {:?}", t);
+            assert_eq!(second_factor_route(true, t), None, "paper, type {t:?}");
         }
     }
 

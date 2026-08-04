@@ -24,7 +24,7 @@ fn main() {
 
     print_header("Bench: Subscribe-to-First-Tick Latency");
     println!("  Contract:       {} (con_id={})", config.symbol, config.con_id);
-    println!("  Iterations:     {}", iterations);
+    println!("  Iterations:     {iterations}");
     println!();
 
     // Connect

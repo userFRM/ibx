@@ -18,10 +18,7 @@ pub(super) fn phase_heartbeat_keepalive(conns: Conns) -> Conns {
     let start = Instant::now();
     let mut disconnected = false;
     while start.elapsed() < Duration::from_secs(20) {
-        match event_rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Event::Disconnected) => { disconnected = true; break; }
-            _ => {}
-        }
+        if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(200)) { disconnected = true; break; }
     }
 
     let elapsed = start.elapsed();
@@ -46,10 +43,7 @@ pub(super) fn phase_farm_heartbeat_keepalive(conns: Conns) -> Conns {
     let start = Instant::now();
     let mut disconnected = false;
     while start.elapsed() < Duration::from_secs(65) {
-        match event_rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(Event::Disconnected) => { disconnected = true; break; }
-            _ => {}
-        }
+        if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(500)) { disconnected = true; break; }
     }
 
     let elapsed = start.elapsed();
@@ -82,10 +76,7 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
     let start = Instant::now();
     let mut disconnect_count = 0u32;
     while start.elapsed() < Duration::from_secs(30) {
-        match event_rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Event::Disconnected) => { disconnect_count += 1; break; }
-            _ => {}
-        }
+        if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(200)) { disconnect_count += 1; break; }
     }
 
     let elapsed = start.elapsed();
