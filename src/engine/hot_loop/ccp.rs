@@ -129,6 +129,54 @@ fn perm_id_from_fix_order_id(s: &str) -> i64 {
     (h >> 1) as i64
 }
 
+/// The update that says an order's state is no longer known. Emitted when the
+/// connection drops with it working, and again if the recovery does not
+/// account for it.
+fn uncertain_update(
+    order: &crate::types::Order,
+    cached: Option<crate::bridge::RichOrderInfo>,
+) -> crate::types::OrderUpdate {
+    crate::types::OrderUpdate {
+                order_id: order.order_id,
+                instrument: order.instrument,
+                status: crate::types::OrderStatus::Uncertain,
+                filled_qty: order.filled as f64,
+                // A fractional order deliberately tracks `qty` as zero — the
+                // decimal it was submitted with lives only in the enriched
+                // record. Both quantity fields are floating point end to
+                // end — the dispatchers already hand them to the callback
+                // as f64 — so the fraction itself survives exactly here
+                // rather than being rounded to a whole unit.
+                remaining_qty: {
+                    let outstanding = |total: f64| (total - order.filled as f64).max(0.0);
+                    if order.qty > 0 {
+                        outstanding(order.qty as f64)
+                    } else if let Some(c) = cached.as_ref() {
+                        outstanding(c.order.total_quantity)
+                    } else {
+                        // No exec report has reached this order yet, so
+                        // neither its quantity nor a fill is known — both
+                        // arrive on the same message — and there is no
+                        // honest quantity to give. ibapi's own "value not
+                        // set" sentinel, rather than a guessed number.
+                        f64::MAX
+                    }
+                },
+                perm_id: cached.as_ref().map(|c| c.order.perm_id).unwrap_or(0),
+                parent_id: cached.as_ref().map(|c| c.order.parent_id).unwrap_or(0),
+                timestamp_ns: 0,
+    }
+}
+
+/// How long a reconnect waits for the recovery push before judging the orders
+/// it did not mention. Generous, because a push that says nothing at all is
+/// indistinguishable from one that has not started (ibx#251).
+const RECOVERY_PUSH_GRACE: Duration = Duration::from_secs(30);
+
+/// The same wait once the push has sent its own terminator. What is coming has
+/// come; this only covers a fill report arriving just behind it.
+const RECOVERY_TERMINATOR_GRACE: Duration = Duration::from_secs(2);
+
 pub(crate) struct CcpState {
     pub(crate) seen_exec_ids: HashSet<String>,
     /// Insertion order for `seen_exec_ids`, oldest at the front. Used to evict
@@ -148,6 +196,7 @@ pub(crate) struct CcpState {
     /// nothing at all, and re-armed tightly when the push's own terminator
     /// arrives (ibx#251). Cleared on a disconnect so a second drop before the
     /// sweep cancels it rather than reaping against a dead session.
+    pub(crate) recovery_sweep_at: Option<Instant>,
     /// (req_id, is_single_shot). Single-shot = known-conId lookup whose
     /// first 35=d reply is also the last (server emits no 323=5/6 terminator
     /// for these). Multi-record by-symbol/matching-symbols requests push
@@ -233,6 +282,7 @@ impl CcpState {
             bulletin_next_id: 0,
             news_subscriptions: Vec::new(),
             disconnected: false,
+            recovery_sweep_at: None,
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
             pending_kut_historical: Vec::new(),
@@ -897,6 +947,11 @@ impl CcpState {
         if clord_id == 0 {
             log::debug!("ExecReport: dropping sentinel record (ClOrdID=0/*) sym={:?} status={:?}",
                 parsed.get(&55), parsed.get(&39));
+            // The push said everything it was going to say, so the orders it
+            // left out can be judged without waiting out the whole grace.
+            if self.recovery_sweep_at.is_some() {
+                self.recovery_sweep_at = Some(Instant::now() + RECOVERY_TERMINATOR_GRACE);
+            }
             return;
         }
 
@@ -2084,47 +2139,54 @@ impl CcpState {
         event_tx: &Option<Sender<Event>>,
     ) {
         self.disconnected = true;
+        self.recovery_sweep_at = None;
         // The engine stops believing these statuses here, and said so to
         // nobody — so the API layer went on reporting the pre-disconnect
         // status and `req_open_orders` kept asserting it (ibx#251).
         context.mark_orders_uncertain();
         for order in context.uncertain_orders() {
-            let cached = shared.orders.get_order_info(order.order_id);
-            let update = crate::types::OrderUpdate {
-                order_id: order.order_id,
-                instrument: order.instrument,
-                status: crate::types::OrderStatus::Uncertain,
-                filled_qty: order.filled as f64,
-                // A fractional order deliberately tracks `qty` as zero — the
-                // decimal it was submitted with lives only in the enriched
-                // record. Both quantity fields are floating point end to
-                // end — the dispatchers already hand them to the callback
-                // as f64 — so the fraction itself survives exactly here
-                // rather than being rounded to a whole unit.
-                remaining_qty: {
-                    let outstanding = |total: f64| (total - order.filled as f64).max(0.0);
-                    if order.qty > 0 {
-                        outstanding(order.qty as f64)
-                    } else if let Some(c) = cached.as_ref() {
-                        outstanding(c.order.total_quantity)
-                    } else {
-                        // No exec report has reached this order yet, so
-                        // neither its quantity nor a fill is known — both
-                        // arrive on the same message — and there is no
-                        // honest quantity to give. ibapi's own "value not
-                        // set" sentinel, rather than a guessed number.
-                        f64::MAX
-                    }
-                },
-                perm_id: cached.as_ref().map(|c| c.order.perm_id).unwrap_or(0),
-                parent_id: cached.as_ref().map(|c| c.order.parent_id).unwrap_or(0),
-                timestamp_ns: 0,
-            };
+            let update = uncertain_update(&order, shared.orders.get_order_info(order.order_id));
             shared.orders.push_order_update(update);
             emit(event_tx, Event::OrderUpdate(update));
         }
         // Don't emit Event::Disconnected — auto-reconnect handles CCP drops transparently.
         // Python is only notified if reconnect exhausts retries.
+    }
+
+    /// Report the orders the recovery push did not account for.
+    ///
+    /// Their status stays Uncertain: the engine watched the connection die
+    /// with them working and has been told nothing since, so it does not know
+    /// whether they filled, were pulled, or are still resting. What it does
+    /// know — and what it had no way to say before — is that the recovery is
+    /// over and they were not in it. A caller waiting on the reconciliation
+    /// that `Uncertain` promises was otherwise waiting on nothing.
+    pub(crate) fn sweep_recovery(
+        &mut self,
+        context: &mut Context,
+        shared: &SharedState,
+        event_tx: &Option<Sender<Event>>,
+    ) {
+        match self.recovery_sweep_at {
+            Some(at) if Instant::now() >= at => self.recovery_sweep_at = None,
+            _ => return,
+        }
+        let stranded = context.uncertain_orders();
+        if stranded.is_empty() {
+            log::info!("Recovery complete — every order the drop left working is accounted for");
+            return;
+        }
+        log::error!(
+            "Recovery complete — {} order(s) it did not account for: {:?}. Their state is not known; \
+             reconcile from executions before acting on them.",
+            stranded.len(),
+            stranded.iter().map(|o| o.order_id).collect::<Vec<_>>(),
+        );
+        for order in stranded {
+            let update = uncertain_update(&order, shared.orders.get_order_info(order.order_id));
+            shared.orders.push_order_update(update);
+            emit(event_tx, Event::OrderUpdate(update));
+        }
     }
 
     pub(crate) fn reconnect(
@@ -2136,6 +2198,7 @@ impl CcpState {
     ) {
         *ccp_conn = Some(conn);
         self.disconnected = false;
+        self.recovery_sweep_at = Some(Instant::now() + RECOVERY_PUSH_GRACE);
         hb.last_ccp_sent = Instant::now();
         hb.last_ccp_recv = Instant::now();
         hb.pending_ccp_test = None;
@@ -2509,6 +2572,40 @@ pub(crate) fn handle_position_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Uncertain` promises the caller a reconciliation when the reconnect
+    /// completes. Nothing completed it, so an order the recovery push left out
+    /// waited on a message that was never coming.
+    #[test]
+    fn the_recovery_reports_the_orders_it_did_not_account_for() {
+        let mut ccp = CcpState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.register_instrument(756733);
+        context.insert_order(crate::types::Order::new(
+            7, instrument, crate::types::Side::Buy, 100,
+            150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+        ));
+        context.mark_orders_uncertain();
+
+        // Still inside the grace: the push may yet speak for it.
+        ccp.recovery_sweep_at = Some(Instant::now() + Duration::from_secs(30));
+        ccp.sweep_recovery(&mut context, &shared, &None);
+        assert!(shared.orders.drain_order_updates().is_empty(), "nothing is due yet");
+
+        ccp.recovery_sweep_at = Some(Instant::now() - Duration::from_secs(1));
+        ccp.sweep_recovery(&mut context, &shared, &None);
+        let updates = shared.orders.drain_order_updates();
+        assert_eq!(updates.len(), 1, "the stranded order is reported");
+        assert_eq!(updates[0].order_id, 7);
+        assert_eq!(
+            updates[0].status, crate::types::OrderStatus::Uncertain,
+            "and reported as what it is — unknown, not a fate the engine invented",
+        );
+
+        ccp.sweep_recovery(&mut context, &shared, &None);
+        assert!(shared.orders.drain_order_updates().is_empty(), "one report per recovery");
+    }
 
     fn position_frame(pairs: &[(u32, &str)]) -> std::collections::HashMap<u32, String> {
         let mut m = std::collections::HashMap::new();
