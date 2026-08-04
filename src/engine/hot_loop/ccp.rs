@@ -249,6 +249,13 @@ pub(crate) struct CcpState {
     /// `35=d` replies as they arrive. `contract_details_end` fires for
     /// `api_req_id` once `received >= fanout_req_ids.len()`.
     pub(crate) pending_fanout: Vec<PendingFanout>,
+    /// Contracts already handed to each caller's request. A lookup on a
+    /// smart-routed symbol is answered once by the request itself and again by
+    /// every venue it fans out to, and every one of those answers describes the
+    /// same contract with a different `exchange` — the full venue list already
+    /// rides inside each. Delivering them all reported one contract as
+    /// twenty-seven listings of itself. Cleared when the request ends.
+    pub(crate) details_delivered: std::collections::HashMap<u32, HashSet<i64>>,
     /// Counter for internal fan-out req IDs (tag 320 on per-exchange `35=c`).
     pub(crate) next_fanout_id: u32,
     /// Counter for internal secdef req IDs (auto-fetch on cold-cache positions).
@@ -311,6 +318,7 @@ impl CcpState {
             pending_schedule_pair: Vec::new(),
             next_schedule_sub_id: 1,
             pending_fanout: Vec::new(),
+            details_delivered: std::collections::HashMap::new(),
             next_fanout_id: 1,
             next_internal_secdef_id: 0xF000_0000,
             auto_fetched_conids: HashSet::new(),
@@ -638,10 +646,12 @@ impl CcpState {
                                 ..Default::default()
                             });
                             self.try_release_scanner_enrichments(def.con_id as i64, shared);
-                            let for_event = clone_for_event(event_tx, &def);
-                            shared.reference.push_contract_details(api_req_id, def);
-                            if let Some(details) = for_event {
-                                emit(event_tx, Event::ContractDetails { req_id: api_req_id, details: Box::new(details) });
+                            if self.details_delivered.entry(api_req_id).or_default().insert(def.con_id as i64) {
+                                let for_event = clone_for_event(event_tx, &def);
+                                shared.reference.push_contract_details(api_req_id, def);
+                                if let Some(details) = for_event {
+                                    emit(event_tx, Event::ContractDetails { req_id: api_req_id, details: Box::new(details) });
+                                }
                             }
                         }
                         // A leg the gateway cannot resolve carries no contract:
@@ -749,7 +759,9 @@ impl CcpState {
                             }
                         } else if join_key.is_empty() {
                             // No join key — emit immediately without schedule data.
-                            if !is_internal {
+                            if !is_internal
+                                && self.details_delivered.entry(req_id).or_default().insert(def.con_id as i64)
+                            {
                                 let for_event = clone_for_event(event_tx, &def);
                                 shared.reference.push_contract_details(req_id, def);
                                 if let Some(details) = for_event {
@@ -808,7 +820,7 @@ impl CcpState {
                                     api_req_id: req_id,
                                     fanout_req_ids,
                                     received: 0,
-                                    deadline: Instant::now() + SECDEF_TIMEOUT,
+                                                            deadline: Instant::now() + SECDEF_TIMEOUT,
                                 });
                             }
                         }
@@ -1743,6 +1755,16 @@ impl CcpState {
         shared: &SharedState,
         event_tx: &Option<Sender<Event>>,
     ) {
+        // A schedule pairing delivers after the lookup that asked for it has
+        // been retired, so the record of what a request was already handed has
+        // to outlive both. Dropping it at the lookup's end let the venue copy
+        // through behind the one carrying the trading hours.
+        let idle = self.pending_secdef.is_empty()
+            && self.pending_fanout.is_empty()
+            && self.pending_schedule_pair.is_empty();
+        if idle {
+            self.details_delivered.clear();
+        }
         if self.pending_secdef.is_empty() && self.pending_fanout.is_empty() {
             return;
         }
@@ -1811,6 +1833,15 @@ impl CcpState {
             }
         });
         for p in emit_now {
+            // Same gate as every other way a contract reaches the caller: the
+            // venue fan-out describes one contract many times over.
+            if !self.details_delivered.entry(p.api_req_id).or_default().insert(p.def.con_id as i64) {
+                if p.is_last {
+                    shared.reference.push_contract_details_end(p.api_req_id);
+                    emit(event_tx, Event::ContractDetailsEnd(p.api_req_id));
+                }
+                continue;
+            }
             let for_event = clone_for_event(event_tx, &p.def);
             shared.reference.push_contract_details(p.api_req_id, p.def);
             if let Some(details) = for_event {
@@ -1854,6 +1885,16 @@ impl CcpState {
             );
         }
         let for_event = clone_for_event(event_tx, &pair.def);
+        // The schedule reply completes the pairing, and this is where the row
+        // that carries the trading hours reaches the caller. Same gate as every
+        // other path: one contract, delivered once.
+        if !self.details_delivered.entry(pair.api_req_id).or_default().insert(pair.def.con_id as i64) {
+            if pair.is_last {
+                shared.reference.push_contract_details_end(pair.api_req_id);
+                emit(event_tx, Event::ContractDetailsEnd(pair.api_req_id));
+            }
+            return;
+        }
         shared.reference.push_contract_details(pair.api_req_id, pair.def);
         if let Some(details) = for_event {
             emit(event_tx, Event::ContractDetails { req_id: pair.api_req_id, details: Box::new(details) });
@@ -2047,6 +2088,7 @@ impl CcpState {
         // By-symbol lookup: master reply carries `6046={exch_list}`. The
         // server never emits a 323=5/6 terminator; completion is detected
         // by counting per-exchange fan-out replies (see `pending_fanout`).
+        self.details_delivered.remove(&req_id);
         self.pending_secdef.push((req_id, false, Instant::now() + SECDEF_TIMEOUT));
     }
 
@@ -3092,6 +3134,21 @@ mod tests {
         assert_eq!(silent.qty_midnight, None, "absent is unknown, not flat");
         assert_eq!(silent.money_traded, -10.0, "the figures it did state survive");
         assert_eq!(silent.realized_pnl, 2.5);
+    }
+
+    /// One lookup describes one contract. The venues answer separately and
+    /// each answer is the same contract with a different exchange, so reporting
+    /// every one of them returned a single stock as twenty-seven listings.
+    #[test]
+    fn a_contract_reaches_the_caller_once_per_request() {
+        let mut ccp = CcpState::new();
+        let mut seen = |req_id: u32, con_id: i64| {
+            ccp.details_delivered.entry(req_id).or_default().insert(con_id)
+        };
+        assert!(seen(9, 756733), "the first answer is the caller's row");
+        assert!(!seen(9, 756733), "and every later venue saying the same is not");
+        assert!(seen(9, 885901989), "a different contract still comes through");
+        assert!(seen(10, 756733), "as does the same one under another request");
     }
 
     /// An option is asked for by expiry date and a future by contract month.

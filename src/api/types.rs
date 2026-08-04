@@ -723,6 +723,14 @@ impl ContractDetails {
             trading_class: def.trading_class.clone(),
             last_trade_date_or_contract_month: def.last_trade_date.clone(),
             strike: def.strike,
+            // Never carried across, so every option came back with its right
+            // unset and a call was indistinguishable from a put outside the
+            // local symbol.
+            right: match def.right {
+                Some(crate::control::contracts::OptionRight::Call) => "C".to_string(),
+                Some(crate::control::contracts::OptionRight::Put) => "P".to_string(),
+                None => String::new(),
+            },
             multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
             ..Default::default()
         };
