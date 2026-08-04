@@ -223,9 +223,14 @@ pub(crate) fn drain_and_send_orders(
                 let qty_str = format_uint(qty as u64);
                 let symbol = context.market.symbol(instrument).to_string();
                 let (sec_type_str, destination) = context.market.order_routing(instrument);
-                let parent_str = parent_id.to_string();
-                let tp_str = tp_id.to_string();
-                let sl_str = sl_id.to_string();
+                // Versioned ClOrdIDs like every other submit path: a cancel or
+                // replace that has seen no echo yet computes `{id}.{ver}` for
+                // OrigClOrdID, and a bare id would not match. The ids are freshly
+                // allocated, so the version is 0. Tag 6107 below reads the same
+                // string, which is the form `send_order_ex` sends a parent link on.
+                let parent_str = format!("{parent_id}.0");
+                let tp_str = format!("{tp_id}.0");
+                let sl_str = format!("{sl_id}.0");
                 let entry_str = format_price(entry_price);
                 let tp_price_str = format_price(take_profit);
                 let sl_price_str = format_price(stop_loss);
@@ -1711,6 +1716,37 @@ mod modify_wire_tests {
 
         assert!(sent.contains("|44=610|"), "the limit moves: {sent}");
         assert!(sent.contains("|99=600|"), "the trigger is restated unchanged: {sent}");
+    }
+
+    /// ibx#311: the bracket was the last submit path emitting a bare ClOrdID.
+    /// A cancel that has seen no echo yet computes `{id}.{ver}` for OrigClOrdID,
+    /// so a leg cancelled before its first execution report named an id the
+    /// gateway is not holding — and tag 6107 disagreed with the parent link
+    /// `send_order_ex` puts on a child of the same order.
+    #[test]
+    fn a_bracket_leg_is_submitted_under_the_id_its_cancel_will_name() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        let (parent, tp, sl) = context.submit_bracket(
+            instrument, Side::Buy, 1,
+            100 * crate::types::PRICE_SCALE,
+            110 * crate::types::PRICE_SCALE,
+            90 * crate::types::PRICE_SCALE,
+        );
+        let submitted = drain(&mut context);
+
+        for id in [parent, tp, sl] {
+            assert!(submitted.contains(&format!("|11={id}.0|")),
+                "leg {id} is submitted versioned: {submitted}");
+        }
+        assert_eq!(submitted.matches(&format!("|6107={parent}.0|")).count(), 2,
+            "both children link the parent by the id it was submitted under: {submitted}");
+
+        // Nothing has echoed, so the cancel computes the OrigClOrdID.
+        context.cancel(tp);
+        let cancelled = drain(&mut context);
+        assert!(cancelled.contains(&format!("|41={tp}.0|")),
+            "the cancel names the submitted id: {cancelled}");
     }
 }
 
