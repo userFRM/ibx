@@ -1610,6 +1610,11 @@ pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
 
 // ─── Phase 113: Rapid order dedup and interleaving (issue #100) ───
 
+// Fails here at position 113 while the same five orders, submitted the same way
+// through EClient against a fresh session, all reach PreSubmitted and cancel
+// cleanly (5 of 5). So the engine is not the variable: what differs is the
+// connection this phase inherits after 112 phases have used it. Do not re-chase
+// it as an order-path defect until the shared-connection state is ruled out.
 pub(super) fn phase_rapid_order_dedup(conns: Conns) -> Conns {
     println!("--- Phase 113: Rapid Order Submission + Dedup (5 orders, SPY) ---");
 
