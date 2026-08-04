@@ -869,19 +869,40 @@ impl Context {
     }
 
     /// `outside_rth` is asserted on the replace: the tracked record has no
-    /// field for it, so it has to come from the caller (ibx#247).
+    /// field for it, so it has to come from the caller (ibx#247). Use
+    /// `modify_ex` to also restate the order type, the time-in-force or the
+    /// trigger.
     pub fn modify(&mut self, order_id: OrderId, price: Price, qty: u32, outside_rth: bool) -> OrderId {
+        // Not supplied: on a trigger-only order the single price argument can
+        // only have meant the trigger, and the builder routes it there.
+        self.modify_ex(order_id, price, qty, outside_rth, 0, 0, 0)
+    }
+
+    /// Replace a working order, stating what the replace should carry.
+    ///
+    /// A zero `ord_type`, `tif` or `stop_price` states nothing and leaves what
+    /// the resting order holds in force (ibx#349, ibx#372).
+    pub fn modify_ex(
+        &mut self,
+        order_id: OrderId,
+        price: Price,
+        qty: u32,
+        outside_rth: bool,
+        ord_type: u8,
+        tif: u8,
+        stop_price: Price,
+    ) -> OrderId {
         let new_id = self.next_order_id;
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::Modify {
             new_order_id: new_id,
             order_id,
             price,
-            // Not supplied: on a trigger-only order the single price argument
-            // can only have meant the trigger, and the builder routes it there.
-            stop_price: 0,
+            stop_price,
             qty,
             outside_rth,
+            ord_type,
+            tif,
         });
         new_id
     }
