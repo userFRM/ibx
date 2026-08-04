@@ -113,6 +113,8 @@ fn main() {
             qty: 1,
             // Matches the outside_rth=true the order was placed with above.
             outside_rth: true,
+            ord_type: 0,
+            tif: 0,
             stop_price: 0,
         });
 

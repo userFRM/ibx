@@ -64,6 +64,8 @@ impl EClient {
                 price,
                 qty,
                 outside_rth: api_order.outside_rth,
+                ord_type: api_order.ord_type_byte(),
+                tif: api_order.tif_byte(),
                 stop_price,
             })
         } else {

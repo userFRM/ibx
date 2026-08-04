@@ -660,6 +660,12 @@ pub enum OrderRequest {
     CancelAll {
         instrument: InstrumentId,
     },
+    /// Replace a working order.
+    ///
+    /// Carries what the replace message states rather than restating the
+    /// tracked original, so a caller changing the order type, the time-in-force
+    /// or the trigger has the change reach the gateway (ibx#349, ibx#372).
+    /// A zero `tif` states none and leaves the resting value in force.
     Modify {
         new_order_id: OrderId,
         order_id: OrderId,
@@ -669,6 +675,11 @@ pub enum OrderRequest {
         /// asserts tag 6433 from this rather than from the tracked record,
         /// which has no field for it (ibx#247).
         outside_rth: bool,
+        /// Order type and time-in-force the replacement carries, as
+        /// `Order::ord_type` and `Order::tif`. A replace that restated neither
+        /// left the gateway to infer them, and it inferred a plain limit.
+        ord_type: u8,
+        tif: u8,
         /// New trigger price. Zero means the caller did not supply one, in
         /// which case a trigger-only order type takes `price` as its trigger
         /// and every other type keeps the trigger it already had.
@@ -733,7 +744,7 @@ impl OrderRequest {
         let s = |p: &mut Price| *p = snap_to_tick(*p, tick);
         match self {
             Self::Cancel { .. } | Self::CancelAll { .. } | Self::SubmitMtlAuc { .. } => {}
-            Self::Modify { price, .. } => s(price),
+            Self::Modify { price, stop_price, .. } => { s(price); s(stop_price); }
             Self::SubmitLimitGtc { price, .. }
             | Self::SubmitLimitIoc { price, .. }
             | Self::SubmitLimitFok { price, .. }
@@ -1398,6 +1409,8 @@ mod tests {
             price: 100 * PRICE_SCALE,
             qty: 200,
             outside_rth: false,
+            ord_type: 0,
+            tif: 0,
             stop_price: 0,
         };
         let req2 = req.clone();
@@ -1635,14 +1648,14 @@ mod tests {
         assert_eq!(req.instrument(), Some(7));
         assert_eq!(OrderRequest::Cancel { order_id: 1 }.instrument(), None);
         assert_eq!(
-            OrderRequest::Modify { new_order_id: 2, order_id: 1, price: 0, qty: 1, outside_rth: false, stop_price: 0 }.instrument(),
+            OrderRequest::Modify { new_order_id: 2, order_id: 1, price: 0, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 }.instrument(),
             None
         );
     }
 
     #[test]
     fn order_request_modify_fields() {
-        let req = OrderRequest::Modify { new_order_id: 100, order_id: 99, price: 200 * PRICE_SCALE, qty: 10, outside_rth: false, stop_price: 0 };
+        let req = OrderRequest::Modify { new_order_id: 100, order_id: 99, price: 200 * PRICE_SCALE, qty: 10, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 };
         match req {
             OrderRequest::Modify { order_id, price, qty, .. } => {
                 assert_eq!(order_id, 99);
