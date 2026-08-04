@@ -537,6 +537,10 @@ impl CcpState {
                 if let Some(idx) = fanout_idx {
                     if let Some(def) = crate::control::contracts::parse_secdef_response(msg) {
                         let api_req_id = self.pending_fanout[idx].api_req_id;
+                        // ibx#229: no con_id is "no definition for this
+                        // exchange" — cache nothing and emit no row. The leg
+                        // still counts toward the fan-out below, so the
+                        // request completes.
                         if def.con_id != 0 {
                             let sec_type_str = def.sec_type.to_api_str();
                             shared.reference.cache_contract(def.con_id as i64, api::Contract {
@@ -551,11 +555,11 @@ impl CcpState {
                                 ..Default::default()
                             });
                             self.try_release_scanner_enrichments(def.con_id as i64, shared);
-                        }
-                        let for_event = clone_for_event(event_tx, &def);
-                        shared.reference.push_contract_details(api_req_id, def);
-                        if let Some(details) = for_event {
-                            emit(event_tx, Event::ContractDetails { req_id: api_req_id, details });
+                            let for_event = clone_for_event(event_tx, &def);
+                            shared.reference.push_contract_details(api_req_id, def);
+                            if let Some(details) = for_event {
+                                emit(event_tx, Event::ContractDetails { req_id: api_req_id, details });
+                            }
                         }
                         self.pending_fanout[idx].received += 1;
                         self.pending_fanout[idx].deadline = Instant::now() + SECDEF_TIMEOUT;
@@ -631,7 +635,25 @@ impl CcpState {
                             self.pending_secdef.remove(idx);
                         }
                         let con_id = def.con_id as i64;
-                        if join_key.is_empty() {
+                        if con_id == 0 {
+                            // ibx#229: con_id=0 is the gateway saying "no
+                            // security definition", not a contract. Pushed as
+                            // a row it is indistinguishable from a hit —
+                            // empty symbol, and min_tick carrying its 0.01
+                            // default. Report it the way the reject and
+                            // timeout paths do. The by-symbol leg gets its
+                            // end from the fan-out branch below.
+                            if !is_internal {
+                                shared.reference.push_historical_error(
+                                    req_id, 200,
+                                    "No security definition has been found for the request".to_string(),
+                                );
+                                if is_last {
+                                    shared.reference.push_contract_details_end(req_id);
+                                    emit(event_tx, Event::ContractDetailsEnd(req_id));
+                                }
+                            }
+                        } else if join_key.is_empty() {
                             // No join key — emit immediately without schedule data.
                             if !is_internal {
                                 let for_event = clone_for_event(event_tx, &def);
@@ -3971,6 +3993,90 @@ mod tests {
         assert_eq!(errors[0].0, 9);
         assert_eq!(errors[0].1, 200);
         assert_eq!(shared.reference.drain_contract_details_end(), vec![9]);
+    }
+
+    // ── ibx#229: a con_id=0 secdef reply is "not found", not a contract ──
+
+    /// The gateway's "no security definition" answer: a `35=d` echoing the
+    /// request id and carrying con_id 0 — no symbol, no price-increment block.
+    fn secdef_not_found(req_id: &str) -> Vec<u8> {
+        crate::protocol::fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, "d"),
+            (crate::control::contracts::TAG_SECURITY_REQ_ID, req_id),
+            (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
+            (crate::control::contracts::TAG_IB_CON_ID, "0"),
+        ], 1)
+    }
+
+    #[test]
+    fn secdef_not_found_by_symbol_is_an_error_not_a_row() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        ccp.pending_secdef.push((7, false, Instant::now() + SECDEF_TIMEOUT));
+
+        ccp.process_ccp_message(&secdef_not_found("7"), &mut None, &mut context, &shared,
+            &None, &mut HeartbeatState::new(), "DU1");
+
+        assert!(shared.reference.drain_contract_details().is_empty(),
+            "con_id=0 is the gateway saying 'no definition' — emitting it as a row \
+             hands the caller a fabricated min_tick that reads like a hit");
+        let errors = shared.reference.drain_historical_errors();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, 7);
+        assert_eq!(errors[0].1, 200);
+        assert_eq!(shared.reference.drain_contract_details_end(), vec![7],
+            "end must still fire so a blocked wait unblocks");
+    }
+
+    #[test]
+    fn secdef_not_found_by_conid_errors_and_ends() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        // Known-conId lookup: single record, is_last regardless of the wire flag.
+        ccp.pending_secdef.push((7, true, Instant::now() + SECDEF_TIMEOUT));
+
+        ccp.process_ccp_message(&secdef_not_found("7"), &mut None, &mut context, &shared,
+            &None, &mut HeartbeatState::new(), "DU1");
+
+        assert!(shared.reference.drain_contract_details().is_empty());
+        let errors = shared.reference.drain_historical_errors();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, 7);
+        assert_eq!(errors[0].1, 200);
+        assert_eq!(shared.reference.drain_contract_details_end(), vec![7]);
+        assert!(ccp.pending_secdef.is_empty(), "the request is finished");
+    }
+
+    #[test]
+    fn secdef_not_found_stays_silent_for_an_internal_fetch() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        // Cache auto-fetch sentinel: no user is waiting on it.
+        ccp.pending_secdef.push((0xF000_0001, true, Instant::now() + SECDEF_TIMEOUT));
+
+        ccp.process_ccp_message(&secdef_not_found("4026531841"), &mut None, &mut context,
+            &shared, &None, &mut HeartbeatState::new(), "DU1");
+
+        assert!(shared.reference.drain_contract_details().is_empty());
+        assert!(shared.reference.drain_historical_errors().is_empty());
+        assert!(shared.reference.drain_contract_details_end().is_empty());
+    }
+
+    #[test]
+    fn a_fanout_reply_without_a_con_id_is_not_a_row() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        ccp.pending_fanout.push(PendingFanout {
+            api_req_id: 9,
+            fanout_req_ids: vec!["ibxfan-9-0".to_string()],
+            received: 0,
+            deadline: Instant::now() + SECDEF_TIMEOUT,
+        });
+
+        ccp.process_ccp_message(&secdef_not_found("ibxfan-9-0"), &mut None, &mut context,
+            &shared, &None, &mut HeartbeatState::new(), "DU1");
+
+        assert!(shared.reference.drain_contract_details().is_empty(),
+            "a per-exchange leg with no con_id is not a contract either");
+        assert_eq!(shared.reference.drain_contract_details_end(), vec![9],
+            "the fan-out still completes");
+        assert!(ccp.pending_fanout.is_empty());
     }
 
     // ── ibx#228: matching-symbols attribution ──
