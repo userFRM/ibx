@@ -129,6 +129,20 @@ fn perm_id_from_fix_order_id(s: &str) -> i64 {
     (h >> 1) as i64
 }
 
+/// Which tag carries a maturity on a definition lookup.
+///
+/// A full expiry date is MaturityDate (541) and a contract month is
+/// MaturityMonthYear (200); they are not interchangeable, and an option asked
+/// for by date on tag 200 matches nothing at all. Anything too short to be
+/// either is left off rather than sent on a guess.
+fn maturity_tag(maturity: &str) -> Option<u32> {
+    match maturity.len() {
+        6 => Some(200),
+        n if n >= 8 => Some(541),
+        _ => None,
+    }
+}
+
 /// The update that says an order's state is no longer known. Emitted when the
 /// connection drops with it working, and again if the recovery does not
 /// account for it.
@@ -1927,6 +1941,7 @@ impl CcpState {
         self.pending_secdef.push((req_id, true, Instant::now() + SECDEF_TIMEOUT));
     }
 
+
     pub(crate) fn send_secdef_request_by_symbol(&mut self, req_id: u32, symbol: &str, sec_type: &str, exchange: &str, currency: &str, filters: &crate::types::SecDefFilters, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         if let Some(conn) = ccp_conn.as_mut() {
             let req_id_str = req_id.to_string();
@@ -1978,8 +1993,8 @@ impl CcpState {
                     fields.push((6058, &filters.trading_class));
                 }
                 fields.push((167, fix_sec_type));
-                if !filters.last_trade_date_or_contract_month.is_empty() {
-                    fields.push((200, &filters.last_trade_date_or_contract_month));
+                if let Some(tag) = maturity_tag(&filters.last_trade_date_or_contract_month) {
+                    fields.push((tag, &filters.last_trade_date_or_contract_month));
                 }
                 if !right_code.is_empty() {
                     fields.push((201, right_code));
@@ -3018,6 +3033,18 @@ mod tests {
         assert_eq!(silent.qty_midnight, None, "absent is unknown, not flat");
         assert_eq!(silent.money_traded, -10.0, "the figures it did state survive");
         assert_eq!(silent.realized_pnl, 2.5);
+    }
+
+    /// An option is asked for by expiry date and a future by contract month.
+    /// Both went out on MaturityMonthYear, so the option lookup asked for a
+    /// month that does not exist and matched nothing.
+    #[test]
+    fn a_maturity_rides_the_tag_its_precision_belongs_to() {
+        assert_eq!(maturity_tag("202609"), Some(200), "a contract month");
+        assert_eq!(maturity_tag("20260918"), Some(541), "a full expiry date");
+        assert_eq!(maturity_tag("20260918 14:30:00"), Some(541), "a date with a time on it");
+        assert_eq!(maturity_tag(""), None, "nothing to state");
+        assert_eq!(maturity_tag("2026"), None, "too short to be either, so it is not guessed");
     }
 
     /// The feed is the account's own statement of what it holds. It reached the
