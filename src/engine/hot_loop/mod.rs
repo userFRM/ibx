@@ -248,6 +248,13 @@ impl HotLoop {
         option_key: &str,
         reply_tx: &Option<crossbeam_channel::Sender<Result<InstrumentId, String>>>,
     ) -> Option<InstrumentId> {
+        // Whether this call is what created the slot. Registration is also how
+        // an already-live contract is looked up, and the account row is older
+        // than any fill booked since: reapplying it on every call rolled a
+        // filled position back to whatever the last account frame said.
+        let is_new_slot = self.context.market.con_id(
+            self.context.market.instrument_by_con_id(con_id).unwrap_or(0),
+        ) != Some(con_id);
         match self.context.market.try_register_contract(con_id, &symbol, sec_type, exchange, option_key) {
             Some(id) => {
                 self.context.market.set_symbol(id, symbol);
@@ -258,7 +265,7 @@ impl HotLoop {
                 // is what makes the engine's position table agree with the
                 // account from the first callback, and what keeps the slot from
                 // being reclaimed as unheld.
-                if let Some(held) = self.shared.portfolio.position_info(con_id) {
+                if let Some(held) = self.shared.portfolio.position_info(con_id).filter(|_| is_new_slot) {
                     if held.position != 0 {
                         self.context.update_position(id, held.position - self.context.position(id));
                         self.shared.portfolio.set_position(id, held.position);
@@ -397,7 +404,18 @@ impl HotLoop {
             if !self.pinned_by_position.is_empty() {
                 for instrument in std::mem::take(&mut self.pinned_by_position) {
                     if self.context.position(instrument) == 0 {
+                        // Reclaiming may still be refused for a reason that has
+                        // nothing to do with the position — a working order, a
+                        // subscription taken out since. `try_reclaim_instrument`
+                        // records it again where that reason is the position,
+                        // and this keeps it where the reason is anything else,
+                        // so the request to free the slot is not lost either way.
                         self.try_reclaim_instrument(instrument);
+                        if self.context.market.con_id(instrument).is_some()
+                            && !self.pinned_by_position.contains(&instrument)
+                        {
+                            self.pinned_by_position.push(instrument);
+                        }
                     } else {
                         self.pinned_by_position.push(instrument);
                     }
