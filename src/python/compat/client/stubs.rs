@@ -206,7 +206,7 @@ impl EClient {
             5 => "trace",
             _ => "warn",
         };
-        log::info!("set_server_log_level: {} (level {})", level, log_level);
+        log::info!("set_server_log_level: {level} (level {log_level})");
         Ok(())
     }
 

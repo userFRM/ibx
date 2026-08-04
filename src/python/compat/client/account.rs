@@ -66,22 +66,22 @@ impl EClient {
         }
         let positions = shared.portfolio.position_infos();
         for pi in &positions {
-            let c = self.core.get_contract(pi.con_id, &shared).map(|ac| {
-                let mut c = Contract::default();
-                c.con_id = ac.con_id;
-                c.symbol = ac.symbol;
-                c.sec_type = ac.sec_type;
-                c.exchange = ac.exchange;
-                c.currency = ac.currency;
-                c
+            let c = self.core.get_contract(pi.con_id, &shared).map(|ac| Contract {
+                con_id: ac.con_id,
+                symbol: ac.symbol,
+                sec_type: ac.sec_type,
+                exchange: ac.exchange,
+                currency: ac.currency,
+                ..Default::default()
             }).unwrap_or_else(|| {
                 // Cache miss: fall back to wire-derived PositionInfo fields.
-                let mut c = Contract::default();
-                c.con_id = pi.con_id;
-                c.symbol = pi.symbol.clone();
-                c.sec_type = pi.sec_type.clone();
-                c.currency = pi.currency.clone();
-                c
+                Contract {
+                    con_id: pi.con_id,
+                    symbol: pi.symbol.clone(),
+                    sec_type: pi.sec_type.clone(),
+                    currency: pi.currency.clone(),
+                    ..Default::default()
+                }
             });
             let c_py = Py::new(py, c)?.into_any();
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
@@ -134,7 +134,7 @@ impl EClient {
             ("MaintMarginReq", acct.maint_margin_req as f64 / PRICE_SCALE_F),
         ];
         for (key, val) in &tag_values {
-            let val_str = format!("{:.2}", val);
+            let val_str = format!("{val:.2}");
             self.wrapper.call_method(
                 py, "account_update_multi",
                 (req_id, acct_name, model_code, *key, val_str.as_str(), "USD"),
@@ -161,8 +161,7 @@ impl EClient {
         }
         let positions = shared.portfolio.position_infos();
         for pi in &positions {
-            let mut c = Contract::default();
-            c.con_id = pi.con_id;
+            let c = Contract { con_id: pi.con_id, ..Default::default() };
             let c_py = Py::new(py, c)?.into_any();
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             self.wrapper.call_method(

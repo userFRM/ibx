@@ -418,7 +418,7 @@ impl Order {
                 Ok(Some(crate::config::IbExpiry::Instant(secs))) => (secs, 0),
                 Ok(Some(crate::config::IbExpiry::DateOnly(ymd))) => (0, ymd),
                 Err(e) => {
-                    log::warn!("dropping good_till_date: {}", e);
+                    log::warn!("dropping good_till_date: {e}");
                     (0, 0)
                 }
             };
@@ -785,8 +785,7 @@ mod tests {
 
     #[test]
     fn order_side_parsing() {
-        let mut o = Order::default();
-        o.action = "BUY".into();
+        let mut o = Order { action: "BUY".into(), ..Default::default() };
         assert_eq!(o.side().unwrap(), Side::Buy);
         o.action = "SELL".into();
         assert_eq!(o.side().unwrap(), Side::Sell);
@@ -800,15 +799,13 @@ mod tests {
 
     #[test]
     fn order_side_invalid() {
-        let mut o = Order::default();
-        o.action = "INVALID".into();
+        let o = Order { action: "INVALID".into(), ..Default::default() };
         assert!(o.side().is_err());
     }
 
     #[test]
     fn order_tif_byte_mapping() {
-        let mut o = Order::default();
-        o.tif = "DAY".into();
+        let mut o = Order { tif: "DAY".into(), ..Default::default() };
         assert_eq!(o.tif_byte(), b'0');
         o.tif = "GTC".into();
         assert_eq!(o.tif_byte(), b'1');
@@ -829,21 +826,21 @@ mod tests {
         let o = Order::default();
         assert!(!o.has_extended_attrs());
 
-        let mut o2 = Order::default();
-        o2.hidden = true;
+        let o2 = Order { hidden: true, ..Default::default() };
         assert!(o2.has_extended_attrs());
 
-        let mut o3 = Order::default();
-        o3.display_size = 50;
+        let o3 = Order { display_size: 50, ..Default::default() };
         assert!(o3.has_extended_attrs());
     }
 
     #[test]
     fn order_attrs_conversion() {
-        let mut o = Order::default();
-        o.display_size = 50;
-        o.hidden = true;
-        o.discretionary_amt = 0.05;
+        let o = Order {
+            display_size: 50,
+            hidden: true,
+            discretionary_amt: 0.05,
+            ..Default::default()
+        };
         let attrs = o.attrs();
         assert_eq!(attrs.display_size, 50);
         assert!(attrs.hidden);
@@ -852,11 +849,13 @@ mod tests {
 
     #[test]
     fn order_attrs_conditions_forwarded() {
-        let mut o = Order::default();
-        o.conditions = vec![
-            OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true },
-        ];
-        o.conditions_cancel_order = true;
+        let o = Order {
+            conditions: vec![
+                OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true },
+            ],
+            conditions_cancel_order: true,
+            ..Default::default()
+        };
         let attrs = o.attrs();
         assert_eq!(attrs.conditions.len(), 1);
         assert!(attrs.conditions_cancel_order);
@@ -926,7 +925,7 @@ mod tests {
         for (input, expected) in [(-1, 0u8), (5, 0), (6, 0), (9, 0), (255, 0),
                                   (0, 0), (2, 2), (4, 4), (7, 7), (8, 8)] {
             let o = Order { trigger_method: input, ..Default::default() };
-            assert_eq!(o.attrs().trigger_method, expected, "input {}", input);
+            assert_eq!(o.attrs().trigger_method, expected, "input {input}");
         }
     }
 
@@ -988,7 +987,10 @@ mod tests {
     /// adding it here is the bug this guards.
     #[test]
     fn every_carried_attribute_routes_through_the_extended_encoder() {
-        let cases: Vec<(&str, fn(&mut Order))> = vec![
+        /// Attribute name paired with the setter that turns it on.
+        type Case = (&'static str, fn(&mut Order));
+
+        let cases: Vec<Case> = vec![
             ("display_size", |o| o.display_size = 100),
             ("min_qty", |o| o.min_qty = 50),
             ("hidden", |o| o.hidden = true),
