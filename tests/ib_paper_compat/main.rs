@@ -279,10 +279,8 @@ fn compat_suite() {
         println!("--- Phase 52: PnL After Round Trip (SPY) ---\n  SKIP: {:?} — needs fills\n", session);
     }
 
-    conns = heartbeat::phase_heartbeat_timeout_detection(conns);
-
-    // CCP may have died during long-running fill phases or heartbeat timeout test.
-    // Reconnect the full gateway session if needed before CCP-dependent phases.
+    // CCP may have died during the long-running fill phases. Reconnect the full
+    // gateway session if needed before CCP-dependent phases.
     conns = ensure_ccp_alive(conns, &mut gw, &config);
 
     conns = contracts::phase_contract_details_channel(conns);
@@ -395,6 +393,11 @@ fn compat_suite() {
         conns = market_data::phase_forex_streaming_validation(conns);
         conns = market_data::phase_forex_reconnection(conns);
     }
+
+    // Runs last: it parks the real CCP behind a dead socket for 30s and is the one
+    // phase asserting a hard liveness deadline, so a failure here cannot take the
+    // phases behind it down with the suite.
+    conns = heartbeat::phase_heartbeat_timeout_detection(conns);
 
     let _conns = connection::phase_graceful_shutdown(conns);
 
