@@ -2382,14 +2382,20 @@ impl CcpState {
     // saying flat — the same defect ibx#261 fixed on the account-update path
     // (ibx#296). A genuine flat still arrives as an explicit `6064=0`.
     let mut qty: Option<i64> = None;
-    let mut avg_cost_raw: f64 = 0.0;
+    // `None` where the row states no cost. Folding that into a zero made an
+    // absent cost indistinguishable from a real one, and publishing it erased
+    // the basis of a live holding.
+    let mut avg_cost_raw: Option<f64> = None;
     let mut count = 0;
     for part in text.split('\x01') {
         if let Some(v) = part.strip_prefix("6008=") {
             // Flush previous position if any
             if count > 0 && con_id != 0 {
                 if let Some(qty) = qty {
-                    let avg_cost = (avg_cost_raw * PRICE_SCALE as f64) as Price;
+                    let avg_cost = avg_cost_raw
+                        .map(|c| (c * PRICE_SCALE as f64) as Price)
+                        .or_else(|| shared.portfolio.position_info(con_id).map(|p| p.avg_cost))
+                        .unwrap_or(0);
                     shared.portfolio.set_position_info(PositionInfo {
                         con_id, position: qty, avg_cost, ..Default::default()
                     });
@@ -2403,20 +2409,23 @@ impl CcpState {
             }
             con_id = v.parse().unwrap_or(0);
             qty = None;
-            avg_cost_raw = 0.0;
+            avg_cost_raw = None;
             count += 1;
         } else if let Some(v) = part.strip_prefix("6064=") {
             // Filtered to finite: `"NaN".parse()` succeeds and `NaN as i64`
             // is 0, which would flatten by the same route.
             qty = v.parse::<f64>().ok().filter(|f| f.is_finite()).map(|f| f as i64);
         } else if let Some(v) = part.strip_prefix("6101=") {
-            avg_cost_raw = v.parse().unwrap_or(0.0);
+            avg_cost_raw = v.parse::<f64>().ok().filter(|f| f.is_finite());
         }
     }
     // Flush last position
     if count > 0 && con_id != 0 {
         if let Some(qty) = qty {
-            let avg_cost = (avg_cost_raw * PRICE_SCALE as f64) as Price;
+            let avg_cost = avg_cost_raw
+                .map(|c| (c * PRICE_SCALE as f64) as Price)
+                .or_else(|| shared.portfolio.position_info(con_id).map(|p| p.avg_cost))
+                .unwrap_or(0);
             shared.portfolio.set_position_info(PositionInfo {
                 con_id, position: qty, avg_cost, ..Default::default()
             });
@@ -3045,6 +3054,45 @@ mod tests {
         assert_eq!(maturity_tag("20260918 14:30:00"), Some(541), "a date with a time on it");
         assert_eq!(maturity_tag(""), None, "nothing to state");
         assert_eq!(maturity_tag("2026"), None, "too short to be either, so it is not guessed");
+    }
+
+    /// The lean feed states a quantity and often no cost. Reading the absence
+    /// as a cost of zero erased the basis of a live holding, and the P&L path
+    /// reads a zero basis as having acquired it for nothing.
+    #[test]
+    fn a_row_without_a_cost_keeps_the_one_on_file() {
+        let mut ccp = CcpState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        context.market.register(265598);
+
+        ccp.handle_position_feed(
+            "6008=265598\x016064=100\x016101=150.0\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
+        );
+        let basis = shared.portfolio.position_info(265598).map(|i| i.avg_cost);
+        assert_eq!(basis, Some(150 * crate::types::PRICE_SCALE));
+
+        // Same holding, stated without a cost.
+        ccp.handle_position_feed(
+            "6008=265598\x016064=100\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
+        );
+        assert_eq!(
+            shared.portfolio.position_info(265598).map(|i| i.avg_cost), basis,
+            "the basis on file stands where the row states none",
+        );
+
+        // Stated as zero, which is the broker saying zero.
+        ccp.handle_position_feed(
+            "6008=265598\x016064=100\x016101=0\x01".as_bytes(),
+            &mut None, &mut context, &shared, &None, &mut hb,
+        );
+        assert_eq!(
+            shared.portfolio.position_info(265598).map(|i| i.avg_cost), Some(0),
+            "a stated zero is a value, not an absence",
+        );
     }
 
     /// The feed is the account's own statement of what it holds. It reached the

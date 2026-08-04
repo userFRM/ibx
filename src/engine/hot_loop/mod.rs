@@ -52,6 +52,10 @@ pub struct HotLoop {
     /// Whether a recoverable loss was announced to the client. Gates the
     /// restore notice so a reconnect that nobody was told about stays quiet.
     loss_announced: bool,
+    /// Slots a caller asked to free that were held open by a position. The
+    /// table is bounded, so they are reconsidered once the account is flat
+    /// rather than being lost until the process ends.
+    pinned_by_position: Vec<InstrumentId>,
     /// Next scheduled CCP/farm reconnect attempt (jittered backoff, ibx#218).
     ccp_next_attempt_at: Option<Instant>,
     farm_next_attempt_at: Option<Instant>,
@@ -171,6 +175,7 @@ impl HotLoop {
             ccp_next_attempt_at: None,
             farm_next_attempt_at: None,
             loss_announced: false,
+            pinned_by_position: Vec::new(),
             farm_reconnect_attempt: 0,
             pending_ccp_reconnect: None,
             ccp_reconnect_attempt: 0,
@@ -247,6 +252,18 @@ impl HotLoop {
             Some(id) => {
                 self.context.market.set_symbol(id, symbol);
                 self.context.market.set_routing(id, sec_type, exchange);
+                // The account states what it holds before a caller subscribes
+                // to anything, and that statement had nowhere to land: with no
+                // slot yet, only the conId-keyed row was written. Taking it now
+                // is what makes the engine's position table agree with the
+                // account from the first callback, and what keeps the slot from
+                // being reclaimed as unheld.
+                if let Some(held) = self.shared.portfolio.position_info(con_id) {
+                    if held.position != 0 {
+                        self.context.update_position(id, held.position - self.context.position(id));
+                        self.shared.portfolio.set_position(id, held.position);
+                    }
+                }
                 self.shared.market.set_instrument_count(self.context.market.count());
                 if let Some(tx) = reply_tx { let _ = tx.send(Ok(id)); }
                 Some(id)
@@ -292,8 +309,12 @@ impl HotLoop {
         // owns handed the slot to the next contract, which then reported the
         // previous one's position as its own.
         if self.context.position(instrument) != 0 {
+            if !self.pinned_by_position.contains(&instrument) {
+                self.pinned_by_position.push(instrument);
+            }
             return;
         }
+        self.pinned_by_position.retain(|id| *id != instrument);
         if self.context.market.unregister(instrument).is_some() {
             // Zero the shared-side quote so a reused slot cannot serve the
             // previous contract's prices before its first tick.
@@ -371,6 +392,17 @@ impl HotLoop {
                 &mut self.ccp_conn, &mut self.context, &self.shared,
                 &self.event_tx, &mut self.hb, &self.account_id,
             );
+            // A holding that has since been closed releases the slot the
+            // caller already asked to free.
+            if !self.pinned_by_position.is_empty() {
+                for instrument in std::mem::take(&mut self.pinned_by_position) {
+                    if self.context.position(instrument) == 0 {
+                        self.try_reclaim_instrument(instrument);
+                    } else {
+                        self.pinned_by_position.push(instrument);
+                    }
+                }
+            }
             self.ccp.sweep_recovery(&mut self.context, &self.shared, &self.event_tx);
             self.ccp.sweep_pending_matching_symbols();
             self.ccp.sweep_pending_schedule_pairs(&self.shared, &self.event_tx);
@@ -1136,10 +1168,15 @@ impl HotLoop {
     /// only this side owns both and only this side can put them back.
     fn resubscribe_keep_up_to_date(&mut self) {
         if self.hmds.kut_resub.is_empty() { return; }
-        if self.ccp_conn.is_none() || self.ccp.disconnected {
-            log::warn!(
-                "HMDS is back but CCP is not, so {} keepUpToDate stream(s) stay down; \
-                 the CCP reconnect does not carry them",
+        // The request goes out on the auth socket and the bars come back on
+        // the historical one, so both have to be up. Whichever recovers second
+        // is the one that sends, and the other's call does nothing — asking
+        // twice would leave two streams upstream for one subscription.
+        if self.ccp_conn.is_none() || self.ccp.disconnected
+            || self.hmds_conn.is_none() || self.hmds.disconnected
+        {
+            log::info!(
+                "{} keepUpToDate stream(s) wait for both transports before being asked for again",
                 self.hmds.kut_resub.len(),
             );
             return;
@@ -1706,6 +1743,11 @@ mod tests {
             "the slot stays with the contract the account is long",
         );
 
+        assert_eq!(
+            hl.pinned_by_position, vec![instrument],
+            "and the request to free it is remembered rather than lost",
+        );
+
         // Flat, and nothing else refers to it: now it may go.
         hl.context.update_position(instrument, -100);
         hl.hmds.tbt_price_state[instrument as usize] = (1, 2, 3);
@@ -1715,6 +1757,7 @@ mod tests {
             hl.hmds.tbt_price_state[instrument as usize], (0, 0, 0),
             "and no prices for the next occupant's deltas to build on",
         );
+        assert!(hl.pinned_by_position.is_empty(), "and nothing is still waiting on it");
     }
 
     /// A client that stood down on the loss needs the other edge to come back
