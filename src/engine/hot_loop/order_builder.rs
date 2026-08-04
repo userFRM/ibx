@@ -901,8 +901,17 @@ fn send_order_ex(
         K::SnapMkt => fields.push((40, "SMKT".to_string())),
         K::SnapMid => fields.push((40, "SMID".to_string())),
         K::SnapPri => fields.push((40, "SREL".to_string())),
-        K::PegMkt { .. } => fields.push((40, "E".to_string())),
-        K::PegMid { .. } => fields.push((40, "E".to_string())),
+        // Both are OrdType "E" and are separated by ExecInst, which is what
+        // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
+        // OrdType sent the two as the same message, saying which peg neither.
+        K::PegMkt { .. } => {
+            fields.push((40, "E".to_string()));
+            fields.push((18, "P".to_string()));
+        }
+        K::PegMid { .. } => {
+            fields.push((40, "E".to_string()));
+            fields.push((18, "M".to_string()));
+        }
         K::Rel { offset } => {
             // Per ib-agent#138 capture: Relative shares OrdType=P and is
             // disambiguated by 18=R; peg offset on 211, no tag 44.
@@ -1652,6 +1661,33 @@ mod modify_wire_tests {
     }
 
     /// A two-legged type can have its trigger moved when it has one.
+    /// Pegged-to-market and pegged-to-midpoint share OrdType "E" and are told
+    /// apart by ExecInst, exactly as `ORD_PEG_MKT` and `ORD_PEG_MID` document
+    /// in types.rs. Neither emitted tag 18, so the two went on the wire byte
+    /// for byte identical and neither said which peg it was — every other
+    /// shared-OrdType pair in this encoder does emit its disambiguator.
+    #[test]
+    fn the_two_pegs_are_told_apart_on_the_wire() {
+        let mut sent = Vec::new();
+        for kind in [
+            crate::types::OrderKind::PegMkt { offset: 5 * crate::types::PRICE_SCALE },
+            crate::types::OrderKind::PegMid { offset: 5 * crate::types::PRICE_SCALE },
+        ] {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+                order_id: 7, instrument, side: Side::Buy, qty: 1, kind,
+                tif: b'0', attrs: crate::types::OrderAttrs::default(),
+            });
+            sent.push(drain(&mut context));
+        }
+        assert!(sent[0].contains("|40=E|"), "pegged to market is OrdType E: {}", sent[0]);
+        assert!(sent[1].contains("|40=E|"), "pegged to midpoint is OrdType E: {}", sent[1]);
+        assert!(sent[0].contains("|18=P|"), "pegged to market states its peg: {}", sent[0]);
+        assert!(sent[1].contains("|18=M|"), "pegged to midpoint states its peg: {}", sent[1]);
+        assert_ne!(sent[0], sent[1], "the two pegs must not be the same message");
+    }
+
     #[test]
     fn a_supplied_trigger_moves_a_two_legged_order() {
         for (ord_type, name) in [(b'4', "STP LMT"), (b'K', "LIT")] {
