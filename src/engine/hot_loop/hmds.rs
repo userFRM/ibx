@@ -974,12 +974,13 @@ impl HmdsState {
         }
     }
 
-    pub(crate) fn send_scanner_subscribe(&mut self, req_id: u32, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_scanner_subscribe(&mut self, req_id: u32, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, filters: Vec<(String, String)>, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let sub = crate::control::scanner::ScannerSubscription {
             instrument: instrument.to_string(),
             location_code: location_code.to_string(),
             scan_code: scan_code.to_string(),
             max_items,
+            filters,
         };
         let scan_id = format!("APISCAN{}:{}", self.next_scanner_id, req_id);
         self.next_scanner_id += 1;

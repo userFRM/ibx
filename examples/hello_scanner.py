@@ -16,6 +16,7 @@ class ScannerSubscription:
         self.locationCode = "STK.US.MAJOR"
         self.scanCode = "TOP_PERC_GAIN"
         self.numberOfRows = 25
+        self.abovePrice = 5.0
 
 
 class ScannerWrapper(EWrapper):

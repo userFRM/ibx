@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ibx::api::client::{EClient, EClientConfig};
-use ibx::api::types::ContractDetails;
+use ibx::api::types::{ContractDetails, TagValue};
 use ibx::api::wrapper::Wrapper;
 
 #[derive(Default)]
@@ -52,7 +52,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let req_id = 1;
     println!("subscribing TOP_PERC_GAIN, STK.US.MAJOR…");
-    client.req_scanner_subscription(req_id, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 25)?;
+    let filters = [TagValue { tag: "priceAbove".into(), value: "5".into() }];
+    client.req_scanner_subscription(req_id, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 25, &filters)?;
 
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
