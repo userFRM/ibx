@@ -9,6 +9,12 @@ pub struct Clock {
     start: std::time::Instant,
 }
 
+impl Default for Clock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Clock {
     pub fn new() -> Self {
         Self {
@@ -51,6 +57,12 @@ pub struct Context {
     pub(crate) recv_at: Instant,
     /// Total hot loop iterations since start.
     pub(crate) loop_iterations: u64,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Context {
@@ -952,8 +964,7 @@ impl Context {
             }
             if prev.is_terminal() || status.rank() < prev.rank() {
                 log::debug!(
-                    "Order {} status guard: keeping {:?}, dropping stale {:?} (ibx#212)",
-                    order_id, prev, status,
+                    "Order {order_id} status guard: keeping {prev:?}, dropping stale {status:?} (ibx#212)",
                 );
                 return false;
             }
@@ -1019,7 +1030,7 @@ mod tests {
         assert_eq!(orders.len(), 1);
         match orders[0] {
             OrderRequest::SubmitEx {
-                order_id, instrument, side, qty,
+                instrument, side, qty,
                 kind: OrderKind::Limit { price }, ..
             } => {
                 assert_eq!(instrument, 0);
@@ -1040,7 +1051,7 @@ mod tests {
         assert_eq!(orders.len(), 1);
         match orders[0] {
             OrderRequest::SubmitEx {
-                order_id, instrument, side, qty,
+                instrument, side, qty,
                 kind: OrderKind::Market, ..
             } => {
                 assert_eq!(instrument, 1);
@@ -1249,7 +1260,7 @@ mod tests {
         assert!(ctx.update_order_status(1, OrderStatus::Filled));
         // A late mass-status snapshot must not resurrect the order.
         for stale in [OrderStatus::Submitted, OrderStatus::Cancelled, OrderStatus::PendingCancel] {
-            assert!(!ctx.update_order_status(1, stale), "{:?} must not overwrite Filled", stale);
+            assert!(!ctx.update_order_status(1, stale), "{stale:?} must not overwrite Filled");
         }
         assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Filled);
     }
@@ -1360,10 +1371,7 @@ mod tests {
         let orders: Vec<_> = ctx.drain_pending_orders().collect();
         assert_eq!(orders.len(), 1);
         match orders[0] {
-            OrderRequest::SubmitEx {
-                order_id, instrument, side, qty,
-                kind: OrderKind::Limit { price }, ..
-            } => {
+            OrderRequest::SubmitEx { kind: OrderKind::Limit { price }, .. } => {
                 assert_eq!(price, 150 * PRICE_SCALE);
             }
             _ => panic!("expected SubmitLimit"),
@@ -1398,7 +1406,7 @@ mod tests {
         let q = Quote {
             bid: 150 * PRICE_SCALE,
             ask: 151 * PRICE_SCALE,
-            last: 150_50 * (PRICE_SCALE / 100),
+            last: 15050 * (PRICE_SCALE / 100),
             bid_size: 500,
             ask_size: 300,
             ..Quote::default()
@@ -1672,7 +1680,7 @@ mod tests {
     #[test]
     fn submit_what_if_drains_correctly() {
         let mut ctx = Context::new();
-        let id = ctx.submit_what_if(0, Side::Buy, 100, 256_20 * (PRICE_SCALE / 100),
+        let id = ctx.submit_what_if(0, Side::Buy, 100, 25620 * (PRICE_SCALE / 100),
             b'0', OrderAttrs::default());
         let orders: Vec<_> = ctx.drain_pending_orders().collect();
         assert_eq!(orders.len(), 1);
@@ -1684,7 +1692,7 @@ mod tests {
                 assert_eq!(*instrument, 0);
                 assert_eq!(*side, Side::Buy);
                 assert_eq!(*qty, 100);
-                assert_eq!(*price, 256_20 * (PRICE_SCALE / 100));
+                assert_eq!(*price, 25620 * (PRICE_SCALE / 100));
             }
             _ => panic!("expected a what-if"),
         }
@@ -1714,11 +1722,11 @@ mod tests {
         let mut ctx = Context::new();
         let id = ctx.submit_adjustable_stop(
             0, Side::Sell, 1,
-            251_20 * (PRICE_SCALE / 100), // stop_price
-            256_20 * (PRICE_SCALE / 100), // trigger_price
+            25120 * (PRICE_SCALE / 100), // stop_price
+            25620 * (PRICE_SCALE / 100), // trigger_price
             AdjustedOrderType::StopLimit,
-            253_20 * (PRICE_SCALE / 100), // adjusted_stop
-            252_20 * (PRICE_SCALE / 100), // adjusted_limit
+            25320 * (PRICE_SCALE / 100), // adjusted_stop
+            25220 * (PRICE_SCALE / 100), // adjusted_limit
             0,                             // adjusted_trailing_amount (StopLimit: unused)
             0,                             // adjustable_trailing_unit
             b'1',                          // GTC
@@ -1733,11 +1741,11 @@ mod tests {
                 assert_eq!(*order_id, id);
                 assert_eq!(*side, Side::Sell);
                 assert_eq!(*qty, 1);
-                assert_eq!(*stop_price, 251_20 * (PRICE_SCALE / 100));
-                assert_eq!(*trigger_price, 256_20 * (PRICE_SCALE / 100));
+                assert_eq!(*stop_price, 25120 * (PRICE_SCALE / 100));
+                assert_eq!(*trigger_price, 25620 * (PRICE_SCALE / 100));
                 assert_eq!(*adjusted_order_type, AdjustedOrderType::StopLimit);
-                assert_eq!(*adjusted_stop_price, 253_20 * (PRICE_SCALE / 100));
-                assert_eq!(*adjusted_stop_limit_price, 252_20 * (PRICE_SCALE / 100));
+                assert_eq!(*adjusted_stop_price, 25320 * (PRICE_SCALE / 100));
+                assert_eq!(*adjusted_stop_limit_price, 25220 * (PRICE_SCALE / 100));
                 assert_eq!(*tif, b'1');
                 assert_eq!(attrs.parent_id, 9);
             }

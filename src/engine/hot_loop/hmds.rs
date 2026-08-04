@@ -148,12 +148,12 @@ impl HmdsState {
                     Ok(0) if !conn.has_buffered_data() => return,
                     Ok(0) => {}
                     Err(e) => {
-                        log::error!("HMDS connection lost: {}", e);
+                        log::error!("HMDS connection lost: {e}");
                         self.disconnect(hmds_conn);
                         return;
                     }
                     Ok(n) => {
-                        log::info!("HMDS recv: {} bytes", n);
+                        log::info!("HMDS recv: {n} bytes");
                         hb.last_hmds_recv = Instant::now();
                         hb.pending_hmds_test = None;
                     }
@@ -348,7 +348,7 @@ impl HmdsState {
                             }
                         }
                         if !matched {
-                            log::info!("HMDS TBT ticker_id assigned: {}", ticker_id_str);
+                            log::info!("HMDS TBT ticker_id assigned: {ticker_id_str}");
                         }
                     }
                     else if xml_tag.contains("<QueryError>") {
@@ -390,8 +390,7 @@ impl HmdsState {
                         match released_req_id {
                             Some(req_id) => {
                                 log::warn!(
-                                    "HMDS QueryError req_id={} query_id={:?}: {}",
-                                    req_id, query_id, error_msg
+                                    "HMDS QueryError req_id={req_id} query_id={query_id:?}: {error_msg}"
                                 );
                                 shared.reference.push_historical_error(req_id, HMDS_ERROR_CODE, error_msg.clone());
                                 // Surface a terminal sentinel for historical-bar consumers
@@ -411,8 +410,7 @@ impl HmdsState {
                             }
                             None => {
                                 log::warn!(
-                                    "HMDS QueryError for unknown query_id={:?}: {}",
-                                    query_id, error_msg
+                                    "HMDS QueryError for unknown query_id={query_id:?}: {error_msg}"
                                 );
                             }
                         }
@@ -670,10 +668,10 @@ impl HmdsState {
                 (fix::TAG_SENDING_TIME, &ts),
                 (6118, &xml),
             ]);
-            log::info!("Sent TBT subscribe: con_id={} type={} req_id={}", con_id, tbt_type_str, req_id);
+            log::info!("Sent TBT subscribe: con_id={con_id} type={tbt_type_str} req_id={req_id}");
             hb.last_hmds_sent = Instant::now();
         }
-        let ticker_id = format!("tbt_{}", req_id);
+        let ticker_id = format!("tbt_{req_id}");
         self.tbt_subscriptions.push((instrument, ticker_id, tbt_type));
     }
 
@@ -693,10 +691,9 @@ impl HmdsState {
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
                  <ListOfCancelQueries>\
                  <CancelQuery>\
-                 <id>ticker:{tid}</id>\
+                 <id>ticker:{ticker_id}</id>\
                  </CancelQuery>\
                  </ListOfCancelQueries>",
-                tid = ticker_id,
             );
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
@@ -704,7 +701,7 @@ impl HmdsState {
                 (fix::TAG_SENDING_TIME, &ts),
                 (6118, &xml),
             ]);
-            log::info!("Sent TBT unsubscribe: instrument={} ticker_id={}", instrument, ticker_id);
+            log::info!("Sent TBT unsubscribe: instrument={instrument} ticker_id={ticker_id}");
             hb.last_hmds_sent = Instant::now();
         }
         self.tbt_price_state[instrument as usize] = (0, 0, 0);
@@ -745,7 +742,7 @@ impl HmdsState {
         let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
             Ok(dt) => dt,
             Err(e) => {
-                log::error!("historical req_id={}: {}", req_id, e);
+                log::error!("historical req_id={req_id}: {e}");
                 super::push_hmds_error(shared, req_id, e, true);
                 return;
             }
@@ -753,13 +750,13 @@ impl HmdsState {
         let bs = match crate::control::historical::BarSize::from_api_str(bar_size) {
             Ok(bs) => bs,
             Err(e) => {
-                log::error!("historical req_id={}: {}", req_id, e);
+                log::error!("historical req_id={req_id}: {e}");
                 super::push_hmds_error(shared, req_id, e, true);
                 return;
             }
         };
 
-        let query_id = format!("hist_{}", qid);
+        let query_id = format!("hist_{qid}");
         let req = crate::control::historical::HistoricalRequest {
             query_id: query_id.clone(),
             con_id: con_id as u32,
@@ -782,7 +779,7 @@ impl HmdsState {
                 (fix::TAG_SENDING_TIME, &ts),
                 (6118, &xml),
             ]);
-            log::info!("Sent historical request: req_id={} con_id={} bar_size={}", req_id, con_id, bar_size);
+            log::info!("Sent historical request: req_id={req_id} con_id={con_id} bar_size={bar_size}");
             hb.last_hmds_sent = Instant::now();
         }
         self.pending_historical.push((query_id, req_id, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
@@ -824,7 +821,7 @@ impl HmdsState {
         let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
             Ok(dt) => dt,
             Err(e) => {
-                log::error!("keepUpToDate req_id={}: {}", req_id, e);
+                log::error!("keepUpToDate req_id={req_id}: {e}");
                 super::push_hmds_error(shared, req_id, e, true);
                 return false;
             }
@@ -833,22 +830,21 @@ impl HmdsState {
             Ok(bs) if bs.supports_keep_up_to_date() => bs,
             Ok(_) => {
                 let e = format!(
-                    "bar_size '{}' is not supported with keep_up_to_date=true: \
+                    "bar_size '{bar_size}' is not supported with keep_up_to_date=true: \
                      supported sizes are 1 secs, 5 secs, 5 mins, 1 hour, 1 day",
-                    bar_size,
                 );
-                log::error!("keepUpToDate req_id={}: {}", req_id, e);
+                log::error!("keepUpToDate req_id={req_id}: {e}");
                 super::push_hmds_error(shared, req_id, e, true);
                 return false;
             }
             Err(e) => {
-                log::error!("keepUpToDate req_id={}: {}", req_id, e);
+                log::error!("keepUpToDate req_id={req_id}: {e}");
                 super::push_hmds_error(shared, req_id, e, true);
                 return false;
             }
         };
 
-        let query_id = format!("hist_{}", qid);
+        let query_id = format!("hist_{qid}");
         let req = crate::control::historical::HistoricalRequest {
             query_id: query_id.clone(),
             con_id: con_id as u32,
@@ -890,7 +886,7 @@ impl HmdsState {
                 // request is a subscription rather than a single answer — so a
                 // refused send left a request nothing would ever answer and
                 // nothing would ever expire (ibx#254).
-                log::warn!("keepUpToDate req_id={} not sent: {}", req_id, e);
+                log::warn!("keepUpToDate req_id={req_id} not sent: {e}");
                 super::push_hmds_error(shared, req_id, e.to_string(), true);
                 return false;
             }
@@ -902,7 +898,7 @@ impl HmdsState {
             // Reported the same way a failed send is: the caller is waiting on a
             // callback, and a request that never went out has no answer coming.
             let e = "no CCP transport".to_string();
-            log::warn!("keepUpToDate req_id={} not sent: {}", req_id, e);
+            log::warn!("keepUpToDate req_id={req_id} not sent: {e}");
             super::push_hmds_error(shared, req_id, e, true);
             return false;
         }
@@ -916,10 +912,9 @@ impl HmdsState {
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
                  <ListOfCancelQueries>\
                  <CancelQuery>\
-                 <id>ticker:{tid}</id>\
+                 <id>ticker:{query_id}</id>\
                  </CancelQuery>\
                  </ListOfCancelQueries>",
-                tid = query_id,
             );
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
@@ -937,7 +932,7 @@ impl HmdsState {
         let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
             Ok(dt) => dt,
             Err(e) => {
-                log::error!("head timestamp req_id={}: {}", req_id, e);
+                log::error!("head timestamp req_id={req_id}: {e}");
                 super::push_hmds_error(shared, req_id, e, false);
                 return;
             }
@@ -959,7 +954,7 @@ impl HmdsState {
                 (fix::TAG_SENDING_TIME, &ts),
                 (6118, &xml),
             ]);
-            log::info!("Sent head timestamp request: req_id={} con_id={}", req_id, con_id);
+            log::info!("Sent head timestamp request: req_id={req_id} con_id={con_id}");
             hb.last_hmds_sent = Instant::now();
         }
         self.pending_head_ts.push((query_id, req_id));
@@ -998,7 +993,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent scanner subscribe: req_id={} scan_code={}", req_id, scan_code);
+            log::info!("Sent scanner subscribe: req_id={req_id} scan_code={scan_code}");
         }
         self.pending_scanner.push((scan_id, req_id));
     }
@@ -1014,7 +1009,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent scanner cancel: scan_id={}", scan_id);
+            log::info!("Sent scanner cancel: scan_id={scan_id}");
         }
     }
 
@@ -1039,7 +1034,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent historical news request: req_id={} con_id={}", req_id, con_id);
+            log::info!("Sent historical news request: req_id={req_id} con_id={con_id}");
         }
         self.pending_news.push((query_id, req_id));
     }
@@ -1062,7 +1057,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent news article request: req_id={} article={}", req_id, article_id);
+            log::info!("Sent news article request: req_id={req_id} article={article_id}");
         }
         self.pending_articles.push((query_id, req_id));
     }
@@ -1092,7 +1087,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent fundamental data request: req_id={} con_id={}", req_id, con_id);
+            log::info!("Sent fundamental data request: req_id={req_id} con_id={con_id}");
         }
         self.pending_fundamental.push((query_id, req_id));
     }
@@ -1115,7 +1110,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent histogram request: req_id={} con_id={}", req_id, con_id);
+            log::info!("Sent histogram request: req_id={req_id} con_id={con_id}");
         }
         self.pending_histogram.push((query_id, req_id));
     }
@@ -1123,7 +1118,7 @@ impl HmdsState {
     pub(crate) fn send_historical_ticks_request(&mut self, req_id: u32, con_id: i64, start_date_time: &str, end_date_time: &str, number_of_ticks: u32, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
-        let query_id = format!("tk_{}", qid);
+        let query_id = format!("tk_{qid}");
         let xml = crate::control::historical::build_tick_query_xml(
             &query_id, con_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth,
         );
@@ -1135,7 +1130,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent historical ticks request: req_id={} con_id={} what={}", req_id, con_id, what_to_show);
+            log::info!("Sent historical ticks request: req_id={req_id} con_id={con_id} what={what_to_show}");
         }
         self.pending_ticks.push((query_id, req_id, what_to_show.to_string()));
     }
@@ -1143,7 +1138,7 @@ impl HmdsState {
     pub(crate) fn send_realtime_bar_subscribe(&mut self, req_id: u32, con_id: i64, _symbol: &str, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
-        let query_id = format!("rt_{}", qid);
+        let query_id = format!("rt_{qid}");
         let xml = crate::control::historical::build_realtime_bar_xml(&query_id, con_id, what_to_show, use_rth);
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
@@ -1153,7 +1148,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent rtbar subscribe: req_id={} con_id={} what={}", req_id, con_id, what_to_show);
+            log::info!("Sent rtbar subscribe: req_id={req_id} con_id={con_id} what={what_to_show}");
         }
         self.rtbar_subs.push((query_id, req_id, None, 0.01));
     }
@@ -1167,7 +1162,7 @@ impl HmdsState {
         } else {
             end_date_time.to_string()
         };
-        let query_id = format!("sched_{}", qid);
+        let query_id = format!("sched_{qid}");
         let xml = crate::control::historical::build_schedule_xml(&query_id, con_id, &end_date_time, &duration, use_rth);
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
@@ -1177,7 +1172,7 @@ impl HmdsState {
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent schedule request: req_id={} con_id={}", req_id, con_id);
+            log::info!("Sent schedule request: req_id={req_id} con_id={con_id}");
         }
         self.pending_schedule.push((query_id, req_id));
     }
@@ -1205,8 +1200,7 @@ impl HmdsState {
         });
         for (query_id, req_id) in expired {
             log::warn!(
-                "HMDS historical timeout: req_id={} query_id={} — no response within {:?}",
-                req_id, query_id, HISTORICAL_IDLE_TIMEOUT,
+                "HMDS historical timeout: req_id={req_id} query_id={query_id} — no response within {HISTORICAL_IDLE_TIMEOUT:?}",
             );
             shared.reference.push_historical_error(
                 req_id, 162,
@@ -1368,8 +1362,7 @@ mod tests {
 
     fn make_query_error_msg(query_id: &str, error: &str) -> Vec<u8> {
         let xml = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<QueryError>\n\t<id>{}</id>\n\t<error>{}</error>\n</QueryError>\n",
-            query_id, error,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<QueryError>\n\t<id>{query_id}</id>\n\t<error>{error}</error>\n</QueryError>\n",
         );
         let mut msg = Vec::new();
         msg.extend_from_slice(b"35=W\x016118=");
@@ -1569,7 +1562,6 @@ mod tests {
     #[test]
     fn the_query_on_the_wire_carries_the_contract_s_own_type_and_venue() {
         use crate::protocol::connection::Connection;
-        use std::io::Read;
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
