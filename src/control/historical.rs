@@ -542,8 +542,16 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
 }
 
 /// Build the XML subscription for real-time 5-second bars.
-pub fn build_realtime_bar_xml(query_id: &str, con_id: i64, what_to_show: &str, use_rth: bool) -> String {
-    let exchange = "BEST";
+pub fn build_realtime_bar_xml(
+    query_id: &str, con_id: i64, what_to_show: &str, use_rth: bool,
+    sec_type: &str, exchange: &str,
+) -> String {
+    // Stated from the contract rather than assumed. A stock routed BEST was
+    // the only shape this ever described, so a request for anything else — an
+    // FX pair on IDEALPRO, a future on its own venue — went out saying it was
+    // a US stock and came back untyped.
+    let exchange = if exchange.is_empty() { "BEST" } else { exchange };
+    let sec_type = if sec_type.is_empty() { "CS" } else { sec_type };
     let rth = if use_rth { "true" } else { "false" };
     let data = match what_to_show.to_uppercase().as_str() {
         "MIDPOINT" => "Midpoint",
@@ -560,7 +568,7 @@ pub fn build_realtime_bar_xml(query_id: &str, con_id: i64, what_to_show: &str, u
          <useRTH>{rth}</useRTH>\
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
-         <secType>CS</secType>\
+         <secType>{sec_type}</secType>\
          <type>BarData</type>\
          <data>{data}</data>\
          <refresh>5 secs</refresh>\
@@ -1206,7 +1214,12 @@ mod tests {
 
     #[test]
     fn build_realtime_bar_xml_structure() {
-        let xml = build_realtime_bar_xml("rt_1", 265598, "TRADES", true);
+        let xml = build_realtime_bar_xml("rt_1", 265598, "TRADES", true, "CS", "BEST");
+        // The contract is stated, not assumed: an FX pair is not a US stock.
+        let fx = build_realtime_bar_xml("rt_2", 12087792, "MIDPOINT", false, "CASH", "IDEALPRO");
+        assert!(fx.contains("<secType>CASH</secType>"), "{fx}");
+        assert!(fx.contains("<exchange>IDEALPRO</exchange>"), "{fx}");
+        assert!(fx.contains("<data>Midpoint</data>"), "{fx}");
         assert!(xml.contains("<id>rt_1</id>"));
         assert!(xml.contains("<type>BarData</type>"));
         assert!(xml.contains("<data>Last</data>"));

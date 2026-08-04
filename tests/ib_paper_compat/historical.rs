@@ -737,6 +737,8 @@ pub(super) fn phase_realtime_bars(mut conns: Conns, gw: &Gateway, config: &Gatew
         req_id: 5001,
         con_id: 756733,
         symbol: "SPY".to_string(),
+        sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(),
         what_to_show: "TRADES".to_string(),
         use_rth: false,
     }).unwrap();

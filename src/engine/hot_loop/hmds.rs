@@ -110,6 +110,8 @@ fn hist_exchange(exchange: &str) -> String {
 pub(crate) struct RtBarRequest {
     pub req_id: u32,
     pub con_id: i64,
+    pub sec_type: String,
+    pub exchange: String,
     pub what_to_show: String,
     pub use_rth: bool,
 }
@@ -212,7 +214,8 @@ impl HmdsState {
         self.rtbar_resub.clear();
         for r in &bars {
             self.send_realtime_bar_subscribe(
-                r.req_id, r.con_id, "", &r.what_to_show, r.use_rth, hmds_conn, hb,
+                r.req_id, r.con_id, "", &r.sec_type, &r.exchange,
+                &r.what_to_show, r.use_rth, hmds_conn, hb,
             );
         }
         if !bars.is_empty() {
@@ -1241,11 +1244,15 @@ impl HmdsState {
         self.pending_ticks.push((query_id, req_id, what_to_show.to_string()));
     }
 
-    pub(crate) fn send_realtime_bar_subscribe(&mut self, req_id: u32, con_id: i64, _symbol: &str, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn send_realtime_bar_subscribe(&mut self, req_id: u32, con_id: i64, _symbol: &str, sec_type: &str, exchange: &str, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
         let query_id = format!("rt_{qid}");
-        let xml = crate::control::historical::build_realtime_bar_xml(&query_id, con_id, what_to_show, use_rth);
+        let xml = crate::control::historical::build_realtime_bar_xml(
+            &query_id, con_id, what_to_show, use_rth,
+            &hist_sec_type(sec_type), &hist_exchange(exchange),
+        );
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
@@ -1259,7 +1266,9 @@ impl HmdsState {
         self.rtbar_subs.push((query_id, req_id, None, 0.01));
         self.rtbar_resub.retain(|r| r.req_id != req_id);
         self.rtbar_resub.push(RtBarRequest {
-            req_id, con_id, what_to_show: what_to_show.to_string(), use_rth,
+            req_id, con_id,
+            sec_type: sec_type.to_string(), exchange: exchange.to_string(),
+            what_to_show: what_to_show.to_string(), use_rth,
         });
     }
 
@@ -1421,7 +1430,7 @@ mod tests {
         let (_peer, _) = listener.accept().unwrap();
         let mut conn = Some(crate::protocol::connection::Connection::new_raw(sock).unwrap());
         let mut hb = HeartbeatState::new();
-        hmds.send_realtime_bar_subscribe(9, 265598, "", "TRADES", true, &mut conn, &mut hb);
+        hmds.send_realtime_bar_subscribe(9, 265598, "", "STK", "SMART", "TRADES", true, &mut conn, &mut hb);
         let first = hmds.rtbar_subs[0].0.clone();
 
         let sock2 = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
