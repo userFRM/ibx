@@ -1299,7 +1299,7 @@ mod tests {
 
     #[test]
     fn price_150_25() {
-        let p: Price = 150_25 * (PRICE_SCALE / 100);
+        let p: Price = 15_025 * (PRICE_SCALE / 100);
         assert_eq!(p, 15_025_000_000);
     }
 
@@ -1425,8 +1425,7 @@ mod tests {
 
     #[test]
     fn quote_field_independence() {
-        let mut q = Quote::default();
-        q.bid = 100 * PRICE_SCALE;
+        let mut q = Quote { bid: 100 * PRICE_SCALE, ..Default::default() };
         assert_eq!(q.ask, 0); // other fields untouched
         assert_eq!(q.last, 0);
         q.ask = 101 * PRICE_SCALE;
@@ -1548,8 +1547,8 @@ mod tests {
         assert_eq!(snap_to_tick(-15_012_500_000, TICK_CENT), -15_013_000_000);
         // 0.05 grid: 10.02 -> 10.00, 10.03 -> 10.05
         let nickel = 5 * TICK_CENT;
-        assert_eq!(snap_to_tick(10_02_000_000, nickel), 10_00_000_000);
-        assert_eq!(snap_to_tick(10_03_000_000, nickel), 10_05_000_000);
+        assert_eq!(snap_to_tick(1_002_000_000, nickel), 1_000_000_000);
+        assert_eq!(snap_to_tick(1_003_000_000, nickel), 1_005_000_000);
         // Unknown tick: unchanged.
         assert_eq!(snap_to_tick(15_012_345_678, 0), 15_012_345_678);
         assert_eq!(snap_to_tick(15_012_345_678, -1), 15_012_345_678);
@@ -1671,8 +1670,7 @@ mod tests {
 
     #[test]
     fn account_state_copy() {
-        let mut a = AccountState::default();
-        a.net_liquidation = 100_000 * PRICE_SCALE;
+        let a = AccountState { net_liquidation: 100_000 * PRICE_SCALE, ..Default::default() };
         let b = a; // Copy
         assert_eq!(b.net_liquidation, 100_000 * PRICE_SCALE);
     }
@@ -1785,12 +1783,12 @@ mod tests {
         let r = WhatIfResponse {
             order_id: 1,
             instrument: 0,
-            init_margin_before: 1364_01 * (PRICE_SCALE / 100),
-            maint_margin_before: 1131_67 * (PRICE_SCALE / 100),
-            equity_with_loan_before: 754_255_14 * (PRICE_SCALE / 100),
-            init_margin_after: 8957_86 * (PRICE_SCALE / 100),
-            maint_margin_after: 8143_51 * (PRICE_SCALE / 100),
-            equity_with_loan_after: 754_255_14 * (PRICE_SCALE / 100),
+            init_margin_before: 136_401 * (PRICE_SCALE / 100),
+            maint_margin_before: 113_167 * (PRICE_SCALE / 100),
+            equity_with_loan_before: 75_425_514 * (PRICE_SCALE / 100),
+            init_margin_after: 895_786 * (PRICE_SCALE / 100),
+            maint_margin_after: 814_351 * (PRICE_SCALE / 100),
+            equity_with_loan_after: 75_425_514 * (PRICE_SCALE / 100),
             commission: PRICE_SCALE,
         };
         let r2 = r; // Copy

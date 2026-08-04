@@ -59,7 +59,7 @@ pub enum Event {
     /// Head timestamp response.
     HeadTimestamp { req_id: u32, data: HeadTimestampResponse },
     /// Contract details response.
-    ContractDetails { req_id: u32, details: ContractDefinition },
+    ContractDetails { req_id: u32, details: Box<ContractDefinition> },
     /// End of contract details for a request.
     ContractDetailsEnd(u32),
     /// Position update.
@@ -998,9 +998,7 @@ mod tests {
     #[test]
     fn seqquote_write_read_roundtrip() {
         let sq = SeqQuote::new();
-        let mut q = Quote::default();
-        q.bid = 150 * PRICE_SCALE;
-        q.ask = 151 * PRICE_SCALE;
+        let q = Quote { bid: 150 * PRICE_SCALE, ask: 151 * PRICE_SCALE, ..Default::default() };
         sq.write(&q);
         let read = sq.read();
         assert_eq!(read.bid, 150 * PRICE_SCALE);
@@ -1088,8 +1086,7 @@ mod tests {
     #[test]
     fn shared_state_account_roundtrip() {
         let ss = SharedState::new();
-        let mut a = AccountState::default();
-        a.net_liquidation = 100_000 * PRICE_SCALE;
+        let a = AccountState { net_liquidation: 100_000 * PRICE_SCALE, ..Default::default() };
         ss.portfolio.set_account(&a);
         let read = ss.portfolio.account();
         assert_eq!(read.net_liquidation, 100_000 * PRICE_SCALE);
@@ -1146,9 +1143,7 @@ mod tests {
 
         let writer = thread::spawn(move || {
             for i in 0..1000 {
-                let mut q = Quote::default();
-                q.bid = i * PRICE_SCALE;
-                q.ask = (i + 1) * PRICE_SCALE;
+                let q = Quote { bid: i * PRICE_SCALE, ask: (i + 1) * PRICE_SCALE, ..Default::default() };
                 sq_writer.write(&q);
             }
         });
