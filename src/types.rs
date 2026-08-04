@@ -815,6 +815,16 @@ impl OrderBuffer {
         self.buf.push(req);
     }
 
+    /// Put requests back at the head, ahead of anything queued since.
+    ///
+    /// Used where a batch was taken and part of it turned out not to have been
+    /// sent, so it waits for the transport rather than being reported.
+    pub fn requeue_front(&mut self, reqs: Vec<OrderRequest>) {
+        if reqs.is_empty() { return; }
+        debug_assert!(self.buf.len() + reqs.len() <= MAX_PENDING_ORDERS, "order buffer overflow");
+        self.buf.splice(0..0, reqs);
+    }
+
     pub fn drain(&mut self) -> std::vec::Drain<'_, OrderRequest> {
         self.buf.drain(..)
     }
