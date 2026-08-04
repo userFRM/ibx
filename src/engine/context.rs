@@ -994,6 +994,11 @@ impl Context {
     }
 
     /// Mark all live open orders as Uncertain (auth disconnect — status may have changed).
+    ///
+    /// The engine stops believing these statuses at this point and the API
+    /// layer went on reporting them, so `req_open_orders` kept asserting a
+    /// status the engine no longer had (ibx#251). Pair with `uncertain_orders`
+    /// to tell the application.
     pub fn mark_orders_uncertain(&mut self) {
         for order in self.open_orders.values_mut() {
             match order.status {
@@ -1004,6 +1009,14 @@ impl Context {
                 _ => {}
             }
         }
+    }
+
+    /// Orders still Uncertain — those the reconnect did not account for.
+    pub fn uncertain_orders(&self) -> Vec<Order> {
+        self.open_orders.values()
+            .filter(|o| o.status == OrderStatus::Uncertain)
+            .copied()
+            .collect()
     }
 }
 

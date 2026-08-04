@@ -194,7 +194,7 @@ impl EClient {
                  update.remaining_qty as f64, 0.0f64, update.perm_id, parent_id, 0.0f64, 0i64, "", 0.0f64));
 
             // Track open orders
-            self.core.update_order_status(update.order_id, update.status, update.filled_qty as f64, update.remaining_qty as f64);
+            self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty as f64, update.remaining_qty as f64);
         }
 
         // Drain cancel rejects -> error
