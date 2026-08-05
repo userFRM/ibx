@@ -1,0 +1,95 @@
+name: build drift
+
+# The build number this client states at logon is a constant here, and the
+# vendor moves theirs every few weeks. Nothing notices, so this does: nightly,
+# it compares the two and keeps one issue open while they differ.
+#
+# It opens an issue rather than a pull request on purpose. What a client states
+# at logon decides what the server does with it, and that is a change to make
+# deliberately against a paper session, not one to merge unattended overnight.
+
+on:
+  schedule:
+    # Off-hour, off-minute: the version files are static and there is no
+    # reason to ask for them at the top of the hour with everyone else.
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: build-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: announced build vs published build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove the parsing before trusting the comparison
+        run: python3 .github/scripts/check_build_drift.py --self-check
+
+      - name: Compare
+        id: compare
+        run: |
+          set +e
+          out=$(python3 .github/scripts/check_build_drift.py 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          {
+            echo "report<<EOF"
+            echo "$out"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "drifted=$([ $status -eq 0 ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+          # Drift is the thing being reported, not a failure of the job. Only a
+          # check that could not run at all should fail here.
+          [ $status -le 1 ]
+
+      - name: Report
+        if: steps.compare.outputs.drifted == 'true'
+        uses: actions/github-script@v7
+        env:
+          REPORT: ${{ steps.compare.outputs.report }}
+        with:
+          script: |
+            const title = 'Announced build is behind the published one';
+            const body = [
+              'The build this client states at logon no longer matches what the vendor ships.',
+              '',
+              '```',
+              process.env.REPORT.trim(),
+              '```',
+              '',
+              'The constants are `IB_BUILD` and `IB_VERSION` in `src/config.rs`.',
+              '',
+              'A stale build is tolerated today because the logon marks the client as a',
+              'rolling-release build, which skips the server\'s allow-list check. That is one',
+              'flag between these constants and a refused login, so the gap is worth closing —',
+              'against a paper session, since what is stated at logon decides what the server',
+              'does with the session.',
+              '',
+              `_Checked ${new Date().toISOString().slice(0, 10)} by \`.github/workflows/build-drift.yml\`._`,
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'build-drift', per_page: 1,
+            });
+            if (open.data.length) {
+              // One issue, kept current. A new one every night is noise.
+              await github.rest.issues.update({
+                owner, repo, issue_number: open.data[0].number, body,
+              });
+              core.notice(`updated #${open.data[0].number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner, repo, title, body, labels: ['build-drift'],
+              });
+              core.notice(`opened #${created.data.number}`);
+            }
