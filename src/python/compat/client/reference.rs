@@ -288,8 +288,8 @@ impl EClient {
         // Released before the callback below — see the note in
         // req_completed_orders (ibx#268).
         let shared = self.shared.lock().unwrap().clone();
-        if let Some(shared) = shared {
-            if let Some(rule) = shared.reference.market_rule(market_rule_id) {
+        if let Some(shared) = shared
+            && let Some(rule) = shared.reference.market_rule(market_rule_id) {
                 let increments: Vec<(f64, f64)> = rule.price_increments.iter()
                     .map(|pi| (pi.low_edge, pi.increment)).collect();
                 let list = pyo3::types::PyList::new(py, increments.iter().map(|(low, inc)| {
@@ -298,7 +298,6 @@ impl EClient {
                 self.wrapper.call_method1(py, "market_rule", (market_rule_id as i64, list.as_any()))?;
                 return Ok(());
             }
-        }
         log::warn!("req_market_rule: rule {market_rule_id} not in cache");
         Ok(())
     }

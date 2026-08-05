@@ -293,13 +293,12 @@ impl Connection {
 
             // 8=O binary protocol: length-delimited via tag 9
             if self.buf.starts_with(b"8=O\x01") {
-                if let Some(total) = binary_msg_length(&self.buf) {
-                    if self.buf.len() >= total {
+                if let Some(total) = binary_msg_length(&self.buf)
+                    && self.buf.len() >= total {
                         let msg: Vec<u8> = self.buf.drain(..total).collect();
                         frames.push(Frame::Binary(msg));
                         continue;
                     }
-                }
                 break; // incomplete
             }
 
@@ -307,25 +306,23 @@ impl Connection {
             // (body length in tag 9, no checksum trailer). Extracted as Control
             // frames and ignored downstream (ibx#185).
             if self.buf.starts_with(b"8=1\x01") || self.buf.starts_with(b"8=X\x01") {
-                if let Some(total) = binary_msg_length(&self.buf) {
-                    if self.buf.len() >= total {
+                if let Some(total) = binary_msg_length(&self.buf)
+                    && self.buf.len() >= total {
                         let msg: Vec<u8> = self.buf.drain(..total).collect();
                         frames.push(Frame::Control(msg));
                         continue;
                     }
-                }
                 break; // incomplete
             }
 
             // FIX.4.1: length-delimited via tag 9, +7 for checksum "10=XXX\x01"
             if self.buf.starts_with(b"8=FIX.") {
-                if let Some(total) = fix_msg_length(&self.buf) {
-                    if self.buf.len() >= total {
+                if let Some(total) = fix_msg_length(&self.buf)
+                    && self.buf.len() >= total {
                         let msg: Vec<u8> = self.buf.drain(..total).collect();
                         frames.push(Frame::Fix(msg));
                         continue;
                     }
-                }
                 break; // incomplete
             }
 

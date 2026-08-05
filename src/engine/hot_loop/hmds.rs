@@ -547,9 +547,9 @@ impl HmdsState {
                             }
                         }
                         "10005" => {
-                            if let Some(xml) = parsed.get(&6118) {
-                                if let Some(result) = crate::control::scanner::parse_scanner_response(xml) {
-                                    if let Some((_, req_id)) = self.pending_scanner.first() {
+                            if let Some(xml) = parsed.get(&6118)
+                                && let Some(result) = crate::control::scanner::parse_scanner_response(xml)
+                                    && let Some((_, req_id)) = self.pending_scanner.first() {
                                         let req_id = *req_id;
                                         // ScanResponse only carries con_ids; contract metadata must be
                                         // resolved via 35=c on CCP. Park results with cache-miss con_ids
@@ -564,8 +564,6 @@ impl HmdsState {
                                             shared.reference.push_scanner_data(req_id, result);
                                         }
                                     }
-                                }
-                            }
                         }
                         "10032" => {
                             let raw_bytes = extract_raw_tag(msg, 96);
@@ -574,11 +572,10 @@ impl HmdsState {
                                 if is_article {
                                     if let Some(pos) = self.pending_articles.iter().position(|_| true) {
                                         let (_, req_id) = self.pending_articles.remove(pos);
-                                        if let Some(raw) = &raw_bytes {
-                                            if let Some((atype, text)) = crate::control::news::parse_article_payload(raw) {
+                                        if let Some(raw) = &raw_bytes
+                                            && let Some((atype, text)) = crate::control::news::parse_article_payload(raw) {
                                                 shared.reference.push_news_article(req_id, atype, text);
                                             }
-                                        }
                                     }
                                 } else if let Some(pos) = self.pending_news.iter().position(|_| true) {
                                     let (_, req_id) = self.pending_news.remove(pos);
