@@ -857,9 +857,12 @@ fn is_trigger_only(ord_type: u8) -> bool {
 fn push_contract_identity(
     fields: &mut Vec<(u32, String)>, context: &Context, instrument: crate::types::InstrumentId,
 ) {
-    let Some((expiry, strike, right, multiplier)) = context.market.order_identity(instrument) else {
+    let Some(id) = context.market.order_identity(instrument) else {
         return;
     };
+    let crate::engine::market_state::OrderIdentity {
+        expiry, strike, right, multiplier, trading_class, local_symbol,
+    } = id;
     // MaturityMonthYear, with a full date in it where the contract has one.
     // The definition *lookup* must split these — an option asked for by date on
     // tag 200 matches nothing — but an order is not a search, and the venue
@@ -867,6 +870,12 @@ fn push_contract_identity(
     // accepted, checked against a live session. Do not "fix" this to match the
     // lookup; it was tried, and it breaks the path that works.
     if !expiry.is_empty() { fields.push((200, expiry)); }
+    // What tells one contract in a family from another where the maturity does
+    // not. The terminal writes both alongside the symbol and the security type;
+    // sending neither left a futures order naming a family and no member of it,
+    // which the venue called ambiguous.
+    if !trading_class.is_empty() { fields.push((6058, trading_class)); }
+    if !local_symbol.is_empty() { fields.push((6035, local_symbol)); }
     if strike.parse::<f64>().unwrap_or(0.0) > 0.0 { fields.push((202, strike)); }
     // PutOrCall is a code on this wire, not the letter: Call = 1, Put = 0, the
     // same mapping the security-definition request uses. Sending "C" would name
