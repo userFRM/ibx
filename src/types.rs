@@ -510,8 +510,13 @@ pub enum OrderKind {
     SnapMkt { offset: Price },
     SnapMid { offset: Price },
     SnapPri { offset: Price },
-    PegMkt { offset: Price },
-    PegMid { offset: Price },
+    /// Pegs to the market price, offset by `offset`, with `price_cap` as the
+    /// worst price it may reach. The cap rides the limit-price tag, which the
+    /// gateway wants on both peg types — a pegged order sent without one is
+    /// refused for an invalid limit price. Zero states no cap.
+    PegMkt { offset: Price, price_cap: Price },
+    /// Pegs to the midpoint of the NBBO, capped the same way.
+    PegMid { offset: Price, price_cap: Price },
     Rel { offset: Price },
     /// Stop that converts to another order type once `trigger_price` is hit.
     /// Tags: 6257=1, 6261=adjusted type, 6258=trigger, 6259=adjusted stop,
@@ -788,7 +793,7 @@ impl OrderRequest {
                 OrderKind::TrailingStop { trail_amt, trail_stop_price } => { s(trail_amt); s(trail_stop_price); }
                 OrderKind::TrailingStopLimit { lmt_offset, trail_amt, trail_stop_price } => { s(lmt_offset); s(trail_amt); s(trail_stop_price); }
                 OrderKind::MidPrice { price_cap } => s(price_cap),
-                OrderKind::PegMkt { offset } | OrderKind::PegMid { offset }
+                OrderKind::PegMkt { offset, .. } | OrderKind::PegMid { offset, .. }
                 | OrderKind::Rel { offset } => s(offset),
             },
         }

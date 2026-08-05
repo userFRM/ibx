@@ -2054,11 +2054,13 @@ impl ClientCore {
             }
             "PEG MKT" => {
                 let offset = (order.aux_price * PRICE_SCALE_F) as i64;
-                ex(OrderKind::PegMkt { offset })
+                let price_cap = (order.lmt_price * PRICE_SCALE_F) as i64;
+                ex(OrderKind::PegMkt { offset, price_cap })
             }
             "PEG MID" | "PEG MIDPT" => {
                 let offset = (order.aux_price * PRICE_SCALE_F) as i64;
-                ex(OrderKind::PegMid { offset })
+                let price_cap = (order.lmt_price * PRICE_SCALE_F) as i64;
+                ex(OrderKind::PegMid { offset, price_cap })
             }
             "MIDPX" | "MIDPRICE" => {
                 let cap = (order.lmt_price * PRICE_SCALE_F) as i64;
