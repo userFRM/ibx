@@ -1856,6 +1856,41 @@ impl ClientCore {
     /// An empty `sec_type` is treated as STK (the engine default), so existing
     /// stock callers that omit the field are unaffected.
     /// See: <https://github.com/deepentropy/ibx/issues/202>
+    /// Refuse an order carrying an instruction this does not send.
+    ///
+    /// The compatible order struct has a field for everything the vendor's API
+    /// has, and most of them reach no encoder. For the ones listed here that is
+    /// not a missing nicety: dropping a volatility makes a volatility order a
+    /// plain limit, dropping a hedge or a delta-neutral leg leaves a position
+    /// unhedged, dropping a scale turns a worked order into one order for the
+    /// whole size, and dropping a short-sale slot or its exemption is a
+    /// regulatory answer nobody gave. Each of those is a different trade from
+    /// the one asked for, so each is refused by name rather than placed.
+    ///
+    /// Fields whose absence changes nothing about the execution — a reference
+    /// string, a routing preference, MiFID reporting — are not listed and do
+    /// not refuse. They are still dropped.
+    pub fn validate_supported_instructions(o: &ApiOrder) -> Result<(), String> {
+        let mut unsent: Vec<&str> = Vec::new();
+        if o.volatility != f64::MAX || o.volatility_type != 0 { unsent.push("volatility"); }
+        if !o.delta_neutral_order_type.is_empty() { unsent.push("deltaNeutralOrderType"); }
+        if !o.hedge_type.is_empty() { unsent.push("hedgeType"); }
+        if o.scale_init_level_size != i32::MAX || o.scale_price_increment != f64::MAX {
+            unsent.push("scale");
+        }
+        if o.short_sale_slot != 0 { unsent.push("shortSaleSlot"); }
+        if o.percent_offset != f64::MAX { unsent.push("percentOffset"); }
+        if unsent.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "this order sets {}, which is not sent — the order placed would be a \
+             different one from the order asked for. Remove it, or place the trade \
+             it describes directly.",
+            unsent.join(", "),
+        ))
+    }
+
     /// Refuse an order whose contract is made of legs.
     ///
     /// The legs are carried on the contract and never reach the wire, so an
@@ -2743,6 +2778,25 @@ mod contract_gate_tests {
 
         // A spread's legs are carried and not sent, so an order for one would
         // be an order for something else. Refused until they are encoded.
+        // An instruction that is carried and not sent makes the order a
+        // different one, so it is refused by name.
+        use crate::api::types::Order as ApiOrder;
+        let plain = ApiOrder::default();
+        assert!(ClientCore::validate_supported_instructions(&plain).is_ok(), "a plain order is fine");
+        for (label, mut o) in [
+            ("volatility", ApiOrder { volatility: 0.25, ..ApiOrder::default() }),
+            ("hedge", ApiOrder { hedge_type: "D".into(), ..ApiOrder::default() }),
+            ("delta neutral", ApiOrder { delta_neutral_order_type: "MKT".into(), ..ApiOrder::default() }),
+            ("scale", ApiOrder { scale_init_level_size: 100, ..ApiOrder::default() }),
+            ("short sale slot", ApiOrder { short_sale_slot: 2, ..ApiOrder::default() }),
+            ("percent offset", ApiOrder { percent_offset: 0.5, ..ApiOrder::default() }),
+        ] {
+            o.action = "BUY".into();
+            let err = ClientCore::validate_supported_instructions(&o)
+                .expect_err("{label} must be refused, not silently dropped");
+            assert!(err.contains("not sent"), "{label}: {err}");
+        }
+
         assert!(ClientCore::validate_combo_legs("STK", 0).is_ok(), "an ordinary contract has none");
         assert!(ClientCore::validate_combo_legs("OPT", 2).is_err(), "legs on any type are refused");
         assert!(ClientCore::validate_combo_legs("BAG", 0).is_err(), "and so is a combination with none listed");
