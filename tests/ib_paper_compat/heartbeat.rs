@@ -40,17 +40,33 @@ pub(super) fn phase_farm_heartbeat_keepalive(conns: Conns) -> Conns {
     );
     let join = run_hot_loop(hot_loop);
 
+    // A farm drop is deliberately silent: the engine recovers it without
+    // telling anyone, which is what `Event::Disconnected` not being emitted
+    // for one means. So waiting for that event tested nothing about the farm,
+    // and caught the auth connection dropping instead — a real event, from the
+    // other transport, about something this phase does not claim to test.
+    //
+    // What the farm heartbeat is for is the server not closing the socket
+    // while nothing is being asked of it. So: wait out two intervals, then ask
+    // the socket.
     let start = Instant::now();
-    let mut disconnected = false;
+    let mut auth_dropped = false;
     while start.elapsed() < Duration::from_secs(65) {
-        if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(500)) { disconnected = true; break; }
+        if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(500)) {
+            auth_dropped = true;
+        }
     }
 
     let elapsed = start.elapsed();
-    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+    let mut conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    assert!(!disconnected, "Farm disconnected after {:.1}s — heartbeat failed", elapsed.as_secs_f64());
-    println!("  PASS ({:.1}s, no disconnect, survived 2x farm heartbeat interval)\n", elapsed.as_secs_f64());
+    // Alive answers WouldBlock, which is `Ok`; a closed socket answers `Err`.
+    let farm_alive = conns.farm.try_recv().is_ok();
+    if auth_dropped {
+        println!("  (the auth connection dropped during this phase, which is the other transport)");
+    }
+    assert!(farm_alive, "Farm socket closed after {:.1}s — heartbeat failed", elapsed.as_secs_f64());
+    println!("  PASS ({:.1}s, farm still open across 2x its heartbeat interval)\n", elapsed.as_secs_f64());
     conns
 }
 
@@ -104,7 +120,8 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
 
     let reclaimed = shutdown_and_reclaim(&control_tx, join, account_id.clone());
 
-    println!("  Timeout at {:.1}s (expected ~21s)", elapsed.as_secs_f64());
+    println!("  Timeout at {:.1}s (warm-up ends at {:.0}s)",
+        elapsed.as_secs_f64(), detect_at.as_secs_f64());
     println!("  on_disconnect emitted at least once");
     println!("  Loop survived timeout (graceful shutdown succeeded)");
     println!("  PASS\n");
