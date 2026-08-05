@@ -477,6 +477,19 @@ fn non_stock_order_phases_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// The nightly-maintenance case: the farm goes away and comes back by itself.
+#[test]
+fn farm_recovery_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() { Some(c) => c, None => return };
+    let (gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let (data_resumed, healthy) = connection::phase_farm_recovers_with_credentials(gw, conns, &config);
+    assert!(data_resumed, "the farm did not come back on its own and resume data");
+    assert!(healthy, "data resumed but the connection still reports itself lost");
+}
+
 /// The multi-condition order, which a change to the condition encoder broke.
 #[test]
 fn multi_condition_phase_live() {
