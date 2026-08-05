@@ -30,6 +30,11 @@ CHANNELS = {
     "stable": "https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json",
 }
 
+# Only one channel decides whether this reports. The other is printed for
+# context and nothing more: a check that reports every night reports nothing,
+# because the issue it keeps open stops being read after the second one.
+TRACKED = "stable"
+
 
 def unwrap(body):
     """The version files are served as JSONP: `name_callback({...});`."""
@@ -83,18 +88,20 @@ def main():
         build, version = announced(f.read())
     print(f"this client announces build {build}, letter {version!r}")
 
-    drifted = []
+    drifted = None
     for channel, url in CHANNELS.items():
         with urllib.request.urlopen(url, timeout=30) as r:
             published = unwrap(r.read().decode())["buildVersion"]
-        their_build, their_version = split_version(published)
-        match = "same" if (their_build, their_version) == (build, version) else "DIFFERENT"
-        print(f"  {channel:>6}: {published}  -> build {their_build}, letter {their_version!r}  [{match}]")
-        if match == "DIFFERENT":
-            drifted.append(f"{channel} is {published}")
+        their = split_version(published)
+        tracked = channel == TRACKED
+        note = "tracked" if tracked else "for context"
+        state = "same" if their == (build, version) else "DIFFERENT"
+        print(f"  {channel:>6}: {published}  -> build {their[0]}, letter {their[1]!r}  [{state}, {note}]")
+        if tracked and their != (build, version):
+            drifted = published
 
     if drifted:
-        print("\ndrift: " + "; ".join(drifted))
+        print(f"\ndrift: the {TRACKED} channel is {drifted}")
         return 1
     return 0
 
