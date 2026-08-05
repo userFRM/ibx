@@ -471,6 +471,8 @@ impl Order {
             not_held: self.not_held,
             order_ref: self.order_ref.clone(),
             open_close: self.open_close.clone(),
+            scale: self.scale_attrs(),
+            delta_neutral: self.delta_neutral_attrs(),
             // Valid trigger-method codes only (ibx#223): the raw `as u8`
             // cast wrapped the gateway's -1 (Unknown) to 255, and
             // out-of-range codes went to the wire verbatim. Anything
@@ -494,6 +496,43 @@ impl Order {
     }
 
     /// Check if the order has any extended attributes set.
+    /// The ladder this order describes, if it describes one.
+    ///
+    /// `i32::MAX` and `f64::MAX` are this API's "not set", so a field left
+    /// alone contributes nothing and an order that sets none has no ladder.
+    fn scale_attrs(&self) -> Option<Box<crate::types::ScaleAttrs>> {
+        let sized = self.scale_init_level_size != i32::MAX;
+        let stepped = self.scale_price_increment != f64::MAX;
+        if !sized && !stepped {
+            return None;
+        }
+        let px = |v: f64| if v == f64::MAX { 0 } else { (v * PRICE_SCALE_F) as i64 };
+        let n = |v: i32| if v == i32::MAX { 0 } else { v.max(0) as u32 };
+        Some(Box::new(crate::types::ScaleAttrs {
+            init_level_size: n(self.scale_init_level_size),
+            subs_level_size: n(self.scale_subs_level_size),
+            price_increment: px(self.scale_price_increment),
+            profit_offset: px(self.scale_profit_offset),
+            price_adjust_value: px(self.scale_price_adjust_value),
+            price_adjust_interval: n(self.scale_price_adjust_interval),
+            auto_reset: self.scale_auto_reset,
+            random_percent: self.scale_random_percent,
+        }))
+    }
+
+    /// The hedging leg this order asks for, if it asks for one.
+    fn delta_neutral_attrs(&self) -> Option<Box<crate::types::DeltaNeutralAttrs>> {
+        if self.delta_neutral_order_type.is_empty() {
+            return None;
+        }
+        Some(Box::new(crate::types::DeltaNeutralAttrs {
+            order_type: self.delta_neutral_order_type.clone(),
+            aux_price: if self.delta_neutral_aux_price == f64::MAX { 0 }
+                       else { (self.delta_neutral_aux_price * PRICE_SCALE_F) as i64 },
+            con_id: self.delta_neutral_con_id as i64,
+        }))
+    }
+
     pub fn has_extended_attrs(&self) -> bool {
         self.display_size > 0
             || self.min_qty > 0
@@ -521,6 +560,9 @@ impl Order {
             || self.not_held
             || !self.order_ref.is_empty()
             || !self.open_close.is_empty()
+            || self.scale_init_level_size != i32::MAX
+            || self.scale_price_increment != f64::MAX
+            || !self.delta_neutral_order_type.is_empty()
     }
 }
 
@@ -1065,6 +1107,8 @@ mod tests {
             ("not_held", |o| o.not_held = true),
             ("order_ref", |o| o.order_ref = "ref-1".into()),
             ("open_close", |o| o.open_close = "O".into()),
+            ("scale", |o| o.scale_init_level_size = 100),
+            ("delta_neutral", |o| o.delta_neutral_order_type = "MKT".into()),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1077,6 +1121,7 @@ mod tests {
             all_or_none: _, trigger_method: _, cash_qty: _, conditions: _,
             conditions_cancel_order: _, conditions_ignore_rth: _,
             volatility: _, percent_offset: _, not_held: _, order_ref: _, open_close: _,
+            scale: _, delta_neutral: _,
         } = Order::default().attrs();
 
         assert!(
