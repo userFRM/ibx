@@ -438,6 +438,87 @@ fn query_error_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// The venue refuses a pegged-to-benchmark order naming a field the client does
+/// not send. Runs that one phase, because a rejection reason is the whole
+/// result and the full suite is a long way to read one line.
+#[test]
+fn peg_bench_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+        .expect("Gateway::connect() failed");
+    let conns = Conns {
+        farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone(),
+    };
+
+    let conns = orders::phase_peg_bench_order(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
+/// The six algo phases were all refused on the same field, so they answer as a
+/// group and are cheaper to ask that way than through the whole suite.
+#[test]
+fn vwap_algo_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+        .expect("Gateway::connect() failed");
+    let conns = Conns {
+        farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone(),
+    };
+    let mut conns = conns;
+    for phase in [
+        orders::phase_vwap_order as fn(Conns) -> Conns,
+        orders::phase_twap_order,
+        orders::phase_arrival_px_order,
+        orders::phase_close_px_order,
+        orders::phase_dark_ice_order,
+        orders::phase_pct_vol_order,
+    ] {
+        conns = phase(conns);
+        conns = ensure_ccp_alive(conns, &mut gw, &config);
+    }
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
+/// The fill-or-cancel phase that fails intermittently, on its own and several
+/// times over. An intermittent failure needs repetition more than it needs the
+/// hundred-odd phases that happen to run before it.
+#[test]
+fn box_top_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+        .expect("Gateway::connect() failed");
+    let mut conns = Conns {
+        farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone(),
+    };
+
+    let rounds: usize = std::env::var("BOX_TOP_ROUNDS")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    for i in 0..rounds {
+        println!("=== round {} of {rounds} ===", i + 1);
+        conns = orders::phase_box_top_order(conns);
+        conns = ensure_ccp_alive(conns, &mut gw, &config);
+    }
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// ibx#191 PR A focused live entry — validates that after a full disconnect,
 /// a fresh `Gateway::connect` receives the CCP recovery push (35=8 with
 /// 150=0/39=0 per ib-agent#155) and that a subsequent

@@ -496,6 +496,20 @@ pub enum OrderKind {
     /// Trailing stop by percentage. Basis points: 100 = 1%.
     /// `trail_stop_price` is the optional initial stop trigger (tag 6117); 0 = not set.
     TrailPct { trail_pct: u32, trail_stop_price: Price },
+    /// Pegged to a benchmark contract's price.
+    ///
+    /// `ref_exchange` is where the reference contract is quoted, by name. The
+    /// field it travels in refuses a number, and the gateway will not accept
+    /// the order without it or without the units field the encoder supplies.
+    PegBench {
+        price: Price,
+        ref_con_id: u32,
+        is_peg_decrease: bool,
+        pegged_change_amount: Price,
+        ref_change_amount: Price,
+        starting_price: Price,
+        ref_exchange: String,
+    },
     Moc,
     Loc { price: Price },
     Mit { stop_price: Price },
@@ -625,21 +639,6 @@ pub enum OrderRequest {
     /// Algorithmic order: limit order with IB algo strategy overlay (VWAP, TWAP, etc.).
     /// Pegged to Benchmark: pegs to a benchmark instrument's price. OrdType PB.
     /// Companion tags: 6941=refConId, 6938=isPegDecrease, 6939=pegChangeAmt, 6942=refChangeAmt.
-    SubmitPegBench {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        price: Price,
-        ref_con_id: u32,
-        is_peg_decrease: bool,
-        pegged_change_amount: Price,
-        ref_change_amount: Price,
-        /// The price the peg is measured from. The gateway requires it
-        /// ("Message must contain field # 99") and refuses the order without
-        /// one, so a peg to a benchmark could not be placed at all.
-        starting_price: Price,
-    },
     /// Limit order for auction (TIF=AUC, tag 59=8). Participates in exchange opening/closing auction.
     SubmitLimitAuc {
         order_id: OrderId,
@@ -712,7 +711,6 @@ impl OrderRequest {
             | Self::SubmitLimitIoc { order_id, .. }
             | Self::SubmitLimitFok { order_id, .. }
             | Self::SubmitLimitOpg { order_id, .. }
-            | Self::SubmitPegBench { order_id, .. }
             | Self::SubmitLimitAuc { order_id, .. }
             | Self::SubmitMtlAuc { order_id, .. }
             | Self::SubmitLimitFractional { order_id, .. }
@@ -734,7 +732,6 @@ impl OrderRequest {
             | Self::SubmitLimitIoc { instrument, .. }
             | Self::SubmitLimitFok { instrument, .. }
             | Self::SubmitLimitOpg { instrument, .. }
-            | Self::SubmitPegBench { instrument, .. }
             | Self::SubmitLimitAuc { instrument, .. }
             | Self::SubmitMtlAuc { instrument, .. }
             | Self::SubmitLimitFractional { instrument, .. }
@@ -768,14 +765,14 @@ impl OrderRequest {
             Self::SubmitBracket { entry_price, take_profit, stop_loss, .. } => {
                 s(entry_price); s(take_profit); s(stop_loss);
             }
-            Self::SubmitPegBench { price, pegged_change_amount, ref_change_amount, .. } => {
-                s(price); s(pegged_change_amount); s(ref_change_amount);
-            }
             Self::SubmitEx { kind, .. } => match kind {
                 OrderKind::Market | OrderKind::Moc | OrderKind::Mtl | OrderKind::MktPrt
                 | OrderKind::SnapMkt { .. } | OrderKind::SnapMid { .. }
                 | OrderKind::SnapPri { .. } => {}
                 OrderKind::TrailPct { trail_stop_price, .. } => s(trail_stop_price),
+                OrderKind::PegBench {
+                    price, pegged_change_amount, ref_change_amount, starting_price, ..
+                } => { s(price); s(pegged_change_amount); s(ref_change_amount); s(starting_price); }
                 OrderKind::Adaptive { price, .. }
                 | OrderKind::Algo { price, .. }
                 | OrderKind::WhatIf { price } => s(price),

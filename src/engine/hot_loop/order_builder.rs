@@ -19,6 +19,7 @@ pub(crate) fn drain_and_send_orders(
     shared: &Arc<SharedState>,
     // Whether a reconnect's recovery is still settling what the broker holds.
     recovery_pending: bool,
+    event_tx: &Option<crossbeam_channel::Sender<crate::bridge::Event>>,
 ) {
     // If CCP is disconnected, leave orders in the pending buffer for retry after reconnect.
     // See: https://github.com/deepentropy/ibx/issues/116
@@ -399,50 +400,6 @@ pub(crate) fn drain_and_send_orders(
                     (204, "0"),
                 ])
             }
-            OrderRequest::SubmitPegBench { order_id, instrument, side, qty, price,
-                ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
-                starting_price } => {
-                context.insert_order(crate::types::Order::new(
-                    order_id, instrument, side, qty, price, crate::types::ORD_PEG_BENCH, b'0', 0,
-                ));
-                let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{order_id}.{ver}");
-                let side_str = fix_side(side);
-                let qty_str = format_uint(qty as u64);
-                let price_str = format_price(price);
-                let symbol = context.market.symbol(instrument).to_string();
-                let (sec_type_str, destination) = context.market.order_routing(instrument);
-                let now = chrono_free_timestamp();
-                let ref_con_str = ref_con_id.to_string();
-                let peg_decrease_str = if is_peg_decrease { "1" } else { "0" };
-                let peg_change_str = format_price(pegged_change_amount);
-                let ref_change_str = format_price(ref_change_amount);
-                let starting_price_str = format_price(starting_price);
-                conn.send_fix(&[
-                    (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
-                    (fix::TAG_SENDING_TIME, &now),
-                    (11, &clord_str),
-                    (1, account_id),
-                    (21, "2"),
-                    (55, &symbol),
-                    (54, side_str),
-                    (38, &qty_str),
-                    (40, "PB"),          // OrdType = Pegged to Benchmark
-                    (44, &price_str),    // Limit price
-                    (59, "0"),
-                    (60, &now),
-                    (167, &sec_type_str),
-                    (100, &destination),
-                    (6210, &destination),
-                    (15, "USD"),
-                    (204, "0"),
-                    (6941, &ref_con_str),      // referenceContractId
-                    (6938, peg_decrease_str),   // isPeggedChangeAmountDecrease
-                    (6939, &peg_change_str),    // peggedChangeAmount
-                    (6942, &ref_change_str),    // referenceChangeAmount
-                    (99, &starting_price_str),  // startingPrice
-                ])
-            }
             OrderRequest::SubmitLimitAuc { order_id, instrument, side, qty, price } => {
                 context.insert_order(crate::types::Order::new(
                     order_id, instrument, side, qty, price, b'2', b'8', 0,
@@ -559,7 +516,7 @@ pub(crate) fn drain_and_send_orders(
                     (60, &now),         // TransactTime
                 ]);
                 if result.is_ok() {
-                    synthesize_pending_cancel(context, shared, order_id);
+                    synthesize_pending_cancel(context, shared, order_id, event_tx);
                 }
                 result
             }
@@ -585,7 +542,7 @@ pub(crate) fn drain_and_send_orders(
                         (60, &now),
                     ]);
                     if last_result.is_ok() {
-                        synthesize_pending_cancel(context, shared, oid);
+                        synthesize_pending_cancel(context, shared, oid, event_tx);
                     }
                 }
                 last_result
@@ -799,7 +756,7 @@ pub(crate) fn drain_and_send_orders(
                         context.insert_order(prior);
                     }
                     context.set_order_status_forced(oid, OrderStatus::Uncertain);
-                    shared.orders.push_order_update(OrderUpdate {
+                    let update = OrderUpdate {
                         order_id: oid,
                         instrument: 0,
                         status: OrderStatus::Uncertain,
@@ -808,7 +765,14 @@ pub(crate) fn drain_and_send_orders(
                         perm_id: 0,
                         parent_id: 0,
                         timestamp_ns: 0,
-                    });
+                    };
+                    shared.orders.push_order_update(update);
+                    // An order whose state is no longer known is the one thing
+                    // a caller must not have to ask for. It was recorded and
+                    // not announced, so a caller reading the event channel —
+                    // told this is a second delivery of everything, not a
+                    // lesser one — was not told at all.
+                    crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::OrderUpdate(update));
                 }
             }
         }
@@ -835,12 +799,13 @@ fn synthesize_pending_cancel(
     context: &mut Context,
     shared: &Arc<SharedState>,
     order_id: crate::types::OrderId,
+    event_tx: &Option<crossbeam_channel::Sender<crate::bridge::Event>>,
 ) {
     if !context.update_order_status(order_id, OrderStatus::PendingCancel) {
         return; // unknown order, already terminal, or already pending-cancel
     }
     if let Some(order) = context.order(order_id).copied() {
-        shared.orders.push_order_update(OrderUpdate {
+        let update = OrderUpdate {
             order_id,
             instrument: order.instrument,
             status: OrderStatus::PendingCancel,
@@ -849,7 +814,9 @@ fn synthesize_pending_cancel(
             perm_id: 0,
             parent_id: 0,
             timestamp_ns: context.now_ns(),
-        });
+        };
+        shared.orders.push_order_update(update);
+        crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::OrderUpdate(update));
     }
 }
 
@@ -931,6 +898,7 @@ fn send_order_ex(
         K::Loc { price } => (b'B', price, 0),
         K::Mit { stop_price } => (b'J', stop_price, stop_price),
         K::Lit { price, stop_price } => (b'K', price, stop_price),
+        K::PegBench { price, .. } => (crate::types::ORD_PEG_BENCH, price, 0),
         K::Mtl => (b'K', 0, 0),
         K::MktPrt => (b'U', 0, 0),
         K::StpPrt { stop_price } => (crate::types::ORD_STP_PRT, 0, stop_price),
@@ -1069,6 +1037,24 @@ fn send_order_ex(
         // Both are OrdType "E" and are separated by ExecInst, which is what
         // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
         // OrdType sent the two as the same message, saying which peg neither.
+        K::PegBench {
+            ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
+            starting_price, ref ref_exchange, ..
+        } => {
+            fields.push((40, "PB".to_string()));
+            fields.push((6941, ref_con_id.to_string()));
+            fields.push((6938, if is_peg_decrease { "1".to_string() } else { "0".to_string() }));
+            fields.push((6939, format_price(pegged_change_amount).to_string()));
+            fields.push((6940, format_price(ref_change_amount).to_string()));
+            fields.push((6942, ref_exchange.clone()));
+            // Required — the gateway answers "Message must contain field #
+            // 6580" without it — and not read at submission: every value tried
+            // was accepted, including one that is not a number. Sent as the
+            // units the amounts above are already in, which is the reading that
+            // makes the rest of the message consistent.
+            fields.push((6580, "2".to_string()));
+            fields.push((99, format_price(starting_price).to_string()));
+        }
         K::PegMkt { .. } => {
             fields.push((40, "E".to_string()));
             fields.push((18, "P".to_string()));
@@ -1098,6 +1084,13 @@ fn send_order_ex(
         K::Algo { price, .. } => {
             fields.push((40, "2".to_string()));
             fields.push((44, format_price(price).to_string()));
+            // Same marker the adaptive wrapper carries: an order handed to an
+            // algo says so here, and the gateway refuses every one that does
+            // not with "Invalid value in field # 18" — which it also answers
+            // for a value that is merely the wrong one, so the six algo types
+            // were refused identically whether the field was absent or wrong.
+            fields.push((18, "e".to_string()));
+            has_base_exec_inst = true;
         }
         K::WhatIf { price } => {
             fields.push((40, "2".to_string()));
@@ -1476,18 +1469,18 @@ mod tests {
         );
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
         let msg = String::from_utf8_lossy(&buf[..n]);
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {}", msg);
-        assert_eq!(tag("40=").as_deref(), Some("3"), "the type the caller stated: {}", msg);
-        assert_eq!(tag("59=").as_deref(), Some("1"), "the tif the caller stated: {}", msg);
+        assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+        assert_eq!(tag("40=").as_deref(), Some("3"), "the type the caller stated: {msg}");
+        assert_eq!(tag("59=").as_deref(), Some("1"), "the tif the caller stated: {msg}");
         assert_eq!(tag("99="), Some(format_price(149 * crate::types::PRICE_SCALE).to_string()),
-            "the trigger the caller stated: {}", msg);
+            "the trigger the caller stated: {msg}");
     }
 
     /// The trigger is a price and lands on the instrument's grid like any
@@ -1514,7 +1507,7 @@ mod tests {
         context.modify_ex(42, 150 * crate::types::PRICE_SCALE, 100, false, b'3', b'0', off_grid);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1523,7 +1516,7 @@ mod tests {
         assert_eq!(
             tag("99="),
             Some(format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100).to_string()),
-            "the trigger must be on the grid: {}", msg,
+            "the trigger must be on the grid: {msg}",
         );
     }
 
@@ -1550,7 +1543,7 @@ mod tests {
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
 
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true, &None);
         peer.set_read_timeout(Some(std::time::Duration::from_millis(50))).unwrap();
         let mut buf = [0u8; 512];
         assert!(
@@ -1564,7 +1557,7 @@ mod tests {
             43, instrument, Side::Buy, 1, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
         ));
         context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 43 });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true, &None);
         let n = std::io::Read::read(&mut peer, &mut buf).unwrap_or(0);
         assert!(
             String::from_utf8_lossy(&buf[..n]).contains("35=F"),
@@ -1572,7 +1565,7 @@ mod tests {
         );
 
         // Once it has settled, the held one goes too.
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
         let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
         assert!(
             String::from_utf8_lossy(&buf[..n]).contains("35=F"),
@@ -1606,7 +1599,18 @@ mod tests {
 
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &Some(tx));
+
+        // Both deliveries, because the event channel is documented as a second
+        // delivery of everything rather than a lesser one — and an order whose
+        // state is no longer known is the last thing to deliver only once.
+        let events: Vec<_> = rx.try_iter().collect();
+        assert!(
+            events.iter().any(|e| matches!(e, crate::bridge::Event::OrderUpdate(u)
+                if u.order_id == 42 && u.status == crate::types::OrderStatus::Uncertain)),
+            "a caller reading events is told too: {events:?}",
+        );
 
         let updates = shared.orders.drain_order_updates();
         assert!(
@@ -1646,7 +1650,7 @@ mod tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.insert_order(crate::types::Order::new(
-            7, instrument, Side::Buy, 1, 1 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            7, instrument, Side::Buy, 1, crate::types::PRICE_SCALE, b'2', b'0', 0,
         ));
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
@@ -1657,7 +1661,7 @@ mod tests {
             new_order_id: 8, order_id: 7, price: 2 * crate::types::PRICE_SCALE,
             qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
         });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
         let n = peer.read(&mut buf).unwrap();
         let first = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
         assert!(first.contains("|41=7.0|"), "the first replace names the original: {first}");
@@ -1666,7 +1670,7 @@ mod tests {
             new_order_id: 9, order_id: 8, price: 3 * crate::types::PRICE_SCALE,
             qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
         });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
         let n = peer.read(&mut buf).unwrap();
         let second = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
         assert!(
@@ -1693,7 +1697,7 @@ mod tests {
         });
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1725,17 +1729,17 @@ mod tests {
         context.modify_ex(42, 151 * crate::types::PRICE_SCALE, 100, false, b'2', 0, 0);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
         let msg = String::from_utf8_lossy(&buf[..n]);
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("40=").as_deref(), Some("2"), "the stated type: {}", msg);
+        assert_eq!(tag("40=").as_deref(), Some("2"), "the stated type: {msg}");
         assert_eq!(tag("44=").as_deref(), Some(&*format_price(151 * crate::types::PRICE_SCALE)),
-            "the limit price: {}", msg);
-        assert_eq!(tag("99="), None, "and no trigger from the order it replaced: {}", msg);
+            "the limit price: {msg}");
+        assert_eq!(tag("99="), None, "and no trigger from the order it replaced: {msg}");
     }
 
     /// A modify that states none of them leaves what the resting order holds in
@@ -1758,21 +1762,21 @@ mod tests {
         context.modify(42, 151 * crate::types::PRICE_SCALE, 100, false);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
         let msg = String::from_utf8_lossy(&buf[..n]);
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("40=").as_deref(), Some("3"), "the resting type: {}", msg);
-        assert_eq!(tag("59=").as_deref(), Some("1"), "the resting tif: {}", msg);
+        assert_eq!(tag("40=").as_deref(), Some("3"), "the resting type: {msg}");
+        assert_eq!(tag("59=").as_deref(), Some("1"), "the resting tif: {msg}");
         // A stop has one price and it is the trigger, so the single price the
         // caller passed can only have meant that. Leaving 149 in place would
         // put 151 on no tag at all and move nothing.
         assert_eq!(tag("99="), Some(format_price(151 * crate::types::PRICE_SCALE).to_string()),
-            "the moved trigger: {}", msg);
-        assert!(!msg.contains("\u{1}44="), "a stop states no limit price: {}", msg);
+            "the moved trigger: {msg}");
+        assert!(!msg.contains("\u{1}44="), "a stop states no limit price: {msg}");
     }
     use super::*;
     use crate::types::Order;
@@ -1792,7 +1796,7 @@ mod tests {
         let shared = Arc::new(SharedState::new());
         context.insert_order(order(7, 3, OrderStatus::PartiallyFilled));
 
-        synthesize_pending_cancel(&mut context, &shared, 7);
+        synthesize_pending_cancel(&mut context, &shared, 7, &None);
 
         assert_eq!(context.order(7).unwrap().status, OrderStatus::PendingCancel);
         let updates = shared.orders.drain_order_updates();
@@ -1809,8 +1813,8 @@ mod tests {
         // Late cancel racing a fill: the order is done, no phase to report.
         context.insert_order(order(8, 10, OrderStatus::Filled));
 
-        synthesize_pending_cancel(&mut context, &shared, 8);
-        synthesize_pending_cancel(&mut context, &shared, 999);
+        synthesize_pending_cancel(&mut context, &shared, 8, &None);
+        synthesize_pending_cancel(&mut context, &shared, 999, &None);
 
         assert_eq!(context.order(8).unwrap().status, OrderStatus::Filled);
         assert!(shared.orders.drain_order_updates().is_empty());
@@ -2037,7 +2041,7 @@ mod modify_wire_tests {
 
         let shared = std::sync::Arc::new(SharedState::new());
         let mut hb = HeartbeatState::new();
-        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -2405,7 +2409,7 @@ mod outside_rth_polarity_tests {
 
         let shared = std::sync::Arc::new(SharedState::new());
         let mut hb = HeartbeatState::new();
-        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false, &None);
 
         let mut buf = vec![0u8; 8192];
         let n = peer.read(&mut buf).unwrap();

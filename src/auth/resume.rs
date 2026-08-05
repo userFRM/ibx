@@ -134,9 +134,8 @@ pub fn save(path: &Path, password: &str, session: &ResumableSession) -> io::Resu
 fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    let mut f = fs::OpenOptions::new()
-        .write(true).create(true).truncate(true).mode(0o600)
-        .open(path)?;
+    let mut f =
+        fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
     f.write_all(bytes)
 }
 

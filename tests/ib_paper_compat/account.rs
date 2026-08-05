@@ -446,7 +446,7 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
         let c = shared.reference.get_contract(pi.con_id)
             .unwrap_or_else(|| api::Contract { con_id: pi.con_id, ..Default::default() });
         let avg_cost = pi.avg_cost as f64 / PRICE_SCALE as f64;
-        wrapper.position(&account_id, &c, pi.position as f64, avg_cost);
+        wrapper.position(&account_id, &c, pi.position, avg_cost);
     }
 
     let gt_account = account_id.clone();
@@ -689,7 +689,7 @@ pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
         let c = shared.reference.get_contract(pi.con_id)
             .unwrap_or_else(|| api::Contract { con_id: pi.con_id, ..Default::default() });
         let avg_cost = pi.avg_cost as f64 / PRICE_SCALE as f64;
-        wrapper.position(&account_id, &c, pi.position as f64, avg_cost);
+        wrapper.position(&account_id, &c, pi.position, avg_cost);
     }
 
     let gt_account = account_id.clone();

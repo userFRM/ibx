@@ -1076,7 +1076,15 @@ impl FarmState {
         let active = self.take_resub_targets(&context.market);
         self.md_req_to_instrument.clear();
         self.instrument_md_reqs.clear();
-        for (instrument, con_id, sym, exch, st, ltd, strike, right, mult, mode) in active {
+        // Paced. A server that has just come back up is the least able to take
+        // a whole book of subscriptions at once, and the client that hands it
+        // one is the client it throttles.
+        for (i, (instrument, con_id, sym, exch, st, ltd, strike, right, mult, mode)) in
+            active.into_iter().enumerate()
+        {
+            if i > 0 && replay.burst > 0 && i.is_multiple_of(replay.burst) {
+                std::thread::sleep(replay.pace);
+            }
             self.send_mktdata_subscribe(con_id, &sym, &exch, &st, &ltd, strike, &right, &mult, instrument, mode, farm_conn, hb);
         }
 

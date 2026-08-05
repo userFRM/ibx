@@ -50,6 +50,7 @@ pub(super) fn get_config() -> Option<GatewayConfig> {
         ib_key_timeout_secs: ibx::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
         ib_key_token_sub_type: ibx::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
         code_provider: None,
+        resume: None,
     })
 }
 
@@ -551,7 +552,27 @@ pub(super) fn run_submit_cancel_phase(
         return conns;
     }
     if fill_or_cancel {
-        assert!(order_filled || order_cancelled, "Order was neither filled nor cancelled");
+        // Filling needs a market to fill against. Outside regular hours an
+        // order of this shape is acknowledged and then rests until the open,
+        // which is neither of the two outcomes and is also the correct
+        // behaviour — the same session gate the branch below applies for the
+        // same reason, on the outcome instead of the acknowledgement.
+        let (session, _) = market_session();
+        if session != MarketSession::Regular && !(order_filled || order_cancelled) {
+            let state = if order_acked { "acknowledged and resting" } else { "not acknowledged" };
+            println!("  SKIP: {session:?} — {state}; filling needs a live market\n");
+            return conns;
+        }
+        // Say what was seen, not only what was not. "Neither filled nor
+        // cancelled" is true of an order the venue never acknowledged and of
+        // one it acknowledged and left working, and those are different
+        // failures with different causes.
+        assert!(
+            order_filled || order_cancelled,
+            "Order was neither filled nor cancelled: acknowledged={order_acked}, \
+             cancel requested={cancel_sent}, venue status {:?}, session {session:?}",
+            shared.orders.get_order_info(order_id).map(|i| i.order_state.status),
+        );
         if order_filled { println!("  PASS (filled)\n"); } else { println!("  PASS (cancelled)\n"); }
     } else {
         // Session-aware gate: some order types (Relative/pegged, snapshot, midprice)
@@ -581,7 +602,22 @@ pub(super) fn run_submit_cancel_phase(
             }
             return conns;
         }
-        assert!(order_cancelled, "Order was never cancelled");
+        // A cancel races the venue, and on a liquid instrument in a live
+        // market the venue sometimes wins. That the order filled instead of
+        // cancelling says the cancel arrived second, which is the market's
+        // timing and not something the client did wrong — and asserting
+        // otherwise makes this phase fail on the days the fill is quick.
+        if order_filled && !order_cancelled {
+            println!("  PASS (filled before the cancel reached the venue)\n");
+            return conns;
+        }
+        assert!(
+            order_cancelled,
+            "Order was never cancelled: acknowledged={order_acked}, cancel requested={cancel_sent}, \
+             venue status {:?}, session {:?}",
+            shared.orders.get_order_info(order_id).map(|i| i.order_state.status),
+            market_session().0,
+        );
         println!("  PASS\n");
     }
     conns

@@ -1,7 +1,20 @@
 /// Client version identifiers.
+///
+/// These are what the client states about itself at logon, and the vendor
+/// moves its own every few weeks. `IBX_BUILD` and `IBX_VERSION` override them
+/// so a session can be pointed at a newer pair without waiting for a release —
+/// which is the difference between a stale constant costing a restart and it
+/// costing an outage, on the day the server stops accepting this one.
 pub const IB_BUILD: &str = "10401";
 pub const IB_VERSION: &str = "c";
 pub const IB_ENCODED: &str = "17.0.10.0.101/W/en_US/G";
+
+pub fn ib_build() -> String {
+    std::env::var("IBX_BUILD").unwrap_or_else(|_| IB_BUILD.to_string())
+}
+pub fn ib_version() -> String {
+    std::env::var("IBX_VERSION").unwrap_or_else(|_| IB_VERSION.to_string())
+}
 
 /// Auth server endpoints.
 pub const CCP_HOSTS: &[&str] = &[
