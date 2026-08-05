@@ -1039,20 +1039,17 @@ fn send_order_ex(
         // OrdType sent the two as the same message, saying which peg neither.
         K::PegBench {
             ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
-            starting_price, ref ref_exchange, ..
+            starting_price, stock_ref_price, ref ref_exchange, ..
         } => {
             fields.push((40, "PB".to_string()));
             fields.push((6941, ref_con_id.to_string()));
-            fields.push((6938, if is_peg_decrease { "1".to_string() } else { "0".to_string() }));
-            fields.push((6939, format_price(pegged_change_amount).to_string()));
-            fields.push((6940, format_price(ref_change_amount).to_string()));
+            // The change amount carries its own direction: there is no separate
+            // field saying which way it moves, so a decrease is a negative one.
+            let signed = if is_peg_decrease { -pegged_change_amount } else { pegged_change_amount };
+            fields.push((6938, format_price(signed).to_string()));
+            fields.push((6939, format_price(ref_change_amount).to_string()));
             fields.push((6942, ref_exchange.clone()));
-            // Required — the gateway answers "Message must contain field #
-            // 6580" without it — and not read at submission: every value tried
-            // was accepted, including one that is not a number. Sent as the
-            // units the amounts above are already in, which is the reading that
-            // makes the rest of the message consistent.
-            fields.push((6580, "2".to_string()));
+            fields.push((6580, format_price(stock_ref_price).to_string()));
             fields.push((99, format_price(starting_price).to_string()));
         }
         K::PegMkt { .. } => {
