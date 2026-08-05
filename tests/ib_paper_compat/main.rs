@@ -461,6 +461,22 @@ fn peg_bench_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// Forex and futures orders are both refused as unknown contracts. They ask
+/// the same question and are cheaper asked together.
+#[test]
+fn non_stock_order_phases_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() { Some(c) => c, None => return };
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let mut conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    conns = multi_asset::phase_forex_order(conns);
+    conns = ensure_ccp_alive(conns, &mut gw, &config);
+    conns = multi_asset::phase_futures_order(conns);
+    conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// The one condition type the venue refuses, on its own.
 #[test]
 fn time_condition_phase_live() {
