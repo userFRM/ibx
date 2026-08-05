@@ -221,6 +221,32 @@ mod order_replay_tests {
         }
     }
 
+    /// The connect-time replay names what the server thinks is working, and it
+    /// is published as it arrives. An order this client has already been paid
+    /// on must not come back from it as live.
+    #[test]
+    fn the_replay_does_not_resurrect_an_order_that_finished() {
+        let s = OrderState::new();
+        s.push_completed_order(crate::types::CompletedOrder {
+            order_id: 7, instrument: 0, status: OrderStatus::Filled,
+            filled_qty: 1, timestamp_ns: 0,
+        });
+
+        s.push_order_info(7, RichOrderInfo {
+            contract: Default::default(),
+            order: Default::default(),
+            order_state: crate::api::types::OrderState {
+                status: "Submitted".to_string(), ..Default::default()
+            },
+            last_exec: Default::default(),
+        });
+
+        assert!(
+            s.drain_open_orders().is_empty(),
+            "a filled order is not reported as working again by the replay",
+        );
+    }
+
     /// The gateway echoes a working status behind a fill. The order is retired
     /// by then, so the echo finds no record to be refused by and reported a
     /// filled order as working with nothing filled.
