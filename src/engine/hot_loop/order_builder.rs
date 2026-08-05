@@ -1210,29 +1210,22 @@ fn send_order_ex(
         for i in 0..attrs.conditions.len() {
             let base = 1 + i * 11;
             fields.push((6222, cond_strs[base].clone()));      // condType
-            // A condition states the fields it has and stays quiet about the
-            // rest. Sending every slot and leaving the inapplicable ones empty
-            // put an empty contract id on a time condition, which is not a
-            // contract id, and the gateway refused the whole condition for it —
-            // while price and volume conditions, which name a contract, went
-            // through and hid that this was general.
-            for (tag, slot) in [
-                (6137, 1),  // conjunction
-                (6126, 2),  // operator
-                (6123, 3),  // conId
-                (6124, 4),  // exchange
-                (6127, 5),  // triggerMethod
-                (6125, 6),  // price
-                (6223, 7),  // time
-                (6245, 8),  // percent
-                (6263, 9),  // volume
-                (6246, 10), // execution
-            ] {
-                let value = &cond_strs[base + slot];
-                if !value.is_empty() {
-                    fields.push((tag, value.clone()));
-                }
-            }
+            // Every slot, including the ones this condition has no use for.
+            // The terminal writes only what applies, and following it here was
+            // tried: it did not make the time condition acceptable, and it
+            // broke the multi-condition order, which is refused for a missing
+            // volume field the moment the price condition alongside it stops
+            // stating an empty one. The gateway is reading these positionally.
+            fields.push((6137, cond_strs[base + 1].clone()));  // conjunction
+            fields.push((6126, cond_strs[base + 2].clone()));  // operator
+            fields.push((6123, cond_strs[base + 3].clone()));  // conId
+            fields.push((6124, cond_strs[base + 4].clone()));  // exchange
+            fields.push((6127, cond_strs[base + 5].clone()));  // triggerMethod
+            fields.push((6125, cond_strs[base + 6].clone()));  // price
+            fields.push((6223, cond_strs[base + 7].clone()));  // time
+            fields.push((6245, cond_strs[base + 8].clone()));  // percent
+            fields.push((6263, cond_strs[base + 9].clone()));  // volume
+            fields.push((6246, cond_strs[base + 10].clone())); // execution
         }
     }
 

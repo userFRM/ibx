@@ -477,6 +477,32 @@ fn non_stock_order_phases_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// The multi-condition order, which a change to the condition encoder broke.
+#[test]
+fn multi_condition_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() { Some(c) => c, None => return };
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let conns = orders::phase_multi_condition_order(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
+/// The iceberg order, whose display size the venue keeps refusing.
+#[test]
+fn iceberg_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() { Some(c) => c, None => return };
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let conns = orders::phase_iceberg_order(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// The one condition type the venue refuses, on its own.
 #[test]
 fn time_condition_phase_live() {
