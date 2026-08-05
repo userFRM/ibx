@@ -563,7 +563,16 @@ pub(super) fn run_submit_cancel_phase(
             println!("  SKIP: {session:?} — {state}; filling needs a live market\n");
             return conns;
         }
-        assert!(order_filled || order_cancelled, "Order was neither filled nor cancelled");
+        // Say what was seen, not only what was not. "Neither filled nor
+        // cancelled" is true of an order the venue never acknowledged and of
+        // one it acknowledged and left working, and those are different
+        // failures with different causes.
+        assert!(
+            order_filled || order_cancelled,
+            "Order was neither filled nor cancelled: acknowledged={order_acked}, \
+             cancel requested={cancel_sent}, venue status {:?}, session {session:?}",
+            shared.orders.get_order_info(order_id).map(|i| i.order_state.status),
+        );
         if order_filled { println!("  PASS (filled)\n"); } else { println!("  PASS (cancelled)\n"); }
     } else {
         // Session-aware gate: some order types (Relative/pegged, snapshot, midprice)
