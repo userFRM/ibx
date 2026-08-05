@@ -1118,7 +1118,13 @@ impl HotLoop {
         let auth = match self.reconnect_auth.clone() {
             Some(a) if !a.host.is_empty() => a,
             _ => {
-                log::warn!("Farm auto-reconnect skipped: no credentials (host empty or auth missing)");
+                log::error!(
+                    "Farm is down and cannot be reconnected: no credentials were cached. \
+                     The connection has to be rebuilt by the caller.",
+                );
+                self.reconnect_halted = Some(retry::DisconnectReason::AuthorizationFailed);
+                self.shared.set_connection_lost();
+                emit(&self.event_tx, Event::Disconnected);
                 return;
             }
         };
@@ -1209,7 +1215,17 @@ impl HotLoop {
         let auth = match self.reconnect_auth.clone() {
             Some(a) if !a.host.is_empty() => a,
             _ => {
-                log::warn!("CCP auto-reconnect skipped: no credentials");
+                // Nothing to reconnect with, and nothing about waiting changes
+                // that. Retrying it quietly every minute leaves a caller on a
+                // dead trading connection with no way to learn it is dead —
+                // which is the state this whole path exists to avoid.
+                log::error!(
+                    "CCP is down and cannot be reconnected: no credentials were cached. \
+                     The connection has to be rebuilt by the caller.",
+                );
+                self.reconnect_halted = Some(retry::DisconnectReason::AuthorizationFailed);
+                self.shared.set_connection_lost();
+                emit(&self.event_tx, Event::Disconnected);
                 return;
             }
         };
@@ -1935,6 +1951,27 @@ mod tests {
             "and no prices for the next occupant's deltas to build on",
         );
         assert!(hl.pinned_by_position.is_empty(), "and nothing is still waiting on it");
+    }
+
+    /// A transport that is down and cannot be rebuilt is not a transport that
+    /// is recovering. Retrying it quietly leaves the caller on a dead trading
+    /// connection with nothing to tell them so.
+    #[test]
+    fn an_unrecoverable_transport_is_reported_rather_than_retried_in_silence() {
+        let shared = Arc::new(SharedState::new());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut hl = HotLoop::new(shared.clone(), Some(tx), None);
+        hl.ccp.disconnected = true;
+        // No credentials were ever cached, so there is nothing to reconnect with.
+
+        hl.spawn_ccp_reconnect();
+
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::Disconnected)),
+            "the caller is told the connection is gone",
+        );
+        assert!(shared.take_connection_lost(), "and a caller without an event channel too");
+        assert!(hl.reconnect_halted.is_some(), "and nothing keeps retrying what cannot work");
     }
 
     /// A login the server refused is refused the same way next time. Climbing
