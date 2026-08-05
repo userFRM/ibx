@@ -924,6 +924,26 @@ fn send_order_ex(
     if attrs.all_or_none && !has_base_exec_inst {
         fields.push((18, "G".to_string()));
     }
+    // Instructions the caller set that used to reach no encoder. Each changes
+    // what is traded, so each goes on the wire: a volatility order priced in
+    // volatility, an offset the venue works from, a discretion the floor is
+    // told about, the caller's own reference, and whether this opens a position
+    // or closes one.
+    if attrs.volatility > 0.0 {
+        fields.push((9816, format!("{:.6}", attrs.volatility)));
+    }
+    if attrs.percent_offset != f64::MAX {
+        fields.push((9822, format!("{:.6}", attrs.percent_offset)));
+    }
+    if attrs.not_held {
+        fields.push((6287, "1".to_string()));
+    }
+    if !attrs.order_ref.is_empty() {
+        fields.push((6010, attrs.order_ref.clone()));
+    }
+    if !attrs.open_close.is_empty() {
+        fields.push((77, attrs.open_close.clone()));
+    }
     if attrs.trigger_method > 0 {
         fields.push((6115, attrs.trigger_method.to_string()));
     }

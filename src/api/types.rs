@@ -464,6 +464,13 @@ impl Order {
             discretionary_amt: (self.discretionary_amt * PRICE_SCALE_F) as Price,
             sweep_to_fill: self.sweep_to_fill,
             all_or_none: self.all_or_none,
+            // `f64::MAX` is this API's "not set" for a price-like field, and
+            // it is not a volatility or an offset.
+            volatility: if self.volatility == f64::MAX { 0.0 } else { self.volatility },
+            percent_offset: self.percent_offset,
+            not_held: self.not_held,
+            order_ref: self.order_ref.clone(),
+            open_close: self.open_close.clone(),
             // Valid trigger-method codes only (ibx#223): the raw `as u8`
             // cast wrapped the gateway's -1 (Unknown) to 255, and
             // out-of-range codes went to the wire verbatim. Anything
@@ -509,6 +516,11 @@ impl Order {
             || self.conditions_cancel_order
             || self.conditions_ignore_rth
             || self.oca_type > 0
+            || (self.volatility != f64::MAX && self.volatility > 0.0)
+            || self.percent_offset != f64::MAX
+            || self.not_held
+            || !self.order_ref.is_empty()
+            || !self.open_close.is_empty()
     }
 }
 
@@ -1048,6 +1060,11 @@ mod tests {
             )),
             ("conditions_cancel_order", |o| o.conditions_cancel_order = true),
             ("conditions_ignore_rth", |o| o.conditions_ignore_rth = true),
+            ("volatility", |o| o.volatility = 0.25),
+            ("percent_offset", |o| o.percent_offset = 0.5),
+            ("not_held", |o| o.not_held = true),
+            ("order_ref", |o| o.order_ref = "ref-1".into()),
+            ("open_close", |o| o.open_close = "O".into()),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1059,6 +1076,7 @@ mod tests {
             oca_type: _, parent_id: _, discretionary_amt: _, sweep_to_fill: _,
             all_or_none: _, trigger_method: _, cash_qty: _, conditions: _,
             conditions_cancel_order: _, conditions_ignore_rth: _,
+            volatility: _, percent_offset: _, not_held: _, order_ref: _, open_close: _,
         } = Order::default().attrs();
 
         assert!(
