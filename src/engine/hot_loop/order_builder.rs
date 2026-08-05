@@ -993,15 +993,29 @@ fn send_order_ex(
     if attrs.cash_qty > 0 {
         fields.push((5920, format_price(attrs.cash_qty).to_string()));
     }
-    // Condition tags (6136+ framework)
+    // Condition tags. The vendor's audit renderer names the whole set:
+    // 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 ignore-RTH,
+    // 6136 list size, 6137 conjunction, 6166 strike, 6168 expiry, 6169
+    // security type, 6220 multiplier, 6222 type, 6223 time, 6224 send-email,
+    // 6226 email text, 6227 TWS actions, 6241 inactive, 6245 percentage,
+    // 6246 execution pattern, 6263 volume, 6579 submit-cancel, 6947 timezone.
+    //
+    // A time condition is still refused with every one of these read and the
+    // relevant ones sent, including the timezone, so what it wants is not in
+    // this list.
     if !attrs.conditions.is_empty() {
         let cond_strs = build_condition_strings(&attrs.conditions);
         fields.push((6136, cond_strs[0].clone())); // first element is count
+        // These two were one tag apart from where they belong. Cancelling on a
+        // condition went out on the tag that says whether conditions ignore
+        // regular hours, and ignoring regular hours went out on a tag that is
+        // not a condition field at all — it is the reference price of a stock,
+        // so the order carried a reference price of one.
         if attrs.conditions_cancel_order {
-            fields.push((6128, "1".to_string()));
+            fields.push((6579, "1".to_string()));
         }
         if attrs.conditions_ignore_rth {
-            fields.push((6151, "1".to_string()));
+            fields.push((6128, "1".to_string()));
         }
         // Per-condition tags start at index 1, 11 strings per condition
         for i in 0..attrs.conditions.len() {
