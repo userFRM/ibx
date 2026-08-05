@@ -1895,35 +1895,15 @@ impl ClientCore {
         ))
     }
 
-    /// Refuse an order whose contract is made of legs.
-    ///
-    /// What the legs would go out as is still open. The vendor's audit
-    /// renderer names tag 6018 `legPath` and 6120 `ComboRules`, and no class in
-    /// any shipped jar writes either — the client jars, the trading core and
-    /// the launcher were all scanned for a push of 6018 and none has one. So
-    /// the legs are not sent as a repeating group, which is why no leg-group
-    /// tag appears anywhere either, and `legPath` looks like something the
-    /// server renders rather than something the client states. The likely
-    /// shape is that a combination is looked up as its own contract and then
-    /// ordered by that contract's id, the same as any other — which would make
-    /// the legs on the order a description for the lookup and not part of the
-    /// order at all. Until that is shown on a live combination, refusing is
-    /// the honest answer.
-    ///
-    /// The legs are carried on the contract and never reach the wire, so an
-    /// order for a spread went out as a single order on whatever the rest of
-    /// the contract named — a different trade from the one asked for, placed
-    /// without a word. Until the legs are encoded, saying so is the only safe
-    /// answer: a refused order is a position nobody took by accident.
+    /// A combination states its legs on the order, so an order for one is
+    /// placeable. What is refused is a combination that names none: the venue
+    /// would be given a security type with nothing to build from.
     pub fn validate_combo_legs(sec_type: &str, leg_count: usize) -> Result<(), String> {
-        if leg_count == 0 && !sec_type.eq_ignore_ascii_case("BAG") {
+        if leg_count > 0 || !sec_type.eq_ignore_ascii_case("BAG") {
             return Ok(());
         }
-        Err(format!(
-            "combination orders are not supported: this contract has {leg_count} leg(s) \
-             and they are not sent, so the order would name a different trade. \
-             Place each leg as its own order.",
-        ))
+        Err("a combination order has no legs: state them on the contract, \
+             or use the security type of the thing you mean to trade".to_string())
     }
 
     pub fn validate_order_contract(sec_type: &str, identity: &str) -> Result<(), String> {
@@ -1972,6 +1952,7 @@ impl ClientCore {
         order: &ApiOrder,
         order_id: u64,
         instrument: InstrumentId,
+        legs: &[crate::api::types::ComboLeg],
     ) -> Result<ControlCommand, String> {
         let side = order.side()?;
         let qty = order.total_quantity as u32;
@@ -1984,11 +1965,27 @@ impl ClientCore {
         // (ibx#224), then the same defect again for the adjustable stop (#240)
         // and for adaptive, algo and what-if (#318).
 
+        // The legs live on the contract, not the order, so they are attached
+        // here rather than in `attrs()`.
+        let leg_specs: Vec<crate::types::ComboLegSpec> = legs.iter().map(|l| {
+            crate::types::ComboLegSpec {
+                con_id: l.con_id,
+                ratio: l.ratio.max(0) as u32,
+                is_sell: l.action.eq_ignore_ascii_case("SELL"),
+                exchange: if l.exchange.eq_ignore_ascii_case("SMART") {
+                    String::new()
+                } else {
+                    l.exchange.clone()
+                },
+                open_close: l.open_close.clamp(0, 255) as u8,
+                short_sale_slot: l.shorting_policy.clamp(0, 255) as u8,
+            }
+        }).collect();
         let ex = |kind: OrderKind| OrderRequest::SubmitEx {
             order_id, instrument, side, qty,
             kind,
             tif: order.tif_byte(),
-            attrs: order.attrs(),
+            attrs: crate::types::OrderAttrs { combo_legs: leg_specs.clone(), ..order.attrs() },
         };
 
         // Adaptive orders (special-cased before generic algo)
@@ -2767,7 +2764,7 @@ mod tests {
             ("what-if", ApiOrder { what_if: true, ..base.clone() }),
         ];
         for (label, order) in cases {
-            let cmd = ClientCore::build_order_request(&order, 7, 0)
+            let cmd = ClientCore::build_order_request(&order, 7, 0, &[])
                 .unwrap_or_else(|e| panic!("{label}: {e}"));
             let ControlCommand::Order(OrderRequest::SubmitEx { tif, attrs, .. }) = cmd else {
                 panic!("{label} must route through the shared extended submission");
@@ -2841,8 +2838,8 @@ mod contract_gate_tests {
         }
 
         assert!(ClientCore::validate_combo_legs("STK", 0).is_ok(), "an ordinary contract has none");
-        assert!(ClientCore::validate_combo_legs("OPT", 2).is_err(), "legs on any type are refused");
-        assert!(ClientCore::validate_combo_legs("BAG", 0).is_err(), "and so is a combination with none listed");
+        assert!(ClientCore::validate_combo_legs("BAG", 2).is_ok(), "a combination states its legs");
+        assert!(ClientCore::validate_combo_legs("BAG", 0).is_err(), "a combination with none is refused");
         assert!(ClientCore::validate_order_contract("cash", "").is_ok(), "and the check is case-insensitive");
         assert!(ClientCore::validate_order_contract("STK", "").is_ok());
         assert!(ClientCore::validate_order_contract("", "").is_ok());

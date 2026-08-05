@@ -76,6 +76,9 @@ impl Clone for Contract {
             description: self.description.clone(),
             issuer_id: self.issuer_id.clone(),
             combo_legs_descrip: self.combo_legs_descrip.clone(),
+            // Legs are Python objects here; reading them needs the interpreter,
+            // which `to_api` does not take. `combo_legs_api` does that, and the
+            // order path calls it.
             combo_legs: Vec::new(),
             delta_neutral_contract: None,
         }
@@ -111,6 +114,37 @@ impl Default for Contract {
 }
 
 impl Contract {
+    /// The legs, read out of the Python objects that hold them.
+    ///
+    /// Each is any object with the ibapi ComboLeg attribute names, so a plain
+    /// `ibapi.contract.ComboLeg` works and so does anything shaped like one. A
+    /// leg that is missing an attribute contributes its default rather than
+    /// failing the order, except the contract id, without which the leg names
+    /// nothing and the whole list is refused.
+    pub fn combo_legs_api(&self, py: Python<'_>) -> Result<Vec<crate::api::types::ComboLeg>, String> {
+        let mut out = Vec::with_capacity(self.combo_legs.len());
+        for (i, obj) in self.combo_legs.iter().enumerate() {
+            let g = |n: &str| obj.getattr(py, n).ok();
+            let con_id = g("conId").and_then(|v| v.extract::<i64>(py).ok()).unwrap_or(0);
+            if con_id == 0 {
+                return Err(format!("combo leg {i} has no conId, so it names no contract"));
+            }
+            out.push(crate::api::types::ComboLeg {
+                con_id,
+                ratio: g("ratio").and_then(|v| v.extract(py).ok()).unwrap_or(1),
+                action: g("action").and_then(|v| v.extract(py).ok()).unwrap_or_default(),
+                exchange: g("exchange").and_then(|v| v.extract(py).ok()).unwrap_or_default(),
+                open_close: g("openClose").and_then(|v| v.extract(py).ok()).unwrap_or(0),
+                shorting_policy: g("shortSaleSlot").and_then(|v| v.extract(py).ok()).unwrap_or(0),
+                designated_location: g("designatedLocation")
+                    .and_then(|v| v.extract(py).ok()).unwrap_or_default(),
+                exempt_code: g("exemptCode").and_then(|v| v.extract(py).ok()).unwrap_or(-1),
+            });
+        }
+        Ok(out)
+    }
+
+
     /// The whole contract the engine holds, not the handful of fields a
     /// callback happens to print: an option with no strike, right or expiry
     /// names nothing the caller can act on. Combo legs and the delta-neutral
@@ -2468,7 +2502,7 @@ mod tests {
         o.trail_stop_price = 99.0;
         o.oca_type = 2;
 
-        let cmd = ClientCore::build_order_request(&o.to_api(), 1, 0).unwrap();
+        let cmd = ClientCore::build_order_request(&o.to_api(), 1, 0, &[]).unwrap();
         let ControlCommand::Order(OrderRequest::SubmitEx {
             kind: OrderKind::TrailingStopLimit { lmt_offset, trail_stop_price, .. },
             attrs,

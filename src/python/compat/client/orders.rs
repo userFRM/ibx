@@ -20,6 +20,7 @@ impl EClient {
         // Convert and validate order params first (fail fast, no connection needed)
         let mut api_order = order.to_api();
         api_order.conditions = order.convert_conditions(py);
+        let legs = contract.combo_legs_api(py).map_err(PyRuntimeError::new_err)?;
         // Empty before connect, so a named account cannot match and is refused.
         // That is the right answer either way: the field reaches no encoder, so
         // an order naming one would fill somewhere else whether or not a session
@@ -28,7 +29,7 @@ impl EClient {
         ClientCore::validate_order(&api_order, &connected)
             .map_err(PyRuntimeError::new_err)?;
         ClientCore::validate_supported_instructions(&api_order).map_err(PyRuntimeError::new_err)?;
-        ClientCore::validate_combo_legs(&contract.sec_type, contract.combo_legs.len()).map_err(PyRuntimeError::new_err)?;
+        ClientCore::validate_combo_legs(&contract.sec_type, legs.len()).map_err(PyRuntimeError::new_err)?;
         ClientCore::validate_order_contract(
             &contract.sec_type,
             &ClientCore::contract_identity(
@@ -71,7 +72,7 @@ impl EClient {
                 stop_price,
             })
         } else {
-            ClientCore::build_order_request(&api_order, oid, instrument)
+            ClientCore::build_order_request(&api_order, oid, instrument, &legs)
                 .map_err(PyRuntimeError::new_err)?
         };
         Self::send_control(py, &tx, cmd)?;
