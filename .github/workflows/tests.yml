@@ -1,5 +1,9 @@
 name: tests
 
+# What has to hold before a change lands. Every job here passes on the tree as
+# it stands, so a red result is the change and not a gate that was already red
+# when it was written.
+
 on:
   push:
     branches: [main]
@@ -12,6 +16,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
 
 jobs:
   rust:
@@ -39,7 +46,88 @@ jobs:
         run: cargo test --lib
 
       # The bindings are behind a non-default feature, so nothing above builds
-      # them. Their tests need a live session and cannot run here, but keeping
-      # them compiling is most of the value and costs one step.
-      - name: Build the Python bindings
-        run: cargo build --lib --features python
+      # them. The live phases they wrap need a session and are not run here;
+      # everything else is, because a binding that stopped agreeing with the
+      # engine is the failure this catches, and it costs one step to catch it.
+      - name: Test the Python bindings
+        run: cargo test --lib --features python
+
+  clippy:
+    name: clippy -D warnings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Lint the library
+        run: cargo clippy --lib -- -D warnings
+
+      # A feature that is not the default is compiled by nobody until it breaks
+      # somebody. Both configurations are lint-clean and stay that way.
+      - name: Lint the Python bindings
+        run: cargo clippy --lib --features python -- -D warnings
+
+  format:
+    name: rustfmt (new files)
+    runs-on: ubuntu-latest
+    # New files only, and deliberately. The tree is hand-formatted and predates
+    # any formatter; no rustfmt configuration comes within a few thousand lines
+    # of reproducing it. Checking every file a change *touches* would therefore
+    # demand reformatting whole legacy files to land a one-line fix, which is
+    # the tree-wide rewrite arriving one pull request at a time. So the gate is
+    # on what a change *adds*: a new file is formatted, and the rest is left
+    # where it is.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check the Rust files this change adds
+        run: |
+          base=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          files=$(git diff --name-only --diff-filter=A "$base" HEAD -- '*.rs')
+          if [ -z "$files" ]; then echo "no new Rust files"; exit 0; fi
+          echo "$files"
+          # shellcheck disable=SC2086
+          rustfmt --edition 2024 --check $files
+
+  portability:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    # Session storage sets owner-only permissions where the platform has them
+    # and relies on the containing directory where it does not. That is two
+    # code paths, and only one of them compiles on the machine this is usually
+    # written on.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --lib
+
+  rustdoc:
+    name: rustdoc -D warnings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The API is documented by intra-doc links, and a link that stopped
+      # resolving is a page that quietly lost what it pointed at.
+      - name: Build the docs
+        run: cargo doc --no-deps --lib
+        env:
+          RUSTDOCFLAGS: -D warnings

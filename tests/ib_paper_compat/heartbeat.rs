@@ -57,6 +57,21 @@ pub(super) fn phase_farm_heartbeat_keepalive(conns: Conns) -> Conns {
 pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
     println!("--- Phase 56: Heartbeat Timeout Detection (simulated stale CCP) ---");
 
+    // Read the deadline off the engine rather than restating it. A version of
+    // this phase spelled out the thresholds it was written against and then
+    // failed for a year's worth of runs after they were widened to match the
+    // gateway's — reporting a broken timeout when the timeout was fine and
+    // the arithmetic here was not.
+    //
+    // Nothing has been received since the connection was made, so the silence
+    // is already past the dead threshold when the warm-up ends: detection
+    // lands at the warm-up boundary, and the report follows one reconnect
+    // attempt later.
+    use ibx::engine::hot_loop::{LIVENESS_DEAD_SECS, LIVENESS_WARMUP_SECS};
+    let detect_at = Duration::from_secs(LIVENESS_WARMUP_SECS.max(LIVENESS_DEAD_SECS));
+    let report_by = detect_at + Duration::from_secs(25);
+    let budget = report_by + Duration::from_secs(15);
+
     let account_id = conns.account_id;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
@@ -75,14 +90,17 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
 
     let start = Instant::now();
     let mut disconnect_count = 0u32;
-    while start.elapsed() < Duration::from_secs(30) {
+    while start.elapsed() < budget {
         if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(200)) { disconnect_count += 1; break; }
     }
 
     let elapsed = start.elapsed();
-    assert!(disconnect_count > 0, "No disconnect after {:.1}s — heartbeat timeout should fire at ~21s", elapsed.as_secs_f64());
-    assert!(elapsed.as_secs() >= 18 && elapsed.as_secs() <= 28,
-        "Disconnect at {:.1}s — expected 18-28s (10+1+10=21s theoretical)", elapsed.as_secs_f64());
+    assert!(disconnect_count > 0,
+        "No disconnect after {:.1}s — a silent connection should be reported by {:.0}s",
+        elapsed.as_secs_f64(), report_by.as_secs_f64());
+    assert!(elapsed >= detect_at.saturating_sub(Duration::from_secs(2)) && elapsed <= report_by,
+        "Disconnect at {:.1}s — expected between {:.0}s (warm-up ends) and {:.0}s (one reconnect attempt later)",
+        elapsed.as_secs_f64(), detect_at.as_secs_f64(), report_by.as_secs_f64());
 
     let reclaimed = shutdown_and_reclaim(&control_tx, join, account_id.clone());
 

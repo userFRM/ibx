@@ -1,0 +1,8 @@
+# The tree is hand-formatted and predates any formatter, and no configuration
+# reproduces it — the closest is still a few thousand lines from the source as
+# written. So this is not a description of the tree. It is what a *new* file is
+# formatted with, which is all the format gate checks: `Max` keeps an
+# expression on one line while it fits, which is how the surrounding code reads
+# and why default rustfmt disagrees with all of it.
+edition = "2024"
+use_small_heuristics = "Max"

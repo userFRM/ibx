@@ -1,7 +1,7 @@
 //! ibapi-compatible EClient — Rust equivalent of C++ `EClientSocket`.
 //!
 //! Connects to IB, provides ibapi-matching method signatures, and dispatches
-//! events to a [`Wrapper`] via `process_msgs()`.
+//! events to a [`Wrapper`](crate::api::wrapper::Wrapper) via `process_msgs()`.
 //!
 //! ```no_run
 //! use ibx::api::{EClient, EClientConfig, Wrapper, Contract, Order};
@@ -133,7 +133,7 @@ pub struct EClientConfig {
 /// # Thread lifecycle
 ///
 /// `connect()` spawns a single `ib-engine-hotloop` background thread.
-/// The thread is **joined** on [`disconnect()`] and on [`Drop`].
+/// The thread is **joined** on [`disconnect()`](EClient::disconnect) and on [`Drop`].
 /// Dropping an `EClient` without calling `disconnect()` first is safe:
 /// the `Drop` impl sends `Shutdown` and joins the thread.
 ///
