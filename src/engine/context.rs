@@ -520,13 +520,7 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitLimitOpg {
-            order_id: id,
-            instrument,
-            side,
-            qty,
-            price,
-        });
+        self.pending_orders.push(OrderRequest::SubmitEx { order_id: id, instrument, side, qty, kind: OrderKind::Limit { price }, tif: b'2', attrs: OrderAttrs { outside_rth: false, ..Default::default() } });
         id
     }
 
@@ -734,9 +728,7 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitLimitAuc {
-            order_id: id, instrument, side, qty, price,
-        });
+        self.pending_orders.push(OrderRequest::SubmitEx { order_id: id, instrument, side, qty, kind: OrderKind::Limit { price }, tif: b'8', attrs: OrderAttrs { outside_rth: false, ..Default::default() } });
         id
     }
 
@@ -749,9 +741,7 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitMtlAuc {
-            order_id: id, instrument, side, qty,
-        });
+        self.pending_orders.push(OrderRequest::SubmitEx { order_id: id, instrument, side, qty, kind: OrderKind::Mtl, tif: b'8', attrs: OrderAttrs { outside_rth: false, ..Default::default() } });
         id
     }
 
@@ -1668,7 +1658,7 @@ mod tests {
         let orders: Vec<_> = ctx.drain_pending_orders().collect();
         assert_eq!(orders.len(), 1);
         match &orders[0] {
-            OrderRequest::SubmitLimitAuc { order_id, instrument, side, qty, price } => {
+            OrderRequest::SubmitEx { order_id, instrument, side, qty, kind: OrderKind::Limit { price }, tif: b'8', .. } => {
                 assert_eq!(*order_id, id);
                 assert_eq!(*instrument, 0);
                 assert_eq!(*side, Side::Buy);
@@ -1686,7 +1676,7 @@ mod tests {
         let orders: Vec<_> = ctx.drain_pending_orders().collect();
         assert_eq!(orders.len(), 1);
         match &orders[0] {
-            OrderRequest::SubmitMtlAuc { order_id, instrument, side, qty } => {
+            OrderRequest::SubmitEx { order_id, instrument, side, qty, kind: OrderKind::Mtl, tif: b'8', .. } => {
                 assert_eq!(*order_id, id);
                 assert_eq!(*instrument, 0);
                 assert_eq!(*side, Side::Buy);

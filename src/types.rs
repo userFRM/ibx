@@ -566,45 +566,6 @@ pub enum OrderKind {
 /// Order request sent via control channel, processed by engine.
 #[derive(Debug, Clone)]
 pub enum OrderRequest {
-    SubmitLimitGtc {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        price: Price,
-        outside_rth: bool,
-    },
-    SubmitStopGtc {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        stop_price: Price,
-        outside_rth: bool,
-    },
-    SubmitStopLimitGtc {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        price: Price,
-        stop_price: Price,
-        outside_rth: bool,
-    },
-    SubmitLimitIoc {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        price: Price,
-    },
-    SubmitLimitFok {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        price: Price,
-    },
     /// Bracket order: parent entry + take-profit + stop-loss, linked via OCA.
     /// Generates 3 FIX messages: parent (35=D), TP child (35=D with 6107+583), SL child (35=D with 6107+583).
     SubmitBracket {
@@ -632,31 +593,11 @@ pub enum OrderRequest {
         attrs: OrderAttrs,
     },
     /// Limit order for opening auction (TIF=OPG).
-    SubmitLimitOpg {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        price: Price,
-    },
     /// Algorithmic order: limit order with IB algo strategy overlay (VWAP, TWAP, etc.).
     /// Pegged to Benchmark: pegs to a benchmark instrument's price. OrdType PB.
     /// Companion tags: 6941=refConId, 6938=isPegDecrease, 6939=pegChangeAmt, 6942=refChangeAmt.
     /// Limit order for auction (TIF=AUC, tag 59=8). Participates in exchange opening/closing auction.
-    SubmitLimitAuc {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        price: Price,
-    },
     /// Market-to-Limit for auction (TIF=AUC, tag 59=8). MTL + auction participation.
-    SubmitMtlAuc {
-        order_id: OrderId,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-    },
     /// What-If order: sends a limit order with tag 6091=1 for margin/commission preview.
     /// The order is NOT placed — response comes back as 35=8 with margin fields.
     /// Fractional shares limit order. Qty is fixed-point (QTY_SCALE = 10^4).
@@ -708,14 +649,6 @@ impl OrderRequest {
             Self::Cancel { order_id } => *order_id,
             Self::CancelAll { .. } => 0,
             Self::Modify { order_id, .. } => *order_id,
-            | Self::SubmitLimitGtc { order_id, .. }
-            | Self::SubmitStopGtc { order_id, .. }
-            | Self::SubmitStopLimitGtc { order_id, .. }
-            | Self::SubmitLimitIoc { order_id, .. }
-            | Self::SubmitLimitFok { order_id, .. }
-            | Self::SubmitLimitOpg { order_id, .. }
-            | Self::SubmitLimitAuc { order_id, .. }
-            | Self::SubmitMtlAuc { order_id, .. }
             | Self::SubmitLimitFractional { order_id, .. }
             | Self::SubmitEx { order_id, .. } => *order_id,
             Self::SubmitBracket { parent_id, .. } => *parent_id,
@@ -729,14 +662,6 @@ impl OrderRequest {
         match self {
             Self::Cancel { .. } | Self::Modify { .. } => None,
             Self::CancelAll { instrument }
-            | Self::SubmitLimitGtc { instrument, .. }
-            | Self::SubmitStopGtc { instrument, .. }
-            | Self::SubmitStopLimitGtc { instrument, .. }
-            | Self::SubmitLimitIoc { instrument, .. }
-            | Self::SubmitLimitFok { instrument, .. }
-            | Self::SubmitLimitOpg { instrument, .. }
-            | Self::SubmitLimitAuc { instrument, .. }
-            | Self::SubmitMtlAuc { instrument, .. }
             | Self::SubmitLimitFractional { instrument, .. }
             | Self::SubmitEx { instrument, .. }
             | Self::SubmitBracket { instrument, .. } => Some(*instrument),
@@ -755,16 +680,9 @@ impl OrderRequest {
         }
         let s = |p: &mut Price| *p = snap_to_tick(*p, tick);
         match self {
-            Self::Cancel { .. } | Self::CancelAll { .. } | Self::SubmitMtlAuc { .. } => {}
+            Self::Cancel { .. } | Self::CancelAll { .. } => {}
             Self::Modify { price, stop_price, .. } => { s(price); s(stop_price); }
-            Self::SubmitLimitGtc { price, .. }
-            | Self::SubmitLimitIoc { price, .. }
-            | Self::SubmitLimitFok { price, .. }
-            | Self::SubmitLimitOpg { price, .. }
-            | Self::SubmitLimitAuc { price, .. }
-            | Self::SubmitLimitFractional { price, .. } => s(price),
-            Self::SubmitStopGtc { stop_price, .. } => s(stop_price),
-            Self::SubmitStopLimitGtc { price, stop_price, .. } => { s(price); s(stop_price); }
+            Self::SubmitLimitFractional { price, .. } => s(price),
             Self::SubmitBracket { entry_price, take_profit, stop_loss, .. } => {
                 s(entry_price); s(take_profit); s(stop_loss);
             }

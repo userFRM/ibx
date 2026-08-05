@@ -246,7 +246,7 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
 pub(super) fn phase_outside_rth(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 10: Outside RTH Limit Order (GTC+OutsideRTH, SPY)",
-        OrderRequest::SubmitLimitGtc { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, price: 1_00_000_000, outside_rth: true },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
         false)
 }
 
@@ -351,9 +351,7 @@ pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitStopGtc {
-        order_id, instrument: inst_id, side: Side::Sell, qty: 1, stop_price: 1_00_000_000, outside_rth: true,
-    })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Sell, qty: 1, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -500,9 +498,7 @@ pub(super) fn phase_limit_ioc(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitIoc {
-        order_id, instrument: inst_id, side: Side::Buy, qty: 1, price: 1_00_000_000,
-    })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'3', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -546,9 +542,7 @@ pub(super) fn phase_limit_fok(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitFok {
-        order_id, instrument: inst_id, side: Side::Buy, qty: 1, price: 1_00_000_000,
-    })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'4', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -582,7 +576,7 @@ pub(super) fn phase_limit_fok(conns: Conns) -> Conns {
 pub(super) fn phase_stop_gtc(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 23: Stop GTC Order (SPY)",
-        OrderRequest::SubmitStopGtc { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, stop_price: 1_00_000_000, outside_rth: true },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
         false)
 }
 
@@ -591,7 +585,7 @@ pub(super) fn phase_stop_gtc(conns: Conns) -> Conns {
 pub(super) fn phase_stop_limit_gtc(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 24: Stop Limit GTC Order (SPY)",
-        OrderRequest::SubmitStopLimitGtc { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, price: 1_00_000_000, stop_price: 1_00_000_000, outside_rth: true },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::StopLimit { price: 1_00_000_000, stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
         false)
 }
 
@@ -719,7 +713,7 @@ pub(super) fn phase_rel_order(conns: Conns) -> Conns {
 pub(super) fn phase_limit_opg(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 32: Limit OPG Order (SPY)",
-        OrderRequest::SubmitLimitOpg { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, price: 1_00_000_000 },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'2', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
         false)
 }
 
@@ -1081,7 +1075,7 @@ pub(super) fn phase_peg_bench_order(conns: Conns) -> Conns {
 pub(super) fn phase_limit_auc_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 69: Limit Auction Order (SPY)",
-        OrderRequest::SubmitLimitAuc { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, price: 1_00_000_000 },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'8', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
         false)
 }
 
@@ -1090,7 +1084,7 @@ pub(super) fn phase_limit_auc_order(conns: Conns) -> Conns {
 pub(super) fn phase_mtl_auc_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 70: Market-to-Limit Auction Order (SPY)",
-        OrderRequest::SubmitMtlAuc { order_id: oid, instrument: 0, side: Side::Buy, qty: 1 },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Mtl, tif: b'8', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
         false)
 }
 
@@ -1528,10 +1522,7 @@ pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitGtc {
-        order_id, instrument: inst_id, side: Side::Buy, qty: 1,
-        price: 1_00_000_000, outside_rth: true,
-    })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -1904,10 +1895,7 @@ pub(super) fn phase_global_cancel(conns: Conns) -> Conns {
     let oid2 = oid1 + 1;
     let oid3 = oid1 + 2;
     for oid in [oid1, oid2, oid3] {
-        control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitGtc {
-            order_id: oid, instrument: inst_id, side: Side::Buy, qty: 1,
-            price: 1_00_000_000, outside_rth: true,
-        })).unwrap();
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     }
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
