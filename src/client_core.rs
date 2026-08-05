@@ -1873,11 +1873,7 @@ impl ClientCore {
     pub fn validate_supported_instructions(o: &ApiOrder) -> Result<(), String> {
         let mut unsent: Vec<&str> = Vec::new();
         if o.volatility_type != 0 { unsent.push("volatilityType"); }
-        if !o.delta_neutral_order_type.is_empty() { unsent.push("deltaNeutralOrderType"); }
         if !o.hedge_type.is_empty() { unsent.push("hedgeType"); }
-        if o.scale_init_level_size != i32::MAX || o.scale_price_increment != f64::MAX {
-            unsent.push("scale");
-        }
         if o.short_sale_slot != 0 { unsent.push("shortSaleSlot"); }
         if unsent.is_empty() {
             return Ok(());
@@ -2788,13 +2784,15 @@ mod contract_gate_tests {
             ("percent offset", ApiOrder { percent_offset: 0.5, ..ApiOrder::default() }),
             ("not held", ApiOrder { not_held: true, ..ApiOrder::default() }),
             ("open/close", ApiOrder { open_close: "O".into(), ..ApiOrder::default() }),
+            ("scale", ApiOrder { scale_init_level_size: 100, scale_price_increment: 0.05,
+                                 ..ApiOrder::default() }),
+            ("delta neutral", ApiOrder { delta_neutral_order_type: "MKT".into(),
+                                         ..ApiOrder::default() }),
         ] {
             assert!(ClientCore::validate_supported_instructions(&o).is_ok(), "{label} is sent");
         }
         for (label, mut o) in [
             ("hedge", ApiOrder { hedge_type: "D".into(), ..ApiOrder::default() }),
-            ("delta neutral", ApiOrder { delta_neutral_order_type: "MKT".into(), ..ApiOrder::default() }),
-            ("scale", ApiOrder { scale_init_level_size: 100, ..ApiOrder::default() }),
             ("short sale slot", ApiOrder { short_sale_slot: 2, ..ApiOrder::default() }),
         ] {
             o.action = "BUY".into();

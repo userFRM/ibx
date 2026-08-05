@@ -341,6 +341,10 @@ pub struct OrderAttrs {
     /// Whether this order opens or closes a position, on tag 77. Empty means
     /// the caller said nothing and the venue decides.
     pub open_close: String,
+    /// The ladder, when this is a scale order.
+    pub scale: Option<Box<ScaleAttrs>>,
+    /// The hedging leg, when the caller asked for one.
+    pub delta_neutral: Option<Box<DeltaNeutralAttrs>>,
     /// Trigger method for stop/MIT/LIT orders (IB tag 6115).
     /// 0=default, 1=double-bid-ask, 2=last, 3=double-last, 4=bid-ask,
     /// 7=last-or-bid-ask, 8=mid-point.
@@ -574,6 +578,45 @@ pub enum OrderKind {
     /// Margin preview. Tag 6091=1; the order is tracked under `ORD_WHAT_IF` so
     /// the response is recognised, and never becomes a live order.
     WhatIf { price: Price },
+}
+
+/// A scale order's ladder: how much to show, how far apart, and how the price
+/// moves as it works.
+///
+/// Boxed on the attribute block so an order that is not a scale order does not
+/// carry the room for one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScaleAttrs {
+    /// Size of the first component (tag 6403).
+    pub init_level_size: u32,
+    /// Size of each component after the first (tag 6445).
+    pub subs_level_size: u32,
+    /// Price step between components (tag 6405).
+    pub price_increment: Price,
+    /// Offset at which a filled component takes profit (tag 6446).
+    pub profit_offset: Price,
+    /// How far the price moves per adjustment (tag 6527).
+    pub price_adjust_value: Price,
+    /// How often it adjusts, in seconds (tag 6526).
+    pub price_adjust_interval: u32,
+    /// Start the ladder again once it is exhausted (tag 6461).
+    pub auto_reset: bool,
+    /// Vary the component sizes (tag 6795).
+    pub random_percent: bool,
+}
+
+/// The hedge an order carries: what to trade against the position, and at what.
+///
+/// Dropping this leaves the position naked, which is why it is carried rather
+/// than ignored. Boxed for the same reason as the ladder.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeltaNeutralAttrs {
+    /// Order type for the hedging leg (tag 6290).
+    pub order_type: String,
+    /// Its price, where the type needs one (tag 6291).
+    pub aux_price: Price,
+    /// The contract to hedge with (tag 6150).
+    pub con_id: i64,
 }
 
 /// Order request sent via control channel, processed by engine.

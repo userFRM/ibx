@@ -944,6 +944,46 @@ fn send_order_ex(
     if !attrs.open_close.is_empty() {
         fields.push((77, attrs.open_close.clone()));
     }
+    // The ladder. Sending the sizes and not the step, or the step and not the
+    // sizes, describes no ladder at all, so an order that names one names all
+    // of what it set.
+    // The hedge. An order that asked for one and did not say so left the
+    // position naked, which is the opposite of what it was for.
+    if let Some(dn) = attrs.delta_neutral.as_deref() {
+        fields.push((6290, dn.order_type.clone()));
+        if dn.aux_price != 0 {
+            fields.push((6291, format_price(dn.aux_price).to_string()));
+        }
+        if dn.con_id != 0 {
+            fields.push((6150, dn.con_id.to_string()));
+        }
+    }
+    if let Some(scale) = attrs.scale.as_deref() {
+        if scale.init_level_size > 0 {
+            fields.push((6403, format_uint(scale.init_level_size as u64).to_string()));
+        }
+        if scale.subs_level_size > 0 {
+            fields.push((6445, format_uint(scale.subs_level_size as u64).to_string()));
+        }
+        if scale.price_increment > 0 {
+            fields.push((6405, format_price(scale.price_increment).to_string()));
+        }
+        if scale.profit_offset > 0 {
+            fields.push((6446, format_price(scale.profit_offset).to_string()));
+        }
+        if scale.price_adjust_value != 0 {
+            fields.push((6527, format_price(scale.price_adjust_value).to_string()));
+        }
+        if scale.price_adjust_interval > 0 {
+            fields.push((6526, format_uint(scale.price_adjust_interval as u64).to_string()));
+        }
+        if scale.auto_reset {
+            fields.push((6461, "1".to_string()));
+        }
+        if scale.random_percent {
+            fields.push((6795, "1".to_string()));
+        }
+    }
     if attrs.trigger_method > 0 {
         fields.push((6115, attrs.trigger_method.to_string()));
     }
@@ -2312,6 +2352,46 @@ mod outside_rth_polarity_tests {
                     "{label}, outside_rth={asked}: {sent}",
                 );
             }
+        }
+    }
+
+    /// A ladder and a hedge each go out under the tags the vendor's own
+    /// attributes declare for them. Both used to reach no encoder, so an order
+    /// that asked for either got a plain one instead — one order for the whole
+    /// size, or a position with nothing against it.
+    #[test]
+    fn a_scale_and_a_hedge_go_out_under_their_own_tags() {
+        use std::io::Read;
+        let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        let attrs = crate::types::OrderAttrs {
+            scale: Some(Box::new(crate::types::ScaleAttrs {
+                init_level_size: 100, subs_level_size: 50,
+                price_increment: crate::types::PRICE_SCALE / 20,
+                profit_offset: crate::types::PRICE_SCALE / 10,
+                price_adjust_interval: 60, auto_reset: true, random_percent: true,
+                ..Default::default()
+            })),
+            delta_neutral: Some(Box::new(crate::types::DeltaNeutralAttrs {
+                order_type: "MKT".into(), aux_price: 0, con_id: 265598,
+            })),
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 21, instrument, Side::Buy, 100,
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        ).unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let has = |t: &str| msg.split('\u{1}').any(|f| f.starts_with(t));
+        for tag in ["6403=100", "6445=50", "6405=0.05", "6446=0.1", "6526=60",
+                    "6461=1", "6795=1", "6290=MKT", "6150=265598"] {
+            assert!(has(tag), "{tag} is on the order: {msg}");
         }
     }
 
