@@ -74,6 +74,10 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     );
     let inst = hot_loop.context_mut().register_instrument(fx_con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "EUR".to_string());
+    // A contract is not a stock because nobody said otherwise. Without this the
+    // order goes out as a stock on the default venue, and the venue answers
+    // that it knows no such contract — correctly.
+    hot_loop.context_mut().set_routing(inst, "CASH", "IDEALPRO");
 
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitGtc {
@@ -193,6 +197,15 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     );
     let inst = hot_loop.context_mut().register_instrument(fut_def.con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "MES".to_string());
+    hot_loop.context_mut().set_routing(inst, "FUT", "CME");
+    hot_loop.context_mut().set_order_identity(inst, "20270917|0||5");
+    // Still answered "Ambiguous Contract", where the forex order alongside now
+    // goes through. Ruled out against a live session: the expiry as a full date
+    // and as a contract month, in MaturityMonthYear and in MaturityDate, with
+    // and without the multiplier, with a right, and naming the contract id
+    // outright. What is left is what the definition carries and this does not
+    // ask for — a trading class or a local symbol — so that is where to look
+    // next, not at the maturity.
 
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitGtc {

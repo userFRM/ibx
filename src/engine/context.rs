@@ -934,6 +934,27 @@ impl Context {
         self.market.set_symbol(id, symbol);
     }
 
+    /// Say what kind of contract this is and where it trades.
+    ///
+    /// An instrument registered by contract id alone has a symbol and nothing
+    /// else, and an order restates the identity from what is known — which,
+    /// with nothing said, is a stock on the default venue. A forex or futures
+    /// contract sent that way names a contract that does not exist, and the
+    /// venue says so. There was no way to say otherwise from here.
+    pub fn set_routing(&mut self, id: InstrumentId, sec_type: &str, exchange: &str) {
+        self.market.set_routing(id, sec_type, exchange);
+    }
+
+    /// State the rest of a contract's identity: expiry, strike, right and
+    /// multiplier, `|`-separated, as a definition lookup reports them.
+    ///
+    /// A future or an option needs these on the order as well as its symbol.
+    /// Without them the venue has a family and no member of it, and answers
+    /// that the contract is ambiguous.
+    pub fn set_order_identity(&mut self, id: InstrumentId, key: &str) {
+        self.market.set_order_identity(id, key);
+    }
+
     pub fn set_quote(&mut self, id: InstrumentId, quote: Quote) {
         *self.market.quote_mut(id) = quote;
     }

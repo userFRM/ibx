@@ -299,6 +299,14 @@ impl MarketState {
     /// The contract identity an order has to restate for anything a symbol does
     /// not name on its own: expiry, strike, right, multiplier. `None` for a
     /// stock or a currency pair, which those fields do not distinguish.
+    /// State the identity an order has to restate: expiry, strike, right and
+    /// multiplier, as the same `|`-separated key a registration carries.
+    pub fn set_order_identity(&mut self, id: InstrumentId, key: &str) {
+        if !key.is_empty() {
+            self.option_keys[id as usize] = Some(key.to_string());
+        }
+    }
+
     pub fn order_identity(&self, id: InstrumentId) -> Option<(String, String, String, String)> {
         let key = self.option_keys.get(id as usize)?.as_deref()?;
         let mut it = key.split('|');
