@@ -44,15 +44,15 @@ const CCP_HEARTBEAT_SECS: u64 = crate::config::CCP_HEARTBEAT;
 const FARM_HEARTBEAT_SECS: u64 = crate::config::FARM_HEARTBEAT;
 /// Liveness (ibx#219), aligned with the gateway's transport thresholds:
 /// send a test request when nothing has been received for this long...
-pub(crate) const LIVENESS_TEST_SECS: u64 = 15;
+pub const LIVENESS_TEST_SECS: u64 = 15;
 /// ...and declare the connection dead when nothing has been received for
 /// this long. The old scheme declared death at ~21s — racing the server's
 /// own ~35s reset and losing to transient stalls the server tolerates.
-const LIVENESS_DEAD_SECS: u64 = 35;
+pub const LIVENESS_DEAD_SECS: u64 = 35;
 /// Grace window after (re)connect before liveness is enforced (ibx#219):
 /// early-connection jitter must not trigger a false disconnect during a
 /// period the server itself treats as warm-up. Heartbeats are still sent.
-const LIVENESS_WARMUP_SECS: u64 = 60;
+pub const LIVENESS_WARMUP_SECS: u64 = 60;
 // The ladder is ordered by construction, so it is checked by construction: a
 // heartbeat that outlives the test window, or a test that outlives the dead
 // window, fails the build rather than a test the optimizer folds away.

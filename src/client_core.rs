@@ -1856,7 +1856,7 @@ impl ClientCore {
     ///
     /// An empty `sec_type` is treated as STK (the engine default), so existing
     /// stock callers that omit the field are unaffected.
-    /// See: https://github.com/deepentropy/ibx/issues/202
+    /// See: <https://github.com/deepentropy/ibx/issues/202>
     pub fn validate_order_contract(sec_type: &str, identity: &str) -> Result<(), String> {
         // A currency pair is fully identified by what an order already carries:
         // symbol, currency, security type and destination. There is no expiry,

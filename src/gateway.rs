@@ -61,8 +61,8 @@ pub(crate) const DEFAULT_TRADING_FARM: &str = "usfarm";
 /// Parse a farm-route string from the auth-server's routing tags.
 ///
 /// Three accepted shapes (per ib-agent#128):
-///   "<host>/<farm>"             — tag 6145 (trading)
-///   "<host>/<farm>/<port>"      — tags 6171 (mktdata) / 8008 (secdef)
+///   `"<host>/<farm>"`            — tag 6145 (trading)
+///   `"<host>/<farm>/<port>"`     — tags 6171 (mktdata) / 8008 (secdef)
 ///
 /// Port is informational only — ibx routes all farm channels to the same
 /// data-port discovered via `misc_port()`. We just need (host, farm).
