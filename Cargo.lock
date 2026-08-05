@@ -436,7 +436,6 @@ dependencies = [
  "base64",
  "cbc",
  "core_affinity",
- "crossbeam-channel",
  "digest",
  "env_logger",
  "flate2",

@@ -124,7 +124,7 @@ fn main() {
 }
 
 fn wait_for_fill(
-    event_rx: &crossbeam_channel::Receiver<Event>,
+    event_rx: &std::sync::mpsc::Receiver<Event>,
     order_id: OrderId,
     submit_time: Instant,
     start: &Instant,
@@ -156,7 +156,7 @@ fn wait_for_fill(
                 return None;
             }
             Ok(_) => continue,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(_) => return None,
         }
     }

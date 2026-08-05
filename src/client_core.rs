@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
 
-use crossbeam_channel::Sender;
+use std::sync::mpsc::SyncSender;
 
 use crate::api::types::{
     Contract as ApiContract, CommissionAndFeesReport as ApiCommissionAndFeesReport,
@@ -529,7 +529,7 @@ impl ClientCore {
     /// Wait for the hot loop to process a registration command and return the
     /// assigned ID. The engine replies Err when the instrument table is full
     /// (ibx#233) — previously that condition killed the hot loop.
-    fn recv_registration(reply_rx: crossbeam_channel::Receiver<Result<InstrumentId, String>>) -> Result<InstrumentId, String> {
+    fn recv_registration(reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>) -> Result<InstrumentId, String> {
         reply_rx.recv_timeout(Self::REGISTRATION_TIMEOUT)
             .map_err(|_| "Registration timed out".to_string())?
     }
@@ -583,7 +583,7 @@ impl ClientCore {
     /// Returns `Err` if the control channel is closed.
     pub fn find_or_register_instrument(
         &self,
-        control_tx: &Sender<ControlCommand>,
+        control_tx: &SyncSender<ControlCommand>,
         con_id: i64,
         symbol: &str,
         exchange: &str,
@@ -602,7 +602,7 @@ impl ClientCore {
             }
 
         // Register new — only allocates an InstrumentId slot, does not subscribe to market data.
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::RegisterInstrument {
             con_id, symbol: symbol.to_string(),
             sec_type: sec_type.to_string(), exchange: exchange.to_string(),
@@ -622,7 +622,7 @@ impl ClientCore {
     pub fn register_mkt_data(
         &self,
         _shared: &SharedState,
-        control_tx: &Sender<ControlCommand>,
+        control_tx: &SyncSender<ControlCommand>,
         req_id: i64,
         con_id: i64,
         symbol: &str,
@@ -657,7 +657,7 @@ impl ClientCore {
             return Err(refusal);
         }
 
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::RegisterInstrument {
             con_id, symbol: symbol.to_string(),
             sec_type: sec_type.to_string(), exchange: exchange.to_string(),
@@ -753,7 +753,7 @@ impl ClientCore {
     pub fn register_tbt(
         &self,
         _shared: &SharedState,
-        control_tx: &Sender<ControlCommand>,
+        control_tx: &SyncSender<ControlCommand>,
         req_id: i64,
         con_id: i64,
         symbol: &str,
@@ -761,7 +761,7 @@ impl ClientCore {
         exchange: &str,
         tbt_type: TbtType,
     ) -> Result<InstrumentId, String> {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::SubscribeTbt {
             con_id,
             symbol: symbol.to_string(),

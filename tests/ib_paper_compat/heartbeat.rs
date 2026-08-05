@@ -8,7 +8,7 @@ pub(super) fn phase_heartbeat_keepalive(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
@@ -34,7 +34,7 @@ pub(super) fn phase_farm_heartbeat_keepalive(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
@@ -98,7 +98,7 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
     let real_ccp = conns.ccp;
 
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(event_tx), account_id.clone(), conns.farm, dead_ccp, conns.hmds, None,
     );

@@ -18,7 +18,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::bounded;
+use std::sync::mpsc::sync_channel;
 
 use ibx::bridge::{Event, SharedState};
 use ibx::gateway::{Gateway, GatewayConfig};
@@ -183,7 +183,7 @@ fn main() {
 
     // 2. Create hot loop with event channel
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = bounded::<Event>(65536);
+    let (event_tx, event_rx) = sync_channel::<Event>(65536);
     let (mut hot_loop, control_tx) = gw.into_hot_loop(
         shared, Some(event_tx), farm_conn, ccp_conn, hmds_conn, None,
         ibx::gateway::CallerAuth {
@@ -231,7 +231,7 @@ fn main() {
 
         let event = match event_rx.recv_timeout(Duration::from_secs(1)) {
             Ok(e) => e,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(_) => break, // channel disconnected
         };
 

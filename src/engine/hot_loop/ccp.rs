@@ -16,7 +16,7 @@ use crate::types::{
     CompletedOrder, Fill, InstrumentId, MidnightSeed, NewsBulletin,
     PositionInfo, Price, Side, PRICE_SCALE,
 };
-use crossbeam_channel::Sender;
+use std::sync::mpsc::SyncSender;
 
 use super::{HeartbeatState, emit, clone_for_event, parse_price_tag, decode_tif};
 
@@ -358,7 +358,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
         hb: &mut HeartbeatState,
         account_id: &str,
     ) {
@@ -440,7 +440,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
         hb: &mut HeartbeatState,
         account_id: &str,
     ) {
@@ -849,7 +849,7 @@ impl CcpState {
         parsed: &std::collections::HashMap<u32, String>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
         account_id: &str,
     ) {
         // CCP recovery push format A (ib-agent#155, captured against live):
@@ -1666,7 +1666,7 @@ impl CcpState {
         parsed: &std::collections::HashMap<u32, String>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
     ) {
         // Match handle_exec_report's tag-11 parsing: strip the gateway's
         // "C" prefix and any ".0/.1/.2" modify-chain suffix.
@@ -1817,7 +1817,7 @@ impl CcpState {
     pub(crate) fn sweep_contract_details(
         &mut self,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
     ) {
         // A schedule pairing delivers after the lookup that asked for it has
         // been retired, so the record of what a request was already handed has
@@ -1872,7 +1872,7 @@ impl CcpState {
     pub(crate) fn sweep_pending_schedule_pairs(
         &mut self,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
     ) {
         let now = Instant::now();
         let mut emit_now: Vec<PendingSchedulePair> = Vec::new();
@@ -1923,7 +1923,7 @@ impl CcpState {
         &mut self,
         msg: &[u8],
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
     ) {
         // Extract 6256 from the reply to locate the matching pair.
         let join_key = match extract_tag_value(msg, b"6256=") {
@@ -2286,7 +2286,7 @@ impl CcpState {
         &mut self,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
     ) {
         self.disconnected = true;
         self.recovery_sweep_at = None;
@@ -2315,7 +2315,7 @@ impl CcpState {
         &mut self,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
     ) {
         match self.recovery_sweep_at {
             Some(at) if Instant::now() >= at => self.recovery_sweep_at = None,
@@ -2497,7 +2497,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
         hb: &mut HeartbeatState,
     ) {
     let text = match std::str::from_utf8(msg) {
@@ -2738,7 +2738,7 @@ pub(crate) fn handle_position_update(
     parsed: &std::collections::HashMap<u32, String>,
     context: &mut Context,
     shared: &SharedState,
-    event_tx: &Option<Sender<Event>>,
+    event_tx: &Option<SyncSender<Event>>,
 ) {
     let con_id: i64 = match parsed.get(&6008).and_then(|s| s.parse().ok()) {
         Some(v) => v,
@@ -3395,7 +3395,7 @@ mod tests {
             let mut context = Context::new();
             let shared = SharedState::new();
             let mut hb = HeartbeatState::new();
-            let (tx, rx) = crossbeam_channel::unbounded();
+            let (tx, rx) = std::sync::mpsc::sync_channel(4096);
             let event_tx = Some(tx);
             let instrument = context.market.register(265598);
             shared.portfolio.set_position_info(PositionInfo {
@@ -3433,7 +3433,7 @@ mod tests {
         let mut context = Context::new();
         let shared = SharedState::new();
         let mut hb = HeartbeatState::new();
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let event_tx = Some(tx);
         let instrument = context.market.register(265598);
 
@@ -4365,7 +4365,7 @@ mod tests {
     #[test]
     fn a_report_that_fills_an_order_also_says_the_order_is_filled() {
         let (mut ccp, mut context, shared) = ord_status_test_state();
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         // 39=2 filled, 150=F the execution, with a quantity and a price on it.
         let frame = exec_report_frame(&[
             (39, "2"), (150, "F"), (32, "100"), (31, "150.00"), (14, "100"), (151, "0"),
@@ -5021,7 +5021,7 @@ mod tests {
     #[test]
     fn a_duplicate_exec_id_suppresses_the_fill_and_nothing_else() {
         let (mut ccp, mut context, shared) = ord_status_test_state();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
         let event_tx = Some(event_tx);
 
         // Partial fill, booked normally.

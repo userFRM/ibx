@@ -73,7 +73,7 @@ pub(super) fn run_hot_loop(hot_loop: HotLoop) -> std::thread::JoinHandle<HotLoop
 
 /// Shutdown a hot loop and reclaim connections.
 pub(super) fn shutdown_and_reclaim(
-    control_tx: &crossbeam_channel::Sender<ControlCommand>,
+    control_tx: &std::sync::mpsc::SyncSender<ControlCommand>,
     join: std::thread::JoinHandle<HotLoop>,
     account_id: String,
 ) -> Conns {
@@ -481,7 +481,7 @@ pub(super) fn run_submit_cancel_phase(
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );

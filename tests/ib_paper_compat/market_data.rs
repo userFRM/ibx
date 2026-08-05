@@ -11,7 +11,7 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -83,7 +83,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -181,7 +181,7 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared,
         Some(event_tx),
@@ -225,7 +225,7 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -269,7 +269,7 @@ pub(super) fn phase_news_ticks(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -319,7 +319,7 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared,
         Some(event_tx),
@@ -396,7 +396,7 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -553,7 +553,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
     // Subscribe and verify ticks
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -632,7 +632,7 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -695,7 +695,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
     // Step 1: Subscribe, get forex ticks
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -735,7 +735,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
 
     // Step 2: Reconnect and verify ticks resume
     let shared2 = Arc::new(SharedState::new());
-    let (event_tx2, event_rx2) = crossbeam_channel::unbounded();
+    let (event_tx2, event_rx2) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop2, control_tx2) = HotLoop::with_connections(
         shared2.clone(),
         Some(event_tx2),
@@ -788,7 +788,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -896,7 +896,7 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared,
         Some(event_tx),
@@ -979,7 +979,7 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),
@@ -1090,7 +1090,7 @@ pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
         Some(event_tx),

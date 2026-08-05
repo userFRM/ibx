@@ -14,9 +14,9 @@ use ibx::engine::hot_loop::HotLoop;
 use ibx::protocol::fix;
 use ibx::types::*;
 
-fn test_client() -> (EClient, crossbeam_channel::Receiver<ControlCommand>, Arc<SharedState>) {
+fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>) {
     let shared = Arc::new(SharedState::new());
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let (tx, rx) = std::sync::mpsc::sync_channel(4096);
     let handle = thread::spawn(|| {});
     let client = EClient::from_parts(shared.clone(), tx, handle, "DU123".into());
     // Pre-seed instrument mappings so tests don't need a running hot loop.
@@ -476,7 +476,7 @@ fn concurrent_seqlock_multiple_readers() {
 #[test]
 fn concurrent_quote_by_instrument() {
     let shared = Arc::new(SharedState::new());
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
     let handle = thread::spawn(|| {});
     let client = Arc::new(EClient::from_parts(shared.clone(), tx, handle, "DU123".into()));
 
@@ -507,7 +507,7 @@ fn concurrent_quote_by_instrument() {
 #[test]
 fn concurrent_disconnect_during_process_msgs() {
     let shared = Arc::new(SharedState::new());
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
     let handle = thread::spawn(|| {});
     let client = Arc::new(EClient::from_parts(shared.clone(), tx, handle, "DU123".into()));
 
@@ -576,7 +576,7 @@ fn rapid_subscribe_unsubscribe_no_stale_state() {
 fn concurrent_place_order_and_process_msgs() {
     let shared = Arc::new(SharedState::new());
     shared.market.set_instrument_count(1);
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
     let handle = thread::spawn(|| {});
     let client = Arc::new(EClient::from_parts(shared.clone(), tx, handle, "DU123".into()));
 

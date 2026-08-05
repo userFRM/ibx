@@ -467,7 +467,7 @@ pub(super) fn phase_historical_news(mut conns: Conns, gw: &Gateway, config: &Gat
     // Step 1: Create HotLoop with ALL real connections (farm + CCP + HMDS)
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         conns.farm, conns.ccp, Some(hmds), None,
@@ -1071,7 +1071,7 @@ pub(super) fn phase_historical_ohlc_validation(conns: Conns, _gw: &Gateway, _con
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
@@ -1326,7 +1326,7 @@ pub(super) fn phase_cancel_data_requests(mut conns: Conns, gw: &Gateway, config:
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, hmds, None,
     );
@@ -1414,7 +1414,7 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, hmds, None,
     );

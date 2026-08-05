@@ -7,7 +7,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 
 use ibx::bridge::{Event, SharedState};
 use ibx::gateway::{Gateway, GatewayConfig};
@@ -67,7 +67,7 @@ impl BenchConfig {
 pub struct BenchSession {
     pub shared: Arc<SharedState>,
     pub event_rx: Receiver<Event>,
-    pub control_tx: Sender<ControlCommand>,
+    pub control_tx: SyncSender<ControlCommand>,
     pub connect_time: Duration,
     pub account_id: String,
     _join: Option<std::thread::JoinHandle<()>>,
@@ -94,7 +94,7 @@ impl BenchSession {
         let account_id = gw.account_id.clone();
 
         let shared = Arc::new(SharedState::new());
-        let (event_tx, event_rx) = bounded::<Event>(65536);
+        let (event_tx, event_rx) = sync_channel::<Event>(65536);
         let (mut hot_loop, control_tx) =
             gw.into_hot_loop(shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, None,
                 ibx::gateway::CallerAuth {
@@ -281,7 +281,7 @@ pub fn warmup(event_rx: &Receiver<Event>, count: u32, start: Instant) -> Instrum
                 }
             }
             Ok(_) => continue,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(_) => panic!("Event channel disconnected during warmup"),
         }
     }

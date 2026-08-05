@@ -7,7 +7,7 @@ use crate::protocol::fix;
 use crate::protocol::fixcomp;
 use crate::protocol::tick_decoder;
 use crate::types::{InstrumentId, TbtType, PRICE_SCALE, MAX_INSTRUMENTS};
-use crossbeam_channel::Sender;
+use std::sync::mpsc::SyncSender;
 
 use super::{HeartbeatState, emit, clone_for_event, find_body_after_tag, extract_raw_tag};
 
@@ -230,7 +230,7 @@ impl HmdsState {
         &mut self,
         hmds_conn: &mut Option<Connection>,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
         hb: &mut HeartbeatState,
     ) {
         if self.disconnected { return; }
@@ -316,7 +316,7 @@ impl HmdsState {
         msg: &[u8],
         hmds_conn: &mut Option<Connection>,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
         hb: &mut HeartbeatState,
     ) {
         let parsed = fix::fix_parse(msg);
@@ -624,7 +624,7 @@ impl HmdsState {
         }
     }
 
-    fn handle_tbt_data(&mut self, msg: &[u8], shared: &SharedState, event_tx: &Option<Sender<Event>>) {
+    fn handle_tbt_data(&mut self, msg: &[u8], shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
         let body = match find_body_after_tag(msg, b"35=E\x01") {
             Some(b) => b,
             None => return,

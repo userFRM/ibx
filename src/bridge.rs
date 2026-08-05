@@ -6,7 +6,7 @@
 //!   - `OrderState` — fills, order updates, cancel rejects, what-if, order cache.
 //!   - `ReferenceState` — historical data, contracts, scanners, news archives, market rules.
 //!   - `PortfolioState` — account snapshot, position info, atomic positions.
-//! - `Event` enum carries all events through a crossbeam channel for the `EClient` API.
+//! - `Event` enum carries all events through a channel for the `EClient` API.
 //! - The HotLoop pushes to SharedState sub-containers directly.
 //! - External callers read snapshots and poll events without blocking the hot loop.
 

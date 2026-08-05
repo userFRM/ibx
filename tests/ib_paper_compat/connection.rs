@@ -79,7 +79,7 @@ pub(super) fn phase_graceful_shutdown(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
@@ -132,7 +132,7 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
 
     let account_id = conns.account_id.clone();
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     // Use fake farm, real auth connection — hot loop should detect farm disconnect
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(event_tx), account_id.clone(), fake_conn, conns.ccp, conns.hmds, None,
@@ -182,7 +182,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
     // Step 1: Subscribe to market data, verify we get ticks
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
@@ -209,7 +209,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
 
     // Step 2: Reconnect with fresh connections and verify ticks resume
     let shared2 = Arc::new(SharedState::new());
-    let (event_tx2, event_rx2) = crossbeam_channel::unbounded();
+    let (event_tx2, event_rx2) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop2, control_tx2) = HotLoop::with_connections(
         shared2.clone(), Some(event_tx2), conns1.account_id.clone(),
         conns1.farm, conns1.ccp, conns1.hmds, None,
@@ -274,7 +274,7 @@ pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
@@ -321,7 +321,7 @@ pub(super) fn phase_update_param(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );

@@ -87,7 +87,7 @@ fn main() {
                     }
                 }
                 Ok(_) => continue,
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => break,
             }
         }
@@ -118,7 +118,7 @@ fn main() {
                     }
                 }
                 Ok(_) => continue,
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => break,
             }
         }

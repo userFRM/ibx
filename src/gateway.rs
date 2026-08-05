@@ -5,7 +5,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-use crossbeam_channel::{Sender, bounded};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use native_tls::TlsConnector;
 use num_bigint::BigUint;
 use sha1::{Digest, Sha1};
@@ -2194,13 +2194,13 @@ impl Gateway {
     pub fn into_hot_loop(
         self,
         shared: Arc<SharedState>,
-        event_tx: Option<Sender<Event>>,
+        event_tx: Option<SyncSender<Event>>,
         farm_conn: Connection,
         ccp_conn: Connection,
         hmds_conn: Option<Connection>,
         core_id: Option<usize>,
         caller: CallerAuth,
-    ) -> (HotLoop, Sender<ControlCommand>) {
+    ) -> (HotLoop, SyncSender<ControlCommand>) {
         self.into_hot_loop_with_farms(shared, event_tx, farm_conn, ccp_conn, hmds_conn, core_id, caller)
     }
 
@@ -2208,14 +2208,14 @@ impl Gateway {
     pub fn into_hot_loop_with_farms(
         self,
         shared: Arc<SharedState>,
-        event_tx: Option<Sender<Event>>,
+        event_tx: Option<SyncSender<Event>>,
         farm_conn: Connection,
         ccp_conn: Connection,
         hmds_conn: Option<Connection>,
         core_id: Option<usize>,
         caller: CallerAuth,
-    ) -> (HotLoop, Sender<ControlCommand>) {
-        let (tx, rx) = bounded(64);
+    ) -> (HotLoop, SyncSender<ControlCommand>) {
+        let (tx, rx) = sync_channel(64);
         let reconnect_auth = ReconnectAuth {
             host: caller.host,
             username: caller.username,

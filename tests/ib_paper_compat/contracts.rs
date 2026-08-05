@@ -12,7 +12,7 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
     // Step 1: Create HotLoop with real connections
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         conns.farm, conns.ccp, conns.hmds, None,
@@ -63,7 +63,7 @@ pub(super) fn phase_contract_details_by_symbol(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         conns.farm, conns.ccp, conns.hmds, None,
@@ -211,7 +211,7 @@ pub(super) fn phase_market_rule_id(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         conns.farm, conns.ccp, conns.hmds, None,
@@ -255,7 +255,7 @@ pub(super) fn phase_matching_symbols_channel(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
@@ -301,7 +301,7 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );

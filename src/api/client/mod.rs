@@ -46,7 +46,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crossbeam_channel::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SyncSender};
 
 use crate::api::types::{
     Contract as ApiContract, Order as ApiOrder, TagValue as ApiTagValue,
@@ -157,7 +157,7 @@ pub struct EClientConfig {
 /// synthesized locally (ibx#242).
 pub struct EClient {
     pub(crate) shared: Arc<SharedState>,
-    pub(crate) control_tx: Sender<ControlCommand>,
+    pub(crate) control_tx: SyncSender<ControlCommand>,
     pub(crate) thread: Mutex<Option<thread::JoinHandle<()>>>,
     pub account_id: String,
     pub(crate) connected: AtomicBool,
@@ -248,14 +248,14 @@ impl EClient {
         config: &EClientConfig,
         capacity: usize,
     ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>> {
-        let (event_tx, event_rx) = crossbeam_channel::bounded(capacity.max(1));
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(capacity.max(1));
         let client = Self::connect_inner(config, Some(event_tx))?;
         Ok((client, event_rx))
     }
 
     fn connect_inner(
         config: &EClientConfig,
-        event_tx: Option<Sender<Event>>,
+        event_tx: Option<SyncSender<Event>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let gw_config = gateway_config(config);
 
@@ -327,7 +327,7 @@ impl EClient {
     #[doc(hidden)]
     pub fn from_parts(
         shared: Arc<SharedState>,
-        control_tx: Sender<ControlCommand>,
+        control_tx: SyncSender<ControlCommand>,
         handle: thread::JoinHandle<()>,
         account_id: String,
     ) -> Self {

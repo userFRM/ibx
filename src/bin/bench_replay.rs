@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crossbeam_channel::bounded;
+use std::sync::mpsc::sync_channel;
 
 use ibx::bridge::{Event, SharedState};
 use ibx::engine::market_state::MarketState;
@@ -214,7 +214,7 @@ fn main() {
         market.register_server_tag(1, id);
         market.set_min_tick(id, 0.01);
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = bounded::<Event>(65536);
+        let (tx, rx) = sync_channel::<Event>(65536);
         let mut sent = 0u64;
 
         bench("full: unsign → decode → state → seqlock → channel", ITERATIONS, || {
@@ -361,10 +361,10 @@ fn main() {
             let _ = fix_sign(&msg, &MAC_KEY, &INIT_IV);
         });
 
-        // Channel enqueue (SPSC crossbeam)
-        let (order_tx, order_rx) = bounded::<u64>(65536);
+        // Channel enqueue (SPSC)
+        let (order_tx, order_rx) = sync_channel::<u64>(65536);
         let mut enqueued = 0u64;
-        bench("channel enqueue (crossbeam bounded)", ITERATIONS, || {
+        bench("channel enqueue (bounded)", ITERATIONS, || {
             let _ = order_tx.try_send(enqueued);
             enqueued += 1;
             if enqueued % 60000 == 0 {
