@@ -66,7 +66,7 @@ impl EClient {
                 stop_price,
             })
         } else {
-            ClientCore::build_order_request(order, oid, instrument)?
+            ClientCore::build_order_request(order, oid, instrument, &contract.combo_legs)?
         };
         self.send(cmd)?;
         self.core.cache_contract(contract.con_id, contract.clone());

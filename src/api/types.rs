@@ -487,6 +487,7 @@ impl Order {
             hedge_ratio: if self.hedge_type.eq_ignore_ascii_case("P") {
                 self.hedge_param.parse().unwrap_or(0.0)
             } else { 0.0 },
+            combo_legs: Vec::new(),
             // Valid trigger-method codes only (ibx#223): the raw `as u8`
             // cast wrapped the gateway's -1 (Unknown) to 255, and
             // out-of-range codes went to the wire verbatim. Anything
@@ -1154,6 +1155,7 @@ mod tests {
             volatility: _, volatility_type: _, percent_offset: _, not_held: _, order_ref: _, open_close: _,
             scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
             exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
+            combo_legs: _,
         } = Order::default().attrs();
 
         assert!(

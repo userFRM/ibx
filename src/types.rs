@@ -358,6 +358,8 @@ pub struct OrderAttrs {
     pub hedge_type: u8,
     pub hedge_beta: f64,
     pub hedge_ratio: f64,
+    /// The legs, when this order is for a combination.
+    pub combo_legs: Vec<ComboLegSpec>,
     /// Trigger method for stop/MIT/LIT orders (IB tag 6115).
     /// 0=default, 1=double-bid-ask, 2=last, 3=double-last, 4=bid-ask,
     /// 7=last-or-bid-ask, 8=mid-point.
@@ -616,6 +618,27 @@ pub struct ScaleAttrs {
     pub auto_reset: bool,
     /// Vary the component sizes (tag 6795).
     pub random_percent: bool,
+}
+
+/// One leg of a combination, as the order states it.
+///
+/// The wire takes the contract by id, a ratio, and a side as a flag rather than
+/// a letter. The exchange is stated only where the leg has one of its own.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ComboLegSpec {
+    /// The leg's contract (tag 6080).
+    pub con_id: i64,
+    /// How many of it per unit of the combination (tag 6081).
+    pub ratio: u32,
+    /// Buy or sell, as the flag the wire takes (tag 6082).
+    pub is_sell: bool,
+    /// Where this leg routes, when it is not the combination's own venue
+    /// (tag 616).
+    pub exchange: String,
+    /// Whether the leg opens or closes (tag 654).
+    pub open_close: u8,
+    /// Short-sale slot for the leg (tag 6086).
+    pub short_sale_slot: u8,
 }
 
 /// The hedge an order carries: what to trade against the position, and at what.

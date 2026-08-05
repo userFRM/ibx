@@ -952,6 +952,29 @@ fn send_order_ex(
     // of what it set.
     // The hedge. An order that asked for one and did not say so left the
     // position naked, which is the opposite of what it was for.
+    // A combination states its legs on the order itself. There is no repeating
+    // group for them and no standard leg tag: the count goes on 6079 and each
+    // leg's contract, ratio and side on 6080, 6081 and 6082, with its venue,
+    // position effect and short-sale slot after. The side is a flag, not the
+    // letter the rest of the message uses.
+    if !attrs.combo_legs.is_empty() {
+        fields.push((6079, format_uint(attrs.combo_legs.len() as u64).to_string()));
+        for leg in &attrs.combo_legs {
+            fields.push((6080, leg.con_id.to_string()));
+            fields.push((6081, format_uint(leg.ratio as u64).to_string()));
+            fields.push((6082, if leg.is_sell { "1" } else { "0" }.to_string()));
+            // Empty where the leg routes with the combination rather than on a
+            // venue of its own, which is what the terminal writes for SMART.
+            fields.push((616, leg.exchange.clone()));
+            if leg.open_close != 0 {
+                fields.push((654, leg.open_close.to_string()));
+            }
+            if leg.short_sale_slot != 0 {
+                fields.push((6086, leg.short_sale_slot.to_string()));
+            }
+        }
+    }
+
     // Short-sale handling. The location is stated only for the slot that has
     // one, which is the rule the venue applies, and the exemption rides its own
     // tag rather than the slot.
@@ -2402,6 +2425,49 @@ mod outside_rth_polarity_tests {
                 );
             }
         }
+    }
+
+    /// A combination names its legs on the order. There is no repeating group
+    /// for them: a count, then a contract, a ratio and a side per leg. The side
+    /// is a flag rather than the letter the order itself uses, and a leg that
+    /// routes with the combination states no venue of its own.
+    #[test]
+    fn a_combination_names_each_of_its_legs() {
+        use std::io::Read;
+        let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        let attrs = crate::types::OrderAttrs {
+            combo_legs: vec![
+                crate::types::ComboLegSpec {
+                    con_id: 265598, ratio: 1, is_sell: false,
+                    exchange: String::new(), open_close: 1, short_sale_slot: 0,
+                },
+                crate::types::ComboLegSpec {
+                    con_id: 272093, ratio: 2, is_sell: true,
+                    exchange: "ARCA".into(), open_close: 0, short_sale_slot: 0,
+                },
+            ],
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 31, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        ).unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6079=2"), "the leg count: {msg}");
+        assert!(f.contains(&"6080=265598") && f.contains(&"6080=272093"), "each contract: {msg}");
+        assert!(f.contains(&"6081=1") && f.contains(&"6081=2"), "each ratio: {msg}");
+        assert!(f.contains(&"6082=0") && f.contains(&"6082=1"), "each side, as a flag: {msg}");
+        assert!(f.contains(&"616=") && f.contains(&"616=ARCA"),
+            "a venue only where the leg has its own: {msg}");
+        assert!(f.contains(&"654=1"), "the position effect where set: {msg}");
     }
 
     /// A ladder and a hedge each go out under the tags the vendor's own
