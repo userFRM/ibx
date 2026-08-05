@@ -461,6 +461,34 @@ fn peg_bench_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// The fill-or-cancel phase that fails intermittently, on its own and several
+/// times over. An intermittent failure needs repetition more than it needs the
+/// hundred-odd phases that happen to run before it.
+#[test]
+fn box_top_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+        .expect("Gateway::connect() failed");
+    let mut conns = Conns {
+        farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone(),
+    };
+
+    let rounds: usize = std::env::var("BOX_TOP_ROUNDS")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    for i in 0..rounds {
+        println!("=== round {} of {rounds} ===", i + 1);
+        conns = orders::phase_box_top_order(conns);
+        conns = ensure_ccp_alive(conns, &mut gw, &config);
+    }
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// ibx#191 PR A focused live entry — validates that after a full disconnect,
 /// a fresh `Gateway::connect` receives the CCP recovery push (35=8 with
 /// 150=0/39=0 per ib-agent#155) and that a subsequent

@@ -1252,7 +1252,6 @@ impl CcpState {
             exec_id.to_string()
         };
 
-        let mut had_fill = false;
         if matches!(exec_type, "F" | "1" | "2") && last_shares > 0 {
             // A fill can arrive for an order this session does not track: one
             // that raced its own cancel-ack out of the book, one placed from
@@ -1327,12 +1326,18 @@ impl CcpState {
                     shared.orders.push_fill(fill);
                     shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
                     emit(event_tx, Event::Fill(fill));
-                    had_fill = true;
                 }
             }
         }
 
-        if status_changed && !had_fill
+        // A report that fills an order states its new status on the same
+        // report, and suppressing the status because the fill was on it meant
+        // the one transition that matters most was the one never announced: a
+        // caller watching order status was told about the execution and left
+        // believing the order was still working. The two are different
+        // questions — what traded, and where the order stands — and a report
+        // that answers both is not a reason to drop one.
+        if status_changed
             && let Some(order) = context.order(clord_id).copied() {
                 let perm_id: i64 = parsed.get(&37).map(|s| perm_id_from_fix_order_id(s)).unwrap_or(0);
                 // Tag 583 is the link id this engine sends the OCA group on, not
@@ -4353,6 +4358,33 @@ mod tests {
     // stays on the order snapshot, and nothing is queued for it — the
     // engine still holds the order at this point, so context still knows it
     // as Inactive/reactivatable while a Rejected order is retired below.
+    /// The report that fills an order states its new status on the same
+    /// report. Announcing the execution and withholding the status left a
+    /// caller watching order status believing the order was still working,
+    /// which is the one thing it most needed not to believe.
+    #[test]
+    fn a_report_that_fills_an_order_also_says_the_order_is_filled() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        // 39=2 filled, 150=F the execution, with a quantity and a price on it.
+        let frame = exec_report_frame(&[
+            (39, "2"), (150, "F"), (32, "100"), (31, "150.00"), (14, "100"), (151, "0"),
+        ]);
+        ccp.handle_exec_report(&frame, &mut context, &shared, &Some(tx), "");
+
+        let events: Vec<_> = rx.try_iter().collect();
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Fill(_))),
+            "the execution is reported: {events:?}",
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e, Event::OrderUpdate(u) if u.status == crate::types::OrderStatus::Filled
+            )),
+            "and so is the status it left the order in: {events:?}",
+        );
+    }
+
     #[test]
     fn ord_status_inactive_reason_reaches_inactive_queue() {
         let (mut ccp, mut context, shared) = ord_status_test_state();
