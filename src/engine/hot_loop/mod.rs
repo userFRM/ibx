@@ -266,7 +266,7 @@ impl HotLoop {
                 // account from the first callback, and what keeps the slot from
                 // being reclaimed as unheld.
                 if let Some(held) = self.shared.portfolio.position_info(con_id).filter(|_| is_new_slot) {
-                    if held.position != 0 {
+                    if held.position != 0.0 {
                         self.context.update_position(id, held.position - self.context.position(id));
                         self.shared.portfolio.set_position(id, held.position);
                     }
@@ -315,7 +315,7 @@ impl HotLoop {
         // is. Dropping the last subscription on something the account still
         // owns handed the slot to the next contract, which then reported the
         // previous one's position as its own.
-        if self.context.position(instrument) != 0 {
+        if self.context.position(instrument) != 0.0 {
             if !self.pinned_by_position.contains(&instrument) {
                 self.pinned_by_position.push(instrument);
             }
@@ -411,7 +411,7 @@ impl HotLoop {
             // caller already asked to free.
             if !self.pinned_by_position.is_empty() {
                 for instrument in std::mem::take(&mut self.pinned_by_position) {
-                    if self.context.position(instrument) == 0 {
+                    if self.context.position(instrument) == 0.0 {
                         // Reclaiming may still be refused for a reason that has
                         // nothing to do with the position — a working order, a
                         // subscription taken out since. `try_reclaim_instrument`
@@ -1356,7 +1356,7 @@ impl HotLoop {
             crate::types::Side::Buy => fill.qty,
             crate::types::Side::Sell | crate::types::Side::ShortSell => -fill.qty,
         };
-        self.context.update_position(fill.instrument, delta);
+        self.context.update_position(fill.instrument, delta as f64);
         self.shared.orders.push_fill(*fill);
         self.shared.portfolio.set_position(fill.instrument, self.context.position(fill.instrument));
         emit(&self.event_tx, Event::Fill(*fill));
@@ -1705,7 +1705,7 @@ mod tests {
         hl.hmds.disconnected = true;
 
         // A reconnect that has just succeeded.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.1:0").unwrap();
         let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (_peer, _) = listener.accept().unwrap();
         let (tx, rx) = crossbeam_channel::bounded(1);
@@ -1754,7 +1754,7 @@ mod tests {
         });
 
         // A live transport, so releasing it is observable.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.1:0").unwrap();
         let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (_peer, _) = listener.accept().unwrap();
         hl.hmds_conn = Some(crate::protocol::connection::Connection::new_raw(sock).unwrap());
@@ -1785,7 +1785,7 @@ mod tests {
     fn a_slot_the_account_still_holds_is_not_reclaimed() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         let instrument = hl.context.register_instrument(265598);
-        hl.context.update_position(instrument, 100);
+        hl.context.update_position(instrument, 100.0);
 
         hl.try_reclaim_instrument(instrument);
         assert_eq!(
@@ -1798,8 +1798,18 @@ mod tests {
             "and the request to free it is remembered rather than lost",
         );
 
+        // Half a share is a holding. A whole-number table read this as flat and
+        // handed the slot to the next contract.
+        hl.context.update_position(instrument, -99.5);
+        assert_eq!(hl.context.position(instrument), 0.5);
+        hl.try_reclaim_instrument(instrument);
+        assert_eq!(
+            hl.context.market.con_id(instrument), Some(265598),
+            "a fractional holding keeps its slot",
+        );
+
         // Flat, and nothing else refers to it: now it may go.
-        hl.context.update_position(instrument, -100);
+        hl.context.update_position(instrument, -0.5);
         hl.hmds.tbt_price_state[instrument as usize] = (1, 2, 3);
         hl.try_reclaim_instrument(instrument);
         assert_eq!(hl.context.market.con_id(instrument), None, "the freed slot holds no contract");
@@ -2012,7 +2022,7 @@ mod tests {
             cum_qty: 100, avg_price: 150_00000000,
         };
         engine.inject_fill(&fill);
-        assert_eq!(engine.context_mut().position(0), 100);
+        assert_eq!(engine.context_mut().position(0), 100.0);
     }
 
     #[test]

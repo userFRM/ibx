@@ -33,7 +33,7 @@ impl EClient {
         // back a position in a contract the caller cannot identify.
         for _ in 0..150 {
             let unnamed = self.shared.portfolio.position_infos().into_iter().any(|pi| {
-                pi.position != 0
+                pi.position != 0.0
                     && pi.symbol.is_empty()
                     && self.core.get_contract(pi.con_id, &self.shared).is_none()
             });

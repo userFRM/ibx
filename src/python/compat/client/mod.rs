@@ -516,7 +516,7 @@ w = W()",
                 ..Default::default()
             });
             shared.portfolio.set_position_info(PositionInfo {
-                con_id: 756733, position: 1, ..Default::default()
+                con_id: 756733, position: 1.0, ..Default::default()
             });
             shared.portfolio.set_account_download_complete();
             shared.portfolio.set_account(&Default::default());

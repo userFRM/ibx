@@ -199,7 +199,7 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
         // After buy+sell round trip, position should return to 0 (or near it)
         let pos = shared.portfolio.position(0);
         println!("  Final position: {pos}");
-        assert!(pos.abs() <= 1, "Position after round trip should be 0 (±1 for timing), got {pos}");
+        assert!(pos.abs() <= 1.0, "Position after round trip should be 0 (±1 for timing), got {pos}");
         println!("  PASS (position returned to {pos})\n");
     } else if phase == 2 {
         println!("  SKIP: Fills completed but no PositionUpdate events\n");

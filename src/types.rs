@@ -1250,7 +1250,10 @@ pub struct AccountState {
 #[derive(Debug, Clone, Default)]
 pub struct PositionInfo {
     pub con_id: i64,
-    pub position: i64,
+    /// The holding exactly as the account states it. Fractional: a holding of
+    /// half a share is a holding, and rounding it to a whole number reported
+    /// it as flat.
+    pub position: f64,
     pub avg_cost: Price,      // per-share avg cost * PRICE_SCALE
     pub symbol: String,
     pub sec_type: String,

@@ -1278,7 +1278,7 @@ impl CcpState {
                         Side::Buy => booked,
                         Side::Sell | Side::ShortSell => -booked,
                     };
-                    context.update_position(instrument, delta);
+                    context.update_position(instrument, delta as f64);
                     // notify_fill inlined
                     shared.orders.push_fill(fill);
                     shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
@@ -2464,7 +2464,7 @@ impl CcpState {
     // it to reqPositions and both P&L paths, and emitted a PositionUpdate
     // saying flat — the same defect ibx#261 fixed on the account-update path
     // (ibx#296). A genuine flat still arrives as an explicit `6064=0`.
-    let mut qty: Option<i64> = None;
+    let mut qty: Option<f64> = None;
     /// The quantity exactly as stated. The whole-number one above truncates,
     /// and half a share is not a closed position.
     let mut qty_raw: Option<f64> = None;
@@ -2502,7 +2502,7 @@ impl CcpState {
             // Filtered to finite: `"NaN".parse()` succeeds and `NaN as i64`
             // is 0, which would flatten by the same route.
             qty_raw = v.parse::<f64>().ok().filter(|f| f.is_finite());
-            qty = qty_raw.map(|f| f as i64);
+            qty = qty_raw;
         } else if let Some(v) = part.strip_prefix("6101=") {
             avg_cost_raw = v.parse::<f64>().ok().filter(|f| f.is_finite());
         }
@@ -2684,9 +2684,9 @@ fn basis_for(shared: &SharedState, con_id: i64, stated: Option<Price>, qty: f64)
 /// since before the connection — flat, on a process that restarted holding
 /// stock. The server is the authority here, so the difference is adopted
 /// rather than accumulated.
-fn adopt_position(context: &mut Context, instrument: InstrumentId, position: i64) {
+fn adopt_position(context: &mut Context, instrument: InstrumentId, position: f64) {
     let delta = position - context.position(instrument);
-    if delta != 0 {
+    if delta != 0.0 {
         context.update_position(instrument, delta);
     }
 }
@@ -2712,7 +2712,7 @@ pub(crate) fn handle_position_update(
         // value would flatten a live position by the same route the absent
         // tag did. Route it to no-data instead.
         .filter(|v| v.is_finite());
-    let position: Option<i64> = position_raw.map(|v| v as i64);
+    let position: Option<f64> = position_raw;
     // Tag map verified against the updatePortfolio callback (ib-agent#172):
     // 6101 = averageCost, 6065 = marketPrice (per share), 6067 = marketValue,
     // 6100 = unrealizedPNL, 6099 = realizedPNL. Earlier code read 6065 as the
@@ -2762,7 +2762,7 @@ pub(crate) fn handle_position_update(
     if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
         let current = context.position(instrument);
         let delta = position - current;
-        if delta != 0 {
+        if delta != 0.0 {
             context.update_position(instrument, delta);
         }
         shared.portfolio.set_position(instrument, position);
@@ -2845,7 +2845,7 @@ mod tests {
             &mut context, &shared, &None,
         );
         let after = shared.portfolio.position_info(756733).expect("row");
-        assert_eq!(after.position, 120, "the quantity it did state is applied");
+        assert_eq!(after.position, 120.0, "the quantity it did state is applied");
         assert_eq!(
             after.avg_cost, 150 * PRICE_SCALE,
             "and the cost it did not state is kept, not zeroed",
@@ -2860,15 +2860,15 @@ mod tests {
 
         handle_position_update(&position_frame(&[(6064, "100"), (6101, "150.0")]),
             &mut context, &shared, &None);
-        assert_eq!(context.position(instrument), 100);
+        assert_eq!(context.position(instrument), 100.0);
 
         // Marks move, no 6064 on the frame.
         handle_position_update(&position_frame(&[(6065, "151.0"), (6100, "100.0")]),
             &mut context, &shared, &None);
-        assert_eq!(context.position(instrument), 100,
+        assert_eq!(context.position(instrument), 100.0,
             "a marks-only frame must not flatten the position");
         assert_eq!(shared.portfolio.position_infos().iter()
-            .find(|p| p.con_id == 265598).map(|p| p.position), Some(100),
+            .find(|p| p.con_id == 265598).map(|p| p.position), Some(100.0),
             "reqPositions must still report the held quantity");
 
         // The marks from that frame did land on the existing row.
@@ -2879,7 +2879,7 @@ mod tests {
 
         // A frame that really does carry a flat quantity still flattens it.
         handle_position_update(&position_frame(&[(6064, "0")]), &mut context, &shared, &None);
-        assert_eq!(context.position(instrument), 0);
+        assert_eq!(context.position(instrument), 0.0);
     }
 
     /// A marks-only frame for a contract never seen before must not conjure a
@@ -2896,13 +2896,13 @@ mod tests {
             handle_position_update(
                 &position_frame(&[(6064, "100"), (6101, "150.0")]), &mut context, &shared, &None);
             assert_eq!(
-                shared.portfolio.position_info(265598).map(|p| p.position), Some(100),
+                shared.portfolio.position_info(265598).map(|p| p.position), Some(100.0),
                 "seed must establish a live position");
 
             handle_position_update(
                 &position_frame(&[(6064, bad), (6101, "151.0")]), &mut context, &shared, &None);
             assert_eq!(
-                shared.portfolio.position_info(265598).map(|p| p.position), Some(100),
+                shared.portfolio.position_info(265598).map(|p| p.position), Some(100.0),
                 "{bad} must not flatten a live position");
         }
     }
@@ -3211,7 +3211,7 @@ mod tests {
         use crate::control::contracts::{ContractDefinition, SecurityType};
         let shared = SharedState::new();
         shared.portfolio.set_position_info(PositionInfo {
-            con_id: 793356217, position: 1, avg_cost: 38270,
+            con_id: 793356217, position: 1.0, avg_cost: 38270,
             ..Default::default()
         });
         assert_eq!(
@@ -3231,7 +3231,7 @@ mod tests {
 
         let row = shared.portfolio.position_info(793356217).unwrap();
         assert_eq!(row.symbol, "MES", "and the definition names it");
-        assert_eq!(row.position, 1, "without disturbing the quantity");
+        assert_eq!(row.position, 1.0, "without disturbing the quantity");
         assert_eq!(row.avg_cost, 38270, "or the basis");
     }
 
@@ -3314,22 +3314,22 @@ mod tests {
         let shared = SharedState::new();
         let mut hb = HeartbeatState::new();
         let instrument = context.market.register(265598);
-        assert_eq!(context.position(instrument), 0, "the engine starts knowing nothing");
+        assert_eq!(context.position(instrument), 0.0, "the engine starts knowing nothing");
 
         ccp.handle_position_feed(
             "6008=265598\x016064=500\x016101=151.0\x01".as_bytes(),
             &mut None, &mut context, &shared, &None, &mut hb,
         );
 
-        assert_eq!(context.position(instrument), 500, "the account holds 500 and so does the engine");
-        assert_eq!(shared.portfolio.position(instrument), 500);
+        assert_eq!(context.position(instrument), 500.0, "the account holds 500 and so does the engine");
+        assert_eq!(shared.portfolio.position(instrument), 500.0);
 
         // A later statement is adopted too, not accumulated on top.
         ccp.handle_position_feed(
             "6008=265598\x016064=300\x016101=151.0\x01".as_bytes(),
             &mut None, &mut context, &shared, &None, &mut hb,
         );
-        assert_eq!(context.position(instrument), 300, "the server's number wins, it is not added");
+        assert_eq!(context.position(instrument), 300.0, "the server's number wins, it is not added");
     }
 
     /// ibx#296: the 75 feed defaulted its running quantity to zero, so an entry
@@ -3357,9 +3357,9 @@ mod tests {
             let event_tx = Some(tx);
             let instrument = context.market.register(265598);
             shared.portfolio.set_position_info(PositionInfo {
-                con_id: 265598, position: 100, avg_cost: 0, ..Default::default()
+                con_id: 265598, position: 100.0, avg_cost: 0, ..Default::default()
             });
-            shared.portfolio.set_position(instrument, 100);
+            shared.portfolio.set_position(instrument, 100.0);
 
             ccp.handle_position_feed(
                 body.as_bytes(), &mut None, &mut context, &shared, &event_tx, &mut hb);
@@ -3367,15 +3367,15 @@ mod tests {
             // All three stores move together, so all three are asserted: the
             // row callers read, the atomic the engine reads, and the event.
             assert_eq!(
-                shared.portfolio.position_info(265598).map(|p| p.position), Some(100),
+                shared.portfolio.position_info(265598).map(|p| p.position), Some(100.0),
                 "{body:?} must not flatten the position row",
             );
             assert_eq!(
-                shared.portfolio.position(instrument), 100,
+                shared.portfolio.position(instrument), 100.0,
                 "{body:?} must not flatten the shared position",
             );
             let flattened = rx.try_iter().any(|e| matches!(
-                e, Event::PositionUpdate { con_id: 265598, position: 0, .. }));
+                e, Event::PositionUpdate { con_id: 265598, position: 0.0, .. }));
             assert!(!flattened, "{body:?} must not publish a flat");
         }
     }
@@ -3401,13 +3401,13 @@ mod tests {
             body.as_bytes(), &mut None, &mut context, &shared, &event_tx, &mut hb);
 
         assert_eq!(
-            shared.portfolio.position_info(265598).map(|p| p.position), Some(42),
+            shared.portfolio.position_info(265598).map(|p| p.position), Some(42.0),
             "the position row",
         );
-        assert_eq!(shared.portfolio.position(instrument), 42, "the shared position");
+        assert_eq!(shared.portfolio.position(instrument), 42.0, "the shared position");
         assert!(
             rx.try_iter().any(|e| matches!(
-                e, Event::PositionUpdate { con_id: 265598, position: 42, .. })),
+                e, Event::PositionUpdate { con_id: 265598, position: 42.0, .. })),
             "the published event",
         );
     }
@@ -3421,16 +3421,16 @@ mod tests {
         let mut hb = HeartbeatState::new();
         let instrument = context.market.register(265598);
         shared.portfolio.set_position_info(PositionInfo {
-            con_id: 265598, position: 100, avg_cost: 0, ..Default::default()
+            con_id: 265598, position: 100.0, avg_cost: 0, ..Default::default()
         });
-        shared.portfolio.set_position(instrument, 100);
+        shared.portfolio.set_position(instrument, 100.0);
 
         ccp.handle_position_feed(
             b"6008=265598\x016064=0\x016101=151.0\x01",
             &mut None, &mut context, &shared, &None, &mut hb);
 
         assert_eq!(
-            shared.portfolio.position_info(265598).map(|p| p.position), Some(0),
+            shared.portfolio.position_info(265598).map(|p| p.position), Some(0.0),
             "an explicit zero is a genuine flat",
         );
     }
@@ -3605,7 +3605,7 @@ mod tests {
                 shared.orders.drain_fills().is_empty(),
                 "tag {} = Y restates history and must not book", marker.0,
             );
-            assert_eq!(context.position(0), 0, "and must not move the position");
+            assert_eq!(context.position(0), 0.0, "and must not move the position");
         }
 
         // The positive control: the same report without a marker is a real
@@ -3614,7 +3614,7 @@ mod tests {
         let (mut ccp, mut context, shared) = tracked_order_state();
         ccp.handle_exec_report(&fill_frame(&[]), &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1, "a live execution books");
-        assert_eq!(context.position(0), 10);
+        assert_eq!(context.position(0), 10.0);
     }
 
     /// ibx#320 end to end, as a fresh process sees it: the gateway replays the
@@ -3684,7 +3684,7 @@ mod tests {
             shared.orders.drain_fills().len(), 1,
             "a marked report carrying quantity the order does not have is a real fill",
         );
-        assert_eq!(context.position(0), 3);
+        assert_eq!(context.position(0), 3.0);
 
         // And a second copy of that same replay states no more, so it is history.
         ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
@@ -3692,7 +3692,7 @@ mod tests {
             shared.orders.drain_fills().is_empty(),
             "restating the same cumulative quantity is not new",
         );
-        assert_eq!(context.position(0), 3);
+        assert_eq!(context.position(0), 3.0);
     }
 
     /// Two genuine slices of one order, same size and price inside one
@@ -3712,7 +3712,7 @@ mod tests {
         ccp.handle_exec_report(&second, &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 2, "both slices book");
-        assert_eq!(context.position(0), 20);
+        assert_eq!(context.position(0), 20.0);
     }
 
     /// ibx#260: the dedup window was skipped entirely when tag 17 was absent,
@@ -3729,7 +3729,7 @@ mod tests {
         ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 1, "booked once, not twice");
-        assert_eq!(context.position(0), 10, "and the position moved once");
+        assert_eq!(context.position(0), 10.0, "and the position moved once");
 
         // A genuinely different execution on the same order is not swallowed by
         // the synthesised key.
@@ -3738,7 +3738,7 @@ mod tests {
         other.insert(32, "5".to_string());
         ccp.handle_exec_report(&other, &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1, "a distinct execution still books");
-        assert_eq!(context.position(0), 15);
+        assert_eq!(context.position(0), 15.0);
     }
 
     /// A long session rolls executions out of the ExecID window, and a replay
@@ -3760,7 +3760,7 @@ mod tests {
 
         assert!(shared.orders.drain_fills().is_empty(), "history restated is not new quantity");
         assert_eq!(context.order(42).unwrap().filled, 12, "and the order is not overcounted");
-        assert_eq!(context.position(0), 0);
+        assert_eq!(context.position(0), 0.0);
 
         // A fill from the same replay that this session has not booked is news
         // and still reaches the caller.
@@ -3768,7 +3768,7 @@ mod tests {
         fresh.remove(&17);
         ccp.handle_exec_report(&fresh, &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1, "quantity the order lacks still books");
-        assert_eq!(context.position(0), 3);
+        assert_eq!(context.position(0), 3.0);
     }
 
     /// The same execution delivered marked and then unmarked. The cumulative
@@ -3821,7 +3821,7 @@ mod tests {
             "a replay the window has forgotten still adds no quantity the order holds",
         );
         assert_eq!(context.order(42).unwrap().filled, 12);
-        assert_eq!(context.position(0), 0);
+        assert_eq!(context.position(0), 0.0);
     }
 
     /// The same marked execution delivered twice, both copies carrying more
@@ -3837,7 +3837,7 @@ mod tests {
 
         assert_eq!(shared.orders.drain_fills().len(), 1, "the second copy adds nothing");
         assert_eq!(context.order(42).unwrap().filled, 12);
-        assert_eq!(context.position(0), 7);
+        assert_eq!(context.position(0), 7.0);
     }
 
     /// A replacement that raises the total lets an order fill the same size at
@@ -3857,7 +3857,7 @@ mod tests {
         ccp.handle_exec_report(&second, &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 2, "both slices book");
-        assert_eq!(context.position(0), 20);
+        assert_eq!(context.position(0), 20.0);
     }
 
     /// An execution with no ExecID that arrives ahead of the recovery record
@@ -3881,7 +3881,7 @@ mod tests {
         ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 1, "the execution is still bookable");
-        assert_eq!(context.position(0), 10);
+        assert_eq!(context.position(0), 10.0);
     }
     /// ibx#369: the request was recorded as pending whether or not it went out.
     /// The send error was discarded and the push sat outside the block that
@@ -3901,7 +3901,7 @@ mod tests {
         );
 
         // And with one, it is recorded.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.1:0").unwrap();
         let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (_peer, _) = listener.accept().unwrap();
         let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
@@ -4147,7 +4147,7 @@ mod tests {
         // And a replace of it carries no tag 59, so the guess is never sent to
         // the gateway as an instruction — a fabricated DAY would expire an
         // order that is resting until cancelled.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.1:0").unwrap();
         let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (mut peer, _) = listener.accept().unwrap();
         let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
@@ -4241,7 +4241,7 @@ mod tests {
         ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 1, "the fill books");
-        assert_eq!(context.position(0), 40, "and the position moves");
+        assert_eq!(context.position(0), 40.0, "and the position moves");
     }
 
     /// Only a stated UnknownOrder retires the order. Every other stated reason
@@ -4391,7 +4391,7 @@ mod tests {
         handle_position_update(&m, &mut context, &shared, &None);
 
         let pi = shared.portfolio.position_info(756733).expect("position stored");
-        assert_eq!(pi.position, 10);
+        assert_eq!(pi.position, 10.0);
         assert_eq!(pi.avg_cost, (100.50 * PRICE_SCALE as f64) as Price);
         assert_eq!(pi.market_price, (110.25 * PRICE_SCALE as f64) as Price);
         assert_eq!(pi.market_value, (1102.50 * PRICE_SCALE as f64) as Price);
@@ -4405,15 +4405,15 @@ mod tests {
     fn lean_position_feed_does_not_clobber_marks() {
         let shared = SharedState::new();
         shared.portfolio.set_position_info(PositionInfo {
-            con_id: 1, position: 10, avg_cost: 100 * PRICE_SCALE, ..Default::default()
+            con_id: 1, position: 10.0, avg_cost: 100 * PRICE_SCALE, ..Default::default()
         });
         shared.portfolio.set_position_marks(1, 110 * PRICE_SCALE, 1100 * PRICE_SCALE, 100 * PRICE_SCALE, 5 * PRICE_SCALE);
         // Lean feed updates position + avg_cost only.
         shared.portfolio.set_position_info(PositionInfo {
-            con_id: 1, position: 12, avg_cost: 101 * PRICE_SCALE, ..Default::default()
+            con_id: 1, position: 12.0, avg_cost: 101 * PRICE_SCALE, ..Default::default()
         });
         let pi = shared.portfolio.position_info(1).unwrap();
-        assert_eq!(pi.position, 12);
+        assert_eq!(pi.position, 12.0);
         assert_eq!(pi.avg_cost, 101 * PRICE_SCALE);
         assert_eq!(pi.market_price, 110 * PRICE_SCALE, "marks survive the lean feed");
         assert_eq!(pi.market_value, 1100 * PRICE_SCALE);
@@ -4756,7 +4756,7 @@ mod tests {
         assert_eq!(fills[0].order_id, 99);
         assert_eq!(fills[0].side, Side::Buy);
         assert_eq!(
-            context.position(fills[0].instrument), 5,
+            context.position(fills[0].instrument), 5.0,
             "the position must move by the filled quantity",
         );
     }
@@ -4773,7 +4773,7 @@ mod tests {
         let fills = shared.orders.drain_fills();
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].side, Side::Sell);
-        assert_eq!(context.position(fills[0].instrument), -5);
+        assert_eq!(context.position(fills[0].instrument), -5.0);
     }
 
     /// Without a contract or a side there is nothing to book against, and
@@ -4939,7 +4939,7 @@ mod tests {
             assert_eq!(fills.len(), 1, "Side={tag54} books");
             assert_eq!(fills[0].side, expected_side, "Side={tag54}");
             assert_eq!(
-                context.position(fills[0].instrument), expected_delta,
+                context.position(fills[0].instrument), expected_delta as f64,
                 "Side={tag54} moves the position {expected_delta}",
             );
         }
@@ -4997,7 +4997,7 @@ mod tests {
 
         // The position is what deduplication exists to protect. One share was
         // filled; the replay must not make it two.
-        assert_eq!(position_after, 1, "the duplicate must not move the position again");
+        assert_eq!(position_after, 1.0, "the duplicate must not move the position again");
         assert_eq!(updates[0].filled_qty, 1.0, "nor inflate the filled quantity");
         assert_eq!(completed[0].filled_qty, 1);
 

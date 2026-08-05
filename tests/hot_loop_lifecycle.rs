@@ -38,7 +38,7 @@ fn full_lifecycle() {
     };
     engine.inject_fill(&fill);
 
-    assert_eq!(engine.context_mut().position(aapl), 100);
+    assert_eq!(engine.context_mut().position(aapl), 100.0);
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
