@@ -508,6 +508,9 @@ pub enum OrderKind {
         pegged_change_amount: Price,
         ref_change_amount: Price,
         starting_price: Price,
+        /// The reference contract's price, which the venue requires alongside
+        /// the contract itself.
+        stock_ref_price: Price,
         ref_exchange: String,
     },
     Moc,

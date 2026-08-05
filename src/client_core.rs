@@ -1892,6 +1892,12 @@ impl ClientCore {
 
     /// Build an `OrderRequest` from an API `Order`, handling all order types.
     /// This is the shared order-type match block used by both Rust and Python.
+    /// A price the caller left alone is `f64::MAX`, which is not a price and
+    /// does not survive being scaled into one.
+    fn price_or_unset(v: f64) -> i64 {
+        if v == f64::MAX { 0 } else { (v * PRICE_SCALE_F) as i64 }
+    }
+
     pub fn build_order_request(
         order: &ApiOrder,
         order_id: u64,
@@ -2061,7 +2067,8 @@ impl ClientCore {
                     is_peg_decrease: order.is_pegged_change_amount_decrease,
                     pegged_change_amount: (order.pegged_change_amount * PRICE_SCALE_F) as i64,
                     ref_change_amount: (order.reference_change_amount * PRICE_SCALE_F) as i64,
-                    starting_price: (order.starting_price * PRICE_SCALE_F) as i64,
+                    starting_price: Self::price_or_unset(order.starting_price),
+                    stock_ref_price: Self::price_or_unset(order.stock_ref_price),
                     ref_exchange: order.reference_exchange_id.clone(),
                 })
             }
