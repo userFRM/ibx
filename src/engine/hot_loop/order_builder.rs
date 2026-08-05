@@ -932,6 +932,9 @@ fn send_order_ex(
     if attrs.volatility > 0.0 {
         fields.push((9816, format!("{:.6}", attrs.volatility)));
     }
+    if attrs.volatility_type > 0 {
+        fields.push((6280, attrs.volatility_type.to_string()));
+    }
     if attrs.percent_offset != f64::MAX {
         fields.push((9822, format!("{:.6}", attrs.percent_offset)));
     }

@@ -331,6 +331,9 @@ pub struct OrderAttrs {
     /// Implied volatility for a volatility order, as a decimal (0.25 = 25%),
     /// on tag 9816. Zero means the caller set none.
     pub volatility: f64,
+    /// Whether the volatility above is daily or annual, on tag 6280. Zero means
+    /// the caller set none.
+    pub volatility_type: u8,
     /// Offset from the market for a relative order, as a decimal fraction, on
     /// tag 9822. `f64::MAX` means the caller set none.
     pub percent_offset: f64,

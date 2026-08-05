@@ -1872,7 +1872,6 @@ impl ClientCore {
     /// not refuse. They are still dropped.
     pub fn validate_supported_instructions(o: &ApiOrder) -> Result<(), String> {
         let mut unsent: Vec<&str> = Vec::new();
-        if o.volatility_type != 0 { unsent.push("volatilityType"); }
         if !o.hedge_type.is_empty() { unsent.push("hedgeType"); }
         if o.short_sale_slot != 0 { unsent.push("shortSaleSlot"); }
         if unsent.is_empty() {
@@ -2781,13 +2780,16 @@ mod contract_gate_tests {
         // Sent now, so no longer refused.
         for (label, o) in [
             ("volatility", ApiOrder { volatility: 0.25, ..ApiOrder::default() }),
-            ("percent offset", ApiOrder { percent_offset: 0.5, ..ApiOrder::default() }),
-            ("not held", ApiOrder { not_held: true, ..ApiOrder::default() }),
-            ("open/close", ApiOrder { open_close: "O".into(), ..ApiOrder::default() }),
+            ("volatility type", ApiOrder { volatility_type: 2, ..ApiOrder::default() }),
             ("scale", ApiOrder { scale_init_level_size: 100, scale_price_increment: 0.05,
                                  ..ApiOrder::default() }),
             ("delta neutral", ApiOrder { delta_neutral_order_type: "MKT".into(),
                                          ..ApiOrder::default() }),
+            ("percent offset", ApiOrder { percent_offset: 0.5, ..ApiOrder::default() }),
+            ("not held", ApiOrder { not_held: true, ..ApiOrder::default() }),
+            ("open/close", ApiOrder { open_close: "O".into(), ..ApiOrder::default() }),
+
+
         ] {
             assert!(ClientCore::validate_supported_instructions(&o).is_ok(), "{label} is sent");
         }
