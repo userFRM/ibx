@@ -593,8 +593,8 @@ impl CcpState {
                     let ticker_id = u32::from_be_bytes([body[2], body[3], body[4], body[5]]);
                     let timestamp = u32::from_be_bytes([body[6], body[7], body[8], body[9]]);
                     let payload_len = body[10] as usize;
-                    if body.len() >= 11 + payload_len {
-                        if let Some(&req_id) = self.kut_ticker_map.get(&ticker_id) {
+                    if body.len() >= 11 + payload_len
+                        && let Some(&req_id) = self.kut_ticker_map.get(&ticker_id) {
                             let min_tick = self.kut_min_tick.get(&ticker_id).copied().unwrap_or(0.01);
                             let payload = &body[11..11 + payload_len];
                             if let Some(mut bar) = crate::control::historical::decode_bar_payload(payload, min_tick) {
@@ -618,7 +618,6 @@ impl CcpState {
                                 shared.reference.push_historical_data(req_id, resp);
                             }
                         }
-                    }
                 }
             }
             "UT" | "UM" | "RL" => handle_account_update(msg, context, shared),
@@ -1072,11 +1071,10 @@ impl CcpState {
         // cancel/modify can echo back the same string. Skip cancel-ack frames
         // (tag 11 starts with 'C' there) — those carry the cancel request's
         // own id, not the original order's. See ibx#179.
-        if let Some(raw_clord) = parsed.get(&11) {
-            if !raw_clord.starts_with('C') && raw_clord != "*" {
+        if let Some(raw_clord) = parsed.get(&11)
+            && !raw_clord.starts_with('C') && raw_clord != "*" {
                 context.last_clord.insert(clord_id, raw_clord.clone());
             }
-        }
 
         // What-If response: tag 6091=1 with margin data (tag 6092+).
         // The gateway emits a not-ready ack frame whose margin fields carry the
@@ -1102,8 +1100,8 @@ impl CcpState {
                     .and_then(|s| s.parse::<f64>().ok())
                     .is_some_and(|f| f.is_finite())
             });
-            if is_data_frame {
-                if let Some(order) = context.order(clord_id).copied() {
+            if is_data_frame
+                && let Some(order) = context.order(clord_id).copied() {
                     let response = crate::types::WhatIfResponse {
                         order_id: clord_id,
                         instrument: order.instrument,
@@ -1124,7 +1122,6 @@ impl CcpState {
                     shared.orders.push_what_if(response);
                     emit(event_tx, Event::WhatIf(response));
                 }
-            }
             return;
         }
 
@@ -1335,8 +1332,8 @@ impl CcpState {
             }
         }
 
-        if status_changed && !had_fill {
-            if let Some(order) = context.order(clord_id).copied() {
+        if status_changed && !had_fill
+            && let Some(order) = context.order(clord_id).copied() {
                 let perm_id: i64 = parsed.get(&37).map(|s| perm_id_from_fix_order_id(s)).unwrap_or(0);
                 // Tag 583 is the link id this engine sends the OCA group on, not
                 // a parent order. Hashing it produced a stable non-zero value
@@ -1370,7 +1367,6 @@ impl CcpState {
                     }
                 }
             }
-        }
 
         // Enrich order/contract caches block
         {
@@ -2408,8 +2404,8 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
     for part in text.split('\x01') {
         if let Some(val) = part.strip_prefix("8001=") {
             key = Some(val);
-        } else if let Some(val) = part.strip_prefix("8004=") {
-            if let Some(k) = key {
+        } else if let Some(val) = part.strip_prefix("8004=")
+            && let Some(k) = key {
                 match k {
                     "NetLiquidation" => { if let Ok(v) = val.parse::<f64>() { context.account.net_liquidation = (v * PRICE_SCALE as f64) as Price; } }
                     "BuyingPower" => { if let Ok(v) = val.parse::<f64>() { context.account.buying_power = (v * PRICE_SCALE as f64) as Price; } }
@@ -2434,7 +2430,6 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
                 }
                 key = None;
             }
-        }
     }
     shared.portfolio.set_account(context.account());
 }

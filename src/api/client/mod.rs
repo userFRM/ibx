@@ -258,11 +258,10 @@ impl EClient {
         // Only where the caller asked for a file. Best-effort even then: a
         // session that cannot be written is a slower start next time, never a
         // failed connect now.
-        if let Some(path) = config.session_file.as_ref() {
-            if let Err(e) = crate::auth::resume::save(path, &config.password, &session) {
+        if let Some(path) = config.session_file.as_ref()
+            && let Err(e) = crate::auth::resume::save(path, &config.password, &session) {
                 log::warn!("session not saved to {}: {e}", path.display());
             }
-        }
 
         let shared = Arc::new(SharedState::new());
         gw.populate_init_data(&shared);

@@ -170,8 +170,8 @@ fn split_messages(buf: &[u8]) -> Vec<Vec<u8>> {
                         let raw_tag = find_tag(&chunk[scan..], b"\x0195=").map(|p| scan + p);
                         let ck = find_tag(&chunk[scan..], b"\x0110=").map(|p| scan + p);
 
-                        if let (Some(rt), _) = (raw_tag, ck) {
-                            if ck.is_none() || rt < ck.unwrap() {
+                        if let (Some(rt), _) = (raw_tag, ck)
+                            && (ck.is_none() || rt < ck.unwrap()) {
                                 // Skip past raw data block
                                 let after95 = match chunk[rt + 4..]
                                     .iter()
@@ -196,7 +196,6 @@ fn split_messages(buf: &[u8]) -> Vec<Vec<u8>> {
                                 scan = tag96 + 3 + rdl;
                                 continue;
                             }
-                        }
                         cksum = ck;
                         break;
                     }

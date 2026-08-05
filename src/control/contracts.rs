@@ -380,11 +380,10 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
             let text = String::from_utf8_lossy(part);
             if let Some(val) = text.strip_prefix("455=") {
                 last_alt_id = val.to_string();
-            } else if let Some(val) = text.strip_prefix("456=") {
-                if val == "4" { // ISIN
+            } else if let Some(val) = text.strip_prefix("456=")
+                && val == "4" { // ISIN
                     def.isin = last_alt_id.clone();
                 }
-            }
         }
     }
     if let Some(v) = tags.get(&8598) { // MinSizeIncrement
@@ -435,11 +434,10 @@ pub fn parse_market_rules(data: &[u8]) -> Vec<MarketRule> {
     for part in data.split(|&b| b == SOH) {
         if part.is_empty() { continue; }
         let text = String::from_utf8_lossy(part);
-        if let Some((tag_str, val)) = text.split_once('=') {
-            if let Ok(tag) = tag_str.parse::<u32>() {
+        if let Some((tag_str, val)) = text.split_once('=')
+            && let Ok(tag) = tag_str.parse::<u32>() {
                 tags.push((tag, val.to_string()));
             }
-        }
     }
 
     let mut rules: Vec<MarketRule> = Vec::new();
@@ -470,13 +468,11 @@ pub fn parse_market_rules(data: &[u8]) -> Vec<MarketRule> {
                 }
             }
             TAG_INCREMENT => {
-                if let Some(ref mut rule) = current {
-                    if let Some(low_edge) = pending_low_edge.take() {
-                        if let Ok(increment) = val.parse::<f64>() {
+                if let Some(ref mut rule) = current
+                    && let Some(low_edge) = pending_low_edge.take()
+                        && let Ok(increment) = val.parse::<f64>() {
                             rule.price_increments.push(PriceIncrement { low_edge, increment });
                         }
-                    }
-                }
             }
             TAG_MARKET_RULE_END => {
                 if let Some(rule) = current.take() {
@@ -572,11 +568,10 @@ pub fn parse_schedule_response(data: &[u8]) -> Option<ContractSchedule> {
     for part in data.split(|&b| b == SOH) {
         if part.is_empty() { continue; }
         let text = String::from_utf8_lossy(part);
-        if let Some((tag_str, val)) = text.split_once('=') {
-            if let Ok(tag) = tag_str.parse::<u32>() {
+        if let Some((tag_str, val)) = text.split_once('=')
+            && let Ok(tag) = tag_str.parse::<u32>() {
                 tags.push((tag, val.to_string()));
             }
-        }
     }
 
     // Verify this is a schedule response
@@ -811,11 +806,10 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
     for part in data.split(|&b| b == SOH) {
         if part.is_empty() { continue; }
         let text = String::from_utf8_lossy(part);
-        if let Some((tag_str, val)) = text.split_once('=') {
-            if let Ok(tag) = tag_str.parse::<u32>() {
+        if let Some((tag_str, val)) = text.split_once('=')
+            && let Ok(tag) = tag_str.parse::<u32>() {
                 tags.push((tag, val.to_string()));
             }
-        }
     }
 
     // Verify this is a matching symbols response
@@ -831,9 +825,8 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
     for (tag, val) in &tags {
         match *tag {
             TAG_SYMBOL => {
-                if let Some(m) = current.take() {
-                    if m.con_id > 0 { matches.push(m); }
-                }
+                if let Some(m) = current.take()
+                    && m.con_id > 0 { matches.push(m); }
                 current = Some(SymbolMatch {
                     con_id: 0,
                     symbol: val.clone(),
@@ -878,9 +871,8 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
         }
     }
     // Flush last match
-    if let Some(m) = current {
-        if m.con_id > 0 { matches.push(m); }
-    }
+    if let Some(m) = current
+        && m.con_id > 0 { matches.push(m); }
 
     Some(matches)
 }

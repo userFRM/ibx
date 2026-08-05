@@ -127,12 +127,11 @@ impl RecoveryBudget {
 
     /// Give the budget back once the session has held together long enough.
     pub fn settle(&mut self, now: std::time::Instant, stable_window: Duration) {
-        if let Some(since) = self.healthy_since {
-            if now.duration_since(since) >= stable_window {
+        if let Some(since) = self.healthy_since
+            && now.duration_since(since) >= stable_window {
                 self.attempts = 0;
                 self.started = None;
             }
-        }
     }
 
     pub fn attempts(&self) -> u32 {
@@ -147,11 +146,10 @@ impl RecoveryBudget {
         if cfg.max_attempts.is_some_and(|max| self.attempts >= max) {
             return false;
         }
-        if let (Some(max), Some(started)) = (cfg.max_elapsed, self.started) {
-            if now.duration_since(started) >= max {
+        if let (Some(max), Some(started)) = (cfg.max_elapsed, self.started)
+            && now.duration_since(started) >= max {
                 return false;
             }
-        }
         true
     }
 }

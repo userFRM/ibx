@@ -293,12 +293,11 @@ impl HotLoop {
                 // is what makes the engine's position table agree with the
                 // account from the first callback, and what keeps the slot from
                 // being reclaimed as unheld.
-                if let Some(held) = self.shared.portfolio.position_info(con_id).filter(|_| is_new_slot) {
-                    if held.position != 0.0 {
+                if let Some(held) = self.shared.portfolio.position_info(con_id).filter(|_| is_new_slot)
+                    && held.position != 0.0 {
                         self.context.update_position(id, held.position - self.context.position(id));
                         self.shared.portfolio.set_position(id, held.position);
                     }
-                }
                 self.shared.market.set_instrument_count(self.context.market.count());
                 if let Some(tx) = reply_tx { let _ = tx.send(Ok(id)); }
                 Some(id)
@@ -615,8 +614,8 @@ impl HotLoop {
                     // On-demand RTT sample (ibx#158). Reuses the liveness
                     // test-request machinery; a pending liveness test is
                     // already a measurement in flight, so don't stomp it.
-                    if self.hb.pending_ccp_test.is_none() {
-                        if let Some(conn) = self.ccp_conn.as_mut() {
+                    if self.hb.pending_ccp_test.is_none()
+                        && let Some(conn) = self.ccp_conn.as_mut() {
                             let ts = chrono_free_timestamp();
                             let test_id = self.hb.next_test_id();
                             let _ = conn.send_fix(&[
@@ -627,7 +626,6 @@ impl HotLoop {
                             self.hb.pending_ccp_test = Some((test_id, Instant::now()));
                             self.hb.last_ccp_sent = Instant::now();
                         }
-                    }
                 }
                 ControlCommand::Order(req) => {
                     self.context.pending_orders.push(req);
@@ -842,8 +840,8 @@ impl HotLoop {
         let ts = chrono_free_timestamp();
 
         // --- Auth heartbeat (skip if already disconnected) ---
-        if !self.ccp.disconnected {
-        if let Some(conn) = self.ccp_conn.as_mut() {
+        if !self.ccp.disconnected
+        && let Some(conn) = self.ccp_conn.as_mut() {
             let since_sent = now.duration_since(self.hb.last_ccp_sent).as_secs();
             let since_recv = now.duration_since(self.hb.last_ccp_recv).as_secs();
 
@@ -872,11 +870,10 @@ impl HotLoop {
                 }
             }
         }
-        }
 
         // --- Farm heartbeat (skip if already disconnected) ---
-        if !self.farm.disconnected {
-        if let Some(conn) = self.farm_conn.as_mut() {
+        if !self.farm.disconnected
+        && let Some(conn) = self.farm_conn.as_mut() {
             let since_sent = now.duration_since(self.hb.last_farm_sent).as_secs();
             let since_recv = now.duration_since(self.hb.last_farm_recv).as_secs();
 
@@ -905,11 +902,10 @@ impl HotLoop {
                 }
             }
         }
-        }
 
         // --- Historical heartbeat (skip if disconnected or no historical activity) ---
-        if !self.hmds.disconnected && self.hmds_conn.is_some() {
-        if let Some(conn) = self.hmds_conn.as_mut() {
+        if !self.hmds.disconnected && self.hmds_conn.is_some()
+        && let Some(conn) = self.hmds_conn.as_mut() {
             let since_sent = now.duration_since(self.hb.last_hmds_sent).as_secs();
             let since_recv = now.duration_since(self.hb.last_hmds_recv).as_secs();
 
@@ -937,7 +933,6 @@ impl HotLoop {
                     self.hb.last_hmds_sent = now;
                 }
             }
-        }
         }
     }
 
@@ -1765,8 +1760,8 @@ pub(crate) fn find_body_after_tag<'a>(msg: &'a [u8], tag_marker: &[u8]) -> Optio
 /// Extract the raw bytes of a binary FIX tag value using a length tag.
 pub(crate) fn extract_raw_tag(msg: &[u8], tag: u32) -> Option<Vec<u8>> {
     let len_tag = tag - 1;
-    if let Some(len_val) = extract_text_tag(msg, len_tag) {
-        if let Ok(data_len) = len_val.parse::<usize>() {
+    if let Some(len_val) = extract_text_tag(msg, len_tag)
+        && let Ok(data_len) = len_val.parse::<usize>() {
             let needle = format!("{tag}=");
             let needle_bytes = needle.as_bytes();
             if let Some(idx) = msg.windows(needle_bytes.len()).position(|w| w == needle_bytes) {
@@ -1775,7 +1770,6 @@ pub(crate) fn extract_raw_tag(msg: &[u8], tag: u32) -> Option<Vec<u8>> {
                 return Some(msg[val_start..val_end].to_vec());
             }
         }
-    }
     let needle = format!("{tag}=");
     let needle_bytes = needle.as_bytes();
     let mut pos = 0;

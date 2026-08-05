@@ -106,11 +106,10 @@ fn has_complete_response_frame(buf: &[u8]) -> bool {
             let tag9_pos = 4 + tag9_off;
             if let Some(soh_off) = buf[tag9_pos..].iter().position(|&b| b == b'\x01') {
                 let soh_pos = tag9_pos + soh_off;
-                if let Ok(s) = std::str::from_utf8(&buf[tag9_pos + 2..soh_pos]) {
-                    if let Ok(body_len) = s.parse::<usize>() {
+                if let Ok(s) = std::str::from_utf8(&buf[tag9_pos + 2..soh_pos])
+                    && let Ok(body_len) = s.parse::<usize>() {
                         return soh_pos + 1 + body_len <= buf.len();
                     }
-                }
             }
         }
         return false;
@@ -1305,8 +1304,8 @@ fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
     let mut scan = init_data.to_vec();
     let mut cursor = 0usize;
     while cursor + 12 < init_data.len() {
-        if init_data[cursor..].starts_with(b"8=FIXCOMP\x01") {
-            if let Some(total_len) = fixcomp::fixcomp_length(&init_data[cursor..]) {
+        if init_data[cursor..].starts_with(b"8=FIXCOMP\x01")
+            && let Some(total_len) = fixcomp::fixcomp_length(&init_data[cursor..]) {
                 let segment = &init_data[cursor..cursor + total_len.min(init_data.len() - cursor)];
                 let inflated = fixcomp::fixcomp_decompress(segment).unwrap_or_else(|e| {
                     log::warn!("Init FIXCOMP segment at offset {cursor}: dropping malformed frame: {e}");
@@ -1324,7 +1323,6 @@ fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
                 cursor += total_len;
                 continue;
             }
-        }
         cursor += 1;
     }
     scan
@@ -1624,20 +1622,17 @@ impl Gateway {
                 _ => {}
             }
 
-            if let Some(v) = fields.get(&1) {
-                if account_id.is_empty() { account_id = v.clone(); }
-            }
-            if let Some(v) = fields.get(&108) {
-                if let Ok(hb) = v.parse() { heartbeat_interval = hb; }
-            }
-            if let Some(v) = fields.get(&6386) {
-                if ccp_token.is_empty() {
+            if let Some(v) = fields.get(&1)
+                && account_id.is_empty() { account_id = v.clone(); }
+            if let Some(v) = fields.get(&108)
+                && let Ok(hb) = v.parse() { heartbeat_interval = hb; }
+            if let Some(v) = fields.get(&6386)
+                && ccp_token.is_empty() {
                     ccp_token = v.clone();
                     log::info!("Auth: captured ccp_token (FIX 6386, len={}, prefix={:?})",
                         ccp_token.len(),
                         if ccp_token.len() > 16 { &ccp_token[..16] } else { &ccp_token });
                 }
-            }
             // Tag 8035: try parsed fields first, then raw byte search
             if server_session_id.is_empty() {
                 if let Some(v) = fields.get(&8035) {
@@ -1658,38 +1653,31 @@ impl Gateway {
             // Farm routing (per ib-agent#128) — server tells us which farms
             // this account is permissioned for. EU accounts get `eufarm`,
             // US get `usfarm`, etc. Read once from whichever auth msg has it.
-            if let Some(v) = fields.get(&6145) {
-                if trading_route.is_empty() {
+            if let Some(v) = fields.get(&6145)
+                && trading_route.is_empty() {
                     trading_route = v.clone();
                     log::info!("Auth: trading farm route = {trading_route}");
                 }
-            }
-            if let Some(v) = fields.get(&6171) {
-                if mktdata_route.is_empty() {
+            if let Some(v) = fields.get(&6171)
+                && mktdata_route.is_empty() {
                     mktdata_route = v.clone();
                     log::info!("Auth: market-data farm route = {mktdata_route}");
                 }
-            }
-            if let Some(v) = fields.get(&8008) {
-                if secdef_route.is_empty() {
+            if let Some(v) = fields.get(&8008)
+                && secdef_route.is_empty() {
                     secdef_route = v.clone();
                     log::info!("Auth: secdef farm route = {secdef_route}");
                 }
-            }
 
             // Gateway-local init data from logon response
-            if let Some(v) = fields.get(&6560) {
-                if raw_soft_dollar_tiers.is_empty() { raw_soft_dollar_tiers = v.clone(); }
-            }
-            if let Some(v) = fields.get(&6823) {
-                if raw_family_codes.is_empty() { raw_family_codes = v.clone(); }
-            }
-            if let Some(v) = fields.get(&6830) {
-                if raw_news_providers.is_empty() { raw_news_providers = v.clone(); }
-            }
-            if let Some(v) = fields.get(&6571) {
-                if white_branding_id.is_empty() { white_branding_id = v.clone(); }
-            }
+            if let Some(v) = fields.get(&6560)
+                && raw_soft_dollar_tiers.is_empty() { raw_soft_dollar_tiers = v.clone(); }
+            if let Some(v) = fields.get(&6823)
+                && raw_family_codes.is_empty() { raw_family_codes = v.clone(); }
+            if let Some(v) = fields.get(&6830)
+                && raw_news_providers.is_empty() { raw_news_providers = v.clone(); }
+            if let Some(v) = fields.get(&6571)
+                && white_branding_id.is_empty() { white_branding_id = v.clone(); }
             // Tag 6321: PRIV_LAB_MISC_URLS — try parsed fields first, then raw byte search.
             // Mirrors the 8035 defensive scan because the value can carry `|` separators
             // that confuse downstream parsers if a chunk is fragmented.
