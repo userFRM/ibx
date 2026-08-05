@@ -54,6 +54,22 @@ pub enum SecurityType {
     Index,    // IND
     Bond,     // BOND
     Warrant,  // WAR
+    FutureOption, // FOP
+    Cfd,      // CFD
+    Commodity, // CMDTY
+    Fund,     // FUND
+    Forward,  // FWD
+    Bill,     // BILL
+    Combo,    // BAG
+    Crypto,    // CRYPTO
+    FixedIncome, // FIXED
+    SecuritiesLending, // SLB
+    News,      // NEWS
+    Basket,    // BSK
+    IndexOption, // IOPT
+    IcuContract, // ICU
+    IcsContract, // ICS
+    PhysicalSettlement, // PHYSS
     Other,
 }
 
@@ -74,6 +90,22 @@ impl SecurityType {
             Self::Index => "IND",
             Self::Bond => "BOND",
             Self::Warrant => "WAR",
+            Self::FutureOption => "FOP",
+            Self::Cfd => "CFD",
+            Self::Commodity => "CMDTY",
+            Self::Fund => "FUND",
+            Self::Forward => "FWD",
+            Self::Bill => "BILL",
+            Self::Combo => "BAG",
+            Self::Crypto => "CRYPTO",
+            Self::FixedIncome => "FIXED",
+            Self::SecuritiesLending => "SLB",
+            Self::News => "NEWS",
+            Self::Basket => "BSK",
+            Self::IndexOption => "IOPT",
+            Self::IcuContract => "ICU",
+            Self::IcsContract => "ICS",
+            Self::PhysicalSettlement => "PHYSS",
             Self::Other => "",
         }
     }
@@ -88,6 +120,22 @@ impl SecurityType {
             Self::Index => "IND",
             Self::Bond => "BOND",
             Self::Warrant => "WAR",
+            Self::FutureOption => "FOP",
+            Self::Cfd => "CFD",
+            Self::Commodity => "CMDTY",
+            Self::Fund => "FUND",
+            Self::Forward => "FWD",
+            Self::Bill => "BILL",
+            Self::Combo => "BAG",
+            Self::Crypto => "CRYPTO",
+            Self::FixedIncome => "FIXED",
+            Self::SecuritiesLending => "SLB",
+            Self::News => "NEWS",
+            Self::Basket => "BSK",
+            Self::IndexOption => "IOPT",
+            Self::IcuContract => "ICU",
+            Self::IcsContract => "ICS",
+            Self::PhysicalSettlement => "PHYSS",
             // An unrecognized security type must not be sent as a stock —
             // that misroutes the request silently (ibx#223). Empty draws a
             // visible gateway error instead, matching its own
@@ -106,6 +154,23 @@ impl SecurityType {
             "IND" => Self::Index,
             "BOND" => Self::Bond,
             "WAR" => Self::Warrant,
+            "FOP" => Self::FutureOption,
+            "CFD" => Self::Cfd,
+            "CMDTY" => Self::Commodity,
+            "FUND" => Self::Fund,
+            "FWD" => Self::Forward,
+            "BILL" => Self::Bill,
+            "BAG" => Self::Combo,
+            "CRYPTO" => Self::Crypto,
+            "FIXED" => Self::FixedIncome,
+            "SLB" => Self::SecuritiesLending,
+            "NEWS" => Self::News,
+            "BSK" => Self::Basket,
+            "IOPT" => Self::IndexOption,
+            "ICU" => Self::IcuContract,
+            "ICS" => Self::IcsContract,
+            "PHYSS" => Self::PhysicalSettlement,
+
             _ => Self::Other,
         }
     }
@@ -1369,6 +1434,35 @@ mod tests {
         assert_eq!(SecurityType::Stock.to_api_str(), "STK");
         assert_eq!(SecurityType::Forex.to_api_str(), "CASH");
         assert_eq!(SecurityType::Warrant.to_api_str(), "WAR");
+
+        // Every type the terminal names, and each one back again. A type this
+        // does not know is sent as an empty security type on purpose, so one
+        // that is merely missing from here does not quietly route as a stock —
+        // which means a gap shows up as a refused request rather than an order
+        // on the wrong contract, and is worth keeping honest.
+        for (ty, wire) in [
+            (SecurityType::Stock, "STK"), (SecurityType::Option, "OPT"),
+            (SecurityType::Future, "FUT"), (SecurityType::Forex, "CASH"),
+            (SecurityType::Index, "IND"), (SecurityType::Bond, "BOND"),
+            (SecurityType::Warrant, "WAR"), (SecurityType::FutureOption, "FOP"),
+            (SecurityType::Cfd, "CFD"), (SecurityType::Commodity, "CMDTY"),
+            (SecurityType::Fund, "FUND"), (SecurityType::Forward, "FWD"),
+            (SecurityType::Bill, "BILL"), (SecurityType::Combo, "BAG"),
+            (SecurityType::Crypto, "CRYPTO"),
+            (SecurityType::FixedIncome, "FIXED"),
+            (SecurityType::SecuritiesLending, "SLB"),
+            (SecurityType::News, "NEWS"),
+            (SecurityType::Basket, "BSK"),
+            (SecurityType::IndexOption, "IOPT"),
+            (SecurityType::IcuContract, "ICU"),
+            (SecurityType::IcsContract, "ICS"),
+            (SecurityType::PhysicalSettlement, "PHYSS"),
+        ] {
+            assert_eq!(ty.to_api_str(), wire, "{ty:?} states itself as {wire}");
+            assert_eq!(SecurityType::from_fix(wire), ty, "and is read back from {wire}");
+        }
+        assert_eq!(SecurityType::from_fix("NOPE"), SecurityType::Other);
+        assert_eq!(SecurityType::Other.to_fix(), "", "unknown stays unroutable, not a stock");
         assert_eq!(SecurityType::Other.to_api_str(), "");
         // Every non-Other variant survives the round trip back through the
         // inbound parser (which accepts API strings too), so a reported
