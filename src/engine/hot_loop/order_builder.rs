@@ -401,7 +401,7 @@ pub(crate) fn drain_and_send_orders(
             }
             OrderRequest::SubmitPegBench { order_id, instrument, side, qty, price,
                 ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
-                starting_price } => {
+                starting_price, ref_exchange } => {
                 context.insert_order(crate::types::Order::new(
                     order_id, instrument, side, qty, price, crate::types::ORD_PEG_BENCH, b'0', 0,
                 ));
@@ -439,7 +439,15 @@ pub(crate) fn drain_and_send_orders(
                     (6941, &ref_con_str),      // referenceContractId
                     (6938, peg_decrease_str),   // isPeggedChangeAmountDecrease
                     (6939, &peg_change_str),    // peggedChangeAmount
-                    (6942, &ref_change_str),    // referenceChangeAmount
+                    (6940, &ref_change_str),    // referenceChangeAmount
+                    (6942, ref_exchange.as_str()), // referenceExchangeId
+                    // Required — the gateway answers "Message must contain
+                    // field # 6580" without it — and not read at submission:
+                    // every value tried was accepted, including one that is
+                    // not a number. Sent as the units the amounts above are
+                    // already in, which is the reading that makes the rest of
+                    // the message consistent.
+                    (6580, "2"),
                     (99, &starting_price_str),  // startingPrice
                 ])
             }
