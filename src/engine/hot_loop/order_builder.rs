@@ -1084,6 +1084,13 @@ fn send_order_ex(
         K::Algo { price, .. } => {
             fields.push((40, "2".to_string()));
             fields.push((44, format_price(price).to_string()));
+            // Same marker the adaptive wrapper carries: an order handed to an
+            // algo says so here, and the gateway refuses every one that does
+            // not with "Invalid value in field # 18" — which it also answers
+            // for a value that is merely the wrong one, so the six algo types
+            // were refused identically whether the field was absent or wrong.
+            fields.push((18, "e".to_string()));
+            has_base_exec_inst = true;
         }
         K::WhatIf { price } => {
             fields.push((40, "2".to_string()));
