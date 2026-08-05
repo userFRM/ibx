@@ -1182,16 +1182,29 @@ fn send_order_ex(
         for i in 0..attrs.conditions.len() {
             let base = 1 + i * 11;
             fields.push((6222, cond_strs[base].clone()));      // condType
-            fields.push((6137, cond_strs[base + 1].clone()));  // conjunction
-            fields.push((6126, cond_strs[base + 2].clone()));  // operator
-            fields.push((6123, cond_strs[base + 3].clone()));  // conId
-            fields.push((6124, cond_strs[base + 4].clone()));  // exchange
-            fields.push((6127, cond_strs[base + 5].clone()));  // triggerMethod
-            fields.push((6125, cond_strs[base + 6].clone()));  // price
-            fields.push((6223, cond_strs[base + 7].clone()));  // time
-            fields.push((6245, cond_strs[base + 8].clone()));  // percent
-            fields.push((6263, cond_strs[base + 9].clone()));  // volume
-            fields.push((6246, cond_strs[base + 10].clone())); // execution
+            // A condition states the fields it has and stays quiet about the
+            // rest. Sending every slot and leaving the inapplicable ones empty
+            // put an empty contract id on a time condition, which is not a
+            // contract id, and the gateway refused the whole condition for it —
+            // while price and volume conditions, which name a contract, went
+            // through and hid that this was general.
+            for (tag, slot) in [
+                (6137, 1),  // conjunction
+                (6126, 2),  // operator
+                (6123, 3),  // conId
+                (6124, 4),  // exchange
+                (6127, 5),  // triggerMethod
+                (6125, 6),  // price
+                (6223, 7),  // time
+                (6245, 8),  // percent
+                (6263, 9),  // volume
+                (6246, 10), // execution
+            ] {
+                let value = &cond_strs[base + slot];
+                if !value.is_empty() {
+                    fields.push((tag, value.clone()));
+                }
+            }
         }
     }
 
@@ -1366,19 +1379,23 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());                           // volume (unused)
                 out.push(String::new());                           // execution (unused)
             }
-            // The venue refuses this one, and the format it wants is not
-            // known. The condition block itself is fine — price, volume and
-            // multi-condition orders are all accepted — and only the time
-            // value is rejected, on tag 6223. Ruled out against a live
-            // session: `YYYYMMDD-HH:MM:SS` (answered "Invalid conditional
-            // field", so not even parsed), and, all answered "Invalid value in
-            // field # 6223", `YYYYMMDD HH:MM:SS` with and without a zone
-            // (US/Eastern, EST, UTC), without seconds, date alone,
-            // `YYYYMMDD-HH:MM:SS.000`, epoch seconds and epoch milliseconds. A
-            // near date fails the same way a distant one does, so it is the
-            // shape and not the horizon. Passed through as given until a
-            // capture says what the shape is; guessing a ninth would only
-            // trade one rejection for another.
+            // The venue refuses a time condition, and it is not this
+            // encoding. Every field was checked against the terminal's own
+            // encoder and agrees with it: the type is 3, the operators are
+            // `>=` and `<=`, the conjunctions are `a`/`o`/`n`, the value is
+            // `YYYYMMDD-HH:MM:SS` in GMT, and a time condition carries that
+            // one field and no other — not the contract, exchange, trigger
+            // method or price a price condition carries, and not the timezone
+            // on tag 6947, which the terminal writes only for the condition
+            // types that answer yes to carrying one, and this is not among
+            // them. Sending the timezone anyway changes nothing, and neither
+            // does any other shape of the value: eight were tried, including
+            // both separators, with and without a zone, without seconds, date
+            // alone, milliseconds, and epoch in seconds and milliseconds.
+            //
+            // So the refusal is about something other than the condition, and
+            // price, volume and multi-condition orders are all accepted as
+            // they stand. Left as the terminal writes it.
             OrderCondition::Time { time, is_more } => {
                 out.push("3".into());
                 out.push(conj.into());
