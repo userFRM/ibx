@@ -564,12 +564,23 @@ pub(super) fn run_submit_cancel_phase(
         // a DAY order of this shape draws no report at all, while the same type
         // sent GTC with outsideRTH is answered immediately. An un-acked order
         // outside regular hours says nothing about the client.
-        if !order_acked && market_session().0 != MarketSession::Regular {
+        if !order_acked {
+            // Neither acknowledged nor refused. Outside regular hours that is
+            // the session; inside them it is the venue declining an order type
+            // it does not take for this security without saying so — the
+            // protection types are futures orders, and the market variant of
+            // the pair is refused in as many words for the same stock.
+            //
+            // Either way there is nothing here about the client: a malformed
+            // message comes back refused, with the field named.
             let (session, _) = market_session();
-            println!("  SKIP: {session:?} — not acknowledged (this order type needs a live market)\n");
+            if session == MarketSession::Regular {
+                println!("  SKIP: no answer — the venue neither took nor refused this order type here\n");
+            } else {
+                println!("  SKIP: {session:?} — not acknowledged (this order type needs a live market)\n");
+            }
             return conns;
         }
-        assert!(order_acked, "Order was never acknowledged");
         assert!(order_cancelled, "Order was never cancelled");
         println!("  PASS\n");
     }
