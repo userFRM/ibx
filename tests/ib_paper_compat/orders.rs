@@ -724,6 +724,13 @@ pub(super) fn phase_limit_opg(conns: Conns) -> Conns {
 }
 
 // ─── Phase 33: Iceberg ───
+//
+// Still refused for the display size, and not for the tag: the field is 111,
+// which is what the terminal's own display-size attribute declares. Tried
+// against a live session at 100 shares displayed on 100, 200, 500 and 1000,
+// every one a whole number of round lots, and every one refused alike. The
+// value this venue will take for this security is not a multiple of anything
+// the client controls.
 
 pub(super) fn phase_iceberg_order(conns: Conns) -> Conns {
     let oid = next_order_id();
