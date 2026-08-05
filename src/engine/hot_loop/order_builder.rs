@@ -400,58 +400,6 @@ pub(crate) fn drain_and_send_orders(
                     (204, "0"),
                 ])
             }
-            OrderRequest::SubmitPegBench { order_id, instrument, side, qty, price,
-                ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
-                starting_price, ref_exchange } => {
-                context.insert_order(crate::types::Order::new(
-                    order_id, instrument, side, qty, price, crate::types::ORD_PEG_BENCH, b'0', 0,
-                ));
-                let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{order_id}.{ver}");
-                let side_str = fix_side(side);
-                let qty_str = format_uint(qty as u64);
-                let price_str = format_price(price);
-                let symbol = context.market.symbol(instrument).to_string();
-                let (sec_type_str, destination) = context.market.order_routing(instrument);
-                let now = chrono_free_timestamp();
-                let ref_con_str = ref_con_id.to_string();
-                let peg_decrease_str = if is_peg_decrease { "1" } else { "0" };
-                let peg_change_str = format_price(pegged_change_amount);
-                let ref_change_str = format_price(ref_change_amount);
-                let starting_price_str = format_price(starting_price);
-                conn.send_fix(&[
-                    (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
-                    (fix::TAG_SENDING_TIME, &now),
-                    (11, &clord_str),
-                    (1, account_id),
-                    (21, "2"),
-                    (55, &symbol),
-                    (54, side_str),
-                    (38, &qty_str),
-                    (40, "PB"),          // OrdType = Pegged to Benchmark
-                    (44, &price_str),    // Limit price
-                    (59, "0"),
-                    (60, &now),
-                    (167, &sec_type_str),
-                    (100, &destination),
-                    (6210, &destination),
-                    (15, "USD"),
-                    (204, "0"),
-                    (6941, &ref_con_str),      // referenceContractId
-                    (6938, peg_decrease_str),   // isPeggedChangeAmountDecrease
-                    (6939, &peg_change_str),    // peggedChangeAmount
-                    (6940, &ref_change_str),    // referenceChangeAmount
-                    (6942, ref_exchange.as_str()), // referenceExchangeId
-                    // Required — the gateway answers "Message must contain
-                    // field # 6580" without it — and not read at submission:
-                    // every value tried was accepted, including one that is
-                    // not a number. Sent as the units the amounts above are
-                    // already in, which is the reading that makes the rest of
-                    // the message consistent.
-                    (6580, "2"),
-                    (99, &starting_price_str),  // startingPrice
-                ])
-            }
             OrderRequest::SubmitLimitAuc { order_id, instrument, side, qty, price } => {
                 context.insert_order(crate::types::Order::new(
                     order_id, instrument, side, qty, price, b'2', b'8', 0,
@@ -950,6 +898,7 @@ fn send_order_ex(
         K::Loc { price } => (b'B', price, 0),
         K::Mit { stop_price } => (b'J', stop_price, stop_price),
         K::Lit { price, stop_price } => (b'K', price, stop_price),
+        K::PegBench { price, .. } => (crate::types::ORD_PEG_BENCH, price, 0),
         K::Mtl => (b'K', 0, 0),
         K::MktPrt => (b'U', 0, 0),
         K::StpPrt { stop_price } => (crate::types::ORD_STP_PRT, 0, stop_price),
@@ -1088,6 +1037,24 @@ fn send_order_ex(
         // Both are OrdType "E" and are separated by ExecInst, which is what
         // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
         // OrdType sent the two as the same message, saying which peg neither.
+        K::PegBench {
+            ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
+            starting_price, ref ref_exchange, ..
+        } => {
+            fields.push((40, "PB".to_string()));
+            fields.push((6941, ref_con_id.to_string()));
+            fields.push((6938, if is_peg_decrease { "1".to_string() } else { "0".to_string() }));
+            fields.push((6939, format_price(pegged_change_amount).to_string()));
+            fields.push((6940, format_price(ref_change_amount).to_string()));
+            fields.push((6942, ref_exchange.clone()));
+            // Required — the gateway answers "Message must contain field #
+            // 6580" without it — and not read at submission: every value tried
+            // was accepted, including one that is not a number. Sent as the
+            // units the amounts above are already in, which is the reading that
+            // makes the rest of the message consistent.
+            fields.push((6580, "2".to_string()));
+            fields.push((99, format_price(starting_price).to_string()));
+        }
         K::PegMkt { .. } => {
             fields.push((40, "E".to_string()));
             fields.push((18, "P".to_string()));

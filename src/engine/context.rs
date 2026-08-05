@@ -733,30 +733,6 @@ impl Context {
 
     /// Submit a Pegged to Benchmark order (OrdType PB).
     /// Pegs to a benchmark instrument's price with change amounts.
-    pub fn submit_peg_bench(
-        &mut self,
-        instrument: InstrumentId,
-        side: Side,
-        qty: u32,
-        price: Price,
-        ref_con_id: u32,
-        is_peg_decrease: bool,
-        pegged_change_amount: Price,
-        ref_change_amount: Price,
-        starting_price: Price,
-        ref_exchange: String,
-    ) -> OrderId {
-        let id = self.next_order_id;
-        self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitPegBench {
-            order_id: id, instrument, side, qty, price,
-            ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
-            starting_price,
-            ref_exchange,
-        });
-        id
-    }
-
     /// Submit a limit order for exchange auction (TIF=AUC).
     pub fn submit_limit_auc(
         &mut self,
@@ -1672,31 +1648,7 @@ mod tests {
         assert_eq!(open.len(), 2);
     }
 
-    #[test]
-    fn submit_peg_bench_drains_correctly() {
-        let mut ctx = Context::new();
-        let id = ctx.submit_peg_bench(0, Side::Buy, 100, 150 * PRICE_SCALE, 12345, false, 50_000_000, 50_000_000, 150 * PRICE_SCALE, "NASDAQ".into());
-        let orders: Vec<_> = ctx.drain_pending_orders().collect();
-        assert_eq!(orders.len(), 1);
-        match &orders[0] {
-            OrderRequest::SubmitPegBench { order_id, instrument, side, qty, price,
-                starting_price: _,
-                ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
-                ref_exchange: _ } => {
-                assert_eq!(*order_id, id);
-                assert_eq!(*instrument, 0);
-                assert_eq!(*side, Side::Buy);
-                assert_eq!(*qty, 100);
-                assert_eq!(*price, 150 * PRICE_SCALE);
-                assert_eq!(*ref_con_id, 12345);
-                assert!(!*is_peg_decrease);
-                assert_eq!(*pegged_change_amount, 50_000_000);
-                assert_eq!(*ref_change_amount, 50_000_000);
-            }
-            _ => panic!("expected SubmitPegBench"),
-        }
-    }
-
+    
     #[test]
     fn submit_limit_auc_drains_correctly() {
         let mut ctx = Context::new();

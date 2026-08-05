@@ -2051,6 +2051,20 @@ impl ClientCore {
                 let offset = (order.aux_price * PRICE_SCALE_F) as i64;
                 ex(OrderKind::Rel { offset })
             }
+            // Every reference field was already carried here and then read by
+            // nobody: a caller setting all six got an order that mentioned none
+            // of them.
+            "PEG BENCH" | "PEGBENCH" => {
+                ex(OrderKind::PegBench {
+                    price: (order.lmt_price * PRICE_SCALE_F) as i64,
+                    ref_con_id: order.reference_contract_id.max(0) as u32,
+                    is_peg_decrease: order.is_pegged_change_amount_decrease,
+                    pegged_change_amount: (order.pegged_change_amount * PRICE_SCALE_F) as i64,
+                    ref_change_amount: (order.reference_change_amount * PRICE_SCALE_F) as i64,
+                    starting_price: (order.starting_price * PRICE_SCALE_F) as i64,
+                    ref_exchange: order.reference_exchange_id.clone(),
+                })
+            }
             "PEG MKT" => {
                 let offset = (order.aux_price * PRICE_SCALE_F) as i64;
                 let price_cap = (order.lmt_price * PRICE_SCALE_F) as i64;
