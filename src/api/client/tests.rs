@@ -3863,6 +3863,7 @@ fn the_second_factor_provider_reaches_the_gateway_config() {
     let base = crate::api::client::EClientConfig {
         username: "u".into(), password: "p".into(), host: "h".into(),
         paper: false, core_id: None, code_provider: None,
+        ..Default::default()
     };
     assert!(gateway_config(&base).code_provider.is_none(), "none stays none");
 

@@ -45,6 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         paper: true,
         core_id: None,
         code_provider: None,
+        ..Default::default()
     })?;
 
     let state = Arc::new(Mutex::new(State::default()));

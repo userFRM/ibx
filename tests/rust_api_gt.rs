@@ -377,6 +377,7 @@ fn get_config() -> Option<EClientConfig> {
         paper: true,
         core_id: None,
         code_provider: None,
+        ..Default::default()
     })
 }
 
