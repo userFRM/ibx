@@ -516,6 +516,19 @@ fn multi_condition_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// Instructions the encoder only just started sending.
+#[test]
+fn carried_instructions_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() { Some(c) => c, None => return };
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let conns = orders::phase_carried_instructions_order(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// The iceberg order, whose display size the venue keeps refusing.
 #[test]
 fn iceberg_phase_live() {

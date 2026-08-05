@@ -1872,14 +1872,13 @@ impl ClientCore {
     /// not refuse. They are still dropped.
     pub fn validate_supported_instructions(o: &ApiOrder) -> Result<(), String> {
         let mut unsent: Vec<&str> = Vec::new();
-        if o.volatility != f64::MAX || o.volatility_type != 0 { unsent.push("volatility"); }
+        if o.volatility_type != 0 { unsent.push("volatilityType"); }
         if !o.delta_neutral_order_type.is_empty() { unsent.push("deltaNeutralOrderType"); }
         if !o.hedge_type.is_empty() { unsent.push("hedgeType"); }
         if o.scale_init_level_size != i32::MAX || o.scale_price_increment != f64::MAX {
             unsent.push("scale");
         }
         if o.short_sale_slot != 0 { unsent.push("shortSaleSlot"); }
-        if o.percent_offset != f64::MAX { unsent.push("percentOffset"); }
         if unsent.is_empty() {
             return Ok(());
         }
@@ -2783,13 +2782,20 @@ mod contract_gate_tests {
         use crate::api::types::Order as ApiOrder;
         let plain = ApiOrder::default();
         assert!(ClientCore::validate_supported_instructions(&plain).is_ok(), "a plain order is fine");
-        for (label, mut o) in [
+        // Sent now, so no longer refused.
+        for (label, o) in [
             ("volatility", ApiOrder { volatility: 0.25, ..ApiOrder::default() }),
+            ("percent offset", ApiOrder { percent_offset: 0.5, ..ApiOrder::default() }),
+            ("not held", ApiOrder { not_held: true, ..ApiOrder::default() }),
+            ("open/close", ApiOrder { open_close: "O".into(), ..ApiOrder::default() }),
+        ] {
+            assert!(ClientCore::validate_supported_instructions(&o).is_ok(), "{label} is sent");
+        }
+        for (label, mut o) in [
             ("hedge", ApiOrder { hedge_type: "D".into(), ..ApiOrder::default() }),
             ("delta neutral", ApiOrder { delta_neutral_order_type: "MKT".into(), ..ApiOrder::default() }),
             ("scale", ApiOrder { scale_init_level_size: 100, ..ApiOrder::default() }),
             ("short sale slot", ApiOrder { short_sale_slot: 2, ..ApiOrder::default() }),
-            ("percent offset", ApiOrder { percent_offset: 0.5, ..ApiOrder::default() }),
         ] {
             o.action = "BUY".into();
             let err = ClientCore::validate_supported_instructions(&o)

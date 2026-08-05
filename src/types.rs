@@ -328,6 +328,19 @@ pub struct OrderAttrs {
     pub sweep_to_fill: bool,
     /// All or none (FIX tag 18=G ExecInst). Fill entire qty or nothing.
     pub all_or_none: bool,
+    /// Implied volatility for a volatility order, as a decimal (0.25 = 25%),
+    /// on tag 9816. Zero means the caller set none.
+    pub volatility: f64,
+    /// Offset from the market for a relative order, as a decimal fraction, on
+    /// tag 9822. `f64::MAX` means the caller set none.
+    pub percent_offset: f64,
+    /// Leave the order to a floor broker's discretion, on tag 6287.
+    pub not_held: bool,
+    /// The caller's own reference for this order, on tag 6010.
+    pub order_ref: String,
+    /// Whether this order opens or closes a position, on tag 77. Empty means
+    /// the caller said nothing and the venue decides.
+    pub open_close: String,
     /// Trigger method for stop/MIT/LIT orders (IB tag 6115).
     /// 0=default, 1=double-bid-ask, 2=last, 3=double-last, 4=bid-ask,
     /// 7=last-or-bid-ask, 8=mid-point.
@@ -564,6 +577,12 @@ pub enum OrderKind {
 }
 
 /// Order request sent via control channel, processed by engine.
+///
+/// The submitting variant is much larger than the cancelling ones, because it
+/// carries the attribute block. Boxing it would even the variants out and pay
+/// an allocation on every order placed to do it, which is the wrong trade on
+/// the path an order takes.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum OrderRequest {
     /// Bracket order: parent entry + take-profit + stop-loss, linked via OCA.

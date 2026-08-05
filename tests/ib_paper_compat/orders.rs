@@ -717,6 +717,23 @@ pub(super) fn phase_limit_opg(conns: Conns) -> Conns {
         false)
 }
 
+// ─── Phase 33b: Instructions that used to be dropped ───
+
+pub(super) fn phase_carried_instructions_order(conns: Conns) -> Conns {
+    let oid = next_order_id();
+    run_submit_cancel_phase(conns, "Phase 33b: Order Ref + Not Held + Open/Close (SPY)",
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
+            kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
+            attrs: OrderAttrs {
+                outside_rth: true,
+                order_ref: "ibx-carried".into(),
+                not_held: true,
+                open_close: "O".into(),
+                ..OrderAttrs::default()
+            } },
+        false)
+}
+
 // ─── Phase 33: Iceberg ───
 //
 // Still refused for the display size, and not for the tag: the field is 111,
