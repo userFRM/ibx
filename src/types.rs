@@ -504,9 +504,12 @@ pub enum OrderKind {
     MktPrt,
     StpPrt { stop_price: Price },
     MidPrice { price_cap: Price },
-    SnapMkt,
-    SnapMid,
-    SnapPri,
+    /// Snap-to orders carry an offset from the price they snap to, and the
+    /// gateway refuses one that does not state it ("Message must contain field
+    /// # 211"). Taken from `aux_price`, as the pegged types are.
+    SnapMkt { offset: Price },
+    SnapMid { offset: Price },
+    SnapPri { offset: Price },
     PegMkt { offset: Price },
     PegMid { offset: Price },
     Rel { offset: Price },
@@ -761,7 +764,8 @@ impl OrderRequest {
             }
             Self::SubmitEx { kind, .. } => match kind {
                 OrderKind::Market | OrderKind::Moc | OrderKind::Mtl | OrderKind::MktPrt
-                | OrderKind::SnapMkt | OrderKind::SnapMid | OrderKind::SnapPri => {}
+                | OrderKind::SnapMkt { .. } | OrderKind::SnapMid { .. }
+                | OrderKind::SnapPri { .. } => {}
                 OrderKind::TrailPct { trail_stop_price, .. } => s(trail_stop_price),
                 OrderKind::Adaptive { price, .. }
                 | OrderKind::Algo { price, .. }

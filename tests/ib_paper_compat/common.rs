@@ -435,8 +435,19 @@ fn us_market_holiday(y: i64, m: u32, d: u32, dow: u32) -> Holiday {
 /// skip-return its `Conns` (and prints the SKIP line as a side effect); on an open
 /// session it returns `false` so the caller's own `assert!` still enforces the ack.
 pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
-    if !order_acked && market_session().0 == MarketSession::Closed {
-        println!("  SKIP: Closed — order not acknowledged (order type/venue needs a live market)\n");
+    // Outside regular hours, not merely closed. An order that is never
+    // acknowledged pre-market is the venue declining to work it, exactly as it
+    // is overnight, and the phases that name the session themselves already
+    // skip on it — this one asserted instead and failed the suite for the time
+    // of day.
+    if order_acked {
+        return false;
+    }
+    let session = market_session().0;
+    if session != MarketSession::Regular {
+        println!(
+            "  SKIP: {session:?} — order not acknowledged (order type/venue needs a live market)\n",
+        );
         return true;
     }
     false

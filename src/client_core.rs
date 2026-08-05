@@ -2065,13 +2065,16 @@ impl ClientCore {
                 ex(OrderKind::MidPrice { price_cap: cap })
             }
             "SNAP MKT" => {
-                ex(OrderKind::SnapMkt)
+                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
+                ex(OrderKind::SnapMkt { offset })
             }
             "SNAP MID" | "SNAP MIDPT" => {
-                ex(OrderKind::SnapMid)
+                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
+                ex(OrderKind::SnapMid { offset })
             }
             "SNAP PRI" | "SNAP PRIM" => {
-                ex(OrderKind::SnapPri)
+                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
+                ex(OrderKind::SnapPri { offset })
             }
             _ => return Err(format!("Unsupported order type: '{}'", order.order_type)),
         };

@@ -630,12 +630,13 @@ impl Context {
         instrument: InstrumentId,
         side: Side,
         qty: u32,
+        offset: Price,
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::SubmitEx {
             order_id: id, instrument, side, qty,
-            kind: OrderKind::SnapMkt,
+            kind: OrderKind::SnapMkt { offset },
             tif: b'0', attrs: OrderAttrs::default(),
         });
         id
@@ -646,12 +647,13 @@ impl Context {
         instrument: InstrumentId,
         side: Side,
         qty: u32,
+        offset: Price,
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::SubmitEx {
             order_id: id, instrument, side, qty,
-            kind: OrderKind::SnapMid,
+            kind: OrderKind::SnapMid { offset },
             tif: b'0', attrs: OrderAttrs::default(),
         });
         id
@@ -662,12 +664,13 @@ impl Context {
         instrument: InstrumentId,
         side: Side,
         qty: u32,
+        offset: Price,
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::SubmitEx {
             order_id: id, instrument, side, qty,
-            kind: OrderKind::SnapPri,
+            kind: OrderKind::SnapPri { offset },
             tif: b'0', attrs: OrderAttrs::default(),
         });
         id
