@@ -31,7 +31,7 @@ use crate::gateway::{connect_farm, reconnect_ccp, ReconnectAuth, FARM_SLOT_HMDS,
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
 use crate::types::{ControlCommand, Fill, InstrumentId, Price, Qty, TbtQuote, TbtTrade, PRICE_SCALE, QTY_SCALE};
-use crossbeam_channel::{bounded, Receiver, Sender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 
 use farm::FarmState;
 use ccp::CcpState;
@@ -62,7 +62,7 @@ const _: () = assert!(LIVENESS_TEST_SECS < LIVENESS_DEAD_SECS);
 /// The pinned-core hot loop. Pushes events to SharedState + optional event channel.
 pub struct HotLoop {
     shared: Arc<SharedState>,
-    event_tx: Option<Sender<Event>>,
+    event_tx: Option<SyncSender<Event>>,
     context: Context,
     /// Core ID to pin the hot loop thread to. None = no pinning.
     core_id: Option<usize>,
@@ -178,7 +178,7 @@ impl HeartbeatState {
 }
 
 impl HotLoop {
-    pub fn new(shared: Arc<SharedState>, event_tx: Option<Sender<Event>>, core_id: Option<usize>) -> Self {
+    pub fn new(shared: Arc<SharedState>, event_tx: Option<SyncSender<Event>>, core_id: Option<usize>) -> Self {
         Self {
             shared,
             event_tx,
@@ -242,14 +242,14 @@ impl HotLoop {
     /// Build a HotLoop with connections and control channel, without requiring a Gateway.
     pub fn with_connections(
         shared: Arc<SharedState>,
-        event_tx: Option<Sender<Event>>,
+        event_tx: Option<SyncSender<Event>>,
         account_id: String,
         farm_conn: Connection,
         ccp_conn: Connection,
         hmds_conn: Option<Connection>,
         core_id: Option<usize>,
-    ) -> (Self, Sender<ControlCommand>) {
-        let (tx, rx) = bounded(64);
+    ) -> (Self, SyncSender<ControlCommand>) {
+        let (tx, rx) = sync_channel(64);
         let mut hl = Self::new(shared, event_tx, core_id);
         hl.set_control_rx(rx);
         hl.set_account_id(account_id);
@@ -274,7 +274,7 @@ impl HotLoop {
         sec_type: &str,
         exchange: &str,
         option_key: &str,
-        reply_tx: &Option<crossbeam_channel::Sender<Result<InstrumentId, String>>>,
+        reply_tx: &Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
     ) -> Option<InstrumentId> {
         // Whether this call is what created the slot. Registration is also how
         // an already-live contract is looked up, and the account row is older
@@ -514,8 +514,8 @@ impl HotLoop {
         // try_iter() finishing and this call, push it into the batch.
         let sender_dropped = match rx.try_recv() {
             Ok(cmd)  => { self.cmd_buf.push(cmd); false }
-            Err(crossbeam_channel::TryRecvError::Empty)        => false,
-            Err(crossbeam_channel::TryRecvError::Disconnected) => true,
+            Err(std::sync::mpsc::TryRecvError::Empty)        => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => true,
         };
 
         // Drain the buffer so we can mutably borrow self in the loop body.
@@ -1127,7 +1127,7 @@ impl HotLoop {
         let attempt = self.farm_reconnect_attempt;
         log::info!("Farm auto-reconnect attempt {} starting (host={}, user={})", attempt, auth.host, auth.username);
 
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name(format!("farm-reconnect-{attempt}"))
             .spawn(move || {
@@ -1196,8 +1196,8 @@ impl HotLoop {
                     emit(&self.event_tx, Event::Disconnected);
                 }
             }
-            Err(crossbeam_channel::TryRecvError::Empty) => {}
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("Farm reconnect thread dropped without result");
                 self.pending_farm_reconnect = None;
             }
@@ -1228,7 +1228,7 @@ impl HotLoop {
         let attempt = self.ccp_reconnect_attempt;
         log::info!("CCP auto-reconnect attempt {} starting (host={})", attempt, auth.host);
 
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name(format!("ccp-reconnect-{attempt}"))
             .spawn(move || {
@@ -1292,8 +1292,8 @@ impl HotLoop {
                     emit(&self.event_tx, Event::Disconnected);
                 }
             }
-            Err(crossbeam_channel::TryRecvError::Empty) => {}
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("CCP reconnect thread dropped without result");
                 self.pending_ccp_reconnect = None;
             }
@@ -1325,7 +1325,7 @@ impl HotLoop {
             "HMDS reconnect attempt {} starting (host={}/{})",
             attempt, auth.hmds_host, auth.hmds_farm,
         );
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name(format!("hmds-reconnect-{attempt}"))
             .spawn(move || {
@@ -1413,8 +1413,8 @@ impl HotLoop {
                 }
                 self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
             }
-            Err(crossbeam_channel::TryRecvError::Empty) => {}
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("HMDS reconnect thread dropped without result");
                 self.pending_hmds_reconnect = None;
             }
@@ -1568,7 +1568,7 @@ pub(crate) fn format_uint(val: u64) -> StackStr {
 
 /// Emit an event to the channel (if connected). Non-blocking — drops event if full.
 #[inline]
-pub(crate) fn emit(event_tx: &Option<Sender<Event>>, event: Event) {
+pub(crate) fn emit(event_tx: &Option<SyncSender<Event>>, event: Event) {
     if let Some(tx) = event_tx {
         let _ = tx.try_send(event);
     }
@@ -1584,7 +1584,7 @@ pub(crate) fn emit(event_tx: &Option<Sender<Event>>, event: Event) {
 /// Clone first, push second, emit last, so the event never becomes visible
 /// before the same data is readable from `SharedState`.
 #[inline]
-pub(crate) fn clone_for_event<T: Clone>(event_tx: &Option<Sender<Event>>, value: &T) -> Option<T> {
+pub(crate) fn clone_for_event<T: Clone>(event_tx: &Option<SyncSender<Event>>, value: &T) -> Option<T> {
     event_tx.as_ref().map(|_| value.clone())
 }
 
@@ -1835,7 +1835,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.1:0").unwrap();
         let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (_peer, _) = listener.accept().unwrap();
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         tx.send(Ok(crate::protocol::connection::Connection::new_raw(sock).unwrap())).unwrap();
         hl.pending_hmds_reconnect = Some(rx);
 
@@ -1965,7 +1965,7 @@ mod tests {
     #[test]
     fn a_spent_budget_stops_the_reconnect() {
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let mut hl = HotLoop::new(shared, Some(tx), None);
         hl.set_reconnect_config(
             crate::api::reliability::ReconnectConfig::default().with_max_attempts(2),
@@ -1991,7 +1991,7 @@ mod tests {
     #[test]
     fn an_unrecoverable_transport_is_reported_rather_than_retried_in_silence() {
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let mut hl = HotLoop::new(shared.clone(), Some(tx), None);
         hl.ccp.disconnected = true;
         // No credentials were ever cached, so there is nothing to reconnect with.
@@ -2177,7 +2177,7 @@ mod tests {
     #[test]
     fn inject_tick_emits_events() {
         let shared = Arc::new(SharedState::new());
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
         let mut engine = HotLoop::new(shared.clone(), Some(event_tx), None);
         engine.context_mut().market.register(265598);
 
@@ -2192,7 +2192,7 @@ mod tests {
     #[test]
     fn inject_tick_multiple_instruments() {
         let shared = Arc::new(SharedState::new());
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
         let mut engine = HotLoop::new(shared.clone(), Some(event_tx), None);
         engine.context_mut().market.register(265598); // 0: AAPL
         engine.context_mut().market.register(272093); // 1: MSFT
@@ -2211,7 +2211,7 @@ mod tests {
     #[test]
     fn inject_fill_updates_position() {
         let shared = Arc::new(SharedState::new());
-        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
         let mut engine = HotLoop::new(shared.clone(), Some(event_tx), None);
         engine.context_mut().market.register(265598);
 
@@ -2242,7 +2242,7 @@ mod tests {
     #[test]
     fn shutdown_sets_running_false() {
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut engine = HotLoop::new(shared, None, None);
         engine.set_control_rx(rx);
         engine.running = true;
@@ -2254,8 +2254,8 @@ mod tests {
     #[test]
     fn channel_disconnect_stops_loop() {
         let shared = Arc::new(SharedState::new());
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut engine = HotLoop::new(shared, Some(event_tx), None);
         engine.set_control_rx(rx);
         engine.running = true;
@@ -2276,7 +2276,7 @@ mod tests {
         // ibx#242: the flag path must work with no event channel attached,
         // which is the default for the Rust client.
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut engine = HotLoop::new(shared.clone(), None, None);
         engine.set_control_rx(rx);
         engine.running = true;
@@ -2290,7 +2290,7 @@ mod tests {
     #[test]
     fn channel_disconnect_sets_connection_lost_flag() {
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut engine = HotLoop::new(shared.clone(), None, None);
         engine.set_control_rx(rx);
         engine.running = true;
@@ -2311,7 +2311,7 @@ mod tests {
     #[test]
     fn a_loop_with_every_transport_down_does_not_spin() {
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut engine = HotLoop::new(shared, None, None);
         engine.set_control_rx(rx);
         engine.farm.disconnected = true;
@@ -2338,14 +2338,14 @@ mod tests {
         let payload = vec![1u8, 2, 3];
         assert!(clone_for_event(&None, &payload).is_none());
 
-        let (tx, _rx) = crossbeam_channel::bounded::<Event>(1);
+        let (tx, _rx) = std::sync::mpsc::sync_channel::<Event>(1);
         assert_eq!(clone_for_event(&Some(tx), &payload), Some(payload));
     }
 
     #[test]
     fn run_exits_on_shutdown() {
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut engine = HotLoop::new(shared, None, None);
         engine.set_control_rx(rx);
 
@@ -2360,7 +2360,7 @@ mod tests {
     #[test]
     fn run_exits_on_channel_disconnect() {
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut engine = HotLoop::new(shared, None, None);
         engine.set_control_rx(rx);
 
@@ -2490,7 +2490,7 @@ mod tests {
     #[test]
     fn an_l1_unsubscribe_hands_back_its_tags_on_a_pinned_instrument() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        let (tx, rx) = bounded(4);
+        let (tx, rx) = sync_channel(4);
         hl.set_control_rx(rx);
 
         let id = hl.context.market.register(4001);
@@ -2517,7 +2517,7 @@ mod tests {
     #[test]
     fn an_l1_unsubscribe_keeps_the_tags_a_live_news_subscription_routes_on() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        let (tx, rx) = bounded(4);
+        let (tx, rx) = sync_channel(4);
         hl.set_control_rx(rx);
 
         let id = hl.context.market.register(4002);

@@ -1060,16 +1060,16 @@ pub enum ControlCommand {
         con_id: i64, symbol: String, exchange: String, sec_type: String,
         last_trade_date: String, strike: f64, right: String, multiplier: String,
         mode_9887: i32,
-        reply_tx: Option<crossbeam_channel::Sender<Result<InstrumentId, String>>>,
+        reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
     },
     /// Unsubscribe from market data for an instrument.
     Unsubscribe { instrument: InstrumentId },
     /// Subscribe to tick-by-tick data via historical data connection.
-    SubscribeTbt { con_id: i64, symbol: String, sec_type: String, exchange: String, tbt_type: TbtType, reply_tx: Option<crossbeam_channel::Sender<Result<InstrumentId, String>>> },
+    SubscribeTbt { con_id: i64, symbol: String, sec_type: String, exchange: String, tbt_type: TbtType, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
     /// Unsubscribe from tick-by-tick data.
     UnsubscribeTbt { instrument: InstrumentId },
     /// Subscribe to per-contract news ticks via CCP (264=292).
-    SubscribeNews { con_id: i64, symbol: String, providers: String, reply_tx: Option<crossbeam_channel::Sender<Result<InstrumentId, String>>> },
+    SubscribeNews { con_id: i64, symbol: String, providers: String, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
     /// Unsubscribe from per-contract news ticks.
     UnsubscribeNews { instrument: InstrumentId },
     /// Subscribe to whole-account P&L via CCP (6040=142).
@@ -1086,7 +1086,7 @@ pub enum ControlCommand {
     /// pair, which those four fields do not distinguish. An order names its
     /// contract by the instrument, so the instrument has to know this or the
     /// order goes out unable to say which strike or contract month it means.
-    RegisterInstrument { con_id: i64, symbol: String, sec_type: String, exchange: String, identity: String, reply_tx: Option<crossbeam_channel::Sender<Result<InstrumentId, String>>> },
+    RegisterInstrument { con_id: i64, symbol: String, sec_type: String, exchange: String, identity: String, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
     /// Request historical bar data via historical data connection.
     FetchHistorical {
         req_id: u32,

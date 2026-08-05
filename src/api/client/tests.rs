@@ -12,9 +12,9 @@ use crate::control::news::NewsHeadline;
 use crate::control::histogram::HistogramEntry;
 
 /// Helper: create a test EClient backed by SharedState + channel.
-fn test_client() -> (EClient, crossbeam_channel::Receiver<ControlCommand>, Arc<SharedState>) {
+fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>) {
     let shared = Arc::new(SharedState::new());
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let (tx, rx) = std::sync::mpsc::sync_channel(4096);
     let handle = std::thread::spawn(|| {});
     let client = EClient::from_parts(shared.clone(), tx, handle, "DU123".into());
     // Pre-seed SPY so find_or_register_instrument hits the fast path.
@@ -2651,7 +2651,7 @@ fn quote_escape_hatch() {
     let q = Quote { bid: 200 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(0, &q);
 
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
     let handle = std::thread::spawn(|| {});
     let client = EClient::from_parts(shared, tx, handle, "DU123".into());
 
@@ -2681,7 +2681,7 @@ fn quote_by_instrument_direct() {
     let q = Quote { ask: 300 * PRICE_SCALE, ..Default::default() };
     shared.market.push_quote(2, &q);
 
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
     let handle = std::thread::spawn(|| {});
     let client = EClient::from_parts(shared, tx, handle, "DU123".into());
 
@@ -2699,7 +2699,7 @@ fn account_reads_shared_state() {
     let a = AccountState { net_liquidation: 100_000 * PRICE_SCALE, ..Default::default() };
     shared.portfolio.set_account(&a);
     let (client2, _rx2, _) = {
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let handle = std::thread::spawn(|| {});
         (EClient::from_parts(shared.clone(), tx, handle, "DU123".into()), rx, shared.clone())
     };
@@ -3802,7 +3802,7 @@ fn session_token_bytes_roundtrip_through_biguint() {
     use num_bigint::BigUint;
 
     let shared = Arc::new(SharedState::new());
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
     let handle = std::thread::spawn(|| {});
     let mut client = EClient::from_parts(shared, tx, handle, "DU123".into());
 

@@ -14,9 +14,9 @@ use ibx::engine::hot_loop::HotLoop;
 use ibx::types::*;
 
 /// Helper: build an EClient backed by SharedState + channel.
-fn test_client() -> (EClient, crossbeam_channel::Receiver<ControlCommand>, Arc<SharedState>) {
+fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>) {
     let shared = Arc::new(SharedState::new());
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let (tx, rx) = std::sync::mpsc::sync_channel(4096);
     let handle = std::thread::spawn(|| {});
     let client = EClient::from_parts(shared.clone(), tx, handle, "DU123".into());
     (client, rx, shared)
@@ -730,7 +730,7 @@ fn engine_to_eclient_end_to_end() {
     engine.inject_tick(spy_id);
 
     // Build EClient on same SharedState
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
     let handle = std::thread::spawn(|| {});
     let client = EClient::from_parts(shared.clone(), tx, handle, "DU123".into());
     client.map_req_instrument(1, spy_id);

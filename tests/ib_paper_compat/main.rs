@@ -564,7 +564,7 @@ fn cross_session_recovery_phase_live() {
 
     let session_a_acked = {
         let shared = std::sync::Arc::new(SharedState::new());
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
         let (mut hot_loop, control_tx) = HotLoop::with_connections(
             shared, Some(event_tx), account_id.clone(),
             farm_a, ccp_a, hmds_a, None,
@@ -618,7 +618,7 @@ fn cross_session_recovery_phase_live() {
     drop(gw_b);
 
     let shared = std::sync::Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(event_tx), account_id.clone(),
         farm_b, ccp_b, hmds_b, None,
@@ -688,7 +688,7 @@ fn cancel_by_perm_id_phase_live() {
     println!("  orderId = {order_id}");
 
     let shared = std::sync::Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         farm, ccp, hmds, None,
@@ -813,7 +813,7 @@ fn submit_ex_bracket_child_phase_live() {
     println!("  parent orderId = {parent_id}, child orderId = {child_id}");
 
     let shared = std::sync::Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         farm, ccp, hmds, None,
@@ -931,7 +931,7 @@ fn snap_to_tick_phase_live() {
     println!("  orderId = {order_id}");
 
     let shared = std::sync::Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         farm, ccp, hmds, None,
@@ -1027,7 +1027,7 @@ fn timeout_sweeps_phase_live() {
     drop(gw);
 
     let shared = std::sync::Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         farm, ccp, hmds, None,
@@ -1129,7 +1129,7 @@ fn reclaim_and_symbol_search_phase_live() {
     drop(gw);
 
     let shared = std::sync::Arc::new(SharedState::new());
-    let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         farm, ccp, hmds, None,
@@ -1137,7 +1137,7 @@ fn reclaim_and_symbol_search_phase_live() {
     let join = run_hot_loop(hot_loop);
 
     let subscribe = |req: &str| {
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::Subscribe {
             con_id: 756733, symbol: "SPY".into(), exchange: String::new(),
             sec_type: String::new(), last_trade_date: String::new(), strike: 0.0,
@@ -1218,7 +1218,7 @@ fn rtt_ping_phase_live() {
     drop(gw);
 
     let shared = std::sync::Arc::new(SharedState::new());
-    let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         farm, ccp, hmds, None,

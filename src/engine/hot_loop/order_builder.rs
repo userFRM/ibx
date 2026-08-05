@@ -19,7 +19,7 @@ pub(crate) fn drain_and_send_orders(
     shared: &Arc<SharedState>,
     // Whether a reconnect's recovery is still settling what the broker holds.
     recovery_pending: bool,
-    event_tx: &Option<crossbeam_channel::Sender<crate::bridge::Event>>,
+    event_tx: &Option<std::sync::mpsc::SyncSender<crate::bridge::Event>>,
 ) {
     // If CCP is disconnected, leave orders in the pending buffer for retry after reconnect.
     // See: https://github.com/deepentropy/ibx/issues/116
@@ -799,7 +799,7 @@ fn synthesize_pending_cancel(
     context: &mut Context,
     shared: &Arc<SharedState>,
     order_id: crate::types::OrderId,
-    event_tx: &Option<crossbeam_channel::Sender<crate::bridge::Event>>,
+    event_tx: &Option<std::sync::mpsc::SyncSender<crate::bridge::Event>>,
 ) {
     if !context.update_order_status(order_id, OrderStatus::PendingCancel) {
         return; // unknown order, already terminal, or already pending-cancel
@@ -1634,7 +1634,7 @@ mod tests {
 
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &Some(tx));
 
         // Both deliveries, because the event channel is documented as a second

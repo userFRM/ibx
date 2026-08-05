@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crossbeam_channel::Sender;
+use std::sync::mpsc::SyncSender;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
@@ -48,17 +48,17 @@ pub struct EClient {
     /// Set by connect(), cleared by disconnect().
     pub(crate) shared: Mutex<Option<Arc<SharedState>>>,
     /// Set by connect(), cleared by disconnect().
-    pub(crate) control_tx: Mutex<Option<Sender<ControlCommand>>>,
+    pub(crate) control_tx: Mutex<Option<SyncSender<ControlCommand>>>,
     pub(crate) next_order_id: AtomicU64,
     pub(crate) _thread: Mutex<Option<thread::JoinHandle<()>>>,
     /// Set by connect(), cleared by disconnect().
     pub(crate) account_id: Mutex<Option<String>>,
     pub(crate) connected: AtomicBool,
     /// Receiver for engine events (disconnects, etc.).
-    pub(crate) event_rx: Mutex<Option<crossbeam_channel::Receiver<Event>>>,
+    pub(crate) event_rx: Mutex<Option<std::sync::mpsc::Receiver<Event>>>,
     /// Sender for test-injected events (test-only).
     #[doc(hidden)]
-    pub(crate) _test_event_tx: Mutex<Option<crossbeam_channel::Sender<Event>>>,
+    pub(crate) _test_event_tx: Mutex<Option<std::sync::mpsc::SyncSender<Event>>>,
     /// Shared subscription tracking and dispatch preparation.
     pub(crate) core: ClientCore,
 }
@@ -209,7 +209,7 @@ impl EClient {
         let connect_username = config.username.clone();
         let connect_password = config.password.clone();
         let connect_paper = config.paper;
-        let (event_tx, event_rx) = crossbeam_channel::bounded(256);
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
         let (hot_loop, control_tx) = gw.into_hot_loop_with_farms(
             shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, core_id,
             crate::gateway::CallerAuth {
@@ -328,12 +328,12 @@ impl EClient {
 
 impl EClient {
     /// Clone the control channel sender, or return "Not connected".
-    pub(crate) fn tx(&self) -> PyResult<Sender<ControlCommand>> {
+    pub(crate) fn tx(&self) -> PyResult<SyncSender<ControlCommand>> {
         self.control_tx.lock().unwrap().clone()
             .ok_or_else(|| PyRuntimeError::new_err("Not connected"))
     }
 
-    /// Send a control command to the engine. `control_tx` is a bounded(64)
+    /// Send a control command to the engine. `control_tx` is a sync_channel(64)
     /// channel: a full queue is normal backpressure (the hot loop is behind,
     /// not gone) and `send` is meant to wait for it to drain, so the send
     /// itself stays blocking. What must not happen is waiting with the GIL
@@ -341,7 +341,7 @@ impl EClient {
     /// (ibx#271), so the wait runs detached, and only the actual send
     /// crosses that boundary; `cmd` must already be a plain owned value by
     /// the time it's built (never touching Python state once detached).
-    pub(crate) fn send_control(py: Python<'_>, tx: &Sender<ControlCommand>, cmd: ControlCommand) -> PyResult<()> {
+    pub(crate) fn send_control(py: Python<'_>, tx: &SyncSender<ControlCommand>, cmd: ControlCommand) -> PyResult<()> {
         // The error carries the command back, which is the whole command by
         // value. Nothing here wants it returned, so it is described and dropped
         // while still detached rather than moved across the boundary.
@@ -472,11 +472,11 @@ w = W()",
     /// A connected client whose engine is a channel the test reads.
     fn wired_client(
         py: Python<'_>,
-    ) -> (Py<EClient>, crossbeam_channel::Receiver<ControlCommand>, Arc<SharedState>, Py<PyAny>) {
+    ) -> (Py<EClient>, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>, Py<PyAny>) {
         let w = recording_wrapper(py);
         let client = EClient::new(w.clone_ref(py));
         let shared = Arc::new(SharedState::new());
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         *client.shared.lock().unwrap() = Some(shared.clone());
         *client.control_tx.lock().unwrap() = Some(tx);
         *client.account_id.lock().unwrap() = Some("DU123".into());

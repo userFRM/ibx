@@ -8,7 +8,7 @@ use crate::protocol::fix;
 use crate::protocol::fixcomp;
 use crate::protocol::tick_decoder;
 use crate::types::{qty_from_wire, InstrumentId};
-use crossbeam_channel::Sender;
+use std::sync::mpsc::SyncSender;
 
 use super::{HeartbeatState, ReplayPacing, emit, fast_extract_msg_type, find_body_after_tag};
 
@@ -134,7 +134,7 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
         hb: &mut HeartbeatState,
     ) {
         if self.disconnected {
@@ -219,7 +219,7 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<Sender<Event>>,
+        event_tx: &Option<SyncSender<Event>>,
         hb: &mut HeartbeatState,
     ) {
         let msg_type = match fast_extract_msg_type(msg) {
@@ -262,7 +262,7 @@ impl FarmState {
         }
     }
 
-    fn handle_tick_data(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState, event_tx: &Option<Sender<Event>>) {
+    fn handle_tick_data(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
         let body = match find_body_after_tag(msg, b"35=P\x01") {
             Some(b) => b,
             None => return,
@@ -1016,7 +1016,7 @@ impl FarmState {
         if has_price || has_size { Some((price, size, side, is_snapshot)) } else { None }
     }
 
-    pub(crate) fn handle_disconnect(&mut self, context: &mut Context, _event_tx: &Option<Sender<Event>>) {
+    pub(crate) fn handle_disconnect(&mut self, context: &mut Context, _event_tx: &Option<SyncSender<Event>>) {
         self.disconnected = true;
         self.md_req_to_instrument.clear();
         self.instrument_md_reqs.clear();
@@ -1101,7 +1101,7 @@ impl FarmState {
         log::info!("Farm reconnected, re-subscribed {} instruments + {} depth", self.instrument_md_reqs.len(), depth_count);
     }
 
-    fn handle_tick_news(&mut self, msg: &[u8], context: &Context, shared: &SharedState, event_tx: &Option<Sender<Event>>) {
+    fn handle_tick_news(&mut self, msg: &[u8], context: &Context, shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
         let body = match find_body_after_tag(msg, b"35=G\x01") {
             Some(b) => b,
             None => return,

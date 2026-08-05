@@ -54,7 +54,6 @@ zeroize = "1"
 
 # Control plane
 tokio = { version = "1", features = ["full"] }
-crossbeam-channel = "0.5"
 
 # Logging
 log = "0.4"

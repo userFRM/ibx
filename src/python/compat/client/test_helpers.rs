@@ -14,7 +14,7 @@ use super::EClient;
 
 #[pymethods]
 impl EClient {
-    /// Create a fake "connected" EClient backed by a SharedState + crossbeam channel.
+    /// Create a fake "connected" EClient backed by a SharedState + channel.
     #[doc(hidden)]
     #[pyo3(signature = (account_id="TEST123".to_string()))]
     fn _test_connect(&self, account_id: String) -> PyResult<()> {
@@ -22,8 +22,8 @@ impl EClient {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
         let shared = Arc::new(SharedState::new());
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::bounded(256);
+        let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
         *self.shared.lock().unwrap() = Some(shared);
         *self.control_tx.lock().unwrap() = Some(tx);
         *self.event_rx.lock().unwrap() = Some(event_rx);

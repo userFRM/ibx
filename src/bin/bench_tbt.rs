@@ -91,7 +91,7 @@ fn main() {
 }
 
 fn collect_tbt_trades(
-    event_rx: &crossbeam_channel::Receiver<Event>,
+    event_rx: &std::sync::mpsc::Receiver<Event>,
     collect: u32,
     warmup_count: u32,
     start: &Instant,
@@ -136,7 +136,7 @@ fn collect_tbt_trades(
             }
             Ok(Event::Disconnected) => break,
             Ok(_) => continue,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if warmed_up == 0 {
                     // No TBT trades coming — market might be closed
                     println!(
@@ -154,7 +154,7 @@ fn collect_tbt_trades(
 }
 
 fn collect_tbt_quotes(
-    event_rx: &crossbeam_channel::Receiver<Event>,
+    event_rx: &std::sync::mpsc::Receiver<Event>,
     collect: u32,
     warmup_count: u32,
     start: &Instant,
@@ -199,7 +199,7 @@ fn collect_tbt_quotes(
             }
             Ok(Event::Disconnected) => break,
             Ok(_) => continue,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if warmed_up == 0 {
                     println!(
                         "[{:.3}s] No TBT BidAsk events received (market closed?), skipping",

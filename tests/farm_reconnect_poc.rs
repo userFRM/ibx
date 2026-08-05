@@ -66,7 +66,7 @@ fn hotloop_auto_reconnect_on_farm_disconnect() {
         Gateway::connect(&cfg).expect("Initial connect failed");
 
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = crossbeam_channel::bounded(256);
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
 
     let (mut hot_loop, _control_tx) = gw.into_hot_loop_with_farms(
         shared.clone(), Some(event_tx),
