@@ -2,6 +2,7 @@ pub mod farm;
 pub mod ccp;
 pub mod hmds;
 pub mod order_builder;
+pub(crate) mod retry;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -52,6 +53,10 @@ pub struct HotLoop {
     /// Whether a recoverable loss was announced to the client. Gates the
     /// restore notice so a reconnect that nobody was told about stays quiet.
     loss_announced: bool,
+    /// Set when a reconnect failed for a reason repeating cannot fix. The
+    /// scheduler stops rather than climbing a ladder forever against a server
+    /// that has already given its answer.
+    reconnect_halted: Option<retry::DisconnectReason>,
     /// Slots a caller asked to free that were held open by a position. The
     /// table is bounded, so they are reconsidered once the account is flat
     /// rather than being lost until the process ends.
@@ -175,6 +180,7 @@ impl HotLoop {
             ccp_next_attempt_at: None,
             farm_next_attempt_at: None,
             loss_announced: false,
+            reconnect_halted: None,
             pinned_by_position: Vec::new(),
             farm_reconnect_attempt: 0,
             pending_ccp_reconnect: None,
@@ -994,6 +1000,12 @@ impl HotLoop {
         if !self.farm.disconnected || self.pending_farm_reconnect.is_some() {
             return;
         }
+        // A reason the server has already given does not change by being asked
+        // again, and a ladder climbed against one is just noise on someone
+        // else's server.
+        if self.reconnect_halted.is_some() {
+            return;
+        }
         match self.farm_next_attempt_at {
             None => {
                 let delay = reconnect_backoff(self.farm_reconnect_attempt);
@@ -1018,6 +1030,9 @@ impl HotLoop {
     /// See `maybe_spawn_farm_reconnect`.
     fn maybe_spawn_ccp_reconnect(&mut self) {
         if !self.ccp.disconnected || self.pending_ccp_reconnect.is_some() {
+            return;
+        }
+        if self.reconnect_halted.is_some() {
             return;
         }
         match self.ccp_next_attempt_at {
@@ -1082,13 +1097,34 @@ impl HotLoop {
                 log::info!("Farm auto-reconnect succeeded (attempt {})", self.farm_reconnect_attempt);
                 self.reconnect_farm(conn);
                 self.farm_reconnect_attempt = 0;
+                self.reconnect_halted = None;
                 self.announce_reconnected();
                 self.farm_next_attempt_at = None;
                 self.hb.farm_up_since = Instant::now();
                 self.pending_farm_reconnect = None;
             }
             Ok(Err(e)) => {
-                log::error!("Farm auto-reconnect failed (attempt {}): {}", self.farm_reconnect_attempt, e);
+                let reason = retry::DisconnectReason::from_error(&e);
+                log::error!(
+                    "Farm auto-reconnect failed (attempt {}): {} — {}",
+                    self.farm_reconnect_attempt, e, reason.as_str(),
+                );
+                if reason.is_terminal() {
+                    log::error!(
+                        "Farm reconnect stopped: {}. Retrying cannot change this; \
+                         the caller has to act.",
+                        reason.as_str(),
+                    );
+                    self.reconnect_halted = Some(reason);
+                    self.pending_farm_reconnect = None;
+                    self.shared.set_connection_lost();
+                    emit(&self.event_tx, Event::Disconnected);
+                    return;
+                }
+                self.farm_next_attempt_at = Some(
+                    Instant::now()
+                        + retry::delay_for(reason, reconnect_backoff(self.farm_reconnect_attempt)),
+                );
                 self.pending_farm_reconnect = None;
                 // Notify once after three straight failures; retries continue
                 // on the backoff ladder — the old 3-attempt hard cap gave up
@@ -1143,6 +1179,7 @@ impl HotLoop {
                 log::info!("CCP auto-reconnect succeeded (attempt {})", self.ccp_reconnect_attempt);
                 self.reconnect_ccp(conn);
                 self.ccp_reconnect_attempt = 0;
+                self.reconnect_halted = None;
                 // The request for these goes out on this socket even though
                 // the bars come back on the historical one, so an HMDS that
                 // recovered first could not send them and left them recorded
@@ -1154,7 +1191,27 @@ impl HotLoop {
                 self.pending_ccp_reconnect = None;
             }
             Ok(Err(e)) => {
-                log::error!("CCP auto-reconnect failed (attempt {}): {}", self.ccp_reconnect_attempt, e);
+                let reason = retry::DisconnectReason::from_error(&e);
+                log::error!(
+                    "CCP auto-reconnect failed (attempt {}): {} — {}",
+                    self.ccp_reconnect_attempt, e, reason.as_str(),
+                );
+                if reason.is_terminal() {
+                    log::error!(
+                        "CCP reconnect stopped: {}. Retrying cannot change this; \
+                         the caller has to act.",
+                        reason.as_str(),
+                    );
+                    self.reconnect_halted = Some(reason);
+                    self.pending_ccp_reconnect = None;
+                    self.shared.set_connection_lost();
+                    emit(&self.event_tx, Event::Disconnected);
+                    return;
+                }
+                self.ccp_next_attempt_at = Some(
+                    Instant::now()
+                        + retry::delay_for(reason, reconnect_backoff(self.ccp_reconnect_attempt)),
+                );
                 self.pending_ccp_reconnect = None;
                 // See the farm path: notify once, keep retrying (ibx#218).
                 if self.ccp_reconnect_attempt == 3 {
@@ -1818,6 +1875,25 @@ mod tests {
             "and no prices for the next occupant's deltas to build on",
         );
         assert!(hl.pinned_by_position.is_empty(), "and nothing is still waiting on it");
+    }
+
+    /// A login the server refused is refused the same way next time. Climbing
+    /// a ladder against that answer forever is noise on someone else's server
+    /// and silence to the caller, who is the only one who can fix it.
+    #[test]
+    fn a_refused_login_stops_the_reconnect_rather_than_looping() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.farm.disconnected = true;
+        hl.reconnect_halted = Some(retry::DisconnectReason::AuthorizationFailed);
+
+        hl.maybe_spawn_farm_reconnect();
+        assert!(hl.farm_next_attempt_at.is_none(), "nothing is scheduled against a settled answer");
+        assert!(hl.pending_farm_reconnect.is_none(), "and no attempt is in flight");
+
+        // Whatever the server objected to may have been changed since.
+        hl.reconnect_halted = None;
+        hl.maybe_spawn_farm_reconnect();
+        assert!(hl.farm_next_attempt_at.is_some(), "an ordinary loss still retries");
     }
 
     /// A client that stood down on the loss needs the other edge to come back
