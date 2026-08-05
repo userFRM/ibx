@@ -635,6 +635,10 @@ pub enum OrderRequest {
         is_peg_decrease: bool,
         pegged_change_amount: Price,
         ref_change_amount: Price,
+        /// The price the peg is measured from. The gateway requires it
+        /// ("Message must contain field # 99") and refuses the order without
+        /// one, so a peg to a benchmark could not be placed at all.
+        starting_price: Price,
     },
     /// Limit order for auction (TIF=AUC, tag 59=8). Participates in exchange opening/closing auction.
     SubmitLimitAuc {
