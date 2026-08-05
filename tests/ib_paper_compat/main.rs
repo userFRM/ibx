@@ -461,6 +461,36 @@ fn peg_bench_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// The six algo phases were all refused on the same field, so they answer as a
+/// group and are cheaper to ask that way than through the whole suite.
+#[test]
+fn vwap_algo_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+        .expect("Gateway::connect() failed");
+    let conns = Conns {
+        farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone(),
+    };
+    let mut conns = conns;
+    for phase in [
+        orders::phase_vwap_order as fn(Conns) -> Conns,
+        orders::phase_twap_order,
+        orders::phase_arrival_px_order,
+        orders::phase_close_px_order,
+        orders::phase_dark_ice_order,
+        orders::phase_pct_vol_order,
+    ] {
+        conns = phase(conns);
+        conns = ensure_ccp_alive(conns, &mut gw, &config);
+    }
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// The fill-or-cancel phase that fails intermittently, on its own and several
 /// times over. An intermittent failure needs repetition more than it needs the
 /// hundred-odd phases that happen to run before it.
