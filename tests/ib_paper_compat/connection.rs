@@ -379,3 +379,71 @@ pub(super) fn phase_update_param(conns: Conns) -> Conns {
     println!("  PASS\n");
     conns
 }
+
+/// The farm comes back by itself after the transport goes away.
+///
+/// This is the case the whole reconnect path exists for: the servers go down
+/// nightly and come back, and a client that needed a person to restart it has
+/// failed at the one job having no gateway gives it. Every other phase that
+/// drops a connection builds the engine without credentials, so it can only
+/// ever watch the give-up path — which is why this one hands it the same
+/// credentials `connect()` does, and then takes the farm away.
+pub(super) fn phase_farm_recovers_with_credentials(
+    gw: gateway::Gateway,
+    conns: Conns,
+    config: &GatewayConfig,
+) -> (bool, bool) {
+    println!("--- Phase 96b: Farm recovers on its own (real credentials) ---");
+
+    let account_id = conns.account_id.clone();
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = gw.into_hot_loop_with_farms(
+        shared.clone(), Some(event_tx), conns.farm, conns.ccp, conns.hmds, None,
+        gateway::CallerAuth {
+            host: config.host.clone(),
+            username: config.username.clone(),
+            password: zeroize::Zeroizing::new(config.password.to_string()),
+            paper: config.paper,
+            code_provider: config.code_provider.clone(),
+            ib_key_timeout_secs: config.ib_key_timeout_secs,
+            ib_key_token_sub_type: config.ib_key_token_sub_type.clone(),
+        },
+    );
+
+    // Take the farm away before the loop starts, so recovery is the first thing
+    // it has to do rather than something raced against start-up.
+    hot_loop.force_farm_disconnect();
+    let join = run_hot_loop(hot_loop);
+
+    control_tx.send(ControlCommand::Subscribe {
+        con_id: 756733, symbol: "SPY".into(), exchange: String::new(),
+        sec_type: String::new(), last_trade_date: String::new(), strike: 0.0,
+        right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+    }).unwrap();
+
+    // A tick is the proof. The farm was down before the loop started, so the
+    // only way one arrives is that the engine dialled the farm again on the
+    // cached credentials and re-sent the subscription. There is deliberately no
+    // event to wait for: a drop the engine handles by itself announces neither
+    // the loss nor the recovery, and the caller is meant to see only that the
+    // data kept coming.
+    let start = Instant::now();
+    let mut ticked = false;
+    let mut elapsed = Duration::ZERO;
+    while start.elapsed() < Duration::from_secs(90) && !ticked {
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(250)) {
+            ticked = true;
+            elapsed = start.elapsed();
+        }
+    }
+
+    // Nothing announced the loss, so nothing should be reporting one.
+    let restored = !shared.take_connection_lost();
+    if ticked {
+        println!("  data resumed after {:.1}s", elapsed.as_secs_f64());
+    }
+    println!("  data_resumed={ticked} connection_reported_healthy={restored}");
+    let _ = shutdown_and_reclaim(&control_tx, join, account_id);
+    (ticked, restored)
+}
