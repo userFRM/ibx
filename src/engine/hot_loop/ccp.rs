@@ -4198,7 +4198,7 @@ mod tests {
 
         context.modify(78, 100 * PRICE_SCALE, 100, false);
         crate::engine::hot_loop::order_builder::drain_and_send_orders(
-            &mut conn, &mut context, "DU1", &mut hb, false, &shared_arc, false,
+            &mut conn, &mut context, "DU1", &mut hb, false, &shared_arc, false, &None,
         );
 
         let mut buf = [0u8; 4096];

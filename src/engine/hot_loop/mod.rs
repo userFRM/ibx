@@ -418,7 +418,7 @@ impl HotLoop {
             order_builder::drain_and_send_orders(
                 &mut self.ccp_conn, &mut self.context, &self.account_id, &mut self.hb,
                 self.ccp.disconnected, &self.shared,
-                self.ccp.recovery_sweep_at.is_some(),
+                self.ccp.recovery_sweep_at.is_some(), &self.event_tx,
             );
 
             // A write that abandoned the transport leaves it unable to carry
