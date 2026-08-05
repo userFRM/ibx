@@ -208,6 +208,44 @@ mod seq_quote_tests {
     }
 }
 
+#[cfg(test)]
+mod order_replay_tests {
+    use super::*;
+    use crate::types::{OrderStatus, OrderUpdate};
+
+    fn update(order_id: u64, status: OrderStatus, filled: f64, remaining: f64) -> OrderUpdate {
+        OrderUpdate {
+            order_id, instrument: 0, status,
+            filled_qty: filled, remaining_qty: remaining,
+            perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        }
+    }
+
+    /// The gateway echoes a working status behind a fill. The order is retired
+    /// by then, so the echo finds no record to be refused by and reported a
+    /// filled order as working with nothing filled.
+    #[test]
+    fn a_finished_order_is_not_reopened_by_a_frame_behind_it() {
+        let s = OrderState::new();
+        s.push_order_update(update(7, OrderStatus::Filled, 1.0, 0.0));
+        s.push_completed_order(crate::types::CompletedOrder {
+            order_id: 7, instrument: 0, status: OrderStatus::Filled,
+            filled_qty: 1, timestamp_ns: 0,
+        });
+
+        // Queued before the fill was known, which is the real ordering.
+        s.push_order_update(update(7, OrderStatus::PreSubmitted, 0.0, 1.0));
+
+        let seen = s.drain_order_updates();
+        assert_eq!(seen.len(), 1, "only the fill reaches the caller: {seen:?}");
+        assert_eq!(seen[0].status, OrderStatus::Filled);
+
+        // An order that has not finished is untouched by this.
+        s.push_order_update(update(8, OrderStatus::PreSubmitted, 0.0, 1.0));
+        assert_eq!(s.drain_order_updates().len(), 1, "a live order still reports");
+    }
+}
+
 // ── Domain-specific state containers ──
 
 /// Lock-free quotes, TBT streams, real-time bars, depth updates, and news ticks.
@@ -388,8 +426,25 @@ impl OrderState {
         self.fills.lock().unwrap().drain(..).collect()
     }
 
+    /// Take the queued statuses, dropping any that the order has already moved
+    /// past.
+    ///
+    /// A working status queued a moment before the fill is still in here when
+    /// the fill is delivered, and the fill is delivered first — so handing this
+    /// queue over untouched reported a filled order as working with nothing
+    /// filled. Seen on every market order against a paper account. The check
+    /// belongs here rather than on the way in, because on the way in the order
+    /// genuinely had not finished yet.
     pub fn drain_order_updates(&self) -> Vec<OrderUpdate> {
-        self.order_updates.lock().unwrap().drain(..).collect()
+        let queued: Vec<OrderUpdate> = self.order_updates.lock().unwrap().drain(..).collect();
+        queued
+            .into_iter()
+            .filter(|u| {
+                u.status.is_terminal()
+                    || u.status == crate::types::OrderStatus::Uncertain
+                    || !self.recently_completed(u.order_id)
+            })
+            .collect()
     }
 
     pub fn drain_cancel_rejects(&self) -> Vec<CancelReject> {
@@ -488,7 +543,7 @@ impl OrderState {
 
     /// Whether this order completed recently enough that a frame reopening it
     /// is a replay rather than news.
-    fn recently_completed(&self, order_id: u64) -> bool {
+    pub(crate) fn recently_completed(&self, order_id: u64) -> bool {
         self.completed.lock().unwrap().get(&order_id)
             .is_some_and(|at| at.elapsed() < COMPLETED_RETENTION)
     }

@@ -898,7 +898,15 @@ impl CcpState {
             .filter(|o| o.status == crate::types::OrderStatus::Uncertain)
             .copied();
         let unknown = prior.is_some();
-        if is_new_ack && clord_id != 0 && (context.order(clord_id).is_none() || unknown) {
+        // An order that already finished this session is not brought back by a
+        // frame that arrives behind it. The gateway echoes a working status
+        // after a fill, and the tracked record is gone by then — retired when
+        // the order finished — so its absence reads as "never seen" and the
+        // echo would insert it as live, with none of the fill on it.
+        let already_finished = shared.orders.recently_completed(clord_id);
+        if is_new_ack && clord_id != 0 && !already_finished
+            && (context.order(clord_id).is_none() || unknown)
+        {
             let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
             // The side has to be stated. A guess does not stay in the recovered
             // record: every later fill for the order books through the tracked
@@ -1587,15 +1595,20 @@ impl CcpState {
             crate::types::OrderStatus::Cancelled |
             crate::types::OrderStatus::Rejected
         ) {
-            if let Some(order) = context.order(clord_id).copied() {
-                shared.orders.push_completed_order(CompletedOrder {
-                    order_id: clord_id,
-                    instrument: order.instrument,
-                    status,
-                    filled_qty: order.filled as i64,
-                    timestamp_ns: context.now_ns(),
-                });
-            }
+            // Recorded whether or not the order was being tracked. A market
+            // order can finish before its acknowledgement has been handled, so
+            // requiring a tracked record meant the fastest orders — the ones
+            // that fill immediately — left no memory of having finished, and
+            // the working status the gateway echoes behind the fill had nothing
+            // to be refused by.
+            let tracked = context.order(clord_id).copied();
+            shared.orders.push_completed_order(CompletedOrder {
+                order_id: clord_id,
+                instrument: tracked.map_or(0, |o| o.instrument),
+                status,
+                filled_qty: tracked.map_or(0, |o| o.filled as i64),
+                timestamp_ns: context.now_ns(),
+            });
             context.retire_order(clord_id);
         }
     }
