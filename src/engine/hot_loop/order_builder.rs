@@ -823,6 +823,10 @@ fn synthesize_pending_cancel(
 /// Map the OCA type code (1..=4) to its tag 6209 wire label. 0/unset and
 /// out-of-range coerce to 3 (ReduceOnFillNonBlock), the gateway default
 /// (ibx#215).
+/// Unit a trailing amount is expressed in, on tag 6268: percent, as against
+/// an absolute amount (0) or ticks (1).
+const TRAIL_UNIT_PERCENT: u32 = 100;
+
 fn oca_type_str(oca_type: u8) -> &'static str {
     match oca_type {
         1 => "CancelOnFillWBlock",
@@ -987,15 +991,19 @@ fn send_order_ex(
             fields.push((211, t));
         }
         K::TrailPct { trail_pct, .. } => {
-            // Per ib-agent#156 capture: percent-trail mirrors 99/211 as the
-            // percent in decimal form (1.00 for 1%), alongside 6268 in
-            // basis points and 18=a.
+            // The percent itself goes on 99 and 211 in decimal form (1.00 for
+            // 1%). Tag 6268 is not the amount but the unit the trail is
+            // expressed in — 100 for percent, 0 for an amount, 1 for ticks —
+            // and it was being filled with the percent in basis points. A one
+            // percent trail is 100 basis points, which is also the code for
+            // percent, so the one case anybody tried was right by coincidence
+            // and every other percentage sent a unit that is not a unit.
             let pct_decimal = format!("{:.2}", trail_pct as f64 / 100.0);
             fields.push((40, "P".to_string()));
             fields.push((99, pct_decimal.clone()));
             fields.push((211, pct_decimal));
             fields.push((18, "a".to_string()));
-            fields.push((6268, trail_pct.to_string()));
+            fields.push((6268, TRAIL_UNIT_PERCENT.to_string()));
             has_base_exec_inst = true;
         }
         K::Moc => fields.push((40, "5".to_string())),
@@ -2000,6 +2008,32 @@ mod tests {
         assert_eq!(tag("6258="), Some(format_price(12 * crate::types::PRICE_SCALE).to_string()));
         assert_eq!(tag("6259="),
             Some(format_price(11 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2).to_string()));
+    }
+
+    /// The trail percentage and the unit it is expressed in are different
+    /// fields, and a one percent trail is a hundred basis points while the code
+    /// for percent is also a hundred — so the two agree for exactly one
+    /// percentage and disagree for every other. Checked at two and a half.
+    #[test]
+    fn a_percent_trail_states_the_percent_and_the_unit_separately() {
+        use std::io::Read;
+        let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 9, 0, Side::Sell, 1,
+            crate::types::OrderKind::TrailPct { trail_pct: 250, trail_stop_price: 0 },
+            b'0',
+            &crate::types::OrderAttrs::default(),
+        ).unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+        assert_eq!(tag("99=").as_deref(), Some("2.50"), "the percent, in decimal");
+        assert_eq!(tag("211=").as_deref(), Some("2.50"), "and again where the peg carries it");
+        assert_eq!(tag("6268=").as_deref(), Some("100"), "the unit is percent, not the percentage");
     }
 
     /// The conditional adjustable tags: 6262 only with a stop-limit conversion,

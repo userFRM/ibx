@@ -755,7 +755,7 @@ pub(super) fn phase_short_sell(conns: Conns) -> Conns {
 pub(super) fn phase_trailing_stop_pct(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 36: Trailing Stop Percent Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::TrailPct { trail_stop_price: 0, trail_pct: 100 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::TrailPct { trail_stop_price: 0, trail_pct: 250 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
