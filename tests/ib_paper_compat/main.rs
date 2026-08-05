@@ -438,6 +438,29 @@ fn query_error_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// The venue refuses a pegged-to-benchmark order naming a field the client does
+/// not send. Runs that one phase, because a rejection reason is the whole
+/// result and the full suite is a long way to read one line.
+#[test]
+fn peg_bench_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+        .expect("Gateway::connect() failed");
+    let conns = Conns {
+        farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone(),
+    };
+
+    let conns = orders::phase_peg_bench_order(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// ibx#191 PR A focused live entry — validates that after a full disconnect,
 /// a fresh `Gateway::connect` receives the CCP recovery push (35=8 with
 /// 150=0/39=0 per ib-agent#155) and that a subsequent

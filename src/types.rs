@@ -639,6 +639,10 @@ pub enum OrderRequest {
         /// ("Message must contain field # 99") and refuses the order without
         /// one, so a peg to a benchmark could not be placed at all.
         starting_price: Price,
+        /// Where the reference contract is quoted, by name — "NASDAQ", "SMART".
+        /// The field this travels in refuses a number, which is how the
+        /// reference change amount came to be sent in it and refused with it.
+        ref_exchange: String,
     },
     /// Limit order for auction (TIF=AUC, tag 59=8). Participates in exchange opening/closing auction.
     SubmitLimitAuc {
