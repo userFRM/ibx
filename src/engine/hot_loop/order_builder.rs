@@ -692,6 +692,16 @@ pub(crate) fn drain_and_send_orders(
                 // subsequent cancel before the modify-ack still references the
                 // right version.
                 context.last_clord.insert(order_id, clord_str.clone());
+                // The replacement is tracked under its own id, and a caller
+                // that modifies it again names that one. The broker still knows
+                // the order by the ClOrdID just sent, so the chain has to be
+                // reachable from both: without this the next replace states an
+                // OrigClOrdID the broker has never seen and is refused, which
+                // is what a second modify in a row did.
+                if new_order_id != order_id {
+                    context.last_clord.insert(new_order_id, clord_str.clone());
+                    context.modify_versions.insert(new_order_id, new_ver);
+                }
 
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
@@ -1620,6 +1630,49 @@ mod tests {
         );
         assert_eq!(kept.price, 150 * crate::types::PRICE_SCALE, "nor its price");
         assert!(context.order(43).is_none(), "and the attempt itself is not tracked");
+    }
+
+    /// A replace names the order the broker knows. Replacing a replacement
+    /// left the chain behind under the previous id, so the second one stated an
+    /// OrigClOrdID that had never existed and the broker refused it.
+    #[test]
+    fn a_replacement_can_itself_be_replaced() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        context.insert_order(crate::types::Order::new(
+            7, instrument, Side::Buy, 1, 1 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+        ));
+        let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+        let shared = std::sync::Arc::new(SharedState::new());
+        let mut buf = [0u8; 4096];
+
+        // 7 -> 8, then 8 -> 9, as a caller stepping an order up twice does.
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            new_order_id: 8, order_id: 7, price: 2 * crate::types::PRICE_SCALE,
+            qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        });
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        let n = peer.read(&mut buf).unwrap();
+        let first = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+        assert!(first.contains("|41=7.0|"), "the first replace names the original: {first}");
+
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            new_order_id: 9, order_id: 8, price: 3 * crate::types::PRICE_SCALE,
+            qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        });
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        let n = peer.read(&mut buf).unwrap();
+        let second = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+        assert!(
+            second.contains("|41=7.1|"),
+            "the second names what the broker last acknowledged, not an id it never saw: {second}",
+        );
     }
 
     /// What a pegged order actually puts on the wire.
