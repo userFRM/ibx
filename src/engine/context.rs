@@ -687,7 +687,7 @@ impl Context {
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::SubmitEx {
             order_id: id, instrument, side, qty,
-            kind: OrderKind::PegMkt { offset },
+            kind: OrderKind::PegMkt { offset, price_cap: 0 },
             tif: b'0', attrs: OrderAttrs::default(),
         });
         id
@@ -704,7 +704,7 @@ impl Context {
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::SubmitEx {
             order_id: id, instrument, side, qty,
-            kind: OrderKind::PegMid { offset },
+            kind: OrderKind::PegMid { offset, price_cap: 0 },
             tif: b'0', attrs: OrderAttrs::default(),
         });
         id

@@ -897,7 +897,7 @@ pub(super) fn phase_snap_pri_order(conns: Conns) -> Conns {
 pub(super) fn phase_peg_mkt_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 45: Pegged to Market Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::PegMkt { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::PegMkt { offset: 0, price_cap: 1000 * ibx::types::PRICE_SCALE }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -906,7 +906,7 @@ pub(super) fn phase_peg_mkt_order(conns: Conns) -> Conns {
 pub(super) fn phase_peg_mid_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 46: Pegged to Midpoint Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::PegMid { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::PegMid { offset: 0, price_cap: 1000 * ibx::types::PRICE_SCALE }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 

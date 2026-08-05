@@ -925,8 +925,8 @@ fn send_order_ex(
         K::SnapMkt { offset } => (crate::types::ORD_SNAP_MKT, 0, offset),
         K::SnapMid { offset } => (crate::types::ORD_SNAP_MID, 0, offset),
         K::SnapPri { offset } => (crate::types::ORD_SNAP_PRI, 0, offset),
-        K::PegMkt { offset } => (crate::types::ORD_PEG_MKT, 0, offset),
-        K::PegMid { offset } => (crate::types::ORD_PEG_MID, 0, offset),
+        K::PegMkt { offset, .. } => (crate::types::ORD_PEG_MKT, 0, offset),
+        K::PegMid { offset, .. } => (crate::types::ORD_PEG_MID, 0, offset),
         K::Rel { offset } => (b'R', 0, offset),
         K::AdjustableStop { stop_price, .. } => (b'3', 0, stop_price),
         K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', price, 0),
@@ -1230,13 +1230,22 @@ fn send_order_ex(
         // the gateway refuse the whole thing — seen against a paper account as
         // "Invalid value in field # 44", which is what an absent offset leaves
         // it looking for.
-        K::PegMkt { offset } => {
+        K::PegMkt { offset, price_cap } => {
             fields.push((211, format_price(*offset).to_string()));
+            if *price_cap > 0 {
+                fields.push((44, format_price(*price_cap).to_string()));
+            }
         }
-        K::PegMid { offset } => {
+        K::PegMid { offset, price_cap } => {
             fields.push((8403, "0.0".to_string())); // midOffsetAtWhole — differentiates PEGMID
             fields.push((8404, "0.0".to_string())); // midOffsetAtHalf
             fields.push((211, format_price(*offset).to_string()));
+            // The worst price the peg may reach, which IBKR documents as the
+            // limit-price field for these types. A zero cap is no cap, and zero
+            // is not a price, so it is left off rather than stated as one.
+            if *price_cap > 0 {
+                fields.push((44, format_price(*price_cap).to_string()));
+            }
         }
         // Optional initial stop trigger (ib-agent#173).
         K::TrailingStop { trail_stop_price, .. }
@@ -1608,6 +1617,33 @@ mod tests {
         );
         assert_eq!(kept.price, 150 * crate::types::PRICE_SCALE, "nor its price");
         assert!(context.order(43).is_none(), "and the attempt itself is not tracked");
+    }
+
+    /// What a pegged order actually puts on the wire.
+    #[test]
+    fn a_pegged_order_states_its_offset_and_no_limit_price() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 1, instrument, side: Side::Buy, qty: 1,
+            kind: crate::types::OrderKind::PegMkt { offset: 0, price_cap: 0 },
+            tif: b'0', attrs: Default::default(),
+        });
+        let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+        let shared = std::sync::Arc::new(SharedState::new());
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+        println!("PEGMKT WIRE: {msg}");
+        assert!(msg.contains("|211=0|"), "the offset is stated: {msg}");
     }
 
     /// A replace may now change the order type, and a stop that becomes a
@@ -2178,8 +2214,8 @@ mod modify_wire_tests {
     fn the_two_pegs_are_told_apart_on_the_wire() {
         let mut sent = Vec::new();
         for kind in [
-            crate::types::OrderKind::PegMkt { offset: 5 * crate::types::PRICE_SCALE },
-            crate::types::OrderKind::PegMid { offset: 5 * crate::types::PRICE_SCALE },
+            crate::types::OrderKind::PegMkt { offset: 5 * crate::types::PRICE_SCALE, price_cap: 0 },
+            crate::types::OrderKind::PegMid { offset: 5 * crate::types::PRICE_SCALE, price_cap: 0 },
         ] {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
