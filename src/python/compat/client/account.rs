@@ -88,7 +88,7 @@ impl EClient {
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             self.wrapper.call_method(
                 py, "position",
-                (self.account().as_str(), &c_py, pi.position as f64, avg_cost),
+                (self.account().as_str(), &c_py, pi.position, avg_cost),
                 None,
             )?;
         }
@@ -166,7 +166,7 @@ impl EClient {
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             self.wrapper.call_method(
                 py, "position_multi",
-                (req_id, account, model_code, &c_py, pi.position as f64, avg_cost),
+                (req_id, account, model_code, &c_py, pi.position, avg_cost),
                 None,
             )?;
         }
