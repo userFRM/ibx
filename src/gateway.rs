@@ -1118,16 +1118,6 @@ fn parse_auth_start_token(auth_start: &str) -> (String, Option<String>) {
     (types.join(","), sub_type)
 }
 
-/// An absent token type routes to the IBKey gate rather than skipping the
-/// second factor. That gate opens by sending its init and reports `Skipped`
-/// when the server answers `AUTH_FINISH PASSED`, which is how an account with
-/// no second factor completes — so skipping it would leave the server waiting
-/// on an init that never comes.
-///
-/// The field carries a comma-separated list when the account has more than one
-/// factor enabled — `AUTH_START` advertised `4,5` for an account with both an
-/// authenticator and IBKey. Reading the whole field as one type refused the
-
 /// What the second-factor gate needs, whether this is the first login or a
 /// reconnect that the server bumped back to SRP.
 pub(crate) struct SecondFactor<'a> {
@@ -1226,7 +1216,7 @@ fn run_second_factor(
         // — a fixed value cannot be right for a session it predates.
         let token_sub_type = sf.token_sub_type
             .as_deref()
-            .unwrap_or(&sf.default_sub_type);
+            .unwrap_or(sf.default_sub_type);
         log::info!(
             "2FA gate: token sub-type {:?} ({})",
             token_sub_type,
@@ -1261,6 +1251,15 @@ fn run_second_factor(
     Ok(soft_token)
 }
 
+/// An absent token type routes to the IBKey gate rather than skipping the
+/// second factor. That gate opens by sending its init and reports `Skipped`
+/// when the server answers `AUTH_FINISH PASSED`, which is how an account with
+/// no second factor completes — so skipping it would leave the server waiting
+/// on an init that never comes.
+///
+/// The field carries a comma-separated list when the account has more than one
+/// factor enabled — `AUTH_START` advertised `4,5` for an account with both an
+/// authenticator and IBKey. Reading the whole field as one type refused the
 /// login outright, so each entry is considered and IBKey is preferred: it is
 /// the only one that completes without a `code_provider`, and it still serves
 /// a configured one through Challenge/Response.

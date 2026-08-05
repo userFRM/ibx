@@ -1483,11 +1483,11 @@ mod tests {
         let msg = String::from_utf8_lossy(&buf[..n]);
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {}", msg);
-        assert_eq!(tag("40=").as_deref(), Some("3"), "the type the caller stated: {}", msg);
-        assert_eq!(tag("59=").as_deref(), Some("1"), "the tif the caller stated: {}", msg);
+        assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+        assert_eq!(tag("40=").as_deref(), Some("3"), "the type the caller stated: {msg}");
+        assert_eq!(tag("59=").as_deref(), Some("1"), "the tif the caller stated: {msg}");
         assert_eq!(tag("99="), Some(format_price(149 * crate::types::PRICE_SCALE).to_string()),
-            "the trigger the caller stated: {}", msg);
+            "the trigger the caller stated: {msg}");
     }
 
     /// The trigger is a price and lands on the instrument's grid like any
@@ -1523,7 +1523,7 @@ mod tests {
         assert_eq!(
             tag("99="),
             Some(format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100).to_string()),
-            "the trigger must be on the grid: {}", msg,
+            "the trigger must be on the grid: {msg}",
         );
     }
 
@@ -1646,7 +1646,7 @@ mod tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.insert_order(crate::types::Order::new(
-            7, instrument, Side::Buy, 1, 1 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            7, instrument, Side::Buy, 1, crate::types::PRICE_SCALE, b'2', b'0', 0,
         ));
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
@@ -1732,10 +1732,10 @@ mod tests {
         let msg = String::from_utf8_lossy(&buf[..n]);
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("40=").as_deref(), Some("2"), "the stated type: {}", msg);
+        assert_eq!(tag("40=").as_deref(), Some("2"), "the stated type: {msg}");
         assert_eq!(tag("44=").as_deref(), Some(&*format_price(151 * crate::types::PRICE_SCALE)),
-            "the limit price: {}", msg);
-        assert_eq!(tag("99="), None, "and no trigger from the order it replaced: {}", msg);
+            "the limit price: {msg}");
+        assert_eq!(tag("99="), None, "and no trigger from the order it replaced: {msg}");
     }
 
     /// A modify that states none of them leaves what the resting order holds in
@@ -1765,14 +1765,14 @@ mod tests {
         let msg = String::from_utf8_lossy(&buf[..n]);
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
-        assert_eq!(tag("40=").as_deref(), Some("3"), "the resting type: {}", msg);
-        assert_eq!(tag("59=").as_deref(), Some("1"), "the resting tif: {}", msg);
+        assert_eq!(tag("40=").as_deref(), Some("3"), "the resting type: {msg}");
+        assert_eq!(tag("59=").as_deref(), Some("1"), "the resting tif: {msg}");
         // A stop has one price and it is the trigger, so the single price the
         // caller passed can only have meant that. Leaving 149 in place would
         // put 151 on no tag at all and move nothing.
         assert_eq!(tag("99="), Some(format_price(151 * crate::types::PRICE_SCALE).to_string()),
-            "the moved trigger: {}", msg);
-        assert!(!msg.contains("\u{1}44="), "a stop states no limit price: {}", msg);
+            "the moved trigger: {msg}");
+        assert!(!msg.contains("\u{1}44="), "a stop states no limit price: {msg}");
     }
     use super::*;
     use crate::types::Order;

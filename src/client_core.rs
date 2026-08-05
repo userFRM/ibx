@@ -1359,16 +1359,16 @@ impl ClientCore {
             // -qty*avgCost (cash paid to open a long, received to open a short).
             let money_traded = match seed {
                 Some(s) => s.money_traded,
-                None => -(qty_now as f64 * avg_cost as f64 / PRICE_SCALE_F),
+                None => -(qty_now * avg_cost as f64 / PRICE_SCALE_F),
             };
 
-            let mv_now = qty_now as f64 * price_now as f64 / PRICE_SCALE_F;
+            let mv_now = qty_now * price_now as f64 / PRICE_SCALE_F;
             let mv_midnight = qty_midnight as f64 * prev_close as f64 / PRICE_SCALE_F;
             // Daily P&L = value change since midnight plus today's net cash.
             total_daily += mv_now - mv_midnight + money_traded;
 
             if avg_cost != 0 {
-                total_unrealized += qty_now as f64 * (price_now - avg_cost) as f64 / PRICE_SCALE_F;
+                total_unrealized += qty_now * (price_now - avg_cost) as f64 / PRICE_SCALE_F;
             }
             priced += 1;
         }
@@ -1456,10 +1456,10 @@ impl ClientCore {
             // trade's net cash for an intraday-only position (no seed row).
             let money_traded = match seed {
                 Some(s) => s.money_traded,
-                None => -(qty_now as f64 * avg_cost as f64 / PRICE_SCALE_F),
+                None => -(qty_now * avg_cost as f64 / PRICE_SCALE_F),
             };
 
-            let mv_now = qty_now as f64 * price_now as f64 / PRICE_SCALE_F;
+            let mv_now = qty_now * price_now as f64 / PRICE_SCALE_F;
             // Held at the value last reported when the overnight size is
             // unknown, rather than recomputed from an assumption that would be
             // wrong in a specific direction: treating the absence as flat
@@ -1474,7 +1474,7 @@ impl ClientCore {
                     .map_or(0.0, |prev| prev[1] as f64 / PRICE_SCALE_F),
             };
             let unrealized = if avg_cost != 0 {
-                qty_now as f64 * (price_now - avg_cost) as f64 / PRICE_SCALE_F
+                qty_now * (price_now - avg_cost) as f64 / PRICE_SCALE_F
             } else { 0.0 };
             let realized = seed.map(|s| s.realized_pnl).unwrap_or(0.0);
             let value = mv_now;
@@ -1493,7 +1493,7 @@ impl ClientCore {
 
             results.push(PnlSingleUpdate {
                 req_id,
-                pos: qty_now as f64,
+                pos: qty_now,
                 daily_pnl: daily,
                 unrealized_pnl: unrealized,
                 realized_pnl: realized,
@@ -1573,7 +1573,7 @@ impl ClientCore {
 
         let to_entry = |pi: &PositionInfo| PortfolioUpdateEntry {
             con_id: pi.con_id,
-            position: pi.position as f64,
+            position: pi.position,
             avg_cost: pi.avg_cost as f64 / PRICE_SCALE_F,
             market_price: pi.market_price as f64 / PRICE_SCALE_F,
             market_value: pi.market_value as f64 / PRICE_SCALE_F,

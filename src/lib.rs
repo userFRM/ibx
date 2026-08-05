@@ -1,3 +1,9 @@
+// A wire message carries the fields the protocol says it carries, and the
+// function that builds one takes them. Splitting a builder into a struct to
+// satisfy an arbitrary count would put a layer between the caller and the
+// message without making either clearer.
+#![allow(clippy::too_many_arguments)]
+
 pub mod api;
 pub mod auth;
 pub mod bridge;
