@@ -863,13 +863,15 @@ fn push_contract_identity(
     let crate::engine::market_state::OrderIdentity {
         expiry, strike, right, multiplier, trading_class, local_symbol, currency: _,
     } = id;
-    // MaturityMonthYear, with a full date in it where the contract has one.
-    // The definition *lookup* must split these — an option asked for by date on
-    // tag 200 matches nothing — but an order is not a search, and the venue
-    // takes the full date here: an option order carrying `20281215` on 200 is
-    // accepted, checked against a live session. Do not "fix" this to match the
-    // lookup; it was tried, and it breaks the path that works.
-    if !expiry.is_empty() { fields.push((200, expiry)); }
+    // A contract month goes on MaturityMonthYear and anything longer on
+    // MaturityDate. That is the rule the terminal's own contract writer
+    // follows, uniformly and for every security type, and it is the same rule
+    // the definition lookup here already used. An option is tolerant of a full
+    // date on the month tag; a future is not, and answered "Unknown contract"
+    // for one.
+    if let Some(tag) = super::ccp::maturity_tag(&expiry) {
+        fields.push((tag, expiry));
+    }
     // What tells one contract in a family from another where the maturity does
     // not. The terminal writes both alongside the symbol and the security type;
     // sending neither left a futures order naming a family and no member of it,
@@ -2326,7 +2328,7 @@ mod modify_wire_tests {
         let sent = drain(&mut context);
 
         assert!(sent.contains("|167=OPT|"), "the security type: {sent}");
-        assert!(sent.contains("|200=20260619|"), "the expiry: {sent}");
+        assert!(sent.contains("|541=20260619|"), "a full date on the maturity-date tag: {sent}");
         assert!(sent.contains("|202=230|"), "the strike: {sent}");
         assert!(sent.contains("|201=1|"), "the right, as the wire code for a call: {sent}");
         assert!(sent.contains("|231=100|"), "the multiplier: {sent}");

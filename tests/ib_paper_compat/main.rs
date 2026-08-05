@@ -477,6 +477,19 @@ fn non_stock_order_phases_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// The options order, which the maturity-tag rule must not break.
+#[test]
+fn options_order_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() { Some(c) => c, None => return };
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let conns = multi_asset::phase_options_order(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// The nightly-maintenance case: the farm goes away and comes back by itself.
 #[test]
 fn farm_recovery_phase_live() {

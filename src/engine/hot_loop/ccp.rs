@@ -129,13 +129,13 @@ fn perm_id_from_fix_order_id(s: &str) -> i64 {
     (h >> 1) as i64
 }
 
-/// Which tag carries a maturity on a definition lookup.
+/// Which tag carries a maturity.
 ///
 /// A full expiry date is MaturityDate (541) and a contract month is
 /// MaturityMonthYear (200); they are not interchangeable, and an option asked
 /// for by date on tag 200 matches nothing at all. Anything too short to be
 /// either is left off rather than sent on a guess.
-fn maturity_tag(maturity: &str) -> Option<u32> {
+pub(crate) fn maturity_tag(maturity: &str) -> Option<u32> {
     match maturity.len() {
         6 => Some(200),
         n if n >= 8 => Some(541),

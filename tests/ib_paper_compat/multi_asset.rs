@@ -221,8 +221,10 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     // works is not in the contract block.
 
     let oid = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitGtc {
-        order_id: oid, instrument: inst, side: Side::Buy, qty: 1, price: 100_00_000_000, outside_rth: true,
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: oid, instrument: inst, side: Side::Buy, qty: 1,
+        kind: OrderKind::Limit { price: 100 * PRICE_SCALE },
+        tif: b'1', attrs: OrderAttrs { outside_rth: true, ..OrderAttrs::default() },
     })).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -339,6 +341,10 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
 
     // Submit an option limit order using the actual option con_id
     let opt_con_id = opt.con_id;
+    let opt_last_trade_date = opt.last_trade_date.clone();
+    let opt_strike = opt.strike;
+    let opt_multiplier = opt.multiplier as i64;
+    let opt_is_call = opt.right == Some(contracts::OptionRight::Call);
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
@@ -347,10 +353,23 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     );
     let inst = hot_loop.context_mut().register_instrument(opt_con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "SPY".to_string());
+    // Without these the order named a symbol and nothing else, so it went out
+    // as a stock on SPY — which the venue accepts, and which is why this phase
+    // reported an option order working when it had never sent one.
+    hot_loop.context_mut().set_routing(inst, "OPT", "SMART");
+    hot_loop.context_mut().set_order_identity(inst, &format!(
+        "{}|{}|{}|{}",
+        opt_last_trade_date,
+        opt_strike,
+        if opt_is_call { "C" } else { "P" },
+        opt_multiplier,
+    ));
 
     let oid = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitGtc {
-        order_id: oid, instrument: inst, side: Side::Buy, qty: 1, price: 1_000_000, outside_rth: true,
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: oid, instrument: inst, side: Side::Buy, qty: 1,
+        kind: OrderKind::Limit { price: 1_000_000 },
+        tif: b'1', attrs: OrderAttrs { outside_rth: true, ..OrderAttrs::default() },
     })).unwrap();
     let join = run_hot_loop(hot_loop);
 
