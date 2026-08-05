@@ -19,6 +19,7 @@ pub(crate) fn drain_and_send_orders(
     shared: &Arc<SharedState>,
     // Whether a reconnect's recovery is still settling what the broker holds.
     recovery_pending: bool,
+    event_tx: &Option<crossbeam_channel::Sender<crate::bridge::Event>>,
 ) {
     // If CCP is disconnected, leave orders in the pending buffer for retry after reconnect.
     // See: https://github.com/deepentropy/ibx/issues/116
@@ -567,7 +568,7 @@ pub(crate) fn drain_and_send_orders(
                     (60, &now),         // TransactTime
                 ]);
                 if result.is_ok() {
-                    synthesize_pending_cancel(context, shared, order_id);
+                    synthesize_pending_cancel(context, shared, order_id, event_tx);
                 }
                 result
             }
@@ -593,7 +594,7 @@ pub(crate) fn drain_and_send_orders(
                         (60, &now),
                     ]);
                     if last_result.is_ok() {
-                        synthesize_pending_cancel(context, shared, oid);
+                        synthesize_pending_cancel(context, shared, oid, event_tx);
                     }
                 }
                 last_result
@@ -807,7 +808,7 @@ pub(crate) fn drain_and_send_orders(
                         context.insert_order(prior);
                     }
                     context.set_order_status_forced(oid, OrderStatus::Uncertain);
-                    shared.orders.push_order_update(OrderUpdate {
+                    let update = OrderUpdate {
                         order_id: oid,
                         instrument: 0,
                         status: OrderStatus::Uncertain,
@@ -816,7 +817,14 @@ pub(crate) fn drain_and_send_orders(
                         perm_id: 0,
                         parent_id: 0,
                         timestamp_ns: 0,
-                    });
+                    };
+                    shared.orders.push_order_update(update);
+                    // An order whose state is no longer known is the one thing
+                    // a caller must not have to ask for. It was recorded and
+                    // not announced, so a caller reading the event channel —
+                    // told this is a second delivery of everything, not a
+                    // lesser one — was not told at all.
+                    crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::OrderUpdate(update));
                 }
             }
         }
@@ -843,12 +851,13 @@ fn synthesize_pending_cancel(
     context: &mut Context,
     shared: &Arc<SharedState>,
     order_id: crate::types::OrderId,
+    event_tx: &Option<crossbeam_channel::Sender<crate::bridge::Event>>,
 ) {
     if !context.update_order_status(order_id, OrderStatus::PendingCancel) {
         return; // unknown order, already terminal, or already pending-cancel
     }
     if let Some(order) = context.order(order_id).copied() {
-        shared.orders.push_order_update(OrderUpdate {
+        let update = OrderUpdate {
             order_id,
             instrument: order.instrument,
             status: OrderStatus::PendingCancel,
@@ -857,7 +866,9 @@ fn synthesize_pending_cancel(
             perm_id: 0,
             parent_id: 0,
             timestamp_ns: context.now_ns(),
-        });
+        };
+        shared.orders.push_order_update(update);
+        crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::OrderUpdate(update));
     }
 }
 
@@ -1484,7 +1495,7 @@ mod tests {
         );
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1522,7 +1533,7 @@ mod tests {
         context.modify_ex(42, 150 * crate::types::PRICE_SCALE, 100, false, b'3', b'0', off_grid);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1558,7 +1569,7 @@ mod tests {
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
 
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true, &None);
         peer.set_read_timeout(Some(std::time::Duration::from_millis(50))).unwrap();
         let mut buf = [0u8; 512];
         assert!(
@@ -1572,7 +1583,7 @@ mod tests {
             43, instrument, Side::Buy, 1, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
         ));
         context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 43 });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true, &None);
         let n = std::io::Read::read(&mut peer, &mut buf).unwrap_or(0);
         assert!(
             String::from_utf8_lossy(&buf[..n]).contains("35=F"),
@@ -1580,7 +1591,7 @@ mod tests {
         );
 
         // Once it has settled, the held one goes too.
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
         let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
         assert!(
             String::from_utf8_lossy(&buf[..n]).contains("35=F"),
@@ -1614,7 +1625,18 @@ mod tests {
 
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &Some(tx));
+
+        // Both deliveries, because the event channel is documented as a second
+        // delivery of everything rather than a lesser one — and an order whose
+        // state is no longer known is the last thing to deliver only once.
+        let events: Vec<_> = rx.try_iter().collect();
+        assert!(
+            events.iter().any(|e| matches!(e, crate::bridge::Event::OrderUpdate(u)
+                if u.order_id == 42 && u.status == crate::types::OrderStatus::Uncertain)),
+            "a caller reading events is told too: {events:?}",
+        );
 
         let updates = shared.orders.drain_order_updates();
         assert!(
@@ -1665,7 +1687,7 @@ mod tests {
             new_order_id: 8, order_id: 7, price: 2 * crate::types::PRICE_SCALE,
             qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
         });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
         let n = peer.read(&mut buf).unwrap();
         let first = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
         assert!(first.contains("|41=7.0|"), "the first replace names the original: {first}");
@@ -1674,7 +1696,7 @@ mod tests {
             new_order_id: 9, order_id: 8, price: 3 * crate::types::PRICE_SCALE,
             qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
         });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
         let n = peer.read(&mut buf).unwrap();
         let second = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
         assert!(
@@ -1701,7 +1723,7 @@ mod tests {
         });
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1733,7 +1755,7 @@ mod tests {
         context.modify_ex(42, 151 * crate::types::PRICE_SCALE, 100, false, b'2', 0, 0);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1766,7 +1788,7 @@ mod tests {
         context.modify(42, 151 * crate::types::PRICE_SCALE, 100, false);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1800,7 +1822,7 @@ mod tests {
         let shared = Arc::new(SharedState::new());
         context.insert_order(order(7, 3, OrderStatus::PartiallyFilled));
 
-        synthesize_pending_cancel(&mut context, &shared, 7);
+        synthesize_pending_cancel(&mut context, &shared, 7, &None);
 
         assert_eq!(context.order(7).unwrap().status, OrderStatus::PendingCancel);
         let updates = shared.orders.drain_order_updates();
@@ -1817,8 +1839,8 @@ mod tests {
         // Late cancel racing a fill: the order is done, no phase to report.
         context.insert_order(order(8, 10, OrderStatus::Filled));
 
-        synthesize_pending_cancel(&mut context, &shared, 8);
-        synthesize_pending_cancel(&mut context, &shared, 999);
+        synthesize_pending_cancel(&mut context, &shared, 8, &None);
+        synthesize_pending_cancel(&mut context, &shared, 999, &None);
 
         assert_eq!(context.order(8).unwrap().status, OrderStatus::Filled);
         assert!(shared.orders.drain_order_updates().is_empty());
@@ -2045,7 +2067,7 @@ mod modify_wire_tests {
 
         let shared = std::sync::Arc::new(SharedState::new());
         let mut hb = HeartbeatState::new();
-        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false, &None);
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -2413,7 +2435,7 @@ mod outside_rth_polarity_tests {
 
         let shared = std::sync::Arc::new(SharedState::new());
         let mut hb = HeartbeatState::new();
-        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false);
+        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false, &None);
 
         let mut buf = vec![0u8; 8192];
         let n = peer.read(&mut buf).unwrap();
