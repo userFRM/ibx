@@ -126,6 +126,14 @@ impl MarketState {
     ) -> Option<InstrumentId> {
         if con_id != 0 {
             let id = self.try_register(con_id)?;
+            // The caller stated what this contract is; recording only its
+            // option key and dropping the rest left every order on it going out
+            // as a stock on the default venue, because that is what an unset
+            // security type reads as.
+            if !symbol.is_empty() && self.symbol(id).is_empty() {
+                self.set_symbol(id, symbol.to_string());
+            }
+            self.set_routing(id, sec_type, exchange);
             // A conId names the contract to the gateway, but an order still has
             // to restate the identity on the wire, and this is where an order
             // reads it from. Recorded here too, or a future known by conId went
