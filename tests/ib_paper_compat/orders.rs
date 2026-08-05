@@ -962,7 +962,7 @@ pub(super) fn phase_time_condition_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 58: Time Condition Order (SPY)",
         OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
-            attrs: OrderAttrs { outside_rth: true, conditions: vec![OrderCondition::Time { time: "20991231-23:59:59".into(), is_more: false }], ..OrderAttrs::default() } },
+            attrs: OrderAttrs { outside_rth: true, conditions: vec![OrderCondition::Time { time: "20271231-23:59:59".into(), is_more: false }], ..OrderAttrs::default() } },
         false)
 }
 
