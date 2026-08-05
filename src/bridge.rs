@@ -382,6 +382,10 @@ pub struct OrderState {
     /// is done — a replayed frame would find nothing to refuse and insert it as
     /// open.
     completed: Mutex<HashMap<u64, Instant>>,
+    /// Set when the server finishes naming the orders already working, which
+    /// it does unprompted after a connect. Until then "none" and "not yet
+    /// told" look the same to a caller.
+    replay_done: AtomicBool,
     /// Reason for a genuinely-Inactive (39=I) transition: (order_id, ibapi
     /// error code, message). ibapi has no callback dedicated to "order
     /// parked with reason", so this is drained into `Wrapper::error` the
@@ -418,6 +422,7 @@ impl OrderState {
             completed_orders: Mutex::new(Vec::with_capacity(64)),
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
+            replay_done: AtomicBool::new(false),
             order_inactive: Mutex::new(Vec::with_capacity(8)),
         }
     }
@@ -514,6 +519,16 @@ impl OrderState {
 
     #[doc(hidden)] pub fn push_what_if(&self, response: WhatIfResponse) {
         self.what_if_responses.lock().unwrap().push(response);
+    }
+
+    /// The server has finished naming what is already working.
+    #[doc(hidden)] pub fn set_replay_done(&self) {
+        self.replay_done.store(true, Ordering::Release);
+    }
+
+    /// Whether the orders already working have been received.
+    pub fn replay_done(&self) -> bool {
+        self.replay_done.load(Ordering::Acquire)
     }
 
     #[doc(hidden)] pub fn push_completed_order(&self, order: CompletedOrder) {

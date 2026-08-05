@@ -131,6 +131,17 @@ impl EClient {
 
     /// Request all open orders. Matches `reqAllOpenOrders` in C++.
     pub fn req_all_open_orders(&self, wrapper: &mut impl Wrapper) {
+        // The orders already working are named by the server unprompted after a
+        // connect, and answering before that lands reports none of them. A
+        // strategy asking what it already has on, at the moment it starts, is
+        // exactly who asks this first, and telling it "nothing" is how the same
+        // order gets placed twice. Bounded: an account with nothing working
+        // never sees the replay end, and waiting forever for it would be worse
+        // than answering.
+        for _ in 0..300 {
+            if self.shared.orders.replay_done() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         for (order_id, tracked) in self.core.collect_open_orders(&self.shared) {
             let state = crate::api::types::OrderState {
                 status: tracked.status,

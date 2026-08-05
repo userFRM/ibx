@@ -215,6 +215,10 @@ pub(crate) struct CcpState {
     /// arrives (ibx#251). Cleared on a disconnect so a second drop before the
     /// sweep cancels it rather than reaping against a dead session.
     pub(crate) recovery_sweep_at: Option<Instant>,
+    /// Whether this connection has hydrated an order from the server's account
+    /// of what is working. Separates the replay's terminator from the echo that
+    /// looks like it.
+    pub(crate) hydrated_any: bool,
     /// (req_id, is_single_shot). Single-shot = known-conId lookup whose
     /// first 35=d reply is also the last (server emits no 323=5/6 terminator
     /// for these). Multi-record by-symbol/matching-symbols requests push
@@ -308,6 +312,7 @@ impl CcpState {
             news_subscriptions: Vec::new(),
             disconnected: false,
             recovery_sweep_at: None,
+            hydrated_any: false,
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
             pending_kut_historical: Vec::new(),
@@ -999,9 +1004,44 @@ impl CcpState {
                     tif: tif_byte,
                     stop_price: stop_price_i64,
                 });
+                self.hydrated_any = true;
                 log::info!("CCP recovery: inserted orderId={} sym={:?} side={:?} qty={} px={}",
                     clord_id, parsed.get(&55), side, qty,
                     limit_price_i64 as f64 / PRICE_SCALE as f64);
+                // Published, not just tracked. The engine knowing an order is
+                // working does the caller no good on its own: `req_open_orders`
+                // reads what has been published, so an order the server named
+                // at connect went unreported until some later message about it
+                // happened to arrive. A caller asking what it already has on,
+                // at the moment it starts, was told nothing.
+                let sec_type_str = context.market.order_routing(instrument).0;
+                shared.orders.push_order_info(clord_id, crate::bridge::RichOrderInfo {
+                    contract: api::Contract {
+                        con_id,
+                        symbol: parsed.get(&55).cloned().unwrap_or_default(),
+                        sec_type: sec_type_str,
+                        currency: parsed.get(&15).cloned().unwrap_or_default(),
+                        ..Default::default()
+                    },
+                    order: api::Order {
+                        order_id: clord_id as i64,
+                        action: match side {
+                            Side::Buy => "BUY".to_string(),
+                            _ => "SELL".to_string(),
+                        },
+                        total_quantity: qty as f64,
+                        order_type: crate::types::ord_type_fix_str(ord_type_byte).to_string(),
+                        lmt_price: limit_price_i64 as f64 / PRICE_SCALE as f64,
+                        aux_price: stop_price_i64 as f64 / PRICE_SCALE as f64,
+                        account: parsed.get(&1).cloned().unwrap_or_default(),
+                        ..Default::default()
+                    },
+                    order_state: api::OrderState {
+                        status: "Submitted".to_string(),
+                        ..Default::default()
+                    },
+                    last_exec: Default::default(),
+                });
                     }
                 }
             }
@@ -1013,6 +1053,13 @@ impl CcpState {
         if clord_id == 0 {
             log::debug!("ExecReport: dropping sentinel record (ClOrdID=0/*) sym={:?} status={:?}",
                 parsed.get(&55), parsed.get(&39));
+            // Everything already working has now been named. The same record
+            // shape also carries a mass-status echo that arrives before any
+            // order, so this only counts once at least one has come through —
+            // otherwise a caller is told the replay is over before it starts.
+            if self.hydrated_any {
+                shared.orders.set_replay_done();
+            }
             // The push said everything it was going to say, so the orders it
             // left out can be judged without waiting out the whole grace.
             if self.recovery_sweep_at.is_some() {
