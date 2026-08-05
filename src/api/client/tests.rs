@@ -785,32 +785,17 @@ fn cancel_mkt_data_unknown_req_id_no_panic() {
     assert!(rx.try_recv().is_err()); // no commands sent
 }
 
+/// Tick-by-tick is carried by a service this client does not speak. A
+/// subscription sent to the historical service is acknowledged and then never
+/// delivers, so the surface says so rather than taking a request it cannot
+/// serve (ibx#404).
 #[test]
-fn req_tick_by_tick_data_sends_subscribe_tbt() {
+fn req_tick_by_tick_data_refuses_rather_than_going_silent() {
     let (client, rx, _shared) = test_client();
-    let _ = client.req_tick_by_tick_data(10, &spy(), "BidAsk", 0, false);
-    let cmd = rx.try_recv().unwrap();
-    match cmd {
-        ControlCommand::SubscribeTbt { con_id, symbol, tbt_type, .. } => {
-            assert_eq!(con_id, 756733);
-            assert_eq!(symbol, "SPY");
-            assert!(matches!(tbt_type, TbtType::BidAsk));
-        }
-        _ => panic!("expected SubscribeTbt"),
-    }
-}
-
-#[test]
-fn req_tick_by_tick_data_defaults_to_last() {
-    let (client, rx, _shared) = test_client();
-    let _ = client.req_tick_by_tick_data(10, &spy(), "AllLast", 0, false);
-    let cmd = rx.try_recv().unwrap();
-    match cmd {
-        ControlCommand::SubscribeTbt { tbt_type, .. } => {
-            assert!(matches!(tbt_type, TbtType::Last));
-        }
-        _ => panic!("expected SubscribeTbt"),
-    }
+    let err = client.req_tick_by_tick_data(10, &spy(), "BidAsk", 0, false)
+        .expect_err("the caller is told");
+    assert!(err.contains("not implemented"), "{err}");
+    assert!(rx.try_recv().is_err(), "and nothing is sent that cannot be served");
 }
 
 #[test]

@@ -2465,9 +2465,6 @@ impl CcpState {
     // saying flat — the same defect ibx#261 fixed on the account-update path
     // (ibx#296). A genuine flat still arrives as an explicit `6064=0`.
     let mut qty: Option<f64> = None;
-    /// The quantity exactly as stated. The whole-number one above truncates,
-    /// and half a share is not a closed position.
-    let mut qty_raw: Option<f64> = None;
     // `None` where the row states no cost. Folding that into a zero made an
     // absent cost indistinguishable from a real one, and publishing it erased
     // the basis of a live holding.
@@ -2480,7 +2477,7 @@ impl CcpState {
                 if let Some(qty) = qty {
                     let avg_cost = basis_for(
                         shared, con_id,
-                        avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty_raw.unwrap_or(0.0),
+                        avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
                     );
                     shared.portfolio.set_position_info(PositionInfo {
                         con_id, position: qty, avg_cost, ..Default::default()
@@ -2495,14 +2492,12 @@ impl CcpState {
             }
             con_id = v.parse().unwrap_or(0);
             qty = None;
-            qty_raw = None;
             avg_cost_raw = None;
             count += 1;
         } else if let Some(v) = part.strip_prefix("6064=") {
             // Filtered to finite: `"NaN".parse()` succeeds and `NaN as i64`
             // is 0, which would flatten by the same route.
-            qty_raw = v.parse::<f64>().ok().filter(|f| f.is_finite());
-            qty = qty_raw;
+            qty = v.parse::<f64>().ok().filter(|f| f.is_finite());
         } else if let Some(v) = part.strip_prefix("6101=") {
             avg_cost_raw = v.parse::<f64>().ok().filter(|f| f.is_finite());
         }
@@ -2512,7 +2507,7 @@ impl CcpState {
         if let Some(qty) = qty {
             let avg_cost = basis_for(
                 shared, con_id,
-                avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty_raw.unwrap_or(0.0),
+                avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
             );
             shared.portfolio.set_position_info(PositionInfo {
                 con_id, position: qty, avg_cost, ..Default::default()
