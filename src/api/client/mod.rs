@@ -102,17 +102,22 @@ pub struct EClientConfig {
     /// fails without it. For IBKey accounts it selects Challenge/Response over
     /// waiting for a mobile push, so `None` is fine there (ibx#208, ibx#282).
     pub code_provider: Option<crate::auth::session::CodeProvider>,
-    /// Where the session is kept so a restart can pick it up instead of logging
-    /// in again — the same thing the terminal's auto-restart file does, and the
-    /// reason a gateway without one cannot come back after the nightly
-    /// maintenance window on its own.
+    /// Resume from a session captured earlier rather than logging in again.
     ///
-    /// `None` uses a per-user default. Persistence can be turned off entirely
-    /// with [`no_session_file`](Self::no_session_file).
+    /// Take it from [`session()`](EClient::session) and keep it wherever your
+    /// process keeps secrets. A session that the server no longer accepts just
+    /// means logging in, so this is only ever a faster start.
+    pub resume: Option<crate::auth::resume::ResumableSession>,
+    /// Keep the session in this file, so a restart can resume without logging
+    /// in — what the terminal's auto-restart file does, and why a gateway
+    /// without one cannot come back from the nightly maintenance window alone.
+    ///
+    /// Off unless set. Nothing about the session touches disk otherwise: it is
+    /// held in memory for the life of the process, which is all a reconnect
+    /// needs. Set this only if a restart must resume without a person present
+    /// to answer a second factor — it puts a credential on disk, encrypted and
+    /// owner-only, and that should be your decision rather than a default.
     pub session_file: Option<std::path::PathBuf>,
-    /// Keep no session on disk. Logging in is then required every start,
-    /// including the second factor where the account has one.
-    pub no_session_file: bool,
 }
 
 /// ibapi-compatible EClient. Matches C++ `EClientSocket` method signatures.
@@ -144,6 +149,7 @@ pub struct EClient {
     pub(crate) next_order_id: AtomicU64,
     pub(crate) core: ClientCore,
     pub(crate) session_token_bytes: Vec<u8>,
+    pub(crate) session: crate::auth::resume::ResumableSession,
     pub(crate) token_type: String,
 }
 
@@ -233,20 +239,19 @@ impl EClient {
         ).to_vec();
         let token_type = String::new();
 
-        // Kept for the next start. Best-effort: a session that cannot be
-        // written is a slower start next time, never a failed connect now.
-        if !config.no_session_file {
-            let path = config.session_file.clone()
-                .unwrap_or_else(crate::auth::resume::default_path);
-            let session = crate::auth::resume::ResumableSession {
-                token: session_token_bytes.clone(),
-                server_session_id: gw.server_session_id.clone(),
-                hw_info: gw.hw_info.clone(),
-                encoded: gw.encoded.clone(),
-                username: config.username.clone(),
-                paper: config.paper,
-            };
-            if let Err(e) = crate::auth::resume::save(&path, &config.password, &session) {
+        let session = crate::auth::resume::ResumableSession {
+            token: session_token_bytes.clone(),
+            server_session_id: gw.server_session_id.clone(),
+            hw_info: gw.hw_info.clone(),
+            encoded: gw.encoded.clone(),
+            username: config.username.clone(),
+            paper: config.paper,
+        };
+        // Only where the caller asked for a file. Best-effort even then: a
+        // session that cannot be written is a slower start next time, never a
+        // failed connect now.
+        if let Some(path) = config.session_file.as_ref() {
+            if let Err(e) = crate::auth::resume::save(path, &config.password, &session) {
                 log::warn!("session not saved to {}: {e}", path.display());
             }
         }
@@ -286,6 +291,7 @@ impl EClient {
             next_order_id: AtomicU64::new(start_id),
             core: ClientCore::new(),
             session_token_bytes,
+            session,
             token_type,
         })
     }
@@ -312,6 +318,7 @@ impl EClient {
             next_order_id: AtomicU64::new(start_id),
             core: ClientCore::new(),
             session_token_bytes: Vec::new(),
+            session: Default::default(),
             token_type: String::new(),
         }
     }
@@ -384,6 +391,17 @@ impl EClient {
     /// secret K and is the second SHA-1 input for SSO `Authenticate-TWS` bodies.
     pub fn session_token_bytes(&self) -> &[u8] {
         &self.session_token_bytes
+    }
+
+    /// The session this connection established, for a caller that wants to
+    /// resume from it later.
+    ///
+    /// Hand it back through [`EClientConfig::resume`] on a subsequent connect.
+    /// Keep it wherever the process keeps secrets — it is a credential, and
+    /// where it lives is the caller's decision, which is why nothing here
+    /// writes it anywhere by default.
+    pub fn session(&self) -> &crate::auth::resume::ResumableSession {
+        &self.session
     }
 
     /// `stoken_type` discriminator captured at connect (`"st"`, `"tst"`, `"zenith"`,

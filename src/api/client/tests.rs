@@ -785,6 +785,16 @@ fn cancel_mkt_data_unknown_req_id_no_panic() {
     assert!(rx.try_recv().is_err()); // no commands sent
 }
 
+/// Nothing about a session reaches the disk unless the caller asks for it. A
+/// credential is theirs to place, and a library that writes one somewhere by
+/// itself has made that decision for them.
+#[test]
+fn a_session_is_not_written_anywhere_by_default() {
+    let cfg = EClientConfig::default();
+    assert!(cfg.session_file.is_none(), "no file unless one is named");
+    assert!(cfg.resume.is_none(), "and nothing is resumed unless one is given");
+}
+
 /// Tick-by-tick is carried by a service this client does not speak. A
 /// subscription sent to the historical service is acknowledged and then never
 /// delivers, so the surface says so rather than taking a request it cannot
