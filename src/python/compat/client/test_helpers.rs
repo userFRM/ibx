@@ -328,7 +328,7 @@ impl EClient {
 
     /// Push a position into SharedState.
     #[doc(hidden)]
-    fn _test_set_position(&self, con_id: i64, position: i64, avg_cost: f64) -> PyResult<()> {
+    fn _test_set_position(&self, con_id: i64, position: f64, avg_cost: f64) -> PyResult<()> {
         let shared = self.shared_state()?;
         let ps = PRICE_SCALE as f64;
         shared.portfolio.set_position_info(PositionInfo {

@@ -62,7 +62,7 @@ pub enum Event {
     /// End of contract details for a request.
     ContractDetailsEnd(u32),
     /// Position update.
-    PositionUpdate { instrument: InstrumentId, con_id: i64, position: i64, avg_cost: Price },
+    PositionUpdate { instrument: InstrumentId, con_id: i64, position: f64, avg_cost: Price },
     /// Connection lost.
     Disconnected,
     /// A transport that had announced its loss is carrying traffic again, with
@@ -951,8 +951,10 @@ impl PortfolioState {
     }
 
     /// Read current position for an instrument.
-    pub fn position(&self, id: InstrumentId) -> i64 {
-        self.positions[id as usize].load(Ordering::Relaxed) as i64
+    pub fn position(&self, id: InstrumentId) -> f64 {
+        // Held as bits so the slot stays lock-free; a holding is fractional and
+        // a whole-number one read half a share as flat.
+        f64::from_bits(self.positions[id as usize].load(Ordering::Relaxed))
     }
 
     // ── Hot-loop-side writers ──
@@ -1010,8 +1012,8 @@ impl PortfolioState {
         entry.realized_pnl = realized_pnl;
     }
 
-    #[doc(hidden)] pub fn set_position(&self, id: InstrumentId, pos: i64) {
-        self.positions[id as usize].store(pos as u64, Ordering::Relaxed);
+    #[doc(hidden)] pub fn set_position(&self, id: InstrumentId, pos: f64) {
+        self.positions[id as usize].store(pos.to_bits(), Ordering::Relaxed);
     }
 
     /// Store midnight seeds from 6040=143 P&L response.
@@ -1234,11 +1236,11 @@ mod tests {
     #[test]
     fn shared_state_position_roundtrip() {
         let ss = SharedState::new();
-        assert_eq!(ss.portfolio.position(0), 0);
-        ss.portfolio.set_position(0, 42);
-        assert_eq!(ss.portfolio.position(0), 42);
-        ss.portfolio.set_position(0, -10);
-        assert_eq!(ss.portfolio.position(0), -10);
+        assert_eq!(ss.portfolio.position(0), 0.0);
+        ss.portfolio.set_position(0, 42.0);
+        assert_eq!(ss.portfolio.position(0), 42.0);
+        ss.portfolio.set_position(0, -10.0);
+        assert_eq!(ss.portfolio.position(0), -10.0);
     }
 
     #[test]

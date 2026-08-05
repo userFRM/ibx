@@ -106,7 +106,7 @@ fn order_lifecycle_place_then_cancel() {
     assert!(w.events.iter().any(|e| e.starts_with("order_status:50:Cancelled")));
 
     // Position should be 0 (no fills happened)
-    assert_eq!(shared.portfolio.position(0), 0);
+    assert_eq!(shared.portfolio.position(0), 0.0);
 }
 
 /// Place order → rejection → error callback → no position change.
@@ -121,7 +121,7 @@ fn order_lifecycle_rejection() {
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
     assert!(w.events.iter().any(|e| e.starts_with("order_status:60:Inactive")));
-    assert_eq!(shared.portfolio.position(0), 0);
+    assert_eq!(shared.portfolio.position(0), 0.0);
 }
 
 /// Place order → partial fill → cancel → verify position reflects only the partial fill.
@@ -227,7 +227,7 @@ fn order_lifecycle_what_if_preview() {
     assert!(w.events.iter().any(|e| e.starts_with("order_status:90:PreSubmitted")));
 
     // No actual position change
-    assert_eq!(shared.portfolio.position(0), 0);
+    assert_eq!(shared.portfolio.position(0), 0.0);
 }
 
 /// Algo order (VWAP): place → multiple partial fills over time.
@@ -425,8 +425,8 @@ fn account_round_trip_position() {
         commission: PRICE_SCALE, timestamp_ns: 1000,
         cum_qty: 100, avg_price: 150 * PRICE_SCALE,
     });
-    assert_eq!(engine.context_mut().position(spy_id), 100);
-    assert_eq!(shared.portfolio.position(spy_id), 100);
+    assert_eq!(engine.context_mut().position(spy_id), 100.0);
+    assert_eq!(shared.portfolio.position(spy_id), 100.0);
 
     // Sell 100 @ 152
     engine.inject_fill(&Fill {
@@ -435,8 +435,8 @@ fn account_round_trip_position() {
         commission: PRICE_SCALE, timestamp_ns: 2000,
         cum_qty: 100, avg_price: 152 * PRICE_SCALE,
     });
-    assert_eq!(engine.context_mut().position(spy_id), 0);
-    assert_eq!(shared.portfolio.position(spy_id), 0);
+    assert_eq!(engine.context_mut().position(spy_id), 0.0);
+    assert_eq!(shared.portfolio.position(spy_id), 0.0);
 
     // Two fills in shared state
     let fills = shared.orders.drain_fills();
@@ -477,10 +477,10 @@ fn account_multi_instrument_positions() {
         cum_qty: 20, avg_price: 452 * PRICE_SCALE,
     });
 
-    assert_eq!(engine.context_mut().position(spy_id), 30);
-    assert_eq!(engine.context_mut().position(aapl_id), 100);
-    assert_eq!(shared.portfolio.position(spy_id), 30);
-    assert_eq!(shared.portfolio.position(aapl_id), 100);
+    assert_eq!(engine.context_mut().position(spy_id), 30.0);
+    assert_eq!(engine.context_mut().position(aapl_id), 100.0);
+    assert_eq!(shared.portfolio.position(spy_id), 30.0);
+    assert_eq!(shared.portfolio.position(aapl_id), 100.0);
 }
 
 /// Account state tracks through fills and position updates.
@@ -510,10 +510,10 @@ fn account_req_positions_reflects_fills() {
 
     // Set position info (as engine would after fills)
     shared.portfolio.set_position_info(PositionInfo {
-        con_id: 756733, position: 100, avg_cost: 450 * PRICE_SCALE, ..Default::default()
+        con_id: 756733, position: 100.0, avg_cost: 450 * PRICE_SCALE, ..Default::default()
     });
     shared.portfolio.set_position_info(PositionInfo {
-        con_id: 265598, position: -50, avg_cost: 150 * PRICE_SCALE, ..Default::default()
+        con_id: 265598, position: -50.0, avg_cost: 150 * PRICE_SCALE, ..Default::default()
     });
 
     let mut w = RecordingWrapper::default();
@@ -692,7 +692,7 @@ fn engine_full_trade_lifecycle() {
         commission: PRICE_SCALE, timestamp_ns: 1000,
         cum_qty: 100, avg_price: 450 * PRICE_SCALE,
     });
-    assert_eq!(engine.context_mut().position(spy_id), 100);
+    assert_eq!(engine.context_mut().position(spy_id), 100.0);
 
     // Price moves up
     let q = engine.context_mut().quote_mut(spy_id);
@@ -707,7 +707,7 @@ fn engine_full_trade_lifecycle() {
         commission: PRICE_SCALE, timestamp_ns: 2000,
         cum_qty: 100, avg_price: 455 * PRICE_SCALE,
     });
-    assert_eq!(engine.context_mut().position(spy_id), 0);
+    assert_eq!(engine.context_mut().position(spy_id), 0.0);
 
     // Verify all fills flowed to SharedState
     let fills = shared.orders.drain_fills();
@@ -770,7 +770,7 @@ fn engine_short_sell_then_cover() {
         commission: 0, timestamp_ns: 1000,
         cum_qty: 50, avg_price: 450 * PRICE_SCALE,
     });
-    assert_eq!(engine.context_mut().position(spy_id), -50);
+    assert_eq!(engine.context_mut().position(spy_id), -50.0);
 
     // Buy to cover 50
     engine.inject_fill(&Fill {
@@ -779,7 +779,7 @@ fn engine_short_sell_then_cover() {
         commission: 0, timestamp_ns: 2000,
         cum_qty: 50, avg_price: 445 * PRICE_SCALE,
     });
-    assert_eq!(engine.context_mut().position(spy_id), 0);
+    assert_eq!(engine.context_mut().position(spy_id), 0.0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1020,7 +1020,7 @@ fn pnl_single_dispatches_position_info() {
 
     shared.portfolio.set_position_info(PositionInfo {
         con_id: 265598,
-        position: 100,
+        position: 100.0,
         avg_cost: 150 * PRICE_SCALE,
         ..Default::default()
     });

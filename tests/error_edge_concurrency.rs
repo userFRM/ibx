@@ -205,7 +205,7 @@ fn fill_dedup_duplicate_exec_id_no_double_position() {
 
     // Only one fill
     assert_eq!(shared.orders.drain_fills().len(), 1);
-    assert_eq!(engine.context_mut().position(0), 100);
+    assert_eq!(engine.context_mut().position(0), 100.0);
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn fill_dedup_different_exec_ids_both_count() {
     engine.inject_ccp_message(&msg_b);
 
     assert_eq!(shared.orders.drain_fills().len(), 2);
-    assert_eq!(engine.context_mut().position(0), 200);
+    assert_eq!(engine.context_mut().position(0), 200.0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════

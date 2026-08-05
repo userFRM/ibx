@@ -1330,7 +1330,7 @@ impl ClientCore {
                 unpriceable += 1;
                 continue;
             }
-            let qty_now = pi.as_ref().map(|p| p.position).unwrap_or(0);
+            let qty_now = pi.as_ref().map(|p| p.position).unwrap_or(0.0);
             let avg_cost = pi.as_ref().map(|p| p.avg_cost).unwrap_or(0);
             // Likewise for the overnight leg: a seed row whose quantity did not
             // parse says the position is not intraday, only that its size is
@@ -1480,7 +1480,7 @@ impl ClientCore {
             let value = mv_now;
 
             let snapshot: [i64; 5] = [
-                qty_now,
+                qty_now as i64,
                 (daily * PRICE_SCALE_F) as i64,
                 (unrealized * PRICE_SCALE_F) as i64,
                 (realized * PRICE_SCALE_F) as i64,
@@ -2236,7 +2236,7 @@ mod tests {
         shared: &SharedState,
         con_id: i64,
         iid: InstrumentId,
-        position: i64,
+        position: f64,
         avg_cost_dollars: f64,
         last_dollars: f64,
         close_dollars: f64,
@@ -2280,7 +2280,7 @@ mod tests {
         core.subscribe_pnl(11);
 
         // One ordinary position that prices fine.
-        seed_pnl_position(&core, &shared, 1, 0, 1, 100.00, 101.00, 100.00);
+        seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.00, 101.00, 100.00);
 
         // And one held overnight that this session cannot size.
         core.con_id_to_instrument.lock().unwrap().insert(2, 1);
@@ -2318,7 +2318,7 @@ mod tests {
         let shared = SharedState::new();
         core.subscribe_pnl_single(21, 756733);
 
-        seed_pnl_position(&core, &shared, 756733, 0, 10, 700.00, 735.00, 730.00);
+        seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
         shared.portfolio.set_midnight_seeds(vec![MidnightSeed {
             con_id: 756733, qty_midnight: None, money_traded: 0.0, realized_pnl: 0.0,
         }]);
@@ -2391,7 +2391,7 @@ mod tests {
         let shared = SharedState::new();
         core.subscribe_pnl(8);
 
-        seed_pnl_position(&core, &shared, 756733, 0, 10, 700.00, 735.00, 730.00);
+        seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
         shared.portfolio.set_midnight_seeds(vec![MidnightSeed {
             con_id: 756733,
             qty_midnight: None,
@@ -2422,7 +2422,7 @@ mod tests {
         core.subscribe_pnl(42);
 
         // 1 share bought at $735.00, now $735.07. No midnight seed (flat at midnight).
-        seed_pnl_position(&core, &shared, 756733, 0, 1, 735.00, 735.07, 0.0);
+        seed_pnl_position(&core, &shared, 756733, 0, 1.0, 735.00, 735.07, 0.0);
 
         let update = core.poll_pnl(&shared).expect("callback must fire");
         assert_eq!(update.req_id, 42);
@@ -2439,7 +2439,7 @@ mod tests {
 
         // Held 10 SPY through midnight: qty_midnight=10, prev_close=$730, avg_cost=$700.
         // No fills today (money_traded=0). Current price $735.
-        seed_pnl_position(&core, &shared, 756733, 0, 10, 700.00, 735.00, 730.00);
+        seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
         shared.portfolio.set_midnight_seeds(vec![MidnightSeed {
             con_id: 756733,
             qty_midnight: Some(10),
@@ -2465,7 +2465,7 @@ mod tests {
         core.subscribe_pnl(31);
 
         // Now holding 7 (was 10 at midnight), avg $100, last $110, prev close $100.
-        seed_pnl_position(&core, &shared, 1, 0, 7, 100.00, 110.00, 100.00);
+        seed_pnl_position(&core, &shared, 1, 0, 7.0, 100.00, 110.00, 100.00);
         shared.portfolio.set_midnight_seeds(vec![MidnightSeed {
             con_id: 1,
             qty_midnight: Some(10),
@@ -2486,7 +2486,7 @@ mod tests {
         let core = ClientCore::new();
         let shared = SharedState::new();
         core.subscribe_pnl(7);
-        seed_pnl_position(&core, &shared, 1, 0, 1, 100.0, 101.0, 0.0);
+        seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
         assert!(core.poll_pnl(&shared).is_some());
         // Same inputs → no callback.
         assert!(core.poll_pnl(&shared).is_none());
@@ -2505,7 +2505,7 @@ mod tests {
         // Open position, but NO instrument mapping and NO quote pushed.
         shared.portfolio.set_position_info(PositionInfo {
             con_id: 756733,
-            position: 10,
+            position: 10.0,
             avg_cost: (700.00 * PRICE_SCALE_F) as i64,
             symbol: "SPY".into(),
             sec_type: "STK".into(),
@@ -2540,7 +2540,7 @@ mod tests {
         core.subscribe_pnl(22);
 
         // Priced position: 1 share, avg 100, last 101 → daily/unrealized = 1.00.
-        seed_pnl_position(&core, &shared, 1, 0, 1, 100.0, 101.0, 0.0);
+        seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
 
         // Divergent account-level values that must be ignored while priced.
         let acct = AccountState {
@@ -2564,8 +2564,8 @@ mod tests {
         let core = ClientCore::new();
         let shared = SharedState::new();
 
-        seed_pnl_position(&core, &shared, 111, 0, 1, 100.0, 105.0, 0.0);  // SPY
-        seed_pnl_position(&core, &shared, 222, 1, 1, 200.0, 210.0, 0.0);  // QQQ
+        seed_pnl_position(&core, &shared, 111, 0, 1.0, 100.0, 105.0, 0.0);  // SPY
+        seed_pnl_position(&core, &shared, 222, 1, 1.0, 200.0, 210.0, 0.0);  // QQQ
 
         core.subscribe_pnl_single(50, 111);
         core.subscribe_pnl_single(51, 222);
@@ -2589,7 +2589,7 @@ mod tests {
         // No seed → money_traded synthesized, daily collapses to unrealized.
         let core = ClientCore::new();
         let shared = SharedState::new();
-        seed_pnl_position(&core, &shared, 756733, 0, 1, 735.00, 735.07, 0.0);
+        seed_pnl_position(&core, &shared, 756733, 0, 1.0, 735.00, 735.07, 0.0);
         core.subscribe_pnl_single(42, 756733);
 
         let updates = core.poll_pnl_single(&shared);
@@ -2606,7 +2606,7 @@ mod tests {
         // #168 (bug 2): realized_pnl must come from the seed, not hardcoded 0.
         let core = ClientCore::new();
         let shared = SharedState::new();
-        seed_pnl_position(&core, &shared, 756733, 0, 10, 700.00, 735.00, 730.00);
+        seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
         shared.portfolio.set_midnight_seeds(vec![MidnightSeed {
             con_id: 756733,
             qty_midnight: Some(10),
@@ -2629,7 +2629,7 @@ mod tests {
     fn poll_pnl_single_change_detection_suppresses_duplicate() {
         let core = ClientCore::new();
         let shared = SharedState::new();
-        seed_pnl_position(&core, &shared, 1, 0, 1, 100.0, 101.0, 0.0);
+        seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
         core.subscribe_pnl_single(7, 1);
         assert_eq!(core.poll_pnl_single(&shared).len(), 1);
         // Same inputs → no emit.
@@ -2640,7 +2640,7 @@ mod tests {
     fn poll_pnl_single_unsubscribe_clears_cache() {
         let core = ClientCore::new();
         let shared = SharedState::new();
-        seed_pnl_position(&core, &shared, 1, 0, 1, 100.0, 101.0, 0.0);
+        seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
         core.subscribe_pnl_single(7, 1);
         let _ = core.poll_pnl_single(&shared);
         core.unsubscribe_pnl_single(7);

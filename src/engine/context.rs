@@ -41,7 +41,7 @@ impl Clock {
 /// order management. All hot-path data is pre-allocated.
 pub struct Context {
     pub(crate) market: MarketState,
-    positions: [i64; MAX_INSTRUMENTS],
+    positions: [f64; MAX_INSTRUMENTS],
     open_orders: HashMap<OrderId, Order>,
     pub(crate) pending_orders: OrderBuffer,
     pub(crate) account: AccountState,
@@ -69,7 +69,7 @@ impl Context {
     pub fn new() -> Self {
         Self {
             market: MarketState::new(),
-            positions: [0i64; MAX_INSTRUMENTS],
+            positions: [0.0f64; MAX_INSTRUMENTS],
             open_orders: HashMap::with_capacity(128),
             pending_orders: OrderBuffer::new(),
             modify_versions: HashMap::new(),
@@ -134,7 +134,11 @@ impl Context {
     // ── Positions & orders (read) ──
 
     #[inline(always)]
-    pub fn position(&self, id: InstrumentId) -> i64 {
+    /// The holding, exactly as the account states it. Fractional: half a share
+    /// is a holding, and a whole-number table reported it as flat — in the
+    /// position, in the profit and loss, and in the guard that decides whether
+    /// a contract's slot may be handed to another.
+    pub fn position(&self, id: InstrumentId) -> f64 {
         self.positions[id as usize]
     }
 
@@ -961,7 +965,7 @@ impl Context {
         self.pending_orders.drain()
     }
 
-    pub fn update_position(&mut self, instrument: InstrumentId, delta: i64) {
+    pub fn update_position(&mut self, instrument: InstrumentId, delta: f64) {
         self.positions[instrument as usize] += delta;
     }
 
@@ -1183,28 +1187,28 @@ mod tests {
     #[test]
     fn position_starts_at_zero() {
         let ctx = Context::new();
-        assert_eq!(ctx.position(0), 0);
-        assert_eq!(ctx.position(255), 0);
+        assert_eq!(ctx.position(0), 0.0);
+        assert_eq!(ctx.position(255), 0.0);
     }
 
     #[test]
     fn update_position_accumulates() {
         let mut ctx = Context::new();
-        ctx.update_position(0, 100);
-        assert_eq!(ctx.position(0), 100);
-        ctx.update_position(0, -30);
-        assert_eq!(ctx.position(0), 70);
-        ctx.update_position(0, -70);
-        assert_eq!(ctx.position(0), 0);
+        ctx.update_position(0, 100.0);
+        assert_eq!(ctx.position(0), 100.0);
+        ctx.update_position(0, -30.0);
+        assert_eq!(ctx.position(0), 70.0);
+        ctx.update_position(0, -70.0);
+        assert_eq!(ctx.position(0), 0.0);
     }
 
     #[test]
     fn positions_per_instrument() {
         let mut ctx = Context::new();
-        ctx.update_position(0, 100);
-        ctx.update_position(1, -50);
-        assert_eq!(ctx.position(0), 100);
-        assert_eq!(ctx.position(1), -50);
+        ctx.update_position(0, 100.0);
+        ctx.update_position(1, -50.0);
+        assert_eq!(ctx.position(0), 100.0);
+        assert_eq!(ctx.position(1), -50.0);
     }
 
     // --- Open orders ---
