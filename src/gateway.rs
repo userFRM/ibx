@@ -166,6 +166,8 @@ pub fn build_ccp_logon(hw_info: &str, encoded: &str, heartbeat: u64, seq: u32) -
     let tz = tz_owned.as_str();
     let hb_str = heartbeat.to_string();
     let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
+    let build = crate::config::ib_build();
+    let version = crate::config::ib_version();
     fix_build(
         &[
             (fix::TAG_MSG_TYPE, fix::MSG_LOGON),
@@ -173,8 +175,8 @@ pub fn build_ccp_logon(hw_info: &str, encoded: &str, heartbeat: u64, seq: u32) -
             (fix::TAG_ENCRYPT_METHOD, "0"),
             (fix::TAG_HEARTBEAT_INT, &hb_str),
             (fix::TAG_RESET_SEQ_NUM, "Y"),
-            (fix::TAG_IB_BUILD, IB_BUILD),
-            (fix::TAG_IB_VERSION, IB_VERSION),
+            (fix::TAG_IB_BUILD, &build),
+            (fix::TAG_IB_VERSION, &version),
             (6490, "dark"),
             (6266, encoded),
             (6351, &hw_field),
@@ -207,6 +209,8 @@ pub fn build_farm_encrypted_logon(
     let now = chrono_free_timestamp();
     let hb_str = FARM_HEARTBEAT.to_string();
     let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
+    let build = crate::config::ib_build();
+    let version = crate::config::ib_version();
 
     let inner = fix_build(
         &[
@@ -216,8 +220,8 @@ pub fn build_farm_encrypted_logon(
             (fix::TAG_HEARTBEAT_INT, &hb_str),
             (95, &farm_id_len),
             (96, &farm_id),
-            (fix::TAG_IB_BUILD, IB_BUILD),
-            (fix::TAG_IB_VERSION, IB_VERSION),
+            (fix::TAG_IB_BUILD, &build),
+            (fix::TAG_IB_VERSION, &version),
             (6351, &hw_field),
             (6266, encoded),
             (6903, "1"),
@@ -2453,8 +2457,8 @@ mod tests {
         assert_eq!(fields[&98], "0");
         assert_eq!(fields[&108], "10");
         assert_eq!(fields[&141], "Y");
-        assert_eq!(fields[&6034], IB_BUILD);
-        assert_eq!(fields[&6968], IB_VERSION);
+        assert_eq!(fields[&6034], crate::config::ib_build());
+        assert_eq!(fields[&6968], crate::config::ib_version());
         assert_eq!(fields[&6490], "dark");
         assert_eq!(fields[&6397], "1");
         assert_eq!(fields[&8361], "(rolling)");
