@@ -20,7 +20,7 @@
 //!     host: "your_ib_host".into(),
 //!     paper: true,
 //!     core_id: None,
-//!     code_provider: None,
+//!     ..Default::default()
 //! }).unwrap();
 //!
 //! client.req_mkt_data(1, &Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() },
@@ -86,6 +86,7 @@ pub use orders::parse_algo_params;
 /// loops to the same core makes them busy-poll the same CPU and starve each
 /// other (degraded throughput, not a hang). With `core_id: None` (the default)
 /// no pinning happens and there is no conflict.
+#[derive(Default)]
 pub struct EClientConfig {
     pub username: String,
     pub password: String,
@@ -101,6 +102,17 @@ pub struct EClientConfig {
     /// fails without it. For IBKey accounts it selects Challenge/Response over
     /// waiting for a mobile push, so `None` is fine there (ibx#208, ibx#282).
     pub code_provider: Option<crate::auth::session::CodeProvider>,
+    /// Where the session is kept so a restart can pick it up instead of logging
+    /// in again — the same thing the terminal's auto-restart file does, and the
+    /// reason a gateway without one cannot come back after the nightly
+    /// maintenance window on its own.
+    ///
+    /// `None` uses a per-user default. Persistence can be turned off entirely
+    /// with [`no_session_file`](Self::no_session_file).
+    pub session_file: Option<std::path::PathBuf>,
+    /// Keep no session on disk. Logging in is then required every start,
+    /// including the second factor where the account has one.
+    pub no_session_file: bool,
 }
 
 /// ibapi-compatible EClient. Matches C++ `EClientSocket` method signatures.
@@ -220,6 +232,25 @@ impl EClient {
             &gw.session_token.to_bytes_be(),
         ).to_vec();
         let token_type = String::new();
+
+        // Kept for the next start. Best-effort: a session that cannot be
+        // written is a slower start next time, never a failed connect now.
+        if !config.no_session_file {
+            let path = config.session_file.clone()
+                .unwrap_or_else(crate::auth::resume::default_path);
+            let session = crate::auth::resume::ResumableSession {
+                token: session_token_bytes.clone(),
+                server_session_id: gw.server_session_id.clone(),
+                hw_info: gw.hw_info.clone(),
+                encoded: gw.encoded.clone(),
+                username: config.username.clone(),
+                paper: config.paper,
+            };
+            if let Err(e) = crate::auth::resume::save(&path, &config.password, &session) {
+                log::warn!("session not saved to {}: {e}", path.display());
+            }
+        }
+
         let shared = Arc::new(SharedState::new());
         gw.populate_init_data(&shared);
 

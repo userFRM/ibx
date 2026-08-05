@@ -53,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         paper: true,
         core_id: None,
         code_provider: None,
+        ..Default::default()
     })?;
 
     let order_id = client.next_order_id();

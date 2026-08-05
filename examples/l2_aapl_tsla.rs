@@ -158,6 +158,7 @@ fn main() {
         paper: true,
         core_id: None,
         code_provider: None,
+        ..Default::default()
     }).expect("Failed to connect");
     println!("Connected.");
 

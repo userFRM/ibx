@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         paper: true,
         core_id: None,
         code_provider: None,
+        ..Default::default()
     })?;
 
     let account = client.account_id.clone();
