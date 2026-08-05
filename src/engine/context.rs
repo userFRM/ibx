@@ -240,13 +240,11 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitLimitGtc {
-            order_id: id,
-            instrument,
-            side,
-            qty,
-            price,
-            outside_rth,
+        self.pending_orders.push(OrderRequest::SubmitEx {
+            order_id: id, instrument, side, qty,
+            kind: crate::types::OrderKind::Limit { price },
+            tif: b'1',
+            attrs: crate::types::OrderAttrs { outside_rth, ..Default::default() },
         });
         id
     }
@@ -261,13 +259,11 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitStopGtc {
-            order_id: id,
-            instrument,
-            side,
-            qty,
-            stop_price,
-            outside_rth,
+        self.pending_orders.push(OrderRequest::SubmitEx {
+            order_id: id, instrument, side, qty,
+            kind: crate::types::OrderKind::Stop { stop_price },
+            tif: b'1',
+            attrs: crate::types::OrderAttrs { outside_rth, ..Default::default() },
         });
         id
     }
@@ -283,14 +279,11 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitStopLimitGtc {
-            order_id: id,
-            instrument,
-            side,
-            qty,
-            price,
-            stop_price,
-            outside_rth,
+        self.pending_orders.push(OrderRequest::SubmitEx {
+            order_id: id, instrument, side, qty,
+            kind: crate::types::OrderKind::StopLimit { price, stop_price },
+            tif: b'1',
+            attrs: crate::types::OrderAttrs { outside_rth, ..Default::default() },
         });
         id
     }
@@ -304,12 +297,11 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitLimitIoc {
-            order_id: id,
-            instrument,
-            side,
-            qty,
-            price,
+        self.pending_orders.push(OrderRequest::SubmitEx {
+            order_id: id, instrument, side, qty,
+            kind: crate::types::OrderKind::Limit { price },
+            tif: b'3',
+            attrs: crate::types::OrderAttrs { outside_rth: false, ..Default::default() },
         });
         id
     }
@@ -323,12 +315,11 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitLimitFok {
-            order_id: id,
-            instrument,
-            side,
-            qty,
-            price,
+        self.pending_orders.push(OrderRequest::SubmitEx {
+            order_id: id, instrument, side, qty,
+            kind: crate::types::OrderKind::Limit { price },
+            tif: b'4',
+            attrs: crate::types::OrderAttrs { outside_rth: false, ..Default::default() },
         });
         id
     }

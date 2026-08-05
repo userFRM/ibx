@@ -2562,4 +2562,36 @@ mod outside_rth_polarity_tests {
             }
         }
     }
+
+    /// A contract that is not a stock is named by more than its symbol, and an
+    /// order that states only the symbol names a whole family — which the venue
+    /// answers as ambiguous, or as a contract it does not know. One submit path
+    /// restated the identity and the rest did not, so which of them an order
+    /// went through decided whether it could be placed at all.
+    #[test]
+    fn every_submit_path_names_the_contract_and_not_just_its_symbol() {
+        let cases: Vec<SubmitCase> = vec![
+            ("limit gtc", |c, i, o| c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)),
+            ("stop gtc", |c, i, o| c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)),
+            ("stop limit gtc", |c, i, o| {
+                c.submit_stop_limit_gtc(i, Side::Sell, 1, 89 * crate::types::PRICE_SCALE, 90 * crate::types::PRICE_SCALE, o)
+            }),
+            ("limit ioc", |c, i, _| c.submit_limit_ioc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)),
+            ("limit fok", |c, i, _| c.submit_limit_fok(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)),
+        ];
+
+        for (label, submit) in cases {
+            let mut context = Context::new();
+            let instrument = context.market
+                .try_register_contract(893091670, "MES", "FUT", "CME", "20270917|0||5")
+                .expect("register a future");
+            context.set_symbol(instrument, "MES".to_string());
+            submit(&mut context, instrument, false);
+            let sent = drain(&mut context);
+
+            assert!(sent.contains("|541=20270917|"), "{label} states the maturity: {sent}");
+            assert!(sent.contains("|231=5|"), "{label} states the multiplier: {sent}");
+            assert!(sent.contains("|167=FUT|"), "{label} states the security type: {sent}");
+        }
+    }
 }
