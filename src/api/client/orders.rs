@@ -16,6 +16,7 @@ impl EClient {
     pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), String> {
         // Validate order params and contract before registering instrument (fail fast).
         ClientCore::validate_order(order, &self.account_id)?;
+        ClientCore::validate_combo_legs(&contract.sec_type, contract.combo_legs.len())?;
         ClientCore::validate_order_contract(
             &contract.sec_type,
             &ClientCore::contract_identity(
