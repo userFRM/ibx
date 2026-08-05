@@ -922,9 +922,9 @@ fn send_order_ex(
         K::MktPrt => (b'U', 0, 0),
         K::StpPrt { stop_price } => (crate::types::ORD_STP_PRT, 0, stop_price),
         K::MidPrice { price_cap } => (crate::types::ORD_MIDPX, price_cap, 0),
-        K::SnapMkt => (crate::types::ORD_SNAP_MKT, 0, 0),
-        K::SnapMid => (crate::types::ORD_SNAP_MID, 0, 0),
-        K::SnapPri => (crate::types::ORD_SNAP_PRI, 0, 0),
+        K::SnapMkt { offset } => (crate::types::ORD_SNAP_MKT, 0, offset),
+        K::SnapMid { offset } => (crate::types::ORD_SNAP_MID, 0, offset),
+        K::SnapPri { offset } => (crate::types::ORD_SNAP_PRI, 0, offset),
         K::PegMkt { offset } => (crate::types::ORD_PEG_MKT, 0, offset),
         K::PegMid { offset } => (crate::types::ORD_PEG_MID, 0, offset),
         K::Rel { offset } => (b'R', 0, offset),
@@ -1038,9 +1038,21 @@ fn send_order_ex(
             fields.push((99, format_price(stop_price).to_string()));
         }
         K::MidPrice { .. } => fields.push((40, "MIDPX".to_string())),
-        K::SnapMkt => fields.push((40, "SMKT".to_string())),
-        K::SnapMid => fields.push((40, "SMID".to_string())),
-        K::SnapPri => fields.push((40, "SREL".to_string())),
+        // The offset rides tag 211, which the gateway requires: without it the
+        // order comes back "Message must contain field # 211" and is never
+        // worked. Seen on all three against a paper account.
+        K::SnapMkt { offset } => {
+            fields.push((40, "SMKT".to_string()));
+            fields.push((211, format_price(offset).to_string()));
+        }
+        K::SnapMid { offset } => {
+            fields.push((40, "SMID".to_string()));
+            fields.push((211, format_price(offset).to_string()));
+        }
+        K::SnapPri { offset } => {
+            fields.push((40, "SREL".to_string()));
+            fields.push((211, format_price(offset).to_string()));
+        }
         // Both are OrdType "E" and are separated by ExecInst, which is what
         // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
         // OrdType sent the two as the same message, saying which peg neither.
@@ -1087,7 +1099,7 @@ fn send_order_ex(
     // MIDPX / SNAP* / PEG* require a directed exchange; everything else
     // routes per the instrument's registered routing (ibx#217).
     let destination = match kind {
-        K::MidPrice { .. } | K::SnapMkt | K::SnapMid | K::SnapPri
+        K::MidPrice { .. } | K::SnapMkt { .. } | K::SnapMid { .. } | K::SnapPri { .. }
         | K::PegMkt { .. } | K::PegMid { .. } => "ISLAND".to_string(),
         _ => destination,
     };

@@ -870,7 +870,7 @@ pub(super) fn phase_mid_price_order(conns: Conns) -> Conns {
 pub(super) fn phase_snap_mkt_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 42: Snap to Market Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapMkt, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapMkt { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -879,7 +879,7 @@ pub(super) fn phase_snap_mkt_order(conns: Conns) -> Conns {
 pub(super) fn phase_snap_mid_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 43: Snap to Midpoint Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapMid, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapMid { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -888,7 +888,7 @@ pub(super) fn phase_snap_mid_order(conns: Conns) -> Conns {
 pub(super) fn phase_snap_pri_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 44: Snap to Primary Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapPri, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapPri { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 

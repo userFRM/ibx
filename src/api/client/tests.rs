@@ -1515,7 +1515,7 @@ fn place_order_snap_mkt() {
     client.place_order(1, &spy(), &order).unwrap();
 
     let cmd = rx.try_recv().unwrap();
-    assert!(matches!(cmd, ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::SnapMkt, .. })));
+    assert!(matches!(cmd, ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::SnapMkt { .. }, .. })));
 }
 
 #[test]
@@ -1528,7 +1528,7 @@ fn place_order_snap_mid() {
     client.place_order(1, &spy(), &order).unwrap();
 
     let cmd = rx.try_recv().unwrap();
-    assert!(matches!(cmd, ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::SnapMid, .. })));
+    assert!(matches!(cmd, ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::SnapMid { .. }, .. })));
 }
 
 #[test]
@@ -1541,7 +1541,7 @@ fn place_order_snap_pri() {
     client.place_order(1, &spy(), &order).unwrap();
 
     let cmd = rx.try_recv().unwrap();
-    assert!(matches!(cmd, ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::SnapPri, .. })));
+    assert!(matches!(cmd, ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::SnapPri { .. }, .. })));
 }
 
 #[test]
