@@ -795,6 +795,33 @@ fn a_session_is_not_written_anywhere_by_default() {
     assert!(cfg.resume.is_none(), "and nothing is resumed unless one is given");
 }
 
+/// A session names the account it came from. Handing back one from a different
+/// login describes a session this connect has no claim on, and the request that
+/// names it is asking the server about somebody else's — so it is not offered,
+/// and the login proceeds as if none had been given.
+#[test]
+fn a_session_from_another_account_is_not_offered() {
+    let session = crate::auth::resume::ResumableSession {
+        token: vec![1, 2, 3],
+        server_session_id: "abc.0001".into(),
+        hw_info: "hw".into(),
+        encoded: "enc".into(),
+        username: "someone-else".into(),
+        paper: true,
+    };
+    let offered = |cfg: &EClientConfig| {
+        cfg.resume.as_ref().filter(|r| r.username == cfg.username && r.paper == cfg.paper).is_some()
+    };
+
+    let cfg = |username: &str, paper: bool| EClientConfig {
+        username: username.into(), paper,
+        resume: Some(session.clone()), ..Default::default()
+    };
+    assert!(offered(&cfg("someone-else", true)), "its own account's session is offered");
+    assert!(!offered(&cfg("me", true)), "another account's session is not");
+    assert!(!offered(&cfg("someone-else", false)), "nor a session of the other kind");
+}
+
 /// Tick-by-tick is carried by a service this client does not speak. A
 /// subscription sent to the historical service is acknowledged and then never
 /// delivers, so the surface says so rather than taking a request it cannot

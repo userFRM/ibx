@@ -191,6 +191,10 @@ impl EClient {
             ib_key_token_sub_type: ib_key_token_sub_type
                 .unwrap_or_else(|| crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into()),
             code_provider,
+            // The bindings do not hand a session back yet. Adding a way to
+            // would be adding a way to ask for something the servers reached
+            // from here decline; when one takes it, this is where it goes.
+            resume: None,
         };
 
         let result = py.detach(|| Gateway::connect(&config));
