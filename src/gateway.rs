@@ -842,10 +842,25 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     // Post-auth: wait for NS_CONNECT_RESPONSE → NEWCOMMPORTTYPE → NS_FIX_START.
     // Per-iteration read timeout aligned with the initial-connect path.
     tls.get_ref().set_read_timeout(Some(Duration::from_secs_f64(TIMEOUT_FIX_LOGON)))?;
+    // A read that times out here is the data start still being on its way, not
+    // its absence. Giving up on the first one failed the reconnect outright and
+    // sent the whole thing round the backoff ladder again — the initial connect
+    // already retries to an overall deadline (ibx#196) and describes itself as
+    // mirroring this path, which never did it.
+    let fix_deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs_f64(TIMEOUT_FIX_LOGON * 2.0);
     let mut fix_ready = false;
-    for _ in 0..20 {
+    while std::time::Instant::now() < fix_deadline {
         let (payload, _) = match ns::ns_recv(&mut tls) {
             Ok(r) => r,
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut
+                    || e.kind() == io::ErrorKind::Interrupted =>
+            {
+                log::warn!("CCP reconnect post-auth recv timeout, retrying until deadline: {e}");
+                continue;
+            }
             Err(e) => {
                 log::warn!("CCP reconnect post-auth recv: {e}");
                 break;

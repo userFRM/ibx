@@ -645,7 +645,9 @@ impl CcpState {
                                 trading_class: def.trading_class.clone(),
                                 ..Default::default()
                             });
-                            self.try_release_scanner_enrichments(def.con_id as i64, shared);
+                            identify_position(shared, &def);
+                            identify_position(shared, &def);
+                        self.try_release_scanner_enrichments(def.con_id as i64, shared);
                             if self.details_delivered.entry(api_req_id).or_default().insert(def.con_id as i64) {
                                 let for_event = clone_for_event(event_tx, &def);
                                 shared.reference.push_contract_details(api_req_id, def);
@@ -687,6 +689,7 @@ impl CcpState {
                             trading_class: def.trading_class.clone(),
                             ..Default::default()
                         });
+                        identify_position(shared, &def);
                         self.try_release_scanner_enrichments(def.con_id as i64, shared);
                     }
                     // Match the response to its originating pending_secdef entry
@@ -2615,6 +2618,30 @@ impl CcpState {
 }
 
 
+/// Fill in a holding's contract once its definition arrives.
+///
+/// The position feed states a contract id, a quantity and often a cost, and
+/// nothing else — so a holding was reported with no symbol at all until some
+/// richer message happened to arrive first. The definition is already being
+/// fetched for exactly this reason; this is what puts it on the row.
+fn identify_position(shared: &SharedState, def: &crate::control::contracts::ContractDefinition) {
+    let con_id = def.con_id as i64;
+    let Some(existing) = shared.portfolio.position_info(con_id) else { return };
+    if !existing.symbol.is_empty() {
+        return;
+    }
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id,
+        position: existing.position,
+        avg_cost: existing.avg_cost,
+        symbol: def.symbol.clone(),
+        sec_type: def.sec_type.to_api_str().to_string(),
+        currency: def.currency.clone(),
+        multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
+        ..Default::default()
+    });
+}
+
 /// The basis to publish for a position row.
 ///
 /// A row that states one states it. A row that does not leaves the one on file
@@ -3161,6 +3188,38 @@ mod tests {
         assert_eq!(maturity_tag("20260918 14:30:00"), Some(541), "a date with a time on it");
         assert_eq!(maturity_tag(""), None, "nothing to state");
         assert_eq!(maturity_tag("2026"), None, "too short to be either, so it is not guessed");
+    }
+
+    /// A holding arrives as a contract id and a quantity. Reported before its
+    /// definition lands, it named no instrument at all — a position in a
+    /// contract the caller cannot identify.
+    #[test]
+    fn a_holding_takes_its_contract_from_the_definition_that_follows() {
+        use crate::control::contracts::{ContractDefinition, SecurityType};
+        let shared = SharedState::new();
+        shared.portfolio.set_position_info(PositionInfo {
+            con_id: 793356217, position: 1, avg_cost: 38270,
+            ..Default::default()
+        });
+        assert_eq!(
+            shared.portfolio.position_info(793356217).map(|p| p.symbol.clone()),
+            Some(String::new()),
+            "the feed states no symbol",
+        );
+
+        let def = ContractDefinition {
+            con_id: 793356217,
+            symbol: "MES".to_string(),
+            sec_type: SecurityType::Future,
+            currency: "USD".to_string(),
+            ..ContractDefinition::default()
+        };
+        identify_position(&shared, &def);
+
+        let row = shared.portfolio.position_info(793356217).unwrap();
+        assert_eq!(row.symbol, "MES", "and the definition names it");
+        assert_eq!(row.position, 1, "without disturbing the quantity");
+        assert_eq!(row.avg_cost, 38270, "or the basis");
     }
 
     /// The lean feed states a quantity and often no cost. Reading the absence

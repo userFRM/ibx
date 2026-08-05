@@ -27,6 +27,19 @@ impl EClient {
                 if !self.shared.portfolio.position_infos().is_empty() { break; }
             }
         }
+        // A holding arrives as a contract id and a quantity, and its definition
+        // is fetched separately. Delivering before that lands names no
+        // instrument at all, so give it a moment to arrive rather than handing
+        // back a position in a contract the caller cannot identify.
+        for _ in 0..150 {
+            let unnamed = self.shared.portfolio.position_infos().into_iter().any(|pi| {
+                pi.position != 0
+                    && pi.symbol.is_empty()
+                    && self.core.get_contract(pi.con_id, &self.shared).is_none()
+            });
+            if !unnamed { break; }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let positions = self.shared.portfolio.position_infos();
         for pi in &positions {
             // Prefer the secdef cache (carries exchange/localSymbol/tradingClass),
