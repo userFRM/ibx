@@ -400,7 +400,8 @@ pub(crate) fn drain_and_send_orders(
                 ])
             }
             OrderRequest::SubmitPegBench { order_id, instrument, side, qty, price,
-                ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount } => {
+                ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
+                starting_price } => {
                 context.insert_order(crate::types::Order::new(
                     order_id, instrument, side, qty, price, crate::types::ORD_PEG_BENCH, b'0', 0,
                 ));
@@ -416,6 +417,7 @@ pub(crate) fn drain_and_send_orders(
                 let peg_decrease_str = if is_peg_decrease { "1" } else { "0" };
                 let peg_change_str = format_price(pegged_change_amount);
                 let ref_change_str = format_price(ref_change_amount);
+                let starting_price_str = format_price(starting_price);
                 conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
                     (fix::TAG_SENDING_TIME, &now),
@@ -438,6 +440,7 @@ pub(crate) fn drain_and_send_orders(
                     (6938, peg_decrease_str),   // isPeggedChangeAmountDecrease
                     (6939, &peg_change_str),    // peggedChangeAmount
                     (6942, &ref_change_str),    // referenceChangeAmount
+                    (99, &starting_price_str),  // startingPrice
                 ])
             }
             OrderRequest::SubmitLimitAuc { order_id, instrument, side, qty, price } => {
