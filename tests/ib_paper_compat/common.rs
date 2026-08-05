@@ -551,6 +551,17 @@ pub(super) fn run_submit_cancel_phase(
         return conns;
     }
     if fill_or_cancel {
+        // Filling needs a market to fill against. Outside regular hours an
+        // order of this shape is acknowledged and then rests until the open,
+        // which is neither of the two outcomes and is also the correct
+        // behaviour — the same session gate the branch below applies for the
+        // same reason, on the outcome instead of the acknowledgement.
+        let (session, _) = market_session();
+        if session != MarketSession::Regular && !(order_filled || order_cancelled) {
+            let state = if order_acked { "acknowledged and resting" } else { "not acknowledged" };
+            println!("  SKIP: {session:?} — {state}; filling needs a live market\n");
+            return conns;
+        }
         assert!(order_filled || order_cancelled, "Order was neither filled nor cancelled");
         if order_filled { println!("  PASS (filled)\n"); } else { println!("  PASS (cancelled)\n"); }
     } else {
