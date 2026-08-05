@@ -860,6 +860,12 @@ fn push_contract_identity(
     let Some((expiry, strike, right, multiplier)) = context.market.order_identity(instrument) else {
         return;
     };
+    // MaturityMonthYear, with a full date in it where the contract has one.
+    // The definition *lookup* must split these — an option asked for by date on
+    // tag 200 matches nothing — but an order is not a search, and the venue
+    // takes the full date here: an option order carrying `20281215` on 200 is
+    // accepted, checked against a live session. Do not "fix" this to match the
+    // lookup; it was tried, and it breaks the path that works.
     if !expiry.is_empty() { fields.push((200, expiry)); }
     if strike.parse::<f64>().unwrap_or(0.0) > 0.0 { fields.push((202, strike)); }
     // PutOrCall is a code on this wire, not the letter: Call = 1, Put = 0, the
