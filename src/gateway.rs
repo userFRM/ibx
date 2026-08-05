@@ -1025,6 +1025,17 @@ pub struct GatewayConfig {
     /// match the profile it came from. This is what gets used when the server
     /// states none. Default `"2a"` matches the captured reference profile.
     pub ib_key_token_sub_type: String,
+    /// A session from an earlier connect, to log on with instead of the
+    /// password.
+    ///
+    /// The server keeps a session alive past the process that made it, and will
+    /// answer a request that names one with a challenge rather than a full
+    /// handshake — which is how a client comes back after a restart without a
+    /// person to approve it. Ignored unless it names this same account and the
+    /// same kind of session, and falls back to the password whenever the server
+    /// declines it. Obtained from [`EClient::session()`](crate::api::client::EClient::session).
+    pub resume: Option<crate::auth::resume::ResumableSession>,
+
     /// Supplies the second factor's code, for whichever exchange `AUTH_START`
     /// selects.
     ///
@@ -1347,18 +1358,29 @@ impl Gateway {
             ));
         }
 
-        let hw_info = session::get_hw_info();
+        // A session belongs to the account and the kind of session that made
+        // it. One from another login describes a session this connect has no
+        // claim on, and offering it asks the server a question about somebody
+        // else's.
+        let resume = config.resume.as_ref().filter(|r| {
+            r.username == config.username && r.paper == config.paper
+        });
+
+        let hw_info = resume.map_or_else(session::get_hw_info, |r| r.hw_info.clone());
         // Tag 6266 carries `{jdkVer}/{platform}/{locale}/{dist}`. The locale
         // segment must be a canonical Java `Locale.toString()` value (e.g.
         // `en_US`, `fr`, `ja_JP`); bare `en` is rejected as `invalid twsInfo`.
         // `IBX_LOCALE` overrides just the locale; `IBX_ENCODED` overrides
         // the whole string for full control.
-        let encoded = std::env::var("IBX_ENCODED").unwrap_or_else(|_| {
-            match std::env::var("IBX_LOCALE") {
-                Ok(loc) if !loc.is_empty() => format!("17.0.10.0.101/W/{loc}/G"),
-                _ => IB_ENCODED.to_string(),
-            }
-        });
+        let encoded = match resume {
+            Some(r) => r.encoded.clone(),
+            None => std::env::var("IBX_ENCODED").unwrap_or_else(|_| {
+                match std::env::var("IBX_LOCALE") {
+                    Ok(loc) if !loc.is_empty() => format!("17.0.10.0.101/W/{loc}/G"),
+                    _ => IB_ENCODED.to_string(),
+                }
+            }),
+        };
 
         // --- Phase 1: TLS + auth ---
         log::info!("Connecting to auth server {host}:{AUTH_PORT}");
@@ -1407,24 +1429,31 @@ impl Gateway {
             | session::FLAG_UNKNOWN_U
             | session::FLAG_UNKNOWN_19
             | session::FLAG_UNKNOWN_20
+            | if resume.is_some() { session::FLAG_SOFT_TOKEN } else { 0 }
             | if config.paper { session::FLAG_PAPER_CONNECT } else { 0 };
         let display_name = if config.paper {
             format!("S{}", config.username)
         } else {
             config.username.clone()
         };
-        let session_id = session::get_session_id();
-        let connect_req = format!(
-            "{};{};{};{};{};27;{};{};{};",
-            NS_VERSION_MIN,
-            ns::NS_CONNECT_REQUEST,
-            display_name,
-            flags,
-            NS_VERSION,
-            hw_info,
-            session_id,
-            encoded
-        );
+        // Naming the session that already exists is what lets the server
+        // answer with a challenge instead of a handshake; a fresh id has no
+        // session behind it and gets the handshake.
+        let resume_key = resume.map(|r| BigUint::from_bytes_be(&r.token));
+        let session_id = resume
+            .map_or_else(session::get_session_id, |r| r.server_session_id.clone());
+        let connect_req = match resume_key.as_ref() {
+            Some(key) => format!(
+                "{};{};{};{};{};27;{};{};{};{};",
+                NS_VERSION_MIN, ns::NS_CONNECT_REQUEST, display_name, flags, NS_VERSION,
+                hw_info, session_id, encoded, token_short_hash(key),
+            ),
+            None => format!(
+                "{};{};{};{};{};27;{};{};{};",
+                NS_VERSION_MIN, ns::NS_CONNECT_REQUEST, display_name, flags, NS_VERSION,
+                hw_info, session_id, encoded,
+            ),
+        };
         session::send_secure(&mut tls, &mut channel, connect_req.as_bytes())?;
 
         // Receive AUTH_START (may get a redirect instead for paper accounts)
@@ -1450,26 +1479,66 @@ impl Gateway {
         let (server_token_type, server_token_sub_type) =
             parse_auth_start_token(&auth_start_text(&auth_start)?);
 
-        // Authentication
-        log::info!("Starting auth for {}", config.username);
-        let session_key = do_srp(&mut tls, &config.username, &config.password)?;
-        log::info!("Auth complete");
+        // Field 5 of AUTH_START says which of the two the server will accept.
+        // It answers 2 only when the request named a session it still holds, so
+        // a resume that is stale, or for another account, or simply older than
+        // the server keeps, comes back asking for the handshake — and gets it,
+        // rather than an error the caller has to know how to retry.
+        let auth_text = auth_start_text(&auth_start)?;
+        let auth_mode: u32 = auth_text
+            .split(';')
+            .nth(5)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
 
-        // Per-session second-factor approval gate (IBKey / seamless push).
-        // Skipped on paper logins; live logins enter a wait state if the
-        // account has a second factor configured server-side.
-        // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
-        // ib-agent#125 that body carries none, so this stays `None` on both
-        // live paths and the farm logon falls back to the SRP session key.
-        let soft_token = run_second_factor(&mut tls, SecondFactor {
-            paper: config.paper,
-            username: &config.username,
-            token_type: server_token_type,
-            token_sub_type: server_token_sub_type,
-            code_provider: config.code_provider.as_ref(),
-            timeout_secs: config.ib_key_timeout_secs,
-            default_sub_type: &config.ib_key_token_sub_type,
-        })?;
+        let (session_key, soft_token) = match (resume_key, auth_mode) {
+            (Some(key), 2) => {
+                log::info!("Resuming the session for {} — no handshake", config.username);
+                do_ccp_soft_token(&mut tls, &key)?;
+                // AUTH_FINISH follows the challenge exactly as it follows a
+                // handshake, and carries nothing this needs.
+                match session::recv_msg(&mut tls) {
+                    Ok(session::RecvMsg::Xyz { state, .. }) => {
+                        log::info!("Resume AUTH_FINISH: state={state}");
+                    }
+                    Ok(session::RecvMsg::Ns { msg_type, .. }) => {
+                        log::info!("Resume post-auth NS type={msg_type}");
+                    }
+                    Err(e) => log::warn!("Resume AUTH_FINISH recv: {e}"),
+                }
+                // The stored token is the session key, so the farm logons that
+                // follow have what they need without a second factor: the
+                // approval that made this session is the one being resumed.
+                (key, None)
+            }
+            (resume_key, _) => {
+                if resume_key.is_some() {
+                    log::info!(
+                        "The session offered was not accepted (mode {auth_mode}) — logging on with the password",
+                    );
+                }
+                log::info!("Starting auth for {}", config.username);
+                let session_key = do_srp(&mut tls, &config.username, &config.password)?;
+                log::info!("Auth complete");
+
+                // Per-session second-factor approval gate (IBKey / seamless push).
+                // Skipped on paper logins; live logins enter a wait state if the
+                // account has a second factor configured server-side.
+                // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
+                // ib-agent#125 that body carries none, so this stays `None` on both
+                // live paths and the farm logon falls back to the SRP session key.
+                let soft_token = run_second_factor(&mut tls, SecondFactor {
+                    paper: config.paper,
+                    username: &config.username,
+                    token_type: server_token_type,
+                    token_sub_type: server_token_sub_type,
+                    code_provider: config.code_provider.as_ref(),
+                    timeout_secs: config.ib_key_timeout_secs,
+                    default_sub_type: &config.ib_key_token_sub_type,
+                })?;
+                (session_key, soft_token)
+            }
+        };
 
         // Receive post-auth messages (encrypted via 534) and wait for the
         // data-farm start (NS_FIX_START). A transient stall here must not be
@@ -2696,6 +2765,7 @@ mod tests {
             ib_key_timeout_secs: session::IB_KEY_DEFAULT_TIMEOUT_SECS,
             ib_key_token_sub_type: session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
             code_provider: None,
+            resume: None,
         };
         assert_eq!(config.username, "user");
         assert!(config.paper);

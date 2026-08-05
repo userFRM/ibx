@@ -102,11 +102,20 @@ pub struct EClientConfig {
     /// fails without it. For IBKey accounts it selects Challenge/Response over
     /// waiting for a mobile push, so `None` is fine there (ibx#208, ibx#282).
     pub code_provider: Option<crate::auth::session::CodeProvider>,
-    /// Resume from a session captured earlier rather than logging in again.
+    /// Offer a session captured earlier, instead of logging in again.
     ///
-    /// Take it from [`session()`](EClient::session) and keep it wherever your
-    /// process keeps secrets. A session that the server no longer accepts just
-    /// means logging in, so this is only ever a faster start.
+    /// Take it from [`session()`](EClient::session). The connect names that
+    /// session and the server chooses: a challenge it can answer from the
+    /// session alone, or the ordinary login. Whatever it chooses, this connects
+    /// — a session it will not take costs a login, never an error.
+    ///
+    /// **The servers reached from here have not yet chosen the challenge.**
+    /// Every observed login, including one offering a session left by a process
+    /// that was killed rather than closed, has been answered with the ordinary
+    /// one. The client asks and handles both answers, because the protocol
+    /// carries both and this library already answers the challenge when a
+    /// dropped connection is rebuilt. Set this and lose nothing; do not plan
+    /// around it skipping a second factor until you have seen it do so.
     pub resume: Option<crate::auth::resume::ResumableSession>,
     /// What to do about a dropped connection.
     ///
@@ -116,15 +125,16 @@ pub struct EClientConfig {
     /// and decide yourself. See
     /// [`ReconnectConfig`](crate::api::reliability::ReconnectConfig).
     pub reconnect: crate::api::reliability::ReconnectConfig,
-    /// Keep the session in this file, so a restart can resume without logging
-    /// in — what the terminal's auto-restart file does, and why a gateway
-    /// without one cannot come back from the nightly maintenance window alone.
+    /// Keep the session in this file, so a restart can offer it without a
+    /// person present.
     ///
-    /// Off unless set. Nothing about the session touches disk otherwise: it is
-    /// held in memory for the life of the process, which is all a reconnect
-    /// needs. Set this only if a restart must resume without a person present
-    /// to answer a second factor — it puts a credential on disk, encrypted and
-    /// owner-only, and that should be your decision rather than a default.
+    /// Off unless set, and worth leaving off for now. Nothing about the session
+    /// touches disk otherwise: it is held in memory for the life of the
+    /// process, which is all a reconnect needs. Setting this writes a
+    /// credential to disk, sealed under the account password and readable only
+    /// by its owner, and buys whatever [`resume`](EClientConfig::resume) buys —
+    /// which today, on the servers reached from here, is nothing. That is a
+    /// cost with no measured return, so it is a decision rather than a default.
     pub session_file: Option<std::path::PathBuf>,
 }
 
@@ -200,6 +210,15 @@ fn gateway_config(config: &EClientConfig) -> GatewayConfig {
         ib_key_timeout_secs: crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
         ib_key_token_sub_type: crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
         code_provider: config.code_provider.clone(),
+        // What the caller handed back, or what was left in the file they named.
+        // A file that cannot be read is a slower start, not a failed one: the
+        // password is still here, and the whole point of the file is to avoid
+        // needing a person, which an error thrown at one defeats.
+        resume: config.resume.clone().or_else(|| {
+            config.session_file.as_ref().and_then(|path| {
+                crate::auth::resume::load(path, &config.username, &config.password, config.paper)
+            })
+        }),
     }
 }
 
