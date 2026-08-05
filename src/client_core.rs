@@ -1872,8 +1872,18 @@ impl ClientCore {
     /// not refuse. They are still dropped.
     pub fn validate_supported_instructions(o: &ApiOrder) -> Result<(), String> {
         let mut unsent: Vec<&str> = Vec::new();
-        if !o.hedge_type.is_empty() { unsent.push("hedgeType"); }
-        if o.short_sale_slot != 0 { unsent.push("shortSaleSlot"); }
+        // A hedging leg with no order type describes nothing to place.
+        if o.delta_neutral_order_type.is_empty()
+            && (o.delta_neutral_aux_price != f64::MAX || o.delta_neutral_con_id != 0)
+        {
+            unsent.push("deltaNeutral without deltaNeutralOrderType");
+        }
+        // A hedge parameter only means something for the kinds that take one.
+        if !o.hedge_param.is_empty()
+            && !matches!(o.hedge_type.to_ascii_uppercase().as_str(), "B" | "P")
+        {
+            unsent.push("hedgeParam for a hedge type that takes none");
+        }
         if unsent.is_empty() {
             return Ok(());
         }
@@ -1886,6 +1896,19 @@ impl ClientCore {
     }
 
     /// Refuse an order whose contract is made of legs.
+    ///
+    /// What the legs would go out as is still open. The vendor's audit
+    /// renderer names tag 6018 `legPath` and 6120 `ComboRules`, and no class in
+    /// any shipped jar writes either — the client jars, the trading core and
+    /// the launcher were all scanned for a push of 6018 and none has one. So
+    /// the legs are not sent as a repeating group, which is why no leg-group
+    /// tag appears anywhere either, and `legPath` looks like something the
+    /// server renders rather than something the client states. The likely
+    /// shape is that a combination is looked up as its own contract and then
+    /// ordered by that contract's id, the same as any other — which would make
+    /// the legs on the order a description for the lookup and not part of the
+    /// order at all. Until that is shown on a live combination, refusing is
+    /// the honest answer.
     ///
     /// The legs are carried on the contract and never reach the wire, so an
     /// order for a spread went out as a single order on whatever the rest of
@@ -2793,9 +2816,23 @@ mod contract_gate_tests {
         ] {
             assert!(ClientCore::validate_supported_instructions(&o).is_ok(), "{label} is sent");
         }
+        // Sent now, so accepted.
+        for (label, o) in [
+            ("hedge", ApiOrder { hedge_type: "B".into(), hedge_param: "1.5".into(),
+                                 ..ApiOrder::default() }),
+            ("short sale", ApiOrder { short_sale_slot: 2,
+                                      designated_location: "IBKR".into(),
+                                      exempt_code: 3, ..ApiOrder::default() }),
+        ] {
+            assert!(ClientCore::validate_supported_instructions(&o).is_ok(), "{label} is sent");
+        }
+
+        // Still refused: an instruction that cannot be acted on as given.
         for (label, mut o) in [
-            ("hedge", ApiOrder { hedge_type: "D".into(), ..ApiOrder::default() }),
-            ("short sale slot", ApiOrder { short_sale_slot: 2, ..ApiOrder::default() }),
+            ("hedge param on a kind that takes none",
+             ApiOrder { hedge_type: "D".into(), hedge_param: "1.5".into(), ..ApiOrder::default() }),
+            ("delta neutral with no order type",
+             ApiOrder { delta_neutral_con_id: 265598, ..ApiOrder::default() }),
         ] {
             o.action = "BUY".into();
             let err = ClientCore::validate_supported_instructions(&o)

@@ -348,6 +348,16 @@ pub struct OrderAttrs {
     pub scale: Option<Box<ScaleAttrs>>,
     /// The hedging leg, when the caller asked for one.
     pub delta_neutral: Option<Box<DeltaNeutralAttrs>>,
+    /// Short-sale handling: which slot (6086), where the shares are located
+    /// (5700, stated only for slot 2) and the exemption reason (1688).
+    pub short_sale_slot: u8,
+    pub designated_location: String,
+    pub exempt_code: i32,
+    /// How this order hedges (6665) and the parameter that goes with it: a
+    /// beta on 6703, a pair ratio on 6666. Delta and FX hedges take neither.
+    pub hedge_type: u8,
+    pub hedge_beta: f64,
+    pub hedge_ratio: f64,
     /// Trigger method for stop/MIT/LIT orders (IB tag 6115).
     /// 0=default, 1=double-bid-ask, 2=last, 3=double-last, 4=bid-ask,
     /// 7=last-or-bid-ask, 8=mid-point.

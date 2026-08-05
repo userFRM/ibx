@@ -952,6 +952,29 @@ fn send_order_ex(
     // of what it set.
     // The hedge. An order that asked for one and did not say so left the
     // position naked, which is the opposite of what it was for.
+    // Short-sale handling. The location is stated only for the slot that has
+    // one, which is the rule the venue applies, and the exemption rides its own
+    // tag rather than the slot.
+    if attrs.short_sale_slot != 0 {
+        fields.push((6086, attrs.short_sale_slot.to_string()));
+        if attrs.short_sale_slot == 2 && !attrs.designated_location.is_empty() {
+            fields.push((5700, attrs.designated_location.clone()));
+        }
+    }
+    if attrs.exempt_code != -1 {
+        fields.push((1688, attrs.exempt_code.to_string()));
+    }
+    // The hedge, as a number rather than the API's letter, with the parameter
+    // the chosen kind takes: a beta or a pair ratio. Delta and FX take none.
+    if attrs.hedge_type != 0 {
+        fields.push((6665, attrs.hedge_type.to_string()));
+        if attrs.hedge_beta != 0.0 {
+            fields.push((6703, format!("{:.6}", attrs.hedge_beta)));
+        }
+        if attrs.hedge_ratio != 0.0 {
+            fields.push((6666, format!("{:.6}", attrs.hedge_ratio)));
+        }
+    }
     if let Some(dn) = attrs.delta_neutral.as_deref() {
         fields.push((6290, dn.order_type.clone()));
         if dn.aux_price != 0 {
@@ -994,11 +1017,12 @@ fn send_order_ex(
         fields.push((5920, format_price(attrs.cash_qty).to_string()));
     }
     // Condition tags. The vendor's audit renderer names the whole set:
-    // 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 ignore-RTH,
+    // 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 cancel-on-condition,
     // 6136 list size, 6137 conjunction, 6166 strike, 6168 expiry, 6169
     // security type, 6220 multiplier, 6222 type, 6223 time, 6224 send-email,
     // 6226 email text, 6227 TWS actions, 6241 inactive, 6245 percentage,
-    // 6246 execution pattern, 6263 volume, 6579 submit-cancel, 6947 timezone.
+    // 6246 execution pattern, 6263 volume, 6151 ignore-RTH, 8569 amount,
+    // 6947 a type discriminator (NOT a timezone).
     //
     // A time condition is still refused with every one of these read and the
     // relevant ones sent, including the timezone, so what it wants is not in
@@ -1006,16 +1030,17 @@ fn send_order_ex(
     if !attrs.conditions.is_empty() {
         let cond_strs = build_condition_strings(&attrs.conditions);
         fields.push((6136, cond_strs[0].clone())); // first element is count
-        // These two were one tag apart from where they belong. Cancelling on a
-        // condition went out on the tag that says whether conditions ignore
-        // regular hours, and ignoring regular hours went out on a tag that is
-        // not a condition field at all — it is the reference price of a stock,
-        // so the order carried a reference price of one.
+        // 6128 cancels the order when its condition fails; 6151 lets the
+        // conditions ignore regular hours. The audit renderer names 6128
+        // "CondIgnoreRth" and 6151 "StockRefPrice" — both names belong to
+        // other messages. The order serializer writes these two, for these two
+        // flags, in this order. Swapping them to match the renderer was tried
+        // and was wrong.
         if attrs.conditions_cancel_order {
-            fields.push((6579, "1".to_string()));
+            fields.push((6128, "1".to_string()));
         }
         if attrs.conditions_ignore_rth {
-            fields.push((6128, "1".to_string()));
+            fields.push((6151, "1".to_string()));
         }
         // Per-condition tags start at index 1, 11 strings per condition
         for i in 0..attrs.conditions.len() {
@@ -1037,6 +1062,13 @@ fn send_order_ex(
             fields.push((6245, cond_strs[base + 8].clone()));  // percent
             fields.push((6263, cond_strs[base + 9].clone()));  // volume
             fields.push((6246, cond_strs[base + 10].clone())); // execution
+            // A time condition is still refused, and these were tried against a
+            // live session to see whether the shape was the reason: writing the
+            // condition's own fields first and the empty ones after, as the
+            // terminal does, and adding the empty 6947 it pads with. Neither
+            // changed the answer, and both are churn on a path that price,
+            // volume and multi-condition orders already go through, so the
+            // order here stays fixed
         }
     }
 

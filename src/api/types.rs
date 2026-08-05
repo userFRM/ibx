@@ -474,6 +474,19 @@ impl Order {
             open_close: self.open_close.clone(),
             scale: self.scale_attrs(),
             delta_neutral: self.delta_neutral_attrs(),
+            short_sale_slot: self.short_sale_slot.clamp(0, 255) as u8,
+            designated_location: self.designated_location.clone(),
+            exempt_code: self.exempt_code,
+            // The wire takes a number, not the API's letter.
+            hedge_type: match self.hedge_type.to_ascii_uppercase().as_str() {
+                "F" => 1, "D" => 2, "P" => 3, "B" => 4, "S" => 5, _ => 0,
+            },
+            hedge_beta: if self.hedge_type.eq_ignore_ascii_case("B") {
+                self.hedge_param.parse().unwrap_or(0.0)
+            } else { 0.0 },
+            hedge_ratio: if self.hedge_type.eq_ignore_ascii_case("P") {
+                self.hedge_param.parse().unwrap_or(0.0)
+            } else { 0.0 },
             // Valid trigger-method codes only (ibx#223): the raw `as u8`
             // cast wrapped the gateway's -1 (Unknown) to 255, and
             // out-of-range codes went to the wire verbatim. Anything
@@ -502,9 +515,17 @@ impl Order {
     /// `i32::MAX` and `f64::MAX` are this API's "not set", so a field left
     /// alone contributes nothing and an order that sets none has no ladder.
     fn scale_attrs(&self) -> Option<Box<crate::types::ScaleAttrs>> {
-        let sized = self.scale_init_level_size != i32::MAX;
-        let stepped = self.scale_price_increment != f64::MAX;
-        if !sized && !stepped {
+        // Any one of them means a ladder was asked for. Keying only off the
+        // first size and the step let the rest be set on their own and dropped.
+        let asked = self.scale_init_level_size != i32::MAX
+            || self.scale_subs_level_size != i32::MAX
+            || self.scale_price_increment != f64::MAX
+            || self.scale_profit_offset != f64::MAX
+            || self.scale_price_adjust_value != f64::MAX
+            || self.scale_price_adjust_interval != i32::MAX
+            || self.scale_auto_reset
+            || self.scale_random_percent;
+        if !asked {
             return None;
         }
         let px = |v: f64| if v == f64::MAX { 0 } else { (v * PRICE_SCALE_F) as i64 };
@@ -562,9 +583,12 @@ impl Order {
             || self.not_held
             || !self.order_ref.is_empty()
             || !self.open_close.is_empty()
-            || self.scale_init_level_size != i32::MAX
-            || self.scale_price_increment != f64::MAX
+            || self.scale_attrs().is_some()
             || !self.delta_neutral_order_type.is_empty()
+            || self.short_sale_slot != 0
+            || !self.designated_location.is_empty()
+            || self.exempt_code != -1
+            || !self.hedge_type.is_empty()
     }
 }
 
@@ -1112,6 +1136,10 @@ mod tests {
             ("open_close", |o| o.open_close = "O".into()),
             ("scale", |o| o.scale_init_level_size = 100),
             ("delta_neutral", |o| o.delta_neutral_order_type = "MKT".into()),
+            ("short_sale_slot", |o| o.short_sale_slot = 2),
+            ("designated_location", |o| o.designated_location = "IBKR".into()),
+            ("exempt_code", |o| o.exempt_code = 3),
+            ("hedge_type", |o| o.hedge_type = "B".into()),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1124,7 +1152,8 @@ mod tests {
             all_or_none: _, trigger_method: _, cash_qty: _, conditions: _,
             conditions_cancel_order: _, conditions_ignore_rth: _,
             volatility: _, volatility_type: _, percent_offset: _, not_held: _, order_ref: _, open_close: _,
-            scale: _, delta_neutral: _,
+            scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
+            exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
         } = Order::default().attrs();
 
         assert!(
