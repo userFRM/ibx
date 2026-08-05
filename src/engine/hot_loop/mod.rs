@@ -1953,6 +1953,44 @@ mod tests {
         assert!(hl.pinned_by_position.is_empty(), "and nothing is still waiting on it");
     }
 
+    /// A caller who would rather be told about a loss than have it handled
+    /// gets exactly that: nothing is scheduled and nothing is attempted.
+    #[test]
+    fn a_manual_policy_leaves_the_reconnect_to_the_caller() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.set_reconnect_config(crate::api::reliability::ReconnectConfig::manual());
+        hl.farm.disconnected = true;
+
+        hl.maybe_spawn_farm_reconnect();
+        assert!(hl.farm_next_attempt_at.is_none(), "nothing is scheduled");
+        assert!(hl.pending_farm_reconnect.is_none(), "and nothing is in flight");
+    }
+
+    /// A budget the caller set is spent and then recovery stops, rather than
+    /// climbing forever against a connection that will not come back.
+    #[test]
+    fn a_spent_budget_stops_the_reconnect() {
+        let shared = Arc::new(SharedState::new());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut hl = HotLoop::new(shared, Some(tx), None);
+        hl.set_reconnect_config(
+            crate::api::reliability::ReconnectConfig::default().with_max_attempts(2),
+        );
+        hl.farm.disconnected = true;
+
+        // Spend it.
+        for _ in 0..2 {
+            hl.budget.record_attempt(Instant::now());
+        }
+        hl.maybe_spawn_farm_reconnect();
+
+        assert!(hl.farm_next_attempt_at.is_none(), "no further attempt is scheduled");
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::Disconnected)),
+            "and the caller is told recovery has stopped",
+        );
+    }
+
     /// A transport that is down and cannot be rebuilt is not a transport that
     /// is recovering. Retrying it quietly leaves the caller on a dead trading
     /// connection with nothing to tell them so.
