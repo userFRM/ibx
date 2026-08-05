@@ -64,21 +64,26 @@ impl EClient {
     }
 
     /// Subscribe to tick-by-tick data. Matches `reqTickByTickData` in C++.
+    ///
+    /// **Not implemented.** Tick-by-tick is carried by a service of its own,
+    /// which this client does not yet speak: the historical service serves
+    /// chart, fundamentals, news and scanner requests, and nothing else. A
+    /// subscription sent there is accepted and assigned a ticker id, and then
+    /// no tick ever follows — verified against a paper account, where three
+    /// subscriptions on two contracts were all acknowledged and all silent
+    /// (ibx#404).
+    ///
+    /// Refused here rather than accepted, because a subscription that is taken
+    /// and never delivers is worse than one that says so.
     pub fn req_tick_by_tick_data(
-        &self, req_id: i64, contract: &Contract, tick_type: &str,
+        &self, _req_id: i64, _contract: &Contract, _tick_type: &str,
         _number_of_ticks: i32, _ignore_size: bool,
     ) -> Result<(), String> {
-        let tbt_type = match tick_type {
-            "BidAsk" => TbtType::BidAsk,
-            _ => TbtType::Last,
-        };
-        self.core.register_tbt(
-            &self.shared, &self.control_tx, req_id,
-            contract.con_id, &contract.symbol,
-            &contract.sec_type, &contract.exchange, tbt_type,
-        )?;
-        Ok(())
+        Err("tick-by-tick data is not implemented: it is carried by a service \
+             this client does not speak yet, and a subscription sent to the \
+             historical service is acknowledged but never delivers (ibx#404)".to_string())
     }
+
 
     /// Cancel tick-by-tick data. Matches `cancelTickByTickData` in C++.
     pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), String> {
