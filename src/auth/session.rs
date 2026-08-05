@@ -271,19 +271,18 @@ pub fn recv_msg<R: Read>(stream: &mut R) -> io::Result<RecvMsg> {
     let (payload, _) = ns::ns_recv(stream)?;
 
     // Try NS text first
-    if ns::is_ns_text(&payload) {
-        if let Some((version, msg_type, fields)) = ns::ns_parse(&payload) {
+    if ns::is_ns_text(&payload)
+        && let Some((version, msg_type, fields)) = ns::ns_parse(&payload) {
             return Ok(RecvMsg::Ns {
                 version,
                 msg_type,
                 fields,
             });
         }
-    }
 
     // Try XYZ binary
-    if payload.len() >= 16 {
-        if let Some((msg_id, sub_id, state, fields)) = xyz::xyz_parse_response(&payload) {
+    if payload.len() >= 16
+        && let Some((msg_id, sub_id, state, fields)) = xyz::xyz_parse_response(&payload) {
             return Ok(RecvMsg::Xyz {
                 msg_id,
                 sub_id,
@@ -291,7 +290,6 @@ pub fn recv_msg<R: Read>(stream: &mut R) -> io::Result<RecvMsg> {
                 fields,
             });
         }
-    }
 
     Err(io::Error::new(
         io::ErrorKind::InvalidData,
@@ -789,16 +787,14 @@ impl GateReader {
         let payload: Vec<u8> = self.buf[8..8 + len].to_vec();
         self.buf.drain(..8 + len);
 
-        if ns::is_ns_text(&payload) {
-            if let Some((version, msg_type, fields)) = ns::ns_parse(&payload) {
+        if ns::is_ns_text(&payload)
+            && let Some((version, msg_type, fields)) = ns::ns_parse(&payload) {
                 return Ok(Some(RecvMsg::Ns { version, msg_type, fields }));
             }
-        }
-        if payload.len() >= 16 {
-            if let Some((msg_id, sub_id, state, fields)) = xyz::xyz_parse_response(&payload) {
+        if payload.len() >= 16
+            && let Some((msg_id, sub_id, state, fields)) = xyz::xyz_parse_response(&payload) {
                 return Ok(Some(RecvMsg::Xyz { msg_id, sub_id, state, fields }));
             }
-        }
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "security-code gate: unparseable frame",
@@ -1118,8 +1114,8 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 // cadence) in the meantime or the socket is torn down before
                 // the code is ever submitted. Guarded so a repeated state=2
                 // (server retransmission) doesn't spawn a second provider.
-                if !code_submitted && pending_code.is_none() {
-                    if let Some(provider) = code_provider {
+                if !code_submitted && pending_code.is_none()
+                    && let Some(provider) = code_provider {
                         let provider = provider.clone();
                         let challenge_info = IbKeyChallenge {
                             factor: SecondFactor::IbKeyChallengeResponse,
@@ -1157,7 +1153,6 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                             }
                         }
                     }
-                }
             }
             RecvMsg::Xyz { msg_id, state, fields, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN && state == 4 => {
                 // Challenge/Response result. Server responds PASSED → falls

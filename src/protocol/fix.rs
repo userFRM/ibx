@@ -149,11 +149,10 @@ pub fn fix_parse(data: &[u8]) -> HashMap<u32, String> {
             continue;
         }
         let text = String::from_utf8_lossy(part);
-        if let Some((tag_str, val)) = text.split_once('=') {
-            if let Ok(tag) = tag_str.parse::<u32>() {
+        if let Some((tag_str, val)) = text.split_once('=')
+            && let Ok(tag) = tag_str.parse::<u32>() {
                 result.insert(tag, val.to_string());
             }
-        }
     }
     result
 }
@@ -405,12 +404,11 @@ pub fn fix_read<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
         }
         buf.extend_from_slice(&tmp[..n]);
         // Look for checksum tag ending: \x0110=XXX\x01
-        if let Some(idx) = buf.windows(4).position(|w| w == b"\x0110=") {
-            if let Some(end) = buf[idx + 4..].iter().position(|&b| b == SOH) {
+        if let Some(idx) = buf.windows(4).position(|w| w == b"\x0110=")
+            && let Some(end) = buf[idx + 4..].iter().position(|&b| b == SOH) {
                 let total = idx + 4 + end + 1;
                 return Ok(buf[..total].to_vec());
             }
-        }
     }
 }
 
@@ -431,12 +429,11 @@ pub fn fix_read_deadline<R: Read>(reader: &mut R, deadline: std::time::Instant) 
             )),
             Ok(n) => {
                 buf.extend_from_slice(&tmp[..n]);
-                if let Some(idx) = buf.windows(4).position(|w| w == b"\x0110=") {
-                    if let Some(end) = buf[idx + 4..].iter().position(|&b| b == SOH) {
+                if let Some(idx) = buf.windows(4).position(|w| w == b"\x0110=")
+                    && let Some(end) = buf[idx + 4..].iter().position(|&b| b == SOH) {
                         let total = idx + 4 + end + 1;
                         return Ok(buf[..total].to_vec());
                     }
-                }
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock
                 || e.kind() == io::ErrorKind::TimedOut =>

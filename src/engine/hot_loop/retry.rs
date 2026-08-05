@@ -64,7 +64,8 @@ impl DisconnectReason {
                 // The reason often survives only in the message the server
                 // sent, which is the one place a competing login is named.
                 let text = e.to_string().to_ascii_lowercase();
-                if text.contains("competing") || text.contains("another user")
+                if text.contains("competing")
+                    || text.contains("another user")
                     || text.contains("logged in from")
                 {
                     Self::TakenOver

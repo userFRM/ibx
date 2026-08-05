@@ -191,6 +191,10 @@ impl EClient {
             ib_key_token_sub_type: ib_key_token_sub_type
                 .unwrap_or_else(|| crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into()),
             code_provider,
+            // The bindings do not hand a session back yet. Adding a way to
+            // would be adding a way to ask for something the servers reached
+            // from here decline; when one takes it, this is where it goes.
+            resume: None,
         };
 
         let result = py.detach(|| Gateway::connect(&config));
@@ -338,7 +342,10 @@ impl EClient {
     /// crosses that boundary; `cmd` must already be a plain owned value by
     /// the time it's built (never touching Python state once detached).
     pub(crate) fn send_control(py: Python<'_>, tx: &Sender<ControlCommand>, cmd: ControlCommand) -> PyResult<()> {
-        py.detach(|| tx.send(cmd))
+        // The error carries the command back, which is the whole command by
+        // value. Nothing here wants it returned, so it is described and dropped
+        // while still detached rather than moved across the boundary.
+        py.detach(|| tx.send(cmd).map_err(|e| e.to_string()))
             .map_err(|e| PyRuntimeError::new_err(format!("Engine stopped: {e}")))
     }
 

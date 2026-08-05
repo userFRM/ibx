@@ -61,8 +61,8 @@ pub(crate) const DEFAULT_TRADING_FARM: &str = "usfarm";
 /// Parse a farm-route string from the auth-server's routing tags.
 ///
 /// Three accepted shapes (per ib-agent#128):
-///   "<host>/<farm>"             — tag 6145 (trading)
-///   "<host>/<farm>/<port>"      — tags 6171 (mktdata) / 8008 (secdef)
+///   `"<host>/<farm>"`            — tag 6145 (trading)
+///   `"<host>/<farm>/<port>"`     — tags 6171 (mktdata) / 8008 (secdef)
 ///
 /// Port is informational only — ibx routes all farm channels to the same
 /// data-port discovered via `misc_port()`. We just need (host, farm).
@@ -106,11 +106,10 @@ fn has_complete_response_frame(buf: &[u8]) -> bool {
             let tag9_pos = 4 + tag9_off;
             if let Some(soh_off) = buf[tag9_pos..].iter().position(|&b| b == b'\x01') {
                 let soh_pos = tag9_pos + soh_off;
-                if let Ok(s) = std::str::from_utf8(&buf[tag9_pos + 2..soh_pos]) {
-                    if let Ok(body_len) = s.parse::<usize>() {
+                if let Ok(s) = std::str::from_utf8(&buf[tag9_pos + 2..soh_pos])
+                    && let Ok(body_len) = s.parse::<usize>() {
                         return soh_pos + 1 + body_len <= buf.len();
                     }
-                }
             }
         }
         return false;
@@ -166,6 +165,8 @@ pub fn build_ccp_logon(hw_info: &str, encoded: &str, heartbeat: u64, seq: u32) -
     let tz = tz_owned.as_str();
     let hb_str = heartbeat.to_string();
     let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
+    let build = crate::config::ib_build();
+    let version = crate::config::ib_version();
     fix_build(
         &[
             (fix::TAG_MSG_TYPE, fix::MSG_LOGON),
@@ -173,8 +174,8 @@ pub fn build_ccp_logon(hw_info: &str, encoded: &str, heartbeat: u64, seq: u32) -
             (fix::TAG_ENCRYPT_METHOD, "0"),
             (fix::TAG_HEARTBEAT_INT, &hb_str),
             (fix::TAG_RESET_SEQ_NUM, "Y"),
-            (fix::TAG_IB_BUILD, IB_BUILD),
-            (fix::TAG_IB_VERSION, IB_VERSION),
+            (fix::TAG_IB_BUILD, &build),
+            (fix::TAG_IB_VERSION, &version),
             (6490, "dark"),
             (6266, encoded),
             (6351, &hw_field),
@@ -207,6 +208,8 @@ pub fn build_farm_encrypted_logon(
     let now = chrono_free_timestamp();
     let hb_str = FARM_HEARTBEAT.to_string();
     let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
+    let build = crate::config::ib_build();
+    let version = crate::config::ib_version();
 
     let inner = fix_build(
         &[
@@ -216,8 +219,8 @@ pub fn build_farm_encrypted_logon(
             (fix::TAG_HEARTBEAT_INT, &hb_str),
             (95, &farm_id_len),
             (96, &farm_id),
-            (fix::TAG_IB_BUILD, IB_BUILD),
-            (fix::TAG_IB_VERSION, IB_VERSION),
+            (fix::TAG_IB_BUILD, &build),
+            (fix::TAG_IB_VERSION, &version),
             (6351, &hw_field),
             (6266, encoded),
             (6903, "1"),
@@ -1022,6 +1025,17 @@ pub struct GatewayConfig {
     /// match the profile it came from. This is what gets used when the server
     /// states none. Default `"2a"` matches the captured reference profile.
     pub ib_key_token_sub_type: String,
+    /// A session from an earlier connect, to log on with instead of the
+    /// password.
+    ///
+    /// The server keeps a session alive past the process that made it, and will
+    /// answer a request that names one with a challenge rather than a full
+    /// handshake — which is how a client comes back after a restart without a
+    /// person to approve it. Ignored unless it names this same account and the
+    /// same kind of session, and falls back to the password whenever the server
+    /// declines it. Obtained from [`EClient::session()`](crate::api::client::EClient::session).
+    pub resume: Option<crate::auth::resume::ResumableSession>,
+
     /// Supplies the second factor's code, for whichever exchange `AUTH_START`
     /// selects.
     ///
@@ -1117,16 +1131,6 @@ fn parse_auth_start_token(auth_start: &str) -> (String, Option<String>) {
     let types: Vec<&str> = entries.iter().map(|(ty, _)| ty.as_str()).collect();
     (types.join(","), sub_type)
 }
-
-/// An absent token type routes to the IBKey gate rather than skipping the
-/// second factor. That gate opens by sending its init and reports `Skipped`
-/// when the server answers `AUTH_FINISH PASSED`, which is how an account with
-/// no second factor completes — so skipping it would leave the server waiting
-/// on an init that never comes.
-///
-/// The field carries a comma-separated list when the account has more than one
-/// factor enabled — `AUTH_START` advertised `4,5` for an account with both an
-/// authenticator and IBKey. Reading the whole field as one type refused the
 
 /// What the second-factor gate needs, whether this is the first login or a
 /// reconnect that the server bumped back to SRP.
@@ -1226,7 +1230,7 @@ fn run_second_factor(
         // — a fixed value cannot be right for a session it predates.
         let token_sub_type = sf.token_sub_type
             .as_deref()
-            .unwrap_or(&sf.default_sub_type);
+            .unwrap_or(sf.default_sub_type);
         log::info!(
             "2FA gate: token sub-type {:?} ({})",
             token_sub_type,
@@ -1261,6 +1265,15 @@ fn run_second_factor(
     Ok(soft_token)
 }
 
+/// An absent token type routes to the IBKey gate rather than skipping the
+/// second factor. That gate opens by sending its init and reports `Skipped`
+/// when the server answers `AUTH_FINISH PASSED`, which is how an account with
+/// no second factor completes — so skipping it would leave the server waiting
+/// on an init that never comes.
+///
+/// The field carries a comma-separated list when the account has more than one
+/// factor enabled — `AUTH_START` advertised `4,5` for an account with both an
+/// authenticator and IBKey. Reading the whole field as one type refused the
 /// login outright, so each entry is considered and IBKey is preferred: it is
 /// the only one that completes without a `code_provider`, and it still serves
 /// a configured one through Challenge/Response.
@@ -1302,8 +1315,8 @@ fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
     let mut scan = init_data.to_vec();
     let mut cursor = 0usize;
     while cursor + 12 < init_data.len() {
-        if init_data[cursor..].starts_with(b"8=FIXCOMP\x01") {
-            if let Some(total_len) = fixcomp::fixcomp_length(&init_data[cursor..]) {
+        if init_data[cursor..].starts_with(b"8=FIXCOMP\x01")
+            && let Some(total_len) = fixcomp::fixcomp_length(&init_data[cursor..]) {
                 let segment = &init_data[cursor..cursor + total_len.min(init_data.len() - cursor)];
                 let inflated = fixcomp::fixcomp_decompress(segment).unwrap_or_else(|e| {
                     log::warn!("Init FIXCOMP segment at offset {cursor}: dropping malformed frame: {e}");
@@ -1321,7 +1334,6 @@ fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
                 cursor += total_len;
                 continue;
             }
-        }
         cursor += 1;
     }
     scan
@@ -1346,18 +1358,29 @@ impl Gateway {
             ));
         }
 
-        let hw_info = session::get_hw_info();
+        // A session belongs to the account and the kind of session that made
+        // it. One from another login describes a session this connect has no
+        // claim on, and offering it asks the server a question about somebody
+        // else's.
+        let resume = config.resume.as_ref().filter(|r| {
+            r.username == config.username && r.paper == config.paper
+        });
+
+        let hw_info = resume.map_or_else(session::get_hw_info, |r| r.hw_info.clone());
         // Tag 6266 carries `{jdkVer}/{platform}/{locale}/{dist}`. The locale
         // segment must be a canonical Java `Locale.toString()` value (e.g.
         // `en_US`, `fr`, `ja_JP`); bare `en` is rejected as `invalid twsInfo`.
         // `IBX_LOCALE` overrides just the locale; `IBX_ENCODED` overrides
         // the whole string for full control.
-        let encoded = std::env::var("IBX_ENCODED").unwrap_or_else(|_| {
-            match std::env::var("IBX_LOCALE") {
-                Ok(loc) if !loc.is_empty() => format!("17.0.10.0.101/W/{loc}/G"),
-                _ => IB_ENCODED.to_string(),
-            }
-        });
+        let encoded = match resume {
+            Some(r) => r.encoded.clone(),
+            None => std::env::var("IBX_ENCODED").unwrap_or_else(|_| {
+                match std::env::var("IBX_LOCALE") {
+                    Ok(loc) if !loc.is_empty() => format!("17.0.10.0.101/W/{loc}/G"),
+                    _ => IB_ENCODED.to_string(),
+                }
+            }),
+        };
 
         // --- Phase 1: TLS + auth ---
         log::info!("Connecting to auth server {host}:{AUTH_PORT}");
@@ -1406,24 +1429,31 @@ impl Gateway {
             | session::FLAG_UNKNOWN_U
             | session::FLAG_UNKNOWN_19
             | session::FLAG_UNKNOWN_20
+            | if resume.is_some() { session::FLAG_SOFT_TOKEN } else { 0 }
             | if config.paper { session::FLAG_PAPER_CONNECT } else { 0 };
         let display_name = if config.paper {
             format!("S{}", config.username)
         } else {
             config.username.clone()
         };
-        let session_id = session::get_session_id();
-        let connect_req = format!(
-            "{};{};{};{};{};27;{};{};{};",
-            NS_VERSION_MIN,
-            ns::NS_CONNECT_REQUEST,
-            display_name,
-            flags,
-            NS_VERSION,
-            hw_info,
-            session_id,
-            encoded
-        );
+        // Naming the session that already exists is what lets the server
+        // answer with a challenge instead of a handshake; a fresh id has no
+        // session behind it and gets the handshake.
+        let resume_key = resume.map(|r| BigUint::from_bytes_be(&r.token));
+        let session_id = resume
+            .map_or_else(session::get_session_id, |r| r.server_session_id.clone());
+        let connect_req = match resume_key.as_ref() {
+            Some(key) => format!(
+                "{};{};{};{};{};27;{};{};{};{};",
+                NS_VERSION_MIN, ns::NS_CONNECT_REQUEST, display_name, flags, NS_VERSION,
+                hw_info, session_id, encoded, token_short_hash(key),
+            ),
+            None => format!(
+                "{};{};{};{};{};27;{};{};{};",
+                NS_VERSION_MIN, ns::NS_CONNECT_REQUEST, display_name, flags, NS_VERSION,
+                hw_info, session_id, encoded,
+            ),
+        };
         session::send_secure(&mut tls, &mut channel, connect_req.as_bytes())?;
 
         // Receive AUTH_START (may get a redirect instead for paper accounts)
@@ -1449,26 +1479,66 @@ impl Gateway {
         let (server_token_type, server_token_sub_type) =
             parse_auth_start_token(&auth_start_text(&auth_start)?);
 
-        // Authentication
-        log::info!("Starting auth for {}", config.username);
-        let session_key = do_srp(&mut tls, &config.username, &config.password)?;
-        log::info!("Auth complete");
+        // Field 5 of AUTH_START says which of the two the server will accept.
+        // It answers 2 only when the request named a session it still holds, so
+        // a resume that is stale, or for another account, or simply older than
+        // the server keeps, comes back asking for the handshake — and gets it,
+        // rather than an error the caller has to know how to retry.
+        let auth_text = auth_start_text(&auth_start)?;
+        let auth_mode: u32 = auth_text
+            .split(';')
+            .nth(5)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
 
-        // Per-session second-factor approval gate (IBKey / seamless push).
-        // Skipped on paper logins; live logins enter a wait state if the
-        // account has a second factor configured server-side.
-        // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
-        // ib-agent#125 that body carries none, so this stays `None` on both
-        // live paths and the farm logon falls back to the SRP session key.
-        let soft_token = run_second_factor(&mut tls, SecondFactor {
-            paper: config.paper,
-            username: &config.username,
-            token_type: server_token_type,
-            token_sub_type: server_token_sub_type,
-            code_provider: config.code_provider.as_ref(),
-            timeout_secs: config.ib_key_timeout_secs,
-            default_sub_type: &config.ib_key_token_sub_type,
-        })?;
+        let (session_key, soft_token) = match (resume_key, auth_mode) {
+            (Some(key), 2) => {
+                log::info!("Resuming the session for {} — no handshake", config.username);
+                do_ccp_soft_token(&mut tls, &key)?;
+                // AUTH_FINISH follows the challenge exactly as it follows a
+                // handshake, and carries nothing this needs.
+                match session::recv_msg(&mut tls) {
+                    Ok(session::RecvMsg::Xyz { state, .. }) => {
+                        log::info!("Resume AUTH_FINISH: state={state}");
+                    }
+                    Ok(session::RecvMsg::Ns { msg_type, .. }) => {
+                        log::info!("Resume post-auth NS type={msg_type}");
+                    }
+                    Err(e) => log::warn!("Resume AUTH_FINISH recv: {e}"),
+                }
+                // The stored token is the session key, so the farm logons that
+                // follow have what they need without a second factor: the
+                // approval that made this session is the one being resumed.
+                (key, None)
+            }
+            (resume_key, _) => {
+                if resume_key.is_some() {
+                    log::info!(
+                        "The session offered was not accepted (mode {auth_mode}) — logging on with the password",
+                    );
+                }
+                log::info!("Starting auth for {}", config.username);
+                let session_key = do_srp(&mut tls, &config.username, &config.password)?;
+                log::info!("Auth complete");
+
+                // Per-session second-factor approval gate (IBKey / seamless push).
+                // Skipped on paper logins; live logins enter a wait state if the
+                // account has a second factor configured server-side.
+                // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
+                // ib-agent#125 that body carries none, so this stays `None` on both
+                // live paths and the farm logon falls back to the SRP session key.
+                let soft_token = run_second_factor(&mut tls, SecondFactor {
+                    paper: config.paper,
+                    username: &config.username,
+                    token_type: server_token_type,
+                    token_sub_type: server_token_sub_type,
+                    code_provider: config.code_provider.as_ref(),
+                    timeout_secs: config.ib_key_timeout_secs,
+                    default_sub_type: &config.ib_key_token_sub_type,
+                })?;
+                (session_key, soft_token)
+            }
+        };
 
         // Receive post-auth messages (encrypted via 534) and wait for the
         // data-farm start (NS_FIX_START). A transient stall here must not be
@@ -1621,20 +1691,17 @@ impl Gateway {
                 _ => {}
             }
 
-            if let Some(v) = fields.get(&1) {
-                if account_id.is_empty() { account_id = v.clone(); }
-            }
-            if let Some(v) = fields.get(&108) {
-                if let Ok(hb) = v.parse() { heartbeat_interval = hb; }
-            }
-            if let Some(v) = fields.get(&6386) {
-                if ccp_token.is_empty() {
+            if let Some(v) = fields.get(&1)
+                && account_id.is_empty() { account_id = v.clone(); }
+            if let Some(v) = fields.get(&108)
+                && let Ok(hb) = v.parse() { heartbeat_interval = hb; }
+            if let Some(v) = fields.get(&6386)
+                && ccp_token.is_empty() {
                     ccp_token = v.clone();
                     log::info!("Auth: captured ccp_token (FIX 6386, len={}, prefix={:?})",
                         ccp_token.len(),
                         if ccp_token.len() > 16 { &ccp_token[..16] } else { &ccp_token });
                 }
-            }
             // Tag 8035: try parsed fields first, then raw byte search
             if server_session_id.is_empty() {
                 if let Some(v) = fields.get(&8035) {
@@ -1655,38 +1722,31 @@ impl Gateway {
             // Farm routing (per ib-agent#128) — server tells us which farms
             // this account is permissioned for. EU accounts get `eufarm`,
             // US get `usfarm`, etc. Read once from whichever auth msg has it.
-            if let Some(v) = fields.get(&6145) {
-                if trading_route.is_empty() {
+            if let Some(v) = fields.get(&6145)
+                && trading_route.is_empty() {
                     trading_route = v.clone();
                     log::info!("Auth: trading farm route = {trading_route}");
                 }
-            }
-            if let Some(v) = fields.get(&6171) {
-                if mktdata_route.is_empty() {
+            if let Some(v) = fields.get(&6171)
+                && mktdata_route.is_empty() {
                     mktdata_route = v.clone();
                     log::info!("Auth: market-data farm route = {mktdata_route}");
                 }
-            }
-            if let Some(v) = fields.get(&8008) {
-                if secdef_route.is_empty() {
+            if let Some(v) = fields.get(&8008)
+                && secdef_route.is_empty() {
                     secdef_route = v.clone();
                     log::info!("Auth: secdef farm route = {secdef_route}");
                 }
-            }
 
             // Gateway-local init data from logon response
-            if let Some(v) = fields.get(&6560) {
-                if raw_soft_dollar_tiers.is_empty() { raw_soft_dollar_tiers = v.clone(); }
-            }
-            if let Some(v) = fields.get(&6823) {
-                if raw_family_codes.is_empty() { raw_family_codes = v.clone(); }
-            }
-            if let Some(v) = fields.get(&6830) {
-                if raw_news_providers.is_empty() { raw_news_providers = v.clone(); }
-            }
-            if let Some(v) = fields.get(&6571) {
-                if white_branding_id.is_empty() { white_branding_id = v.clone(); }
-            }
+            if let Some(v) = fields.get(&6560)
+                && raw_soft_dollar_tiers.is_empty() { raw_soft_dollar_tiers = v.clone(); }
+            if let Some(v) = fields.get(&6823)
+                && raw_family_codes.is_empty() { raw_family_codes = v.clone(); }
+            if let Some(v) = fields.get(&6830)
+                && raw_news_providers.is_empty() { raw_news_providers = v.clone(); }
+            if let Some(v) = fields.get(&6571)
+                && white_branding_id.is_empty() { white_branding_id = v.clone(); }
             // Tag 6321: PRIV_LAB_MISC_URLS — try parsed fields first, then raw byte search.
             // Mirrors the 8035 defensive scan because the value can carry `|` separators
             // that confuse downstream parsers if a chunk is fragmented.
@@ -2454,8 +2514,8 @@ mod tests {
         assert_eq!(fields[&98], "0");
         assert_eq!(fields[&108], "10");
         assert_eq!(fields[&141], "Y");
-        assert_eq!(fields[&6034], IB_BUILD);
-        assert_eq!(fields[&6968], IB_VERSION);
+        assert_eq!(fields[&6034], crate::config::ib_build());
+        assert_eq!(fields[&6968], crate::config::ib_version());
         assert_eq!(fields[&6490], "dark");
         assert_eq!(fields[&6397], "1");
         assert_eq!(fields[&8361], "(rolling)");
@@ -2705,6 +2765,7 @@ mod tests {
             ib_key_timeout_secs: session::IB_KEY_DEFAULT_TIMEOUT_SECS,
             ib_key_token_sub_type: session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
             code_provider: None,
+            resume: None,
         };
         assert_eq!(config.username, "user");
         assert!(config.paper);

@@ -105,6 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         accept_invalid_certs: false,
         ib_key_timeout_secs: session::IB_KEY_DEFAULT_TIMEOUT_SECS,
         ib_key_token_sub_type: session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
+        resume: None,
         code_provider: Some(provider),
     };
 

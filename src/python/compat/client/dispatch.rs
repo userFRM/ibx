@@ -190,11 +190,11 @@ impl EClient {
             // it did not place keeps the engine's answer of none.
             let parent_id = self.core.tracked_parent_id(update.order_id)
                 .unwrap_or(update.parent_id);
-            call_wrapper!(self.wrapper, py, "order_status", (update.order_id as i64, status, update.filled_qty as f64,
-                 update.remaining_qty as f64, 0.0f64, update.perm_id, parent_id, 0.0f64, 0i64, "", 0.0f64));
+            call_wrapper!(self.wrapper, py, "order_status", (update.order_id as i64, status, update.filled_qty,
+                 update.remaining_qty, 0.0f64, update.perm_id, parent_id, 0.0f64, 0i64, "", 0.0f64));
 
             // Track open orders
-            self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty as f64, update.remaining_qty as f64);
+            self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty, update.remaining_qty);
         }
 
         // Drain cancel rejects -> error
