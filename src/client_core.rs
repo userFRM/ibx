@@ -1856,6 +1856,24 @@ impl ClientCore {
     /// An empty `sec_type` is treated as STK (the engine default), so existing
     /// stock callers that omit the field are unaffected.
     /// See: <https://github.com/deepentropy/ibx/issues/202>
+    /// Refuse an order whose contract is made of legs.
+    ///
+    /// The legs are carried on the contract and never reach the wire, so an
+    /// order for a spread went out as a single order on whatever the rest of
+    /// the contract named — a different trade from the one asked for, placed
+    /// without a word. Until the legs are encoded, saying so is the only safe
+    /// answer: a refused order is a position nobody took by accident.
+    pub fn validate_combo_legs(sec_type: &str, leg_count: usize) -> Result<(), String> {
+        if leg_count == 0 && !sec_type.eq_ignore_ascii_case("BAG") {
+            return Ok(());
+        }
+        Err(format!(
+            "combination orders are not supported: this contract has {leg_count} leg(s) \
+             and they are not sent, so the order would name a different trade. \
+             Place each leg as its own order.",
+        ))
+    }
+
     pub fn validate_order_contract(sec_type: &str, identity: &str) -> Result<(), String> {
         // A currency pair is fully identified by what an order already carries:
         // symbol, currency, security type and destination. There is no expiry,
@@ -2722,6 +2740,12 @@ mod contract_gate_tests {
     #[test]
     fn cash_is_admitted_and_the_underspecified_types_are_not() {
         assert!(ClientCore::validate_order_contract("CASH", "").is_ok(), "an FX pair is fully named");
+
+        // A spread's legs are carried and not sent, so an order for one would
+        // be an order for something else. Refused until they are encoded.
+        assert!(ClientCore::validate_combo_legs("STK", 0).is_ok(), "an ordinary contract has none");
+        assert!(ClientCore::validate_combo_legs("OPT", 2).is_err(), "legs on any type are refused");
+        assert!(ClientCore::validate_combo_legs("BAG", 0).is_err(), "and so is a combination with none listed");
         assert!(ClientCore::validate_order_contract("cash", "").is_ok(), "and the check is case-insensitive");
         assert!(ClientCore::validate_order_contract("STK", "").is_ok());
         assert!(ClientCore::validate_order_contract("", "").is_ok());
