@@ -861,7 +861,7 @@ fn push_contract_identity(
         return;
     };
     let crate::engine::market_state::OrderIdentity {
-        expiry, strike, right, multiplier, trading_class, local_symbol,
+        expiry, strike, right, multiplier, trading_class, local_symbol, currency: _,
     } = id;
     // MaturityMonthYear, with a full date in it where the contract has one.
     // The definition *lookup* must split these — an option asked for by date on
@@ -1133,7 +1133,12 @@ fn send_order_ex(
     // Secondary routing field — the reference encoder always writes it
     // alongside the destination (ib-agent#165).
     fields.push((6210, destination));
-    fields.push((15, "USD".to_string()));
+    // What the contract is priced in, where the caller has said. It was a
+    // constant, which is right for a US instrument and wrong for every other:
+    // an order on a contract quoted in another currency named a contract that
+    // is not the one it meant.
+    fields.push((15, context.market.order_identity(instrument)
+        .map_or_else(|| "USD".to_string(), |id| id.currency)));
     fields.push((204, "0".to_string()));
 
     // Extended attributes — same tag order as the historical SubmitLimitEx
@@ -2023,6 +2028,34 @@ mod tests {
         assert_eq!(tag("6258="), Some(format_price(12 * crate::types::PRICE_SCALE).to_string()));
         assert_eq!(tag("6259="),
             Some(format_price(11 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2).to_string()));
+    }
+
+    /// A contract is priced in what it is priced in. The field was a constant,
+    /// which names the right currency for a US instrument and the wrong one for
+    /// every other, and an order naming the wrong currency names a different
+    /// contract. A caller that says nothing still gets the constant.
+    #[test]
+    fn an_order_states_the_currency_the_contract_is_priced_in() {
+        use std::io::Read;
+        let sent = |key: Option<&str>| {
+            let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+            let mut context = Context::new();
+            let id = context.market.try_register_contract(0, "BMW", "STK", "IBIS", "").unwrap();
+            context.set_symbol(id, "BMW".to_string());
+            if let Some(k) = key { context.set_order_identity(id, k); }
+            send_order_ex(
+                &mut conn, &mut context, "DU123456", 12, id, Side::Buy, 1,
+                crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+                b'0', &crate::types::OrderAttrs::default(),
+            ).unwrap();
+            let mut buf = [0u8; 4096];
+            let n = peer.read(&mut buf).unwrap();
+            let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+            msg.split('\u{1}').find_map(|f| f.strip_prefix("15=").map(str::to_string)).unwrap()
+        };
+
+        assert_eq!(sent(Some("|0|||||EUR")), "EUR", "what the caller said");
+        assert_eq!(sent(None), "USD", "and the old constant when nobody said");
     }
 
     /// The trail percentage and the unit it is expressed in are different

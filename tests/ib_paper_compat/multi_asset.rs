@@ -213,9 +213,12 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     // and as a contract month, in MaturityMonthYear and in MaturityDate, with
     // and without the multiplier, with a right, naming the contract id
     // outright, and — sent here, and carried on the order — the trading class
-    // and the local symbol the definition reports, which is everything the
-    // terminal puts in a contract block. Whatever separates this from the
-    // forex order that now works is not in the contract block.
+    // and the local symbol the definition reports. Also tried, against the
+    // terminal's own contract writer: the listing exchange on tag 207 as
+    // distinct from the routing destination, and both maturity tags together
+    // rather than either alone. That is every contract-identifying field the
+    // terminal sends. Whatever separates this from the forex order that now
+    // works is not in the contract block.
 
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitGtc {

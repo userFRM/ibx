@@ -27,6 +27,8 @@ pub struct OrderIdentity {
     pub multiplier: String,
     pub trading_class: String,
     pub local_symbol: String,
+    /// What the contract is priced in. `USD` when the key does not say.
+    pub currency: String,
 }
 
 pub struct MarketState {
@@ -333,10 +335,16 @@ impl MarketState {
         // A key written before these existed simply has neither.
         let trading_class = it.next().unwrap_or("").to_string();
         let local_symbol = it.next().unwrap_or("").to_string();
-        if expiry.is_empty() && right.is_empty() && strike.parse::<f64>().unwrap_or(0.0) <= 0.0 {
-            return None;
-        }
-        Some(OrderIdentity { expiry, strike, right, multiplier, trading_class, local_symbol })
+        let currency = match it.next().unwrap_or("") {
+            "" => "USD".to_string(),
+            c => c.to_string(),
+        };
+        // No guard on "does this look like an option": every field is checked
+        // for emptiness where it is written, and a stock that states only its
+        // currency has an identity worth returning.
+        Some(OrderIdentity {
+            expiry, strike, right, multiplier, trading_class, local_symbol, currency,
+        })
     }
 
     pub fn order_routing(&self, id: InstrumentId) -> (String, String) {
