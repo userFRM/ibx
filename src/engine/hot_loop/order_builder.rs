@@ -1369,6 +1369,19 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());                           // volume (unused)
                 out.push(String::new());                           // execution (unused)
             }
+            // The venue refuses this one, and the format it wants is not
+            // known. The condition block itself is fine — price, volume and
+            // multi-condition orders are all accepted — and only the time
+            // value is rejected, on tag 6223. Ruled out against a live
+            // session: `YYYYMMDD-HH:MM:SS` (answered "Invalid conditional
+            // field", so not even parsed), and, all answered "Invalid value in
+            // field # 6223", `YYYYMMDD HH:MM:SS` with and without a zone
+            // (US/Eastern, EST, UTC), without seconds, date alone,
+            // `YYYYMMDD-HH:MM:SS.000`, epoch seconds and epoch milliseconds. A
+            // near date fails the same way a distant one does, so it is the
+            // shape and not the horizon. Passed through as given until a
+            // capture says what the shape is; guessing a ninth would only
+            // trade one rejection for another.
             OrderCondition::Time { time, is_more } => {
                 out.push("3".into());
                 out.push(conj.into());
