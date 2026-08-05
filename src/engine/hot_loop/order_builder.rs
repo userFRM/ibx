@@ -1225,15 +1225,18 @@ fn send_order_ex(
         K::MidPrice { price_cap } if *price_cap > 0 => {
             fields.push((44, format_price(*price_cap).to_string()));
         }
-        K::PegMkt { offset } if *offset > 0 => {
+        // The offset is stated whether or not it is zero. Pegging at the price
+        // with no offset is an ordinary order, and omitting the tag for it had
+        // the gateway refuse the whole thing — seen against a paper account as
+        // "Invalid value in field # 44", which is what an absent offset leaves
+        // it looking for.
+        K::PegMkt { offset } => {
             fields.push((211, format_price(*offset).to_string()));
         }
         K::PegMid { offset } => {
             fields.push((8403, "0.0".to_string())); // midOffsetAtWhole — differentiates PEGMID
             fields.push((8404, "0.0".to_string())); // midOffsetAtHalf
-            if *offset > 0 {
-                fields.push((211, format_price(*offset).to_string()));
-            }
+            fields.push((211, format_price(*offset).to_string()));
         }
         // Optional initial stop trigger (ib-agent#173).
         K::TrailingStop { trail_stop_price, .. }
