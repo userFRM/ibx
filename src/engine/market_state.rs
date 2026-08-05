@@ -14,6 +14,21 @@ fn blank_or_eq(stored: &Option<String>, incoming: &str) -> bool {
 
 /// Pre-allocated quote storage indexed by InstrumentId.
 /// All quotes live in a contiguous array for cache efficiency.
+/// The contract fields an order restates beyond its symbol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The trading class and local symbol are what tell one contract in a family
+/// from another where the maturity does not: two futures on the same underlying
+/// and month differ by them and by nothing else the order carries.
+pub struct OrderIdentity {
+    pub expiry: String,
+    pub strike: String,
+    pub right: String,
+    pub multiplier: String,
+    pub trading_class: String,
+    pub local_symbol: String,
+}
+
 pub struct MarketState {
     quotes: [Quote; MAX_INSTRUMENTS],
     /// High-water mark: slots ever allocated (iteration bound). Freed slots
@@ -300,24 +315,28 @@ impl MarketState {
     /// not name on its own: expiry, strike, right, multiplier. `None` for a
     /// stock or a currency pair, which those fields do not distinguish.
     /// State the identity an order has to restate: expiry, strike, right and
-    /// multiplier, as the same `|`-separated key a registration carries.
+    /// multiplier, as the same `|`-separated key a registration carries, and
+    /// optionally the trading class and local symbol after them.
     pub fn set_order_identity(&mut self, id: InstrumentId, key: &str) {
         if !key.is_empty() {
             self.option_keys[id as usize] = Some(key.to_string());
         }
     }
 
-    pub fn order_identity(&self, id: InstrumentId) -> Option<(String, String, String, String)> {
+    pub fn order_identity(&self, id: InstrumentId) -> Option<OrderIdentity> {
         let key = self.option_keys.get(id as usize)?.as_deref()?;
         let mut it = key.split('|');
         let expiry = it.next().unwrap_or("").to_string();
         let strike = it.next().unwrap_or("").to_string();
         let right = it.next().unwrap_or("").to_string();
         let multiplier = it.next().unwrap_or("").to_string();
+        // A key written before these existed simply has neither.
+        let trading_class = it.next().unwrap_or("").to_string();
+        let local_symbol = it.next().unwrap_or("").to_string();
         if expiry.is_empty() && right.is_empty() && strike.parse::<f64>().unwrap_or(0.0) <= 0.0 {
             return None;
         }
-        Some((expiry, strike, right, multiplier))
+        Some(OrderIdentity { expiry, strike, right, multiplier, trading_class, local_symbol })
     }
 
     pub fn order_routing(&self, id: InstrumentId) -> (String, String) {

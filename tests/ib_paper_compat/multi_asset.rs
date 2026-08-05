@@ -198,14 +198,24 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     let inst = hot_loop.context_mut().register_instrument(fut_def.con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "MES".to_string());
     hot_loop.context_mut().set_routing(inst, "FUT", "CME");
-    hot_loop.context_mut().set_order_identity(inst, "20270917|0||5");
+    // Everything the definition gave, in the order the key carries it: what
+    // tells this contract from the rest of its family is the trading class and
+    // the local symbol, not the maturity.
+    hot_loop.context_mut().set_order_identity(inst, &format!(
+        "{}|0||{}|{}|{}",
+        fut_def.last_trade_date, fut_def.multiplier as i64,
+        fut_def.trading_class, fut_def.local_symbol,
+    ));
+    println!("  identity: tradingClass={} localSymbol={}",
+        fut_def.trading_class, fut_def.local_symbol);
     // Still answered "Ambiguous Contract", where the forex order alongside now
     // goes through. Ruled out against a live session: the expiry as a full date
     // and as a contract month, in MaturityMonthYear and in MaturityDate, with
-    // and without the multiplier, with a right, and naming the contract id
-    // outright. What is left is what the definition carries and this does not
-    // ask for — a trading class or a local symbol — so that is where to look
-    // next, not at the maturity.
+    // and without the multiplier, with a right, naming the contract id
+    // outright, and — sent here, and carried on the order — the trading class
+    // and the local symbol the definition reports, which is everything the
+    // terminal puts in a contract block. Whatever separates this from the
+    // forex order that now works is not in the contract block.
 
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitGtc {
