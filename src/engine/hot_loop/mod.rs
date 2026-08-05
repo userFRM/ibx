@@ -1431,6 +1431,16 @@ impl HotLoop {
         self.farm.handle_disconnect_for_test();
     }
 
+    /// Test-only: force the auth transport into disconnected state.
+    ///
+    /// Sets the flag and nothing else, so recovery is exercised without
+    /// invalidating the session server-side — which is what happens if the
+    /// connection is taken away by logging in again from elsewhere, and why
+    /// that is not a way to test this.
+    pub fn force_ccp_disconnect(&mut self) {
+        self.ccp.disconnected = true;
+    }
+
     /// Test-only: trigger farm reconnect spawn.
     pub fn spawn_farm_reconnect_for_test(&mut self) {
         self.spawn_farm_reconnect();

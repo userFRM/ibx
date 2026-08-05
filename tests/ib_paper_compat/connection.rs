@@ -411,9 +411,15 @@ pub(super) fn phase_farm_recovers_with_credentials(
         },
     );
 
-    // Take the farm away before the loop starts, so recovery is the first thing
-    // it has to do rather than something raced against start-up.
+    // Take the transports away before the loop starts, so recovery is the first
+    // thing it has to do rather than something raced against start-up. Both,
+    // because a maintenance window takes both: the auth transport carries the
+    // orders and the farm carries the data, and a client that recovers one is
+    // still not trading.
     hot_loop.force_farm_disconnect();
+    if std::env::var("IBX_RECOVER_FARM_ONLY").is_err() {
+        hot_loop.force_ccp_disconnect();
+    }
     let join = run_hot_loop(hot_loop);
 
     control_tx.send(ControlCommand::Subscribe {
@@ -439,11 +445,36 @@ pub(super) fn phase_farm_recovers_with_credentials(
     }
 
     // Nothing announced the loss, so nothing should be reporting one.
+    // Data resuming proves the farm. Trading is the other half, and the auth
+    // transport was taken away too: an order that is acknowledged after all
+    // this is one that went out on a connection the engine rebuilt itself.
+    let mut order_acked = false;
+    if ticked {
+        let oid = next_order_id();
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+            order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
+            kind: OrderKind::Limit { price: 1_00_000_000 },
+            tif: b'0', attrs: OrderAttrs { outside_rth: true, ..OrderAttrs::default() },
+        })).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline && !order_acked {
+            if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(250))
+                && u.order_id == oid
+            {
+                order_acked = matches!(u.status,
+                    OrderStatus::PreSubmitted | OrderStatus::Submitted | OrderStatus::Filled);
+            }
+        }
+        let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid }));
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    println!("  order_accepted_after_recovery={order_acked}");
+
     let restored = !shared.take_connection_lost();
     if ticked {
         println!("  data resumed after {:.1}s", elapsed.as_secs_f64());
     }
     println!("  data_resumed={ticked} connection_reported_healthy={restored}");
     let _ = shutdown_and_reclaim(&control_tx, join, account_id);
-    (ticked, restored)
+    (ticked && order_acked, restored)
 }
