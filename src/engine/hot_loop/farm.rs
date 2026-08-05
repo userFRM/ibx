@@ -10,7 +10,7 @@ use crate::protocol::tick_decoder;
 use crate::types::{qty_from_wire, InstrumentId};
 use crossbeam_channel::Sender;
 
-use super::{HeartbeatState, emit, fast_extract_msg_type, find_body_after_tag};
+use super::{HeartbeatState, ReplayPacing, emit, fast_extract_msg_type, find_body_after_tag};
 
 /// Build the 35=V subscribe tag list for a contract whose conId is known.
 ///
@@ -1060,6 +1060,7 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         context: &mut Context,
         hb: &mut HeartbeatState,
+        replay: ReplayPacing,
     ) {
         *farm_conn = Some(conn);
         self.disconnected = false;

@@ -4,6 +4,22 @@ pub mod hmds;
 pub mod order_builder;
 pub(crate) mod retry;
 
+/// How fast a reconnect may put its subscriptions back.
+///
+/// Taken from the caller's [`ReconnectConfig`](crate::api::reliability::ReconnectConfig).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReplayPacing {
+    pub burst: usize,
+    pub pace: std::time::Duration,
+}
+
+impl Default for ReplayPacing {
+    fn default() -> Self {
+        let d = crate::api::reliability::ReconnectConfig::default();
+        Self { burst: d.replay_burst, pace: d.replay_pace }
+    }
+}
+
 use std::sync::Arc;
 use std::time::Instant;
 use std::io;
@@ -57,6 +73,10 @@ pub struct HotLoop {
     /// scheduler stops rather than climbing a ladder forever against a server
     /// that has already given its answer.
     reconnect_halted: Option<retry::DisconnectReason>,
+    /// What the caller said about recovery. Defaults recover automatically and
+    /// keep trying, which is what a process that must stay up wants.
+    reconnect_cfg: crate::api::reliability::ReconnectConfig,
+    budget: crate::api::reliability::RecoveryBudget,
     /// Slots a caller asked to free that were held open by a position. The
     /// table is bounded, so they are reconsidered once the account is flat
     /// rather than being lost until the process ends.
@@ -181,6 +201,8 @@ impl HotLoop {
             farm_next_attempt_at: None,
             loss_announced: false,
             reconnect_halted: None,
+            reconnect_cfg: Default::default(),
+            budget: Default::default(),
             pinned_by_position: Vec::new(),
             farm_reconnect_attempt: 0,
             pending_ccp_reconnect: None,
@@ -454,6 +476,7 @@ impl HotLoop {
             self.poll_farm_reconnect();
             self.poll_ccp_reconnect();
             self.poll_hmds_reconnect();
+            self.budget.settle(Instant::now(), self.reconnect_cfg.stable_window);
             self.maybe_spawn_farm_reconnect();
             self.maybe_spawn_ccp_reconnect();
             self.maybe_spawn_hmds_reconnect();
@@ -937,10 +960,15 @@ impl HotLoop {
 
     /// Replace the farm connection (after reconnection) and re-subscribe to all instruments.
     pub fn reconnect_farm(&mut self, conn: Connection) {
+        let replay = ReplayPacing {
+            burst: self.reconnect_cfg.replay_burst,
+            pace: self.reconnect_cfg.replay_pace,
+        };
         self.farm.reconnect(
             conn,
             &mut self.farm_conn,
             &mut self.context, &mut self.hb,
+            replay,
         );
     }
 
@@ -971,6 +999,21 @@ impl HotLoop {
         }
     }
 
+    /// Say once that recovery has stopped, so a caller waiting on a connection
+    /// that is never coming back is told rather than left waiting.
+    fn report_recovery_exhausted(&mut self, which: &str) {
+        if self.reconnect_halted.is_some() {
+            return;
+        }
+        log::error!(
+            "{which} recovery abandoned after {} attempts — the limits the caller set are spent",
+            self.budget.attempts(),
+        );
+        self.reconnect_halted = Some(retry::DisconnectReason::ByDesign);
+        self.shared.set_connection_lost();
+        emit(&self.event_tx, Event::Disconnected);
+    }
+
     /// Tell the client a transport it was told about is carrying traffic
     /// again. Silent unless a loss was announced, so the routine drops a
     /// reconnect handles on its own stay invisible.
@@ -985,6 +1028,11 @@ impl HotLoop {
         log::info!("Connection restored — subscriptions re-established");
         self.shared.set_connection_restored();
         emit(&self.event_tx, Event::Reconnected);
+    }
+
+    /// Take the caller's recovery settings.
+    pub fn set_reconnect_config(&mut self, cfg: crate::api::reliability::ReconnectConfig) {
+        self.reconnect_cfg = cfg;
     }
 
     /// Set cached auth credentials for farm auto-reconnect.
@@ -1006,6 +1054,10 @@ impl HotLoop {
         if self.reconnect_halted.is_some() {
             return;
         }
+        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) {
+            self.report_recovery_exhausted("farm");
+            return;
+        }
         match self.farm_next_attempt_at {
             None => {
                 let delay = reconnect_backoff(self.farm_reconnect_attempt);
@@ -1015,6 +1067,7 @@ impl HotLoop {
             }
             Some(due) if Instant::now() >= due => {
                 self.farm_next_attempt_at = None;
+                self.budget.record_attempt(Instant::now());
                 self.spawn_farm_reconnect();
                 if self.pending_farm_reconnect.is_none() {
                     // Could not spawn (no cached credentials): re-check in a
@@ -1035,6 +1088,10 @@ impl HotLoop {
         if self.reconnect_halted.is_some() {
             return;
         }
+        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) {
+            self.report_recovery_exhausted("ccp");
+            return;
+        }
         match self.ccp_next_attempt_at {
             None => {
                 let delay = reconnect_backoff(self.ccp_reconnect_attempt);
@@ -1044,6 +1101,7 @@ impl HotLoop {
             }
             Some(due) if Instant::now() >= due => {
                 self.ccp_next_attempt_at = None;
+                self.budget.record_attempt(Instant::now());
                 self.spawn_ccp_reconnect();
                 if self.pending_ccp_reconnect.is_none() {
                     self.ccp_next_attempt_at =
@@ -1098,6 +1156,7 @@ impl HotLoop {
                 self.reconnect_farm(conn);
                 self.farm_reconnect_attempt = 0;
                 self.reconnect_halted = None;
+                self.budget.record_connected(Instant::now());
                 self.announce_reconnected();
                 self.farm_next_attempt_at = None;
                 self.hb.farm_up_since = Instant::now();
@@ -1180,6 +1239,7 @@ impl HotLoop {
                 self.reconnect_ccp(conn);
                 self.ccp_reconnect_attempt = 0;
                 self.reconnect_halted = None;
+                self.budget.record_connected(Instant::now());
                 // The request for these goes out on this socket even though
                 // the bars come back on the historical one, so an HMDS that
                 // recovered first could not send them and left them recorded

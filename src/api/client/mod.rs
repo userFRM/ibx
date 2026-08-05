@@ -108,6 +108,14 @@ pub struct EClientConfig {
     /// process keeps secrets. A session that the server no longer accepts just
     /// means logging in, so this is only ever a faster start.
     pub resume: Option<crate::auth::resume::ResumableSession>,
+    /// What to do about a dropped connection.
+    ///
+    /// The default recovers on its own and keeps trying, which is what a
+    /// process that must stay up wants and what having no gateway makes this
+    /// library's job. Set it to bound the effort, or to be told about a loss
+    /// and decide yourself. See
+    /// [`ReconnectConfig`](crate::api::reliability::ReconnectConfig).
+    pub reconnect: crate::api::reliability::ReconnectConfig,
     /// Keep the session in this file, so a restart can resume without logging
     /// in — what the terminal's auto-restart file does, and why a gateway
     /// without one cannot come back from the nightly maintenance window alone.
@@ -259,7 +267,7 @@ impl EClient {
         let shared = Arc::new(SharedState::new());
         gw.populate_init_data(&shared);
 
-        let (hot_loop, control_tx) = gw.into_hot_loop_with_farms(
+        let (mut hot_loop, control_tx) = gw.into_hot_loop_with_farms(
             shared.clone(), event_tx, farm_conn, ccp_conn, hmds_conn, config.core_id,
             crate::gateway::CallerAuth {
                 host: config.host.clone(),
@@ -271,6 +279,7 @@ impl EClient {
                 ib_key_token_sub_type: gw_config.ib_key_token_sub_type.clone(),
             },
         );
+        hot_loop.set_reconnect_config(config.reconnect.clone());
 
         let handle = thread::Builder::new()
             .name("ib-engine-hotloop".into())
