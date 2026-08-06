@@ -651,6 +651,11 @@ fn synthesize_pending_cancel(
 /// an absolute amount (0) or ticks (1).
 const TRAIL_UNIT_PERCENT: u32 = 100;
 
+/// The SecurityIDSource an order states when the SecurityID it carries is the
+/// venue's own local symbol rather than a public identifier. Not one of the
+/// published sources, which are single characters.
+const IB_LOCAL_SYMBOL_SOURCE: &str = "101";
+
 fn oca_type_str(oca_type: u8) -> &'static str {
     match oca_type {
         1 => "CancelOnFillWBlock",
@@ -707,24 +712,41 @@ fn push_contract_identity(
         local_symbol,
         currency: _,
     } = id;
-    // A contract month goes on MaturityMonthYear and anything longer on
-    // MaturityDate. That is the rule the terminal's own contract writer
-    // follows, uniformly and for every security type, and it is the same rule
-    // the definition lookup here already used. An option is tolerant of a full
-    // date on the month tag; a future is not, and answered "Unknown contract"
-    // for one.
-    if let Some(tag) = super::ccp::maturity_tag(&expiry) {
+    let (sec_type, _) = context.market.order_routing(instrument);
+    // A future states its month, not its date. The order path writes the
+    // contract month and nothing else: it carries no MaturityDate at all, and
+    // an eight character date on the month tag named a contract the venue
+    // could not settle on. An option is tolerant of a full date there and is
+    // left exactly as it was, because it is accepted as it stands.
+    let is_future = matches!(sec_type.as_str(), "FUT" | "FWD");
+    if is_future {
+        let month: String = expiry.chars().take(6).collect();
+        if month.len() == 6 {
+            fields.push((200, month));
+        }
+    } else if let Some(tag) = super::ccp::maturity_tag(&expiry) {
         fields.push((tag, expiry));
     }
     // What tells one contract in a family from another where the maturity does
-    // not. The terminal writes both alongside the symbol and the security type;
-    // sending neither left a futures order naming a family and no member of it,
-    // which the venue called ambiguous.
-    if !trading_class.is_empty() {
-        fields.push((6058, trading_class));
-    }
-    if !local_symbol.is_empty() {
-        fields.push((6035, local_symbol));
+    // not.
+    //
+    // An order names the member by its own identifier rather than by its class:
+    // the local symbol goes on SecurityID under a source that says the
+    // identifier is the venue's own, and the trading class is not stated at all
+    // on an order. Naming the class and not the member is what left a futures
+    // order describing a family, which the venue called ambiguous.
+    if is_future {
+        if !local_symbol.is_empty() {
+            fields.push((48, local_symbol));
+            fields.push((22, IB_LOCAL_SYMBOL_SOURCE.to_string()));
+        }
+    } else {
+        if !trading_class.is_empty() {
+            fields.push((6058, trading_class));
+        }
+        if !local_symbol.is_empty() {
+            fields.push((6035, local_symbol));
+        }
     }
     if strike.parse::<f64>().unwrap_or(0.0) > 0.0 {
         fields.push((202, strike));
@@ -3350,9 +3372,16 @@ mod outside_rth_polarity_tests {
             submit(&mut context, instrument, false);
             let sent = drain(&mut context);
 
-            assert!(sent.contains("|541=20270917|"), "{label} states the maturity: {sent}");
+            // A future states its contract month. The order path carries no
+            // MaturityDate at all, and a full date on the month tag named a
+            // contract the venue could not settle on.
+            assert!(sent.contains("|200=202709|"), "{label} states the contract month: {sent}");
+            assert!(!sent.contains("|541="), "{label} states no maturity date: {sent}");
             assert!(sent.contains("|231=5|"), "{label} states the multiplier: {sent}");
             assert!(sent.contains("|167=FUT|"), "{label} states the security type: {sent}");
+            // The member, not the family: the local symbol under the source
+            // that says the identifier is the venue's own.
+            assert!(!sent.contains("|6058="), "{label} states no trading class: {sent}");
         }
     }
 }
