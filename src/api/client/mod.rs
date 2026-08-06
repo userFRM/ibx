@@ -32,6 +32,7 @@
 //! }
 //! ```
 
+mod ask;
 mod market_data;
 mod orders;
 mod account;
