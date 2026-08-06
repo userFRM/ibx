@@ -30,7 +30,7 @@ def new(wrapper))
 
 #### `connect`
 
-Connect to IB and start the engine.  Live logins (``paper=False``) enter a second-factor approval window and **block** until the factor is approved (mobile push) or the deadline fires (``ib_key_timeout_secs``, default ~18 min). This is a human approval gate, not a hang. To bound or avoid it: use ``paper=True``, pass a smaller ``ib_key_timeout_secs``, or run ``connect()`` on a worker thread with your own timeout. Paper logins skip the gate entirely. Set ``RUST_LOG=info`` to see a log line when the wait begins.  ``code_provider`` answers that factor with a typed code instead: ``code_provider(factor, display_id, avth_url) -> str``, where ``factor`` is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or ``"authenticator"`` (return the account's current code; ``display_id`` and ``avth_url`` are empty). An authenticator account has no push to fall back to and cannot log in without this. It is called once, on a thread of its own, and holds the GIL while it runs — return the code, don't block on input. One wrong code ends the login; there is no retry.  Multiple ``EClient`` instances can run concurrently in one process; each owns its own state, sockets, and engine thread, and ``connect()`` does not serialize across instances. If you pin engines via ``core_id``, give each a distinct value. See ibx#203 / ibx#207.
+Connect to IB and start the engine.  Live logins (``paper=False``) enter a second-factor approval window and **block** until the factor is approved (mobile push) or the deadline fires (``ib_key_timeout_secs``, default ~18 min). This is a human approval gate, not a hang. To bound or avoid it: use ``paper=True``, pass a smaller ``ib_key_timeout_secs``, or run ``connect()`` on a worker thread with your own timeout. Paper logins skip the gate entirely. Set ``RUST_LOG=info`` to see a log line when the wait begins.  ``code_provider`` answers that factor with a typed code instead: ``code_provider(factor, display_id, avth_url) -> str``, where ``factor`` is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or ``"authenticator"`` (return the account's current code; ``display_id`` and ``avth_url`` are empty). An authenticator account has no push to fall back to and cannot log in without this. It is called once, on a thread of its own, and holds the GIL while it runs — return the code, don't block on input. One wrong code ends the login; there is no retry.  Multiple ``EClient`` instances can run concurrently in one process; each owns its own state, sockets, and engine thread, and ``connect()`` does not serialize across instances. If you pin engines via ``core_id``, give each a distinct value. See  / .
 
 ```python
 def connect(host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None))
@@ -513,7 +513,7 @@ def cancel_tick_by_tick_data(req_id)
 
 #### `req_ping`
 
-Request an auth-connection round-trip time sample (ibx#158): sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. Poll `last_rtt_ms()` after a moment for the result.
+Request an auth-connection round-trip time sample: sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. Poll `last_rtt_ms()` after a moment for the result.
 
 ```python
 def req_ping()
@@ -523,7 +523,7 @@ def req_ping()
 
 #### `last_rtt_ms`
 
-Last measured auth-connection round-trip time in milliseconds, or None if never measured (ibx#158). A gauge, not a benchmark — see `req_ping`. Also sampled automatically by the engine's own liveness probes.
+Last measured auth-connection round-trip time in milliseconds, or None if never measured. A gauge, not a benchmark — see `req_ping`. Also sampled automatically by the engine's own liveness probes.
 
 ```python
 def last_rtt_ms()
@@ -533,7 +533,7 @@ def last_rtt_ms()
 
 #### `req_market_data_type`
 
-NOT supported end to end (ibx#234): the requested type (1=live, 2=frozen, 3=delayed, 4=delayed-frozen) is stored locally but never sent to the gateway, so subscriptions always deliver realtime data and delayed tick variants never arrive. Requesting a non-realtime type logs a warning, and the `market_data_type` callback reports the DELIVERED type (realtime) rather than echoing the request.
+Set the market data type for subscriptions that follow: 1 live, 2 frozen, 3 delayed, 4 delayed-frozen. The type is carried per subscription, and the `market_data_type` callback reports the type each subscription was made under. A contract holds one subscription at a time, so to compare types on one contract, cancel between them.
 
 ```python
 def req_market_data_type(market_data_type)
