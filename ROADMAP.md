@@ -94,9 +94,9 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Bond | Implemented | Implemented | Implemented | W2 |
 | Warrant | Implemented | Implemented | Implemented | W2 |
 | Combination | Verified | Not applicable | Implemented | W2 |
-| Crypto and CFD | Implemented | Implemented | Blocked, the order is refused with no reason stated | W2 |
+| Crypto and CFD | Implemented | Implemented | Blocked, the order is refused with no reason stated. The account's crypto onboarding is within its waiting period | W2 |
 | Commodity, fund, forward, bill | Implemented | Implemented | Absent | W2 |
-| Venues outside the United States | Verified | Verified | Blocked, orders return inactive with no stated reason | W2 |
+| Venues outside the United States | Verified | Verified | Verified | Available |
 
 ## Release policy
 
@@ -129,7 +129,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | --- | --- | --- | --- |
 | W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns | Met |
 | W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session | Open |
-| W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission | Open |
+| W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission | Met |
 | W2.4 | Combination orders | Live phase covering leg construction and acceptance | Open |
 | W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause | Met |
 | W2.6 | Account summary and account level P&L | Both observed end to end in a live phase | Met |
