@@ -120,38 +120,38 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 
 ### W1 Option surface
 
-| ID | Requirement | Acceptance |
-| --- | --- | --- |
-| W1.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks |
-| W1.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed |
-| W1.3 | Option analytics | Implied volatility and option price return values, or the calls are removed with the reason recorded |
+| ID | Requirement | Acceptance | Status |
+| --- | --- | --- | --- |
+| W1.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks | Open |
+| W1.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed | Open |
+| W1.3 | Option analytics | Implied volatility and option price return values, or the calls are removed with the reason recorded | Open |
 
 ### W2 Asset class and instrumentation coverage
 
-| ID | Requirement | Acceptance |
-| --- | --- | --- |
-| W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns |
-| W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session |
-| W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission |
-| W2.4 | Combination orders | Live phase covering leg construction and acceptance |
-| W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause |
-| W2.6 | Account summary and account level P&L | Both observed end to end in a live phase |
-| W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position |
-| W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session |
-| W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust |
-| W2.10 | Tick by tick data | Available, or the transport requirement recorded |
-| W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue |
+| ID | Requirement | Acceptance | Status |
+| --- | --- | --- | --- |
+| W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns | Open |
+| W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session | Open |
+| W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission | Open |
+| W2.4 | Combination orders | Live phase covering leg construction and acceptance | Open |
+| W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause | Open |
+| W2.6 | Account summary and account level P&L | Both observed end to end in a live phase | Open |
+| W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position | Open |
+| W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Open |
+| W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust | Open |
+| W2.10 | Tick by tick data | Available, or the transport requirement recorded | Open |
+| W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue | Open |
 
 ### W3 Call contract and behaviour parity
 
-| ID | Requirement | Acceptance |
-| --- | --- | --- |
-| W3.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot |
-| W3.2 | Pre connection behaviour | Behaviour of a call issued before connection is defined, documented, and identical across the Rust and Python surfaces |
-| W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the surface removed |
-| W3.4 | Event data | Wall Street Horizon calls served, or the surface removed |
-| W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it |
-| W3.6 | Second factor | Approval path covered by an automated live check |
+| ID | Requirement | Acceptance | Status |
+| --- | --- | --- | --- |
+| W3.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot | Met |
+| W3.2 | Pre connection behaviour | A request issued before connection is reported on the error callback with code 504 on the Python surface, matching the reference client, and returns a typed error on the Rust surface | Met |
+| W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the surface removed | Open |
+| W3.4 | Event data | Wall Street Horizon calls served, or the surface removed | Open |
+| W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it | Open |
+| W3.6 | Second factor | Approval path covered by an automated live check | Open |
 
 ## Excluded surface
 
