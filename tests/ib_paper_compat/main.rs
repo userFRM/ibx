@@ -32,9 +32,31 @@ use ibx::protocol::fixcomp;
 
 use common::*;
 
+/// How long the whole suite may take before it is treated as stuck.
+///
+/// A phase that waits on something the venue will never send waits forever,
+/// and the run then reports nothing at all — no pass, no fail, no last phase.
+/// That happened, and cost a session's worth of verification. This turns it
+/// into a failure that names where it stopped.
+const SUITE_BUDGET: Duration = Duration::from_secs(25 * 60);
+
+fn watch_for_a_stuck_suite() {
+    std::thread::spawn(|| {
+        std::thread::sleep(SUITE_BUDGET);
+        // The last phase header printed is the one it stopped in.
+        eprintln!(
+            "\n=== the suite passed {} minutes without finishing and is being stopped. \
+             The last phase printed above is where it stopped. ===",
+            SUITE_BUDGET.as_secs() / 60,
+        );
+        std::process::exit(2);
+    });
+}
+
 #[test]
 fn compat_suite() {
     let _ = tracing_subscriber::fmt::try_init();
+    watch_for_a_stuck_suite();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
