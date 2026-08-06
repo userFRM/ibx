@@ -53,6 +53,11 @@ pub struct Context {
     /// it appeared on the wire. Used as the OrigClOrdID on cancel/modify so that
     /// legacy orders recorded without a `.{ver}` suffix still match — see ibx#179.
     pub(crate) last_clord: HashMap<OrderId, String>,
+    /// How many cancels have been sent for an order. A cancel names itself on
+    /// tag 11, and a retry that reuses the previous name is a duplicate the
+    /// server is entitled to drop — which is exactly the case a retry exists
+    /// for. Counts so each attempt is a new name.
+    pub(crate) cancel_attempts: HashMap<OrderId, u32>,
     /// Timestamp when the last farm socket recv returned data (for decode latency measurement).
     pub(crate) recv_at: Instant,
     /// Total hot loop iterations since start.
@@ -74,6 +79,7 @@ impl Context {
             pending_orders: OrderBuffer::new(),
             modify_versions: HashMap::new(),
             last_clord: HashMap::new(),
+            cancel_attempts: HashMap::new(),
             account: AccountState::default(),
             clock: Clock::new(),
             next_order_id: {
