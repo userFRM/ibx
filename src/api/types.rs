@@ -493,6 +493,8 @@ impl Order {
             min_trade_qty: if self.min_trade_qty == i32::MAX { 0 } else { self.min_trade_qty.max(0) as u32 },
             block_order: self.block_order,
             auto_cancel_date: self.auto_cancel_date.clone(),
+            clearing_account: self.clearing_account.clone(),
+            clearing_intent: self.clearing_intent.clone(),
             rule80a: self.rule80a.clone(),
             post_to_ats: if self.post_to_ats == i32::MAX { 0 } else { self.post_to_ats.max(0) as u32 },
             combo_legs: Vec::new(),
@@ -608,6 +610,8 @@ impl Order {
             || self.min_trade_qty != i32::MAX
             || self.block_order
             || !self.auto_cancel_date.is_empty()
+            || !self.clearing_account.is_empty()
+            || !self.clearing_intent.is_empty()
     }
 }
 
@@ -1167,6 +1171,8 @@ mod tests {
             ("min_trade_qty", |o| o.min_trade_qty = 50),
             ("block_order", |o| o.block_order = true),
             ("auto_cancel_date", |o| o.auto_cancel_date = "20261231".into()),
+            ("clearing_account", |o| o.clearing_account = "U123".into()),
+            ("clearing_intent", |o| o.clearing_intent = "IB".into()),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1183,7 +1189,7 @@ mod tests {
             exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
             combo_legs: _, rule80a: _, post_to_ats: _, deactivate: _,
             include_overnight: _, auto_cancel_parent: _, min_trade_qty: _,
-            block_order: _, auto_cancel_date: _,
+            block_order: _, auto_cancel_date: _, clearing_account: _, clearing_intent: _,
             primary_exchange: _, delta_neutral_contract: _,
         } = Order::default().attrs();
 
