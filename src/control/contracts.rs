@@ -343,12 +343,6 @@ fn contains_field(body: &[u8], field: &[u8]) -> bool {
 /// The symbol tag is reused by the identifier block — `55=BBG` and `55=US` sit
 /// there — so a record counts only when it also states what the contract is
 /// and which contract it is.
-///
-/// Not on the live path yet. The reply that carries two listings does not
-/// reach the point where this would be called: it is consumed by the handling
-/// that fans a by-symbol lookup out across venues, and untangling that is a
-/// change to the most central lookup in the client. Until then
-/// `qualify_contract` refuses a description that could match more than one.
 pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
     use crate::protocol::fix::SOH;
     const SYMBOL_FIELD: &[u8] = b"\x0155=";

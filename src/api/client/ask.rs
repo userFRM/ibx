@@ -434,19 +434,6 @@ impl EClient {
     /// venue exists in more than one currency, and picking one silently is how
     /// an order ends up on the wrong one.
     pub fn qualify_contract(&self, contract: &Contract) -> Result<Contract, String> {
-        // A symbol without a currency names a listing in every currency it
-        // trades in. Asking the venue for SPY is answered with the dollar
-        // listing and the Australian dollar listing together, in one message,
-        // and this client reads such a message as a single contract and keeps
-        // whichever came last — the Australian one. Until that is fixed the
-        // ambiguity cannot be seen from here, so the description is refused
-        // before it can resolve to the wrong side of the world.
-        if contract.currency.is_empty() && contract.con_id == 0 {
-            return Err(format!(
-                "{} {} names a listing in every currency it trades in: state the currency",
-                contract.sec_type, contract.symbol,
-            ));
-        }
         let mut found = self.contract_details(contract)?;
         match found.len() {
             0 => Err(format!(
