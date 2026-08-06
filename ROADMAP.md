@@ -37,14 +37,14 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Available |
 | Contract definitions by identifier and symbol | Verified | Live phase | Available |
 | Contract definitions by ISIN or CUSIP | Verified | Live lookup by ISIN resolved the contract | Available |
-| Option chain discovery | Blocked | Request, reply parsing and delivery are covered by tests. The session answers other requests, including one whose reply is never sent unasked, and answers a chain request in no shape at all | W1 |
+| Option chain discovery | Blocked | Request, reply parsing and delivery are covered by tests. The session answers other requests, including one whose reply is never sent unasked. A chain request is answered in no shape at all, and nothing in the client conditions the request on a permission, so this is a question for whoever provisions the account | W1 |
 | Scanners | Verified | Live phase | Available |
 | News, providers, articles, historical, bulletins | Verified | Live phase | Available |
 | Fundamental data | Verified | Live phase | Available |
 | Account values | Verified | Live phase | Available |
 | Account summary | Verified | Live session, rows and completion observed | Available |
 | Positions and round trip tracking | Implemented | Live phase requires a fill it did not obtain | W2 |
-| P&L, per contract | Verified | Live phase | Available |
+| P&L, per contract | Verified | Live phase, and the venue's own midnight values and prices are used where it states them | Available |
 | P&L, account level subscription | Verified | Live session, reported from the gateway's own account figures | Available |
 | Option exercise and lapse | Implemented | No position has been exercised yet | W1 |
 | Option analytics, implied volatility and price | Accepted, not served | | W1 |
