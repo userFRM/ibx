@@ -839,6 +839,22 @@ fn routing_table_probe() {
     let idle = tally(&mut ccp, 12);
     println!("  asking nothing: {idle:?}");
 
+    for (label, sub, extra) in [
+        ("chain", "138", vec![(55, "SPY"), (310, "OPT"), (6346, "756733"), (6320, "1"), (6994, "1")]),
+        ("routing", "78", vec![(6556, "1"), (6066, "0")]),
+    ] {
+        let now = ibx::gateway::chrono_free_timestamp();
+        let mut fields: Vec<(u32, &str)> = vec![
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &now),
+            (6040, sub),
+        ];
+        fields.extend(extra);
+        ccp.send_fix(&fields).expect("send the request");
+        let seen = tally(&mut ccp, 15);
+        println!("  {label}: {seen:?}");
+    }
+
     drop(farm);
     drop(hmds);
 }
