@@ -809,6 +809,10 @@ impl ClientCore {
 
     pub fn subscribe_pnl(&self, req_id: i64) {
         *self.pnl_req_id.lock().unwrap() = Some(req_id);
+        // Nothing has been reported to this subscription yet. Without a value
+        // that no account can hold, an account whose P&L is genuinely zero
+        // matched the initial state and the caller was told nothing at all.
+        *self.last_pnl.lock().unwrap() = [i64::MIN; 3];
     }
 
     pub fn unsubscribe_pnl(&self, req_id: i64) {
@@ -1342,9 +1346,9 @@ impl ClientCore {
         for pi in &positions {
             con_ids.insert(pi.con_id);
         }
-        if con_ids.is_empty() {
-            return None;
-        }
+        // An account holding nothing still has a P&L: what it realised today
+        // is already in the gateway's own figures. Returning here reported
+        // nothing at all to a caller that had asked to be told.
 
         let con_id_map = self.con_id_to_instrument.lock().unwrap();
         let mut total_daily: f64 = 0.0;
@@ -2236,6 +2240,24 @@ mod tests {
     use crate::types::SmartComponent;
     use crate::bridge::RichOrderInfo;
     use crate::api::types::OrderState as ApiOrderState;
+
+    /// An account holding nothing still has a P&L, and a P&L of zero is an
+    /// answer. Both used to report nothing: the empty position list returned
+    /// early, and a zero matched the state a fresh subscription starts in.
+    #[test]
+    fn an_account_with_no_positions_still_reports_its_pnl() {
+        let core = ClientCore::new();
+        let shared = SharedState::new();
+        shared.portfolio.set_account(&crate::types::AccountState::default());
+
+        core.subscribe_pnl(7);
+        let update = core.poll_pnl(&shared).expect("a subscription is answered");
+        assert_eq!(update.req_id, 7);
+        assert_eq!(update.daily_pnl, 0.0);
+        assert_eq!(update.unrealized_pnl, 0.0);
+        assert_eq!(update.realized_pnl, 0.0);
+        assert!(core.poll_pnl(&shared).is_none(), "the same figures do not repeat");
+    }
 
     /// The type a caller asks for has to reach the subscription, or asking for
     /// delayed data got realtime-shaped subscriptions and no delayed ticks.
