@@ -32,11 +32,10 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(15);
 
     while Instant::now() < deadline && contract.is_none() {
-        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if req_id == 1200 {
+        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100))
+            && req_id == 1200 {
                 contract = Some(*details);
             }
-        }
     }
 
     // Step 4: Verify SPECIFIC VALUES
@@ -82,9 +81,8 @@ pub(super) fn phase_contract_details_by_symbol(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(15);
 
     while Instant::now() < deadline && contract.is_none() {
-        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if req_id == 7800 { contract = Some(*details); }
-        }
+        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100))
+            && req_id == 7800 { contract = Some(*details); }
     }
 
     let def = contract.expect("No contract details received for AAPL by symbol search");
@@ -229,9 +227,8 @@ pub(super) fn phase_market_rule_id(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(15);
 
     while Instant::now() < deadline && contract.is_none() {
-        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if req_id == 8400 { contract = Some(*details); }
-        }
+        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100))
+            && req_id == 8400 { contract = Some(*details); }
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
@@ -354,9 +351,8 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
     if got_details && !got_end {
         let end_deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < end_deadline {
-            if let Ok(Event::ContractDetailsEnd(req_id)) = event_rx.recv_timeout(Duration::from_millis(100)) {
-                if req_id == 1001 { got_end = true; break; }
-            }
+            if let Ok(Event::ContractDetailsEnd(req_id)) = event_rx.recv_timeout(Duration::from_millis(100))
+                && req_id == 1001 { got_end = true; break; }
         }
     }
 

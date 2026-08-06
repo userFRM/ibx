@@ -39,13 +39,12 @@ pub(super) fn phase_ib_error_handling(conns: Conns) -> Conns {
                     break;
                 }
             }
-            Ok(Event::CancelReject(cr)) => {
-                if cr.order_id == oid {
+            Ok(Event::CancelReject(cr))
+                if cr.order_id == oid => {
                     got_error_or_reject = true;
                     println!("  CancelReject received for bogus order");
                     break;
                 }
-            }
             _ => {}
         }
     }

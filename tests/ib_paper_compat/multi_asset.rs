@@ -44,15 +44,13 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
             };
             for msg in messages {
                 let tags = fix::fix_parse(&msg);
-                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d") {
-                    if let Some(def) = contracts::parse_secdef_response(&msg) {
-                        if def.sec_type == contracts::SecurityType::Forex {
+                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
+                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                        && def.sec_type == contracts::SecurityType::Forex {
                             println!("  Contract: {} conId={} secType={:?} exchange={}",
                                 def.symbol, def.con_id, def.sec_type, def.exchange);
                             forex_con_id = Some(def.con_id);
                         }
-                    }
-                }
             }
         }
     }
@@ -90,8 +88,8 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     let mut rejected_order: Option<u64> = None;
 
     while Instant::now() < deadline {
-        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if update.order_id == oid {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && update.order_id == oid {
                 match update.status {
                     OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         order_acked = true;
@@ -105,7 +103,6 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
                     _ => {}
                 }
             }
-        }
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
@@ -159,9 +156,9 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
             };
             for msg in messages {
                 let tags = fix::fix_parse(&msg);
-                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d") {
-                    if let Some(def) = contracts::parse_secdef_response(&msg) {
-                        if def.sec_type == contracts::SecurityType::Future {
+                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
+                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                        && def.sec_type == contracts::SecurityType::Future {
                             println!("  Contract: {} conId={} secType={:?} exchange={} expiry={} multiplier={}",
                                 def.symbol, def.con_id, def.sec_type, def.exchange,
                                 def.last_trade_date, def.multiplier);
@@ -172,8 +169,6 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
                                 fut_contract = Some(def);
                             }
                         }
-                    }
-                }
             }
         }
     }
@@ -229,8 +224,8 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     let mut rejected_order: Option<u64> = None;
 
     while Instant::now() < deadline {
-        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if update.order_id == oid {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && update.order_id == oid {
                 match update.status {
                     OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         order_acked = true;
@@ -244,7 +239,6 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
                     _ => {}
                 }
             }
-        }
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
@@ -301,17 +295,15 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
                 let tags = fix::fix_parse(&msg);
                 let msg_type = tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()).unwrap_or("?");
                 if msg_type == "d" {
-                    if let Some(resp_type) = tags.get(&contracts::TAG_SECURITY_RESPONSE_TYPE) {
-                        if resp_type == "6" || resp_type == "5" {
+                    if let Some(resp_type) = tags.get(&contracts::TAG_SECURITY_RESPONSE_TYPE)
+                        && (resp_type == "6" || resp_type == "5") {
                             got_end = true;
                             continue;
                         }
-                    }
-                    if let Some(def) = contracts::parse_secdef_response(&msg) {
-                        if def.sec_type == contracts::SecurityType::Option && def.right.is_some() {
+                    if let Some(def) = contracts::parse_secdef_response(&msg)
+                        && def.sec_type == contracts::SecurityType::Option && def.right.is_some() {
                             option_contracts.push(def);
                         }
-                    }
                 }
             }
         }
@@ -374,8 +366,8 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     let mut rejected_order: Option<u64> = None;
 
     while Instant::now() < deadline {
-        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if update.order_id == oid {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && update.order_id == oid {
                 match update.status {
                     OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         order_acked = true;
@@ -389,7 +381,6 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
                     _ => {}
                 }
             }
-        }
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);

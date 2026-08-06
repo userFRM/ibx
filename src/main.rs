@@ -61,12 +61,14 @@ fn main() {
 
     println!("Connected!");
 
-    let mut contract = Contract::default();
-    contract.con_id = 756733;
-    contract.symbol = "SPY".into();
-    contract.sec_type = "STK".into();
-    contract.exchange = "SMART".into();
-    contract.currency = "USD".into();
+    let contract = Contract {
+        con_id: 756733,
+        symbol: "SPY".into(),
+        sec_type: "STK".into(),
+        exchange: "SMART".into(),
+        currency: "USD".into(),
+        ..Contract::default()
+    };
 
     client.req_mkt_data(1, &contract, "", false, false).unwrap();
     println!("Requested market data for SPY (req_id=1)");

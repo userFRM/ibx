@@ -125,7 +125,7 @@ fn collect_tbt_trades(
                 }
                 last_time = Some(now);
                 collected += 1;
-                if collected % 1000 == 0 {
+                if collected.is_multiple_of(1000) {
                     println!(
                         "[{:.3}s] TBT Last: {}/{} samples...",
                         start.elapsed().as_secs_f64(),
@@ -188,7 +188,7 @@ fn collect_tbt_quotes(
                 }
                 last_time = Some(now);
                 collected += 1;
-                if collected % 1000 == 0 {
+                if collected.is_multiple_of(1000) {
                     println!(
                         "[{:.3}s] TBT BidAsk: {}/{} samples...",
                         start.elapsed().as_secs_f64(),

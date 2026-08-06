@@ -39,6 +39,11 @@ fn gt_callbacks(gt: &serde_json::Value, name: &str) -> Vec<serde_json::Value> {
 
 // ── Recording Wrapper ──
 
+/// Every field is the callback's own payload, kept whole so a failing
+/// comparison prints what actually arrived rather than the part the assertion
+/// happened to name. They are read through `Debug`, which dead-code analysis
+/// does not see.
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 enum Cb {
     NextValidId { order_id: i64 },
@@ -87,6 +92,7 @@ enum Cb {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // the captured payload, read through Debug
 struct ContractSnapshot {
     con_id: i64,
     symbol: String,
@@ -98,6 +104,7 @@ struct ContractSnapshot {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // the captured payload, read through Debug
 struct OrderSnapshot {
     order_id: i64,
     action: String,
@@ -111,6 +118,7 @@ struct OrderSnapshot {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // the captured payload, read through Debug
 struct OrderStateSnapshot {
     status: String,
     completed_time: String,
@@ -118,6 +126,7 @@ struct OrderStateSnapshot {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // the captured payload, read through Debug
 struct ExecSnapshot {
     exec_id: String,
     time: String,
@@ -132,6 +141,7 @@ struct ExecSnapshot {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // the captured payload, read through Debug
 struct ContractDescSnapshot {
     con_id: i64,
     symbol: String,
@@ -411,22 +421,20 @@ fn poll_until(client: &EClient, wrapper: &mut RecWrapper, pred: impl Fn(&[Cb]) -
 // ── Comparison helpers ──
 
 fn assert_field(name: &str, actual: &str, gt_key: &str, gt: &serde_json::Value) -> bool {
-    if let Some(expected) = gt.get(gt_key).and_then(|v| v.as_str()) {
-        if actual != expected {
+    if let Some(expected) = gt.get(gt_key).and_then(|v| v.as_str())
+        && actual != expected {
             println!("    FAIL {name}: '{actual}' != GT '{expected}'");
             return false;
         }
-    }
     true
 }
 
 fn assert_field_i64(name: &str, actual: i64, gt_key: &str, gt: &serde_json::Value) -> bool {
-    if let Some(expected) = gt.get(gt_key).and_then(|v| v.as_i64()) {
-        if actual != expected {
+    if let Some(expected) = gt.get(gt_key).and_then(|v| v.as_i64())
+        && actual != expected {
             println!("    FAIL {name}: {actual} != GT {expected}");
             return false;
         }
-    }
     true
 }
 
@@ -469,7 +477,7 @@ fn api_gt_suite() {
         let gt_cd = gt_callbacks(&gt, "contractDetails");
 
         let cd: Vec<_> = cbs.iter().filter_map(|c| if let Cb::ContractDetails { contract, .. } = c { Some(contract) } else { None }).collect();
-        let has_end = cbs.iter().any(|c| matches!(c, Cb::ContractDetailsEnd { .. }));
+        let _has_end = cbs.iter().any(|c| matches!(c, Cb::ContractDetailsEnd { .. }));
 
         if cd.is_empty() {
             println!("FAIL (no contractDetails received)");
@@ -528,7 +536,7 @@ fn api_gt_suite() {
         let cbs = wrapper.drain();
 
         let gt = load_gt("07_reqMatchingSymbols.json");
-        let gt_ss = gt_callbacks(&gt, "symbolSamples");
+        let _gt_ss = gt_callbacks(&gt, "symbolSamples");
 
         let ss: Vec<_> = cbs.iter().filter_map(|c| if let Cb::SymbolSamples { descriptions, .. } = c { Some(descriptions) } else { None }).collect();
 
@@ -621,7 +629,7 @@ fn api_gt_suite() {
             skip_count += 1;
         } else {
             let gt = load_gt("20_reqPnL.json");
-            let gt_pnl = gt_callbacks(&gt, "pnl");
+            let _gt_pnl = gt_callbacks(&gt, "pnl");
             // Just verify the callback fires with numeric values
             println!("PASS (daily={:.2} unrealized={:.2} realized={:.2})", pnls[0].0, pnls[0].1, pnls[0].2);
             pass_count += 1;
@@ -680,7 +688,7 @@ fn api_gt_suite() {
         let cbs = wrapper.drain();
 
         let gt_oo = load_gt("51_reqOpenOrders_with_live_order.json");
-        let gt_co = load_gt("54_reqCompletedOrders_after_cancel.json");
+        let _gt_co = load_gt("54_reqCompletedOrders_after_cancel.json");
 
         // Check open_order
         let open_orders: Vec<_> = cbs.iter().filter_map(|c| if let Cb::OpenOrder { contract, order, state, .. } = c { Some((contract, order, state)) } else { None }).collect();
@@ -693,7 +701,7 @@ fn api_gt_suite() {
         println!();
 
         if let Some((c, o, s)) = open_orders.first() {
-            let gt_c = &gt_oo["responses"].as_array().unwrap().iter()
+            let _gt_c = &gt_oo["responses"].as_array().unwrap().iter()
                 .find(|r| r["callback"] == "openOrder").map(|r| &r["args"]["contract"]);
             println!("    open_order:");
             println!("      contract: conId={} symbol='{}' secType='{}' localSymbol='{}' tradingClass='{}'",
@@ -801,7 +809,7 @@ fn api_gt_suite() {
             println!("SKIP (no histogramData — HMDS connection may be down)");
             skip_count += 1;
         } else {
-            let gt = load_gt("33_reqHistogramData.json");
+            let _gt = load_gt("33_reqHistogramData.json");
             println!("PASS ({} items)", hd[0]);
             pass_count += 1;
         }

@@ -133,9 +133,7 @@ fn phase_place() -> Result<(), Box<dyn std::error::Error>> {
     if !got { eprintln!("WARN: never saw Submitted/PreSubmitted within 15s"); }
 
     let snap = state.lock().unwrap();
-    let (final_status, perm) = snap.statuses.iter()
-        .filter(|(id, _, _)| *id == order_id)
-        .next_back()
+    let (final_status, perm) = snap.statuses.iter().rfind(|(id, _, _)| *id == order_id)
         .map(|(_, s, p)| (s.clone(), *p))
         .unwrap_or_else(|| ("Unknown".into(), 0));
     write_state(order_id, perm, &final_status)?;

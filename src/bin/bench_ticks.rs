@@ -72,7 +72,7 @@ fn main() {
                 last_tick = now;
                 count += 1;
 
-                if count % 2000 == 0 {
+                if count.is_multiple_of(2000) {
                     println!(
                         "[{:.3}s] {}/{} samples...",
                         start.elapsed().as_secs_f64(),

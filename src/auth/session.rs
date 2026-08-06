@@ -2776,12 +2776,11 @@ mod tests {
                 stream.written[offset + 4..offset + 8].try_into().unwrap(),
             ) as usize;
             let payload = &stream.written[offset + 8..offset + 8 + len];
-            if let Some((_, msg_type, fields)) = ns::ns_parse(payload) {
-                if msg_type == ns::NS_HEART_BEAT {
+            if let Some((_, msg_type, fields)) = ns::ns_parse(payload)
+                && msg_type == ns::NS_HEART_BEAT {
                     assert_eq!(fields, vec!["20260430-22:58:25".to_string()]);
                     saw_heartbeat = true;
                 }
-            }
             offset += 8 + len;
         }
         assert!(saw_heartbeat, "client must echo the test-request timestamp in a HEART_BEAT");

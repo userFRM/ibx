@@ -5,6 +5,11 @@
 //!
 //! All tests share a single Gateway connection to avoid session throttling.
 //! Each phase builds a fresh HotLoop, runs it, then reclaims connections.
+//!
+//! Prices here are written scaled, grouped as dollars and cents:
+//! `1_00_000_000` is $1.00 at `PRICE_SCALE`. The grouping is the unit, which
+//! is why the digits are not grouped in threes.
+#![allow(clippy::inconsistent_digit_grouping)]
 
 mod account;
 mod common;
@@ -654,7 +659,7 @@ fn cross_session_recovery_phase_live() {
         let inst_id = hot_loop.context_mut().register_instrument(756733);
         hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
-        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("Session A: send order failed");
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("Session A: send order failed");
 
         let join = run_hot_loop(hot_loop);
 
@@ -770,7 +775,7 @@ fn routing_table_probe() {
 
     // Count every user message by its own subtype, so a reply can be told from
     // silence and from traffic that was going to arrive anyway.
-    let mut tally = |ccp: &mut Connection, secs: u64| -> std::collections::BTreeMap<String, usize> {
+    let tally = |ccp: &mut Connection, secs: u64| -> std::collections::BTreeMap<String, usize> {
         let mut seen: std::collections::BTreeMap<String, usize> = Default::default();
         let deadline = Instant::now() + Duration::from_secs(secs);
         while Instant::now() < deadline {
@@ -921,7 +926,7 @@ fn cancel_by_perm_id_phase_live() {
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
 
     let join = run_hot_loop(hot_loop);
 
@@ -1172,7 +1177,7 @@ fn snap_to_tick_phase_live() {
     std::thread::sleep(Duration::from_secs(5));
 
     // Off-grid on a $0.01 grid: must go out as $1.00.
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_123_400 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_123_400 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let (mut acked, mut rejected) = (false, false);
@@ -1204,9 +1209,8 @@ fn snap_to_tick_phase_live() {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut cancelled = false;
     while Instant::now() < deadline && !cancelled {
-        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if u.order_id == order_id && u.status == OrderStatus::Cancelled { cancelled = true; }
-        }
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && u.order_id == order_id && u.status == OrderStatus::Cancelled { cancelled = true; }
     }
     let _ = control_tx.send(ControlCommand::Shutdown);
     let _ = join.join();

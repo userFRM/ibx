@@ -467,7 +467,7 @@ pub(super) fn phase_historical_news(mut conns: Conns, gw: &Gateway, config: &Gat
     // Step 1: Create HotLoop with ALL real connections (farm + CCP + HMDS)
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(), Some(event_tx), account_id.clone(),
         conns.farm, conns.ccp, Some(hmds), None,
@@ -814,13 +814,12 @@ pub(super) fn phase_news_article(mut conns: Conns, gw: &Gateway, config: &Gatewa
     while Instant::now() < deadline && article_id.is_none() {
         let data = shared.reference.drain_historical_news();
         for (req_id, headlines, _done) in data {
-            if req_id == 6001 {
-                if let Some(h) = headlines.first() {
+            if req_id == 6001
+                && let Some(h) = headlines.first() {
                     article_id = Some(h.article_id.clone());
                     provider_code = Some(h.provider_code.clone());
                     println!("  Headline: {} ({})", h.headline, h.article_id);
                 }
-            }
         }
         if article_id.is_some() { break; }
         std::thread::sleep(Duration::from_millis(100));
@@ -974,7 +973,7 @@ pub(super) fn phase_parallel_historical(mut conns: Conns, gw: &Gateway, config: 
             match *req_id {
                 8001 => { if resp.is_complete { received[0] = true; println!("  req 8001 (1d/5min): {} bars", resp.bars.len()); } }
                 8002 => { if resp.is_complete { received[1] = true; println!("  req 8002 (5d/1day): {} bars", resp.bars.len()); } }
-                8003 => { if resp.is_complete { received[2] = true; println!("  req 8003 (1W/1h): {} bars", resp.bars.len()); } }
+                8003 if resp.is_complete => { received[2] = true; println!("  req 8003 (1W/1h): {} bars", resp.bars.len()); }
                 _ => {}
             }
         }
@@ -1456,8 +1455,8 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config
             }
         }
 
-        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            if update.order_id == oid {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && update.order_id == oid {
                 match update.status {
                     OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                         order_acked = true;
@@ -1473,7 +1472,6 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config
                     _ => {}
                 }
             }
-        }
 
         if order_cancelled && hist_responses.len() >= 3 { break; }
     }

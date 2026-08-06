@@ -298,11 +298,10 @@ fn load_dotenv(path: &str) {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            if let Some((key, value)) = line.split_once('=') {
-                if env::var(key.trim()).is_err() {
+            if let Some((key, value)) = line.split_once('=')
+                && env::var(key.trim()).is_err() {
                     unsafe { env::set_var(key.trim(), value.trim()) };
                 }
-            }
         }
     }
 }

@@ -74,14 +74,13 @@ fn read_code_from_stdin(challenge: IbKeyChallenge) -> io::Result<String> {
     if code.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no code entered"));
     }
-    if let Some(n) = want {
-        if code.len() != n {
+    if let Some(n) = want
+        && code.len() != n {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("expected {} characters, got {}", n, code.len()),
             ));
         }
-    }
     Ok(code)
 }
 

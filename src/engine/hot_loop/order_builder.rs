@@ -2880,7 +2880,7 @@ mod modify_wire_tests {
 
         // The bucket is pinned from above as well: a type that is not
         // trigger-only must keep its limit leg.
-        for ord_type in [b'U', b'2', b'1'] {
+        for ord_type in *b"U21" {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
             context.insert_order(crate::types::Order::new(

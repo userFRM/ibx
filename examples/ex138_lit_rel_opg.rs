@@ -136,35 +136,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 1) LIT — Buy 1 AAPL, lmt=$300, trigger=$280
-    let mut lit = Order::default();
-    lit.action = "BUY".into();
-    lit.order_type = "LIT".into();
-    lit.total_quantity = 1.0;
-    lit.lmt_price = 300.0;
-    lit.aux_price = 280.0;
-    lit.tif = "DAY".into();
+    let lit = Order {
+        action: "BUY".into(), order_type: "LIT".into(), total_quantity: 1.0,
+        lmt_price: 300.0, aux_price: 280.0, tif: "DAY".into(), ..Order::default()
+    };
     let p1 = run_one(&client, &state, &mut wrapper, "LIT", next_id(), lit, false);
 
     std::thread::sleep(Duration::from_millis(500));
 
     // 2) Relative — Buy 1 AAPL, peg offset $0.05
-    let mut rel = Order::default();
-    rel.action = "BUY".into();
-    rel.order_type = "REL".into();
-    rel.total_quantity = 1.0;
-    rel.aux_price = 0.05;
-    rel.tif = "DAY".into();
+    let rel = Order {
+        action: "BUY".into(), order_type: "REL".into(), total_quantity: 1.0,
+        aux_price: 0.05, tif: "DAY".into(), ..Order::default()
+    };
     let p2 = run_one(&client, &state, &mut wrapper, "Relative", next_id(), rel, false);
 
     std::thread::sleep(Duration::from_millis(500));
 
     // 3) LMT-OPG — Buy 1 AAPL @ $1.00, TIF=OPG
-    let mut opg = Order::default();
-    opg.action = "BUY".into();
-    opg.order_type = "LMT".into();
-    opg.total_quantity = 1.0;
-    opg.lmt_price = 1.0;
-    opg.tif = "OPG".into();
+    let opg = Order {
+        action: "BUY".into(), order_type: "LMT".into(), total_quantity: 1.0,
+        lmt_price: 1.0, tif: "OPG".into(), ..Order::default()
+    };
     let p3 = run_one(&client, &state, &mut wrapper, "LMT-OPG", next_id(), opg, true);
 
     println!("\n== Summary ==");
