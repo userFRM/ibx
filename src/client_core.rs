@@ -1965,24 +1965,44 @@ impl ClientCore {
         // restates — so the question is not which type this is but whether the
         // caller said enough to identify one contract.
         let ty = sec_type.to_ascii_uppercase();
-        if matches!(ty.as_str(), "" | "STK" | "CASH") {
+        // What identifies one contract differs by kind, and only two kinds need
+        // more than the caller has already given.
+        //
+        // An option and a warrant are one of a chain, so they need the expiry,
+        // strike or right that says which one. A future is one of a series and
+        // needs its maturity. Everything else is named completely by its symbol
+        // and the contract id and local symbol that travel with it, which is
+        // how the venue itself names them on an order.
+        if matches!(ty.as_str(), "OPT" | "FOP" | "WAR" | "IOPT") {
+            if identity.is_empty() {
+                return Err(format!(
+                    "a {ty} contract needs its expiry, strike or right: the symbol alone \
+                     names a whole chain, and an order stating only the symbol would be \
+                     filled on whichever contract the gateway picked"
+                ));
+            }
             return Ok(());
         }
-        if matches!(ty.as_str(), "OPT" | "FUT" | "FOP" | "IND" | "CFD") {
-            if !identity.is_empty() {
-                return Ok(());
+        if matches!(ty.as_str(), "FUT" | "FWD") {
+            if identity.is_empty() {
+                return Err(format!(
+                    "a {ty} contract needs its maturity: the symbol alone names a series, \
+                     and an order stating only the symbol would be filled on whichever \
+                     contract the gateway picked"
+                ));
             }
+            return Ok(());
+        }
+        // A combination is the one kind an order cannot state on its own, because
+        // its legs have no place on this message.
+        if matches!(ty.as_str(), "BAG" | "COMBO") {
             return Err(format!(
-                "a {ty} contract needs its expiry, strike or right: the symbol alone \
-                 names a whole chain, and an order stating only the symbol would be \
-                 filled on whichever contract the gateway picked"
+                "a {ty} contract cannot be ordered by its symbol: a combination's legs \
+                 have no wire encoding here, so the order would go out as a single-leg \
+                 order on the underlying symbol"
             ));
         }
-        Err(format!(
-            "Unsupported contract sec_type '{sec_type}': a combo's legs have no wire \
-             encoding, so the order would go out as a single-leg order on the \
-             underlying symbol"
-        ))
+        Ok(())
     }
 
     /// Build an `OrderRequest` from an API `Order`, handling all order types.
@@ -2946,9 +2966,8 @@ mod contract_gate_tests {
         assert!(ClientCore::validate_order_contract("STK", "").is_ok());
         assert!(ClientCore::validate_order_contract("", "").is_ok());
 
-        // Now that an order restates expiry, strike, right and multiplier, these
-        // name their contract and are admitted.
-        for st in ["OPT", "FUT", "FOP", "IND", "CFD"] {
+        // One of a chain or one of a series has to say which one.
+        for st in ["OPT", "FUT", "FOP", "WAR"] {
             assert!(
                 ClientCore::validate_order_contract(st, "20260619|230|C|100").is_ok(),
                 "{st} with an identity names one contract",
@@ -2956,6 +2975,16 @@ mod contract_gate_tests {
             let err = ClientCore::validate_order_contract(st, "")
                 .expect_err("and without one it names a whole chain");
             assert!(err.contains(st), "the refusal names the type: {err}");
+        }
+        // Everything else is named completely by its symbol and the contract id
+        // and local symbol that travel with it. Requiring an expiry or a strike
+        // of a kind that has neither refused it forever: an index and a crypto
+        // pair could not be ordered at all.
+        for st in ["IND", "CFD", "CRYPTO", "BOND", "CMDTY", "FUND"] {
+            assert!(
+                ClientCore::validate_order_contract(st, "").is_ok(),
+                "{st} is named without an expiry or a strike",
+            );
         }
         // A combo does not: its legs have no encoding, so one would go out as a
         // single-leg order on the underlying.
