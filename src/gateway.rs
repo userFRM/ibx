@@ -2205,18 +2205,14 @@ impl Gateway {
     }
 
     /// Create the control channel and build a HotLoop with farm connections.
-    pub fn into_hot_loop_with_farms(
-        self,
-        shared: Arc<SharedState>,
-        event_tx: Option<SyncSender<Event>>,
-        farm_conn: Connection,
-        ccp_conn: Connection,
-        hmds_conn: Option<Connection>,
-        core_id: Option<usize>,
-        caller: CallerAuth,
-    ) -> (HotLoop, SyncSender<ControlCommand>) {
-        let (tx, rx) = sync_channel(64);
-        let reconnect_auth = ReconnectAuth {
+    /// The credentials and session a reconnect needs, from this gateway plus
+    /// what the caller supplied.
+    ///
+    /// Shared with the test harness so a compatibility run recovers a dropped
+    /// transport the same way a real client does, instead of failing the phase
+    /// that happened to be running.
+    pub fn reconnect_auth(&self, caller: CallerAuth) -> ReconnectAuth {
+        ReconnectAuth {
             host: caller.host,
             username: caller.username,
             password: caller.password,
@@ -2233,7 +2229,21 @@ impl Gateway {
             hmds_farm: self.hmds_farm.clone(),
             trading_host: self.trading_host.clone(),
             trading_farm: self.trading_farm.clone(),
-        };
+        }
+    }
+
+    pub fn into_hot_loop_with_farms(
+        self,
+        shared: Arc<SharedState>,
+        event_tx: Option<SyncSender<Event>>,
+        farm_conn: Connection,
+        ccp_conn: Connection,
+        hmds_conn: Option<Connection>,
+        core_id: Option<usize>,
+        caller: CallerAuth,
+    ) -> (HotLoop, SyncSender<ControlCommand>) {
+        let (tx, rx) = sync_channel(64);
+        let reconnect_auth = self.reconnect_auth(caller);
         if let Some(tx) = event_tx.as_ref() {
             let _ = tx.send(Event::GatewayLogon {
                 ccp_session_id: self.server_session_id.clone(),

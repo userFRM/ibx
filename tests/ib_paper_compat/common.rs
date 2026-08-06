@@ -62,10 +62,36 @@ pub(super) struct Conns {
     pub(super) account_id: String,
 }
 
+/// Credentials every phase's engine recovers with.
+///
+/// Set once, after the gateway is up. Without it a phase builds an engine that
+/// cannot rebuild a dropped transport, so a drop anywhere in a twenty-minute
+/// run fails whichever phase was unlucky — which is how three runs died on the
+/// farm going away rather than on anything the client did. With it the engine
+/// recovers exactly as it does in production, and the suite tests that too.
+pub(super) static RECOVERY_AUTH: std::sync::OnceLock<gateway::ReconnectAuth> =
+    std::sync::OnceLock::new();
+
+/// Remember what a reconnect will need. Call once, after `Gateway::connect`.
+pub(super) fn remember_recovery_auth(gw: &gateway::Gateway, config: &GatewayConfig) {
+    let _ = RECOVERY_AUTH.set(gw.reconnect_auth(gateway::CallerAuth {
+        host: config.host.clone(),
+        username: config.username.clone(),
+        password: zeroize::Zeroizing::new(config.password.to_string()),
+        paper: config.paper,
+        code_provider: config.code_provider.clone(),
+        ib_key_timeout_secs: config.ib_key_timeout_secs,
+        ib_key_token_sub_type: config.ib_key_token_sub_type.clone(),
+    }));
+}
+
 /// Run a hot loop in a background thread, returning the HotLoop for connection reclamation.
 pub(super) fn run_hot_loop(hot_loop: HotLoop) -> std::thread::JoinHandle<HotLoop> {
     std::thread::spawn(move || {
         let mut hl = hot_loop;
+        if let Some(auth) = RECOVERY_AUTH.get() {
+            hl.set_reconnect_auth(auth.clone());
+        }
         hl.run();
         hl
     })
