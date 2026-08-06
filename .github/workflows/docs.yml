@@ -34,14 +34,37 @@ jobs:
       - name: Build book
         run: mdbook build docs/book
 
+      # Building the book is the part that can break and is worth knowing
+      # about. Publishing it needs Pages turned on for the repository, and
+      # where it is not, every push failed on that rather than on anything in
+      # the book. Ask first, and publish only where there is somewhere to
+      # publish to.
+      - name: Is there a Pages site to publish to
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/pages" >/dev/null 2>&1; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Pages is not enabled for ${{ github.repository }}; the book built and is not being published." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - uses: actions/configure-pages@v5
+        if: steps.pages.outputs.enabled == 'true'
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.pages.outputs.enabled == 'true'
         with:
           path: docs/book/book
 
+    outputs:
+      pages: ${{ steps.pages.outputs.enabled }}
+
   deploy:
     needs: build
+    if: needs.build.outputs.pages == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
