@@ -324,6 +324,55 @@ pub fn build_secdef_request_by_symbol(
 }
 
 /// Parse a SecurityDefinition response into a ContractDefinition.
+/// Every contract a security-definition reply describes.
+///
+/// One reply can describe several. Asking for a symbol without saying which
+/// currency returns each listing that answers to it — the dollar one and the
+/// Australian dollar one arrive together — and reading the message as a single
+/// contract keeps whichever came last, silently. That is the wrong contract to
+/// trade, and it looks exactly like the right one.
+///
+/// Each contract begins at its symbol. What precedes the first symbol is the
+/// message header, and every record needs it, so it rides in front of each.
+///
+/// Not yet used on the live path: a reply also carries identifier fields that
+/// reuse the symbol tag — `55=BBG` and `55=US` sit in the security-id block —
+/// so the boundary needs to exclude those before this can replace the
+/// single-contract read. Until then `qualify_contract` refuses a description
+/// that could match more than one listing rather than resolve it silently.
+pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
+    use crate::protocol::fix::SOH;
+    const SYMBOL_FIELD: &[u8] = b"\x0155=";
+
+    let mut starts = Vec::new();
+    let mut at = 0;
+    while let Some(found) = data[at..]
+        .windows(SYMBOL_FIELD.len())
+        .position(|w| w == SYMBOL_FIELD)
+    {
+        starts.push(at + found);
+        at += found + SYMBOL_FIELD.len();
+    }
+    // Nothing repeats, so the message is its own single record.
+    if starts.len() < 2 {
+        return parse_secdef_response(data).into_iter().collect();
+    }
+
+    let header = &data[..starts[0]];
+    let mut out = Vec::with_capacity(starts.len());
+    for (i, &start) in starts.iter().enumerate() {
+        let end = starts.get(i + 1).copied().unwrap_or(data.len());
+        let mut record = Vec::with_capacity(header.len() + (end - start) + 1);
+        record.extend_from_slice(header);
+        record.extend_from_slice(&data[start..end]);
+        record.push(SOH);
+        if let Some(def) = parse_secdef_response(&record) {
+            out.push(def);
+        }
+    }
+    out
+}
+
 pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     let tags = fix::fix_parse(data);
 
@@ -1850,5 +1899,46 @@ mod tests {
             format_sessions_string(&sessions),
             "20260101:0930-20260101:1600;20260102:CLOSED",
         );
+    }
+
+    /// A reply naming two listings of one symbol is two contracts, not the
+    /// last one. Read as a single contract it resolves to whichever came last,
+    /// which is how asking for SPY yields the Australian dollar listing.
+    #[test]
+    fn a_reply_naming_two_listings_is_two_contracts() {
+        let msg = crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+            (TAG_SECURITY_REQ_ID, "7"),
+            (TAG_SECURITY_RESPONSE_TYPE, "4"),
+            (TAG_SYMBOL, "SPY"),
+            (TAG_SECURITY_TYPE, "CS"),
+            (207, "BEST"),
+            (TAG_IB_CON_ID, "756733"),
+            (TAG_CURRENCY, "USD"),
+            (TAG_SYMBOL, "SPY"),
+            (TAG_SECURITY_TYPE, "CS"),
+            (207, "ASX"),
+            (TAG_IB_CON_ID, "237937002"),
+            (TAG_CURRENCY, "AUD"),
+        ], 1);
+
+        let defs = parse_secdef_responses(&msg);
+        assert_eq!(defs.len(), 2, "both listings: {defs:?}");
+        assert_eq!(defs[0].con_id, 756733);
+        assert_eq!(defs[0].currency, "USD");
+        assert_eq!(defs[1].con_id, 237937002);
+        assert_eq!(defs[1].currency, "AUD", "and neither borrowed the other's fields");
+
+        // One contract still reads as one.
+        let single = crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+            (TAG_SECURITY_REQ_ID, "8"),
+            (TAG_SYMBOL, "AAPL"),
+            (TAG_IB_CON_ID, "265598"),
+            (TAG_CURRENCY, "USD"),
+        ], 1);
+        let defs = parse_secdef_responses(&single);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].con_id, 265598);
     }
 }
