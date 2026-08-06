@@ -996,6 +996,15 @@ fn send_order_ex(
         }
     }
 
+    // Where the order clears, which is not the account it trades in. This
+    // already read both of these back off the wire and sent neither.
+    if !attrs.clearing_account.is_empty() {
+        fields.push((440, attrs.clearing_account.clone()));
+    }
+    if !attrs.clearing_intent.is_empty() {
+        fields.push((6419, attrs.clearing_intent.clone()));
+    }
+
     // Lifecycle: whether the venue holds this order rather than working it,
     // whether it may work overnight, when it cancels itself, and what it takes
     // with it when it goes.

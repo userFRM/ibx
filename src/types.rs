@@ -376,6 +376,10 @@ pub struct OrderAttrs {
     pub block_order: bool,
     /// The date the venue cancels this order by itself (tag 6596).
     pub auto_cancel_date: String,
+    /// Where this order clears (tag 440) and how (tag 6419). Distinct from the
+    /// account it trades in, which the order already names.
+    pub clearing_account: String,
+    pub clearing_intent: String,
     /// The legs, when this order is for a combination.
     pub combo_legs: Vec<ComboLegSpec>,
     /// Where the contract is listed (tag 207), which is not where the order
@@ -1100,6 +1104,14 @@ pub struct SecDefFilters {
 }
 
 /// Commands sent from the control plane to the hot loop via SPSC channel.
+///
+/// The submitting command is much larger than the rest, because it carries an
+/// order's whole attribute block — which grew as the fields the venue reads
+/// were filled in. Boxing it would even the variants out at the cost of an
+/// allocation per order placed; the channel holds sixty-four of these, so the
+/// size it saves is measured in tens of kilobytes and the cost is on the path
+/// an order takes.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum ControlCommand {
     /// Subscribe to market data for a contract.
