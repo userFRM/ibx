@@ -782,7 +782,7 @@ impl Context {
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::SubmitEx {
             order_id: id, instrument, side, qty,
-            kind: OrderKind::WhatIf { price },
+            kind: OrderKind::WhatIf { price, ord_type: b'2' },
             tif, attrs,
         });
         id
@@ -1729,7 +1729,7 @@ mod tests {
         assert_eq!(orders.len(), 1);
         match &orders[0] {
             OrderRequest::SubmitEx {
-                order_id, instrument, side, qty, kind: OrderKind::WhatIf { price }, ..
+                order_id, instrument, side, qty, kind: OrderKind::WhatIf { price, .. }, ..
             } => {
                 assert_eq!(*order_id, id);
                 assert_eq!(*instrument, 0);
