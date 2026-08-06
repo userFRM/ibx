@@ -589,6 +589,18 @@ fn is_trigger_only(ord_type: u8) -> bool {
 fn push_contract_identity(
     fields: &mut Vec<(u32, String)>, context: &Context, instrument: crate::types::InstrumentId,
 ) {
+    // Name the contract by its id where one is known — before anything else,
+    // and for every kind of contract including a stock, which has no other
+    // identity to state. The terminal writes this on every order it can, and it
+    // is the only field that names a contract exactly: the rest describe one
+    // and leave the venue to match, which is how a description that matches
+    // nothing becomes "Unknown contract" and one that matches several becomes
+    // "Ambiguous".
+    if let Some(con_id) = context.market.con_id(instrument)
+        && con_id != 0
+    {
+        fields.push((6008, con_id.to_string()));
+    }
     let Some(id) = context.market.order_identity(instrument) else {
         return;
     };
@@ -696,7 +708,12 @@ fn send_order_ex(
     // also carry all_or_none (18=G); validate_order rejects that
     // combination up front, and the emission below skips 18=G as a second
     // line of defense.
-    let mut has_base_exec_inst = false;
+    // ExecInst is one field with the instructions concatenated, not one field
+    // per instruction. The terminal builds it as the order type's own character
+    // followed by "G" for all-or-none, and an order that had a character of its
+    // own therefore lost its all-or-none entirely — silently, on every
+    // trailing, relative, pegged and algo order.
+    let mut exec_inst = String::new();
     match kind {
         K::Market => fields.push((40, "1".to_string())),
         K::Limit { price } => {
@@ -726,8 +743,7 @@ fn send_order_ex(
             fields.push((40, "P".to_string()));
             fields.push((99, t.clone()));
             fields.push((211, t));
-            fields.push((18, "a".to_string()));
-            has_base_exec_inst = true;
+            exec_inst.push('a');
         }
         K::TrailingStopLimit { lmt_offset, trail_amt, .. } => {
             // Per ib-agent#136 capture: TRAIL LIMIT uses OrdType=TSL, no
@@ -751,9 +767,8 @@ fn send_order_ex(
             fields.push((40, "P".to_string()));
             fields.push((99, pct_decimal.clone()));
             fields.push((211, pct_decimal));
-            fields.push((18, "a".to_string()));
+            exec_inst.push('a');
             fields.push((6268, TRAIL_UNIT_PERCENT.to_string()));
-            has_base_exec_inst = true;
         }
         K::Moc => fields.push((40, "5".to_string())),
         K::Loc { price } => {
@@ -811,19 +826,18 @@ fn send_order_ex(
         }
         K::PegMkt { .. } => {
             fields.push((40, "E".to_string()));
-            fields.push((18, "P".to_string()));
+            exec_inst.push('P');
         }
         K::PegMid { .. } => {
             fields.push((40, "E".to_string()));
-            fields.push((18, "M".to_string()));
+            exec_inst.push('M');
         }
         K::Rel { offset } => {
             // Per ib-agent#138 capture: Relative shares OrdType=P and is
             // disambiguated by 18=R; peg offset on 211, no tag 44.
             fields.push((40, "P".to_string()));
             fields.push((211, format_price(offset).to_string()));
-            fields.push((18, "R".to_string()));
-            has_base_exec_inst = true;
+            exec_inst.push('R');
         }
         K::Adaptive { price, .. } => {
             // Per ib-agent#136 capture: Adaptive needs 18=e (ExecInst = adaptive
@@ -832,8 +846,7 @@ fn send_order_ex(
             // after the attribute block, where the encoder this replaced put them.
             fields.push((40, "2".to_string()));
             fields.push((44, format_price(price).to_string()));
-            fields.push((18, "e".to_string()));
-            has_base_exec_inst = true;
+            exec_inst.push('e');
         }
         K::Algo { price, .. } => {
             fields.push((40, "2".to_string()));
@@ -843,8 +856,7 @@ fn send_order_ex(
             // not with "Invalid value in field # 18" — which it also answers
             // for a value that is merely the wrong one, so the six algo types
             // were refused identically whether the field was absent or wrong.
-            fields.push((18, "e".to_string()));
-            has_base_exec_inst = true;
+            exec_inst.push('e');
         }
         K::WhatIf { price } => {
             fields.push((40, "2".to_string()));
@@ -921,8 +933,11 @@ fn send_order_ex(
     if attrs.sweep_to_fill {
         fields.push((6102, "1".to_string()));
     }
-    if attrs.all_or_none && !has_base_exec_inst {
-        fields.push((18, "G".to_string()));
+    if attrs.all_or_none {
+        exec_inst.push('G');
+    }
+    if !exec_inst.is_empty() {
+        fields.push((18, exec_inst));
     }
     // Instructions the caller set that used to reach no encoder. Each changes
     // what is traded, so each goes on the wire: a volatility order priced in
@@ -1043,7 +1058,13 @@ fn send_order_ex(
         fields.push((6115, attrs.trigger_method.to_string()));
     }
     if attrs.cash_qty > 0 {
-        fields.push((5920, format_price(attrs.cash_qty).to_string()));
+        // 152, not 5920. The vendor's attribute declares `super(152, …, 5920, …)`
+        // — the same shape as all-or-none's `super(18, …, 3570, …)`, where 18 is
+        // the tag this already sends and 3570 is a selector for its own screens.
+        // 5920 is that selector, and it is written by no encoder anywhere; 152
+        // is CashOrderQty. An order by cash amount was naming a field the venue
+        // does not read.
+        fields.push((152, format_price(attrs.cash_qty).to_string()));
     }
     // Condition tags. The vendor's audit renderer names the whole set:
     // 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 cancel-on-condition,
