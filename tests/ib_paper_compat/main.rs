@@ -765,6 +765,7 @@ fn routing_table_probe() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
     let (gw, farm, mut ccp, hmds) = Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
     drop(gw);
 
     // Count every user message by its own subtype, so a reply can be told from
@@ -838,6 +839,22 @@ fn routing_table_probe() {
     // the line delivers on its own.
     let idle = tally(&mut ccp, 12);
     println!("  asking nothing: {idle:?}");
+
+    // An account subscribe, whose answer nothing pushes unasked. If this is
+    // served, the session serves genuine queries and the chain is specifically
+    // unavailable. If it is silent, only messages the session already pushes
+    // ever come back.
+    for round in 1..=3 {
+        let now = ibx::gateway::chrono_free_timestamp();
+        ccp.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &now),
+            (6040, "61"),
+            (1, account_id.as_str()),
+        ]).expect("send the account subscribe");
+        let seen = tally(&mut ccp, 12);
+        println!("  account ask {round}: {seen:?}");
+    }
 
     for (label, sub, extra) in [
         ("chain", "138", vec![(55, "SPY"), (310, "OPT"), (6346, "756733"), (6320, "1"), (6994, "1")]),
