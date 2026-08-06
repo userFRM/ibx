@@ -790,16 +790,18 @@ fn routing_table_probe() {
                 };
                 for msg in messages {
                     let tags = fix::fix_parse(&msg);
-                    if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("U")
-                        && let Some(sub) = tags.get(&6040)
-                    {
-                        *seen.entry(sub.clone()).or_default() += 1;
-                        // The two that state profit and loss, printed whole, so
-                        // what the fields mean can be read off real values
-                        // rather than assumed.
-                        if sub == "143" || sub == "152" {
-                            println!("  [{sub}] {}", String::from_utf8_lossy(&msg).replace('\u{1}', "|"));
-                        }
+                    // Count every message type, not only the one a reply was
+                    // expected on. A refusal that arrives as something else is
+                    // invisible to a probe that only looks for what it wanted.
+                    let mt = tags.get(&fix::TAG_MSG_TYPE).cloned().unwrap_or_default();
+                    let key = if mt == "U" {
+                        format!("U/{}", tags.get(&6040).cloned().unwrap_or_default())
+                    } else {
+                        mt.clone()
+                    };
+                    *seen.entry(key).or_default() += 1;
+                    if let Some(text) = tags.get(&58).filter(|t| !t.is_empty()) {
+                        println!("  said: {mt} 58={text}");
                     }
                 }
             }
@@ -862,19 +864,24 @@ fn routing_table_probe() {
         println!("  account ask {round}: {seen:?}");
     }
 
-    for (label, sub, extra) in [
-        ("chain", "138", vec![(55, "SPY"), (310, "OPT"), (6346, "756733"), (6320, "1"), (6994, "1")]),
-        ("routing", "78", vec![(6556, "1"), (6066, "0")]),
-    ] {
+    let variants: [(&str, Vec<(u32, &str)>); 6] = [
+        ("spy 6346", vec![(55, "SPY"), (310, "OPT"), (6346, "756733"), (6320, "1"), (6994, "1")]),
+        ("aapl 6346", vec![(55, "AAPL"), (310, "OPT"), (6346, "265598"), (6320, "1"), (6994, "1")]),
+        ("aapl 6457", vec![(55, "AAPL"), (310, "OPT"), (6457, "265598"), (6320, "1"), (6994, "1")]),
+        ("aapl no conid", vec![(55, "AAPL"), (310, "OPT"), (6320, "1"), (6994, "1")]),
+        ("aapl +exch", vec![(55, "AAPL"), (310, "OPT"), (6346, "265598"), (6320, "1"), (6994, "1"), (6995, "SMART")]),
+        ("aapl stk", vec![(55, "AAPL"), (310, "STK"), (6346, "265598"), (6320, "1"), (6994, "1")]),
+    ];
+    for (label, body) in variants {
         let now = ibx::gateway::chrono_free_timestamp();
         let mut fields: Vec<(u32, &str)> = vec![
             (fix::TAG_MSG_TYPE, "U"),
             (fix::TAG_SENDING_TIME, &now),
-            (6040, sub),
+            (6040, "138"),
         ];
-        fields.extend(extra);
-        ccp.send_fix(&fields).expect("send the request");
-        let seen = tally(&mut ccp, 15);
+        fields.extend(body);
+        ccp.send_fix(&fields).expect("send the chain request");
+        let seen = tally(&mut ccp, 12);
         println!("  {label}: {seen:?}");
     }
 
