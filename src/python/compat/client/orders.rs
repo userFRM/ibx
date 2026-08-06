@@ -109,6 +109,45 @@ impl EClient {
         Ok(())
     }
 
+    /// Exercise or lapse a long option position.
+    ///
+    /// `exercise_action` is 1 to exercise and 2 to lapse; anything else is
+    /// refused. `_override` is taken for signature compatibility and is not
+    /// sent: it is a validation bypass the venue's own front end applies before
+    /// it builds the order, so there is no tag for it on the wire.
+    #[pyo3(signature = (req_id, contract, exercise_action, exercise_quantity, account, _override))]
+    fn exercise_options(
+        &self, py: Python<'_>, req_id: i64, contract: &Contract, exercise_action: i32,
+        exercise_quantity: i32, account: &str, _override: i32,
+    ) -> PyResult<()> {
+        // The session is what names the account an exercise would be taken on,
+        // so it is established before the one the caller named is compared
+        // against it. Without a session there is nothing to compare and nothing
+        // to send, and the caller is told that rather than told about its
+        // account.
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let (action, qty) = ClientCore::validate_exercise(
+            exercise_action, exercise_quantity, account, &self.account(),
+        ).map_err(PyRuntimeError::new_err)?;
+        ClientCore::validate_order_contract(
+            &contract.sec_type,
+            &ClientCore::contract_identity(
+                &contract.last_trade_date_or_contract_month, contract.strike,
+                &contract.right, &contract.multiplier,
+            ),
+        ).map_err(PyRuntimeError::new_err)?;
+
+        let oid = if req_id > 0 {
+            req_id as u64
+        } else {
+            self.next_order_id.fetch_add(1, Ordering::Relaxed)
+        };
+        let instrument = self.find_or_register_instrument(py, contract)?;
+        Self::send_control(py, &tx, ControlCommand::Order(
+            ClientCore::build_exercise_request(oid, instrument, action, qty),
+        ))
+    }
+
     /// Cancel an order.
     #[pyo3(signature = (order_id, manual_order_cancel_time=""))]
     fn cancel_order(&self, py: Python<'_>, order_id: i64, manual_order_cancel_time: &str) -> PyResult<()> {

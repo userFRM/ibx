@@ -39,16 +39,6 @@ impl EClient {
         Ok(())
     }
 
-    #[pyo3(signature = (req_id, contract, exercise_action, exercise_quantity, account, _override))]
-    fn exercise_options(
-        &self, req_id: i64, contract: &Contract, exercise_action: i32,
-        exercise_quantity: i32, account: &str, _override: i32,
-    ) -> PyResult<()> {
-        let _ = (req_id, contract, exercise_action, exercise_quantity, account, _override);
-        unserviceable(self, req_id, "exercise_options");
-        Ok(())
-    }
-
     // ── Option Chain Parameters (stub) ──
 
     #[pyo3(signature = (req_id, underlying_symbol, fut_fop_exchange="", underlying_sec_type="STK", underlying_con_id=0))]
