@@ -358,6 +358,12 @@ pub struct OrderAttrs {
     pub hedge_type: u8,
     pub hedge_beta: f64,
     pub hedge_ratio: f64,
+    /// Order capacity and originator, on tag 47 — who this order is for, which
+    /// the venue treats as a regulatory statement rather than a preference.
+    pub rule80a: String,
+    /// Seconds an order rests on the alternative venue before routing on
+    /// (tag 8405). Zero means the caller set none.
+    pub post_to_ats: u32,
     /// The legs, when this order is for a combination.
     pub combo_legs: Vec<ComboLegSpec>,
     /// Trigger method for stop/MIT/LIT orders (IB tag 6115).

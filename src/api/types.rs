@@ -487,6 +487,8 @@ impl Order {
             hedge_ratio: if self.hedge_type.eq_ignore_ascii_case("P") {
                 self.hedge_param.parse().unwrap_or(0.0)
             } else { 0.0 },
+            rule80a: self.rule80a.clone(),
+            post_to_ats: if self.post_to_ats == i32::MAX { 0 } else { self.post_to_ats.max(0) as u32 },
             combo_legs: Vec::new(),
             // Valid trigger-method codes only (ibx#223): the raw `as u8`
             // cast wrapped the gateway's -1 (Unknown) to 255, and
@@ -590,6 +592,8 @@ impl Order {
             || !self.designated_location.is_empty()
             || self.exempt_code != -1
             || !self.hedge_type.is_empty()
+            || !self.rule80a.is_empty()
+            || self.post_to_ats != i32::MAX
     }
 }
 
@@ -1141,6 +1145,8 @@ mod tests {
             ("designated_location", |o| o.designated_location = "IBKR".into()),
             ("exempt_code", |o| o.exempt_code = 3),
             ("hedge_type", |o| o.hedge_type = "B".into()),
+            ("rule80a", |o| o.rule80a = "I".into()),
+            ("post_to_ats", |o| o.post_to_ats = 30),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1155,7 +1161,7 @@ mod tests {
             volatility: _, volatility_type: _, percent_offset: _, not_held: _, order_ref: _, open_close: _,
             scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
             exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
-            combo_legs: _,
+            combo_legs: _, rule80a: _, post_to_ats: _,
         } = Order::default().attrs();
 
         assert!(
