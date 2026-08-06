@@ -92,6 +92,125 @@ pub(crate) struct FarmState {
     pub(crate) farm_msg_buf: Vec<Vec<u8>>,
 }
 
+/// The venue's option model, subscribed to by naming the model where a price
+/// subscription names an exchange, and the model's own tick where a price
+/// subscription names a request type. One subscription per option.
+fn build_greeks_subscribe_tags(req_id: u32, con_id: i64, sec_type: &str, ts: &str) -> Vec<(u32, String)> {
+    let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type);
+    vec![
+        (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
+        (fix::TAG_SENDING_TIME, ts.to_string()),
+        (263, "1".to_string()),
+        (146, "1".to_string()),
+        (262, req_id.to_string()),
+        (6008, (con_id as u32).to_string()),
+        (207, GREEKS_VENUE.to_string()),
+        (167, fix_sec_type.to_string()),
+        (264, GREEKS_REQUEST_TYPE.to_string()),
+        (6088, "Socket".to_string()),
+        (9830, "1".to_string()),
+        (9839, "1".to_string()),
+    ]
+}
+
+/// What the option model goes by where an exchange would be named.
+const GREEKS_VENUE: &str = "IBVOL";
+
+/// The option model's own tick, in place of a request type.
+const GREEKS_REQUEST_TYPE: &str = "732";
+
+/// Drop the framing that follows a binary payload.
+fn strip_trailer(body: &[u8]) -> &[u8] {
+    const TRAILER: &[u8] = b"\x018349=";
+    body.windows(TRAILER.len())
+        .position(|w| w == TRAILER)
+        .map_or(body, |at| &body[..at])
+}
+
+/// The tick that carries the venue's own option model, on the same envelope as
+/// a news tick and told apart by its type.
+const TICK_GREEKS: u16 = 0x0408;
+
+/// What the venue sent of its option model.
+///
+/// A set of flags says which fields the payload carries, then one price that
+/// is always there, then the stated fields in a fixed order that is not the
+/// order of the flags: the time value is flagged first and read last. A field
+/// whose flag is clear occupies no bytes at all, so the payload's length
+/// varies with what was stated.
+fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
+    const VALID: u32 = 1 << 0;
+    const TIME_VALUE: u32 = 1 << 13;
+    const DELTA: u32 = 1 << 16;
+    const GAMMA: u32 = 1 << 17;
+    const VEGA: u32 = 1 << 18;
+    const RHO: u32 = 1 << 19;
+    const THETA: u32 = 1 << 20;
+    const FUGIT: u32 = 1 << 21;
+    const BOUNDARY: u32 = 1 << 22;
+    const FORWARD_COEFF: u32 = 1 << 23;
+    const UNDERLYING_PRICE: u32 = 1 << 25;
+    const IMPLIED_VOL: u32 = 1 << 26;
+    const CALENDAR_DAYS: u32 = 1 << 27;
+    const DAILY_RATE: u32 = 1 << 28;
+    const MODEL_YIELD: u32 = 1 << 29;
+    const BRIDGE_YIELD: u32 = 1 << 30;
+    // A value the venue did not state. The reference client's own mark, so a
+    // caller can tell an unstated field from a real zero — and zero is a real
+    // greek.
+    const UNSTATED: f64 = f64::MAX;
+
+    if payload.len() < 12 {
+        return None;
+    }
+    let flags = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    // The first flag gates the whole payload: without it nothing was computed
+    // and nothing after it is a number.
+    if flags & VALID == 0 {
+        return None;
+    }
+    let mut pos = 4;
+    let mut next = |stated: bool| -> f64 {
+        if !stated {
+            return UNSTATED;
+        }
+        let Some(bytes) = payload.get(pos..pos + 8) else { return UNSTATED };
+        pos += 8;
+        f64::from_be_bytes(bytes.try_into().unwrap_or_default())
+    };
+
+    // The model's own price for the option, stated whatever else is.
+    let opt_price = next(true);
+    let delta = next(flags & DELTA != 0);
+    let gamma = next(flags & GAMMA != 0);
+    let vega = next(flags & VEGA != 0);
+    let _rho = next(flags & RHO != 0);
+    let theta = next(flags & THETA != 0);
+    let _fugit = next(flags & FUGIT != 0);
+    let _boundary = next(flags & BOUNDARY != 0);
+    let _forward_coeff = next(flags & FORWARD_COEFF != 0);
+    let und_price = next(flags & UNDERLYING_PRICE != 0);
+    let implied_vol = next(flags & IMPLIED_VOL != 0);
+    let _calendar_days = next(flags & CALENDAR_DAYS != 0);
+    let _daily_rate = next(flags & DAILY_RATE != 0);
+    let _model_yield = next(flags & MODEL_YIELD != 0);
+    let _bridge_yield = next(flags & BRIDGE_YIELD != 0);
+    let _time_value = next(flags & TIME_VALUE != 0);
+
+    Some(crate::types::OptionComputation {
+        instrument: 0,
+        implied_vol,
+        delta,
+        opt_price,
+        // The venue states no present value of dividends on this tick.
+        pv_dividend: UNSTATED,
+        gamma,
+        vega,
+        theta,
+        und_price,
+    })
+}
+
 impl FarmState {
     /// Whether this instrument still has market-data state that would be
     /// repointed by a slot reuse: a live subscription, or a record kept for the
@@ -494,9 +613,27 @@ impl FarmState {
             self.next_md_req_id += 1;
         }
 
+        // An option is worth asking the venue to model. Anything else has no
+        // volatility to imply, and the venue answers such a request with
+        // nothing at all.
+        let models_a_volatility = matches!(
+            crate::control::contracts::sec_type_to_fix(sec_type),
+            "OPT" | "FOP" | "IOPT" | "WAR",
+        );
+        let greeks_req_id = if models_a_volatility && con_id > 0 {
+            let id = self.next_md_req_id;
+            self.next_md_req_id += 1;
+            Some(id)
+        } else {
+            None
+        };
+
         self.md_req_to_instrument.push((bid_ask_id, instrument));
         if realtime {
             self.md_req_to_instrument.push((last_id, instrument));
+        }
+        if let Some(id) = greeks_req_id {
+            self.md_req_to_instrument.push((id, instrument));
         }
 
         match self.instrument_md_reqs.iter_mut().find(|(id, _)| *id == instrument) {
@@ -536,6 +673,17 @@ impl FarmState {
                 let refs: Vec<(u32, &str)> =
                     tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
                 let _ = conn.send_fixcomp(&refs);
+
+                // The venue's option model is a subscription of its own, not a
+                // field on the price one: it names the model in place of an
+                // exchange and its own tick in place of a request type. A
+                // subscription that does not ask for it is sent prices alone.
+                if let Some(greeks_id) = greeks_req_id {
+                    let tags = build_greeks_subscribe_tags(greeks_id, con_id, sec_type, &ts);
+                    let refs: Vec<(u32, &str)> =
+                        tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
+                    let _ = conn.send_fixcomp(&refs);
+                }
             } else {
                 // No con_id — send descriptive fields
                 let strike_str = if strike > 0.0 { strike.to_string() } else { String::new() };
@@ -1110,6 +1258,22 @@ impl FarmState {
         if body.len() < 12 { return; }
 
         let tick_type = u16::from_be_bytes([body[0], body[1]]);
+        // The option model rides the same envelope. Its flags start a byte
+        // later than a news tick's payload does.
+        if tick_type == TICK_GREEKS {
+            let server_tag = u32::from_be_bytes([body[2], body[3], body[4], body[5]]);
+            let Some(instrument) = context.market.instrument_by_server_tag(server_tag) else {
+                log::debug!("Option model for unknown server tag {server_tag}; dropping");
+                return;
+            };
+            let payload = strip_trailer(&body[7..]);
+            if let Some(mut comp) = decode_greeks(payload) {
+                comp.instrument = instrument;
+                shared.market.push_option_computation(comp);
+                emit(event_tx, Event::OptionComputation(comp));
+            }
+            return;
+        }
         if tick_type != 0x1E90 { return; }
 
         let server_tag = u32::from_be_bytes([body[2], body[3], body[4], body[5]]);
@@ -1784,5 +1948,34 @@ mod price_scaling_tests {
             context.market.quote(id).last, good,
             "an unrepresentable price must be dropped, leaving the last good quote",
         );
+    }
+
+    /// A frame the venue sent for a deep in-the-money call, byte for byte.
+    /// Nothing here is constructed: a wrong alignment does not produce a price
+    /// that decomposes into the other two fields by accident.
+    #[test]
+    fn the_venue_states_an_option_model() {
+        const FRAME: &[u8] = &[0x7e, 0xf7, 0x20, 0x01, 0x40, 0x57, 0x04, 0x41, 0xc8, 0xf2, 0xf3, 0x45, 0x3f, 0xef, 0xfc, 0x3a, 0xab, 0x98, 0x37, 0xb3, 0x3f, 0x12, 0xf3, 0x0c, 0x1b, 0xcf, 0xac, 0xe7, 0x3f, 0x53, 0x13, 0xaf, 0x03, 0xfc, 0x00, 0x00, 0xbf, 0xa0, 0x60, 0x85, 0xf4, 0x8d, 0x38, 0x00, 0x40, 0x0d, 0x23, 0xdb, 0x03, 0xb8, 0xf5, 0x14, 0x40, 0x71, 0x7c, 0xb2, 0x05, 0x82, 0x74, 0xf0, 0x3f, 0xf0, 0x07, 0x27, 0xcf, 0x01, 0x13, 0xef, 0x40, 0x73, 0x7f, 0x52, 0x20, 0x00, 0x00, 0x00, 0x3f, 0x9f, 0xf2, 0x61, 0x35, 0xdd, 0x42, 0xd9, 0x40, 0x2e, 0x2b, 0xd8, 0x8e, 0x99, 0xfa, 0xb0, 0x3f, 0x1e, 0x54, 0x91, 0xb1, 0x1c, 0x9a, 0x6c, 0xbe, 0xf5, 0x34, 0xf6, 0xa2, 0xc8, 0x61, 0xb4, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xb5, 0x32, 0x2a, 0x5c, 0xf4, 0xd4];
+        let c = super::decode_greeks(FRAME).expect("the payload is stated valid");
+        assert!((c.opt_price - 92.066_515_195_137_14).abs() < 1e-9, "{c:?}");
+        assert!((c.delta - 0.999_539_694_925_024_9).abs() < 1e-12, "deep in the money: {c:?}");
+        assert!((c.gamma - 0.000_072_286_237_766_827_99).abs() < 1e-15, "{c:?}");
+        assert!((c.vega - 0.001_164_360_917_698_559_2).abs() < 1e-15, "{c:?}");
+        assert!((c.theta - -0.031_986_414_053_434_94).abs() < 1e-12, "{c:?}");
+        assert!((c.und_price - 311.957_550_048_828_1).abs() < 1e-9, "{c:?}");
+        assert!((c.implied_vol - 0.031_198_042_786_232_037).abs() < 1e-12, "{c:?}");
+        // The strike was 220, so the model price sits just above the
+        // intrinsic. A mis-read of the layout does not land there.
+        let intrinsic = c.und_price - 220.0;
+        assert!(c.opt_price > intrinsic, "worth at least its intrinsic: {c:?}");
+        assert!(c.opt_price - intrinsic < 1.0, "and barely more, this close to expiry: {c:?}");
+        assert_eq!(c.pv_dividend, f64::MAX, "not stated on this tick");
+    }
+
+    /// A payload the venue did not mark valid carries no numbers.
+    #[test]
+    fn an_invalid_option_model_states_nothing() {
+        assert!(super::decode_greeks(&[0u8; 32]).is_none());
+        assert!(super::decode_greeks(&[0xff, 0xff, 0xff, 0xfe]).is_none(), "too short to hold one");
     }
 }

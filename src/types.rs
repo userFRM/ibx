@@ -167,6 +167,24 @@ pub struct OrderUpdate {
     pub timestamp_ns: u64,
 }
 
+/// What the venue makes of an option: its own model price, the greeks and the
+/// volatility that price implies.
+///
+/// A field the venue did not state is `f64::MAX`, the reference client's own
+/// mark for a value that was not sent. Zero is a real greek.
+#[derive(Debug, Clone, Copy)]
+pub struct OptionComputation {
+    pub instrument: InstrumentId,
+    pub implied_vol: f64,
+    pub delta: f64,
+    pub opt_price: f64,
+    pub pv_dividend: f64,
+    pub gamma: f64,
+    pub vega: f64,
+    pub theta: f64,
+    pub und_price: f64,
+}
+
 /// Cancel/modify reject notification (reject message).
 #[derive(Debug, Clone, Copy)]
 pub struct CancelReject {

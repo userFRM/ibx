@@ -53,6 +53,9 @@ pub enum Event {
     WhatIf(WhatIfResponse),
     /// Real-time news headline.
     News(TickNews),
+    /// The venue's own model for an option: its price, the greeks and the
+    /// volatility that price implies.
+    OptionComputation(crate::types::OptionComputation),
     /// Historical bar data.
     HistoricalData { req_id: u32, data: HistoricalResponse },
     /// Head timestamp response.
@@ -285,6 +288,7 @@ pub struct MarketDataState {
     depth_updates: Mutex<Vec<DepthUpdate>>,
     tick_news: Mutex<Vec<TickNews>>,
     news_bulletins: Mutex<Vec<NewsBulletin>>,
+    option_computations: Mutex<Vec<crate::types::OptionComputation>>,
 }
 
 impl MarketDataState {
@@ -298,6 +302,7 @@ impl MarketDataState {
             depth_updates: Mutex::new(Vec::with_capacity(64)),
             tick_news: Mutex::new(Vec::with_capacity(32)),
             news_bulletins: Mutex::new(Vec::with_capacity(16)),
+            option_computations: Mutex::new(Vec::with_capacity(16)),
         }
     }
 
@@ -351,6 +356,10 @@ impl MarketDataState {
         self.news_bulletins.lock().unwrap().drain(..).collect()
     }
 
+    pub fn drain_option_computations(&self) -> Vec<crate::types::OptionComputation> {
+        self.option_computations.lock().unwrap().drain(..).collect()
+    }
+
     // ── Hot-loop-side writers ──
 
     #[doc(hidden)]
@@ -386,6 +395,10 @@ impl MarketDataState {
 
     #[doc(hidden)] pub fn push_news_bulletin(&self, bulletin: NewsBulletin) {
         self.news_bulletins.lock().unwrap().push(bulletin);
+    }
+
+    #[doc(hidden)] pub fn push_option_computation(&self, comp: crate::types::OptionComputation) {
+        self.option_computations.lock().unwrap().push(comp);
     }
 
     #[doc(hidden)] pub fn set_instrument_count(&self, count: u32) {
