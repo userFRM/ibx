@@ -328,7 +328,6 @@ pub fn farm_logon_exchange(
                 msg.clone()
             };
             let fields = fix_parse(&parsed_msg);
-
             // Check for encrypted content (tags 91/96)
             let enc_tag = fields.get(&91).or_else(|| fields.get(&96));
             if let Some(b64_data) = enc_tag {
