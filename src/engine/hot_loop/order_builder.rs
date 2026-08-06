@@ -227,26 +227,7 @@ pub(crate) fn drain_and_send_orders(
                 ])
             }
             OrderRequest::Cancel { order_id } => {
-                // OrigClOrdID must match exactly what the server has on record.
-                // Prefer the string we last observed on the wire (see ibx#179 —
-                // legacy orders recorded without a `.{ver}` suffix won't match
-                // a computed `{id}.0`). Fall back to the versioned scheme when
-                // we have no observation yet (fresh-order place→immediate-cancel
-                // before the ack round-trip).
-                let orig_clord = context.last_clord.get(&order_id).cloned()
-                    .unwrap_or_else(|| {
-                        let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                        format!("{order_id}.{ver}")
-                    });
-                let clord_str = format!("C{order_id}");
-                let now = chrono_free_timestamp();
-                let result = conn.send_fix(&[
-                    (fix::TAG_MSG_TYPE, fix::MSG_ORDER_CANCEL),
-                    (fix::TAG_SENDING_TIME, &now),
-                    (11, &clord_str),   // ClOrdID (cancel)
-                    (41, &orig_clord),  // OrigClOrdID (latest version)
-                    (60, &now),         // TransactTime
-                ]);
+                let result = send_cancel(conn, context, account_id, order_id);
                 if result.is_ok() {
                     synthesize_pending_cancel(context, shared, order_id, event_tx);
                 }
@@ -259,20 +240,7 @@ pub(crate) fn drain_and_send_orders(
                     .collect();
                 let mut last_result = Ok(());
                 for oid in open_ids {
-                    let orig_clord = context.last_clord.get(&oid).cloned()
-                        .unwrap_or_else(|| {
-                            let ver = *context.modify_versions.get(&oid).unwrap_or(&0);
-                            format!("{oid}.{ver}")
-                        });
-                    let clord_str = format!("C{oid}");
-                    let now = chrono_free_timestamp();
-                    last_result = conn.send_fix(&[
-                        (fix::TAG_MSG_TYPE, fix::MSG_ORDER_CANCEL),
-                        (fix::TAG_SENDING_TIME, &now),
-                        (11, &clord_str),
-                        (41, &orig_clord),
-                        (60, &now),
-                    ]);
+                    last_result = send_cancel(conn, context, account_id, oid);
                     if last_result.is_ok() {
                         synthesize_pending_cancel(context, shared, oid, event_tx);
                     }
@@ -513,6 +481,52 @@ pub(crate) fn drain_and_send_orders(
 }
 
 /// Convert Side to FIX tag 54 value.
+/// Everything a cancel states, in one place because the two callers stated it
+/// twice and drifted.
+///
+/// The terminal names five fields and stops: ClOrdID, OrigClOrdID, Side,
+/// Account and Originator. It writes no TransactTime anywhere in the order
+/// path, so neither does this.
+fn send_cancel(
+    conn: &mut Connection,
+    context: &mut Context,
+    account_id: &str,
+    order_id: u64,
+) -> std::io::Result<()> {
+    // OrigClOrdID must match exactly what the server has on record. Prefer the
+    // string last observed on the wire (see ibx#179 — legacy orders recorded
+    // without a `.{ver}` suffix won't match a computed `{id}.0`). Fall back to
+    // the versioned scheme when there is no observation yet (fresh-order
+    // place->immediate-cancel before the ack round-trip).
+    let orig_clord = context.last_clord.get(&order_id).cloned().unwrap_or_else(|| {
+        let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
+        format!("{order_id}.{ver}")
+    });
+    let attempt = context.cancel_attempts.entry(order_id).and_modify(|n| *n += 1).or_insert(0);
+    let clord_str = if *attempt == 0 {
+        format!("C{order_id}")
+    } else {
+        format!("C{order_id}.{attempt}")
+    };
+    let now = chrono_free_timestamp();
+    let side = context.order(order_id).map(|o| fix_side(o.side));
+    let mut fields = vec![
+        (fix::TAG_MSG_TYPE, fix::MSG_ORDER_CANCEL),
+        (fix::TAG_SENDING_TIME, &now),
+        (11, &clord_str),
+        (41, &orig_clord),
+        (1, account_id),
+        (6088, "Socket"),
+    ];
+    // Stated when it is known rather than defaulted: the cancel is keyed by
+    // OrigClOrdID, and a guessed side is a claim about someone's order that
+    // nothing here can stand behind.
+    if let Some(side) = side {
+        fields.push((54, side));
+    }
+    conn.send_fix(&fields)
+}
+
 fn fix_side(side: Side) -> &'static str {
     match side {
         Side::Buy => "1",
@@ -1444,6 +1458,45 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The five fields a cancel always names, and the one it never does. Two
+    /// cancels of the same order must also name themselves differently, or the
+    /// retry is a duplicate the server is free to drop.
+    #[test]
+    fn a_cancel_names_the_side_account_and_originator_but_no_transact_time() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        context.insert_order(crate::types::Order::new(
+            42, instrument, Side::Sell, 100, 150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+        ));
+        let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+        let shared = std::sync::Arc::new(SharedState::new());
+
+        let mut names = Vec::new();
+        for _ in 0..2 {
+            context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 42 });
+            drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+            let mut buf = [0u8; 4096];
+            let n = peer.read(&mut buf).unwrap();
+            let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+            let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+            assert_eq!(tag("35=").as_deref(), Some("F"), "a cancel was sent: {msg}");
+            assert_eq!(tag("41=").as_deref(), Some("42.0"), "the order it cancels: {msg}");
+            assert_eq!(tag("54=").as_deref(), Some("2"), "the side it carries: {msg}");
+            assert_eq!(tag("1=").as_deref(), Some("DU1"), "the account: {msg}");
+            assert_eq!(tag("6088=").as_deref(), Some("Socket"), "the originator: {msg}");
+            assert_eq!(tag("60="), None, "no transact time is written in the order path: {msg}");
+            names.push(tag("11=").expect("a cancel names itself"));
+        }
+        assert_ne!(names[0], names[1], "a retried cancel needs its own name: {names:?}");
+    }
 
     /// ibx#349, ibx#372: the replace restated the tracked order's type,
     /// time-in-force and trigger, so a caller changing any of them had the
