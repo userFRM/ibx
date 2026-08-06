@@ -8,13 +8,16 @@ marks the client as a rolling-release build, which skips the server's
 allow-list check — but that is one flag standing between a stale constant and
 a refused login, and nothing here notices when the gap widens.
 
-So this notices. It reads the constants, reads the versions the vendor
-publishes, and reports the difference. It does not change anything: what a
-client announces at logon decides what the server does with it, and that is
-not a thing to bump unattended.
+So this notices. What it reports on is the vendor publishing something new,
+not the gap between their build and ours: that gap is deliberate, and a check
+that reports it reports every night, which is the same as reporting nothing.
+The build we last looked at is written down, and this speaks up when the
+vendor moves past it. It changes nothing on its own — what a client announces
+at logon decides what the server does with it, and that is not a thing to bump
+unattended.
 
     check_build_drift.py --self-check   # prove the parsing, no network
-    check_build_drift.py                # compare, exit 1 on drift
+    check_build_drift.py                # compare, exit 1 when the vendor moves
 """
 
 import json
@@ -23,6 +26,9 @@ import sys
 import urllib.request
 
 CONFIG = "src/config.rs"
+# The published build this repository has already looked at and made a decision
+# about. Update it in the same change that acts on a new one.
+SEEN = ".github/gateway-build.json"
 
 # The vendor publishes a version file per release channel.
 CHANNELS = {
@@ -77,6 +83,12 @@ def self_check():
     assert unwrap('cb({"buildVersion":"10.49.1d"});')["buildVersion"] == "10.49.1d"
     assert unwrap('{"buildVersion":"10.49.1d"}')["buildVersion"] == "10.49.1d"
     assert announced('pub const IB_BUILD: &str = "10401";\npub const IB_VERSION: &str = "c";') == ("10401", "c")
+    # The deliberate gap between what we announce and what the vendor ships is
+    # not what this reports on, so a build we have already looked at is quiet
+    # however far it is from ours.
+    with open(SEEN) as f:
+        seen = json.load(f)
+    assert TRACKED in seen, f"{SEEN} names no {TRACKED} build"
     print("self-check ok")
 
 
@@ -86,22 +98,26 @@ def main():
 
     with open(CONFIG) as f:
         build, version = announced(f.read())
+    with open(SEEN) as f:
+        seen = json.load(f)
     print(f"this client announces build {build}, letter {version!r}")
 
-    drifted = None
+    moved = None
     for channel, url in CHANNELS.items():
         with urllib.request.urlopen(url, timeout=30) as r:
             published = unwrap(r.read().decode())["buildVersion"]
         their = split_version(published)
         tracked = channel == TRACKED
         note = "tracked" if tracked else "for context"
-        state = "same" if their == (build, version) else "DIFFERENT"
+        known = seen.get(channel)
+        state = "as last seen" if published == known else f"NEW (last seen {known})"
         print(f"  {channel:>6}: {published}  -> build {their[0]}, letter {their[1]!r}  [{state}, {note}]")
-        if tracked and their != (build, version):
-            drifted = published
+        if tracked and published != known:
+            moved = published
 
-    if drifted:
-        print(f"\ndrift: the {TRACKED} channel is {drifted}")
+    if moved:
+        print(f"\nthe {TRACKED} channel is now {moved}, and was {seen.get(TRACKED)} when last looked at.")
+        print(f"This client announces {build}{version}. Decide whether to move, then record {moved} in {SEEN}.")
         return 1
     return 0
 
