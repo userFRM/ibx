@@ -146,10 +146,6 @@ impl EClient {
     /// waiting on a callback that will never come cannot tell that apart from
     /// a slow gateway, so it is told on the channel a venue uses to say it
     /// will not act on a request.
-    fn report_unserviceable(&self, req_id: i64, call: &str) {
-        self.report_reason(req_id, &format!("{call} is not served by this client"));
-    }
-
     fn report_reason(&self, req_id: i64, reason: &str) {
         self.shared.reference.push_historical_error(req_id.max(0) as u32, 321, reason.to_string());
     }
