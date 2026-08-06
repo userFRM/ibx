@@ -529,17 +529,33 @@ impl ClientCore {
 
     // ── Registration helpers ──
 
-    /// Registration reply timeout.
+    /// How long a caller waits for the engine to name an instrument.
+    ///
+    /// `IBX_REGISTRATION_TIMEOUT_MS` overrides it. The library's own tests get
+    /// a millisecond from the attribute below, but a test outside the library
+    /// links it built the ordinary way and would wait the full five seconds on
+    /// every call that has no engine to answer — minutes of it, across a
+    /// suite. Read once.
     #[cfg(not(test))]
-    const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    fn registration_timeout() -> std::time::Duration {
+        static TIMEOUT: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
+        *TIMEOUT.get_or_init(|| {
+            std::env::var("IBX_REGISTRATION_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map_or(std::time::Duration::from_secs(5), std::time::Duration::from_millis)
+        })
+    }
     #[cfg(test)]
-    const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1);
+    fn registration_timeout() -> std::time::Duration {
+        std::time::Duration::from_millis(1)
+    }
 
     /// Wait for the hot loop to process a registration command and return the
     /// assigned ID. The engine replies Err when the instrument table is full
     /// (ibx#233) — previously that condition killed the hot loop.
     fn recv_registration(reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>) -> Result<InstrumentId, String> {
-        reply_rx.recv_timeout(Self::REGISTRATION_TIMEOUT)
+        reply_rx.recv_timeout(Self::registration_timeout())
             .map_err(|_| "Registration timed out".to_string())?
     }
 
