@@ -18,7 +18,7 @@ the offline suites only when a test names it.
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
 | **EClient methods** | 77 | 69 impl, 4 stub | 69 impl, 8 stub |
-| **EWrapper callbacks** | 81 | 70 impl, 1 stub | 74 impl, 7 stub |
+| **EWrapper callbacks** | 81 | 74 impl, 1 stub | 74 impl, 7 stub |
 
 ## EClient Methods
 
@@ -136,10 +136,10 @@ the offline suites only when a test names it.
 |  | `position_end` | Y | Y |
 |  | `pnl` | Y | Y |
 |  | `pnl_single` | Y | Y |
-|  | `position_multi` | - | Y |
-|  | `position_multi_end` | - | Y |
-|  | `account_update_multi` | - | Y |
-|  | `account_update_multi_end` | - | Y |
+|  | `position_multi` | Y | Y |
+|  | `position_multi_end` | Y | Y |
+|  | `account_update_multi` | Y | Y |
+|  | `account_update_multi_end` | Y | Y |
 | Contract | `contract_details` | Y | Y |
 |  | `contract_details_end` | Y | Y |
 |  | `bond_contract_details` | - | STUB |

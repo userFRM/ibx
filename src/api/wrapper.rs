@@ -57,6 +57,23 @@ pub trait Wrapper {
     fn account_summary_end(&mut self, req_id: i64) {}
     fn position(&mut self, account: &str, contract: &Contract, pos: f64, avg_cost: f64) {}
     fn position_end(&mut self) {}
+    /// A holding, answering `req_positions_multi`. Separate from `position`:
+    /// a caller asks per account or model and is answered per request.
+    fn position_multi(
+        &mut self, req_id: i64, account: &str, model_code: &str,
+        contract: &Contract, pos: f64, avg_cost: f64,
+    ) {
+        let _ = (req_id, account, model_code, contract, pos, avg_cost);
+    }
+    fn position_multi_end(&mut self, req_id: i64) { let _ = req_id; }
+    /// An account value, answering `req_account_updates_multi`.
+    fn account_update_multi(
+        &mut self, req_id: i64, account: &str, model_code: &str,
+        key: &str, value: &str, currency: &str,
+    ) {
+        let _ = (req_id, account, model_code, key, value, currency);
+    }
+    fn account_update_multi_end(&mut self, req_id: i64) { let _ = req_id; }
     fn pnl(&mut self, req_id: i64, daily_pnl: f64, unrealized_pnl: f64, realized_pnl: f64) {}
     fn pnl_single(&mut self, req_id: i64, pos: f64, daily_pnl: f64, unrealized_pnl: f64, realized_pnl: f64, value: f64) {}
 
@@ -245,6 +262,24 @@ pub mod tests {
         }
         fn error(&mut self, req_id: i64, error_code: i64, error_string: &str, _: &str) {
             self.events.push(format!("error:{req_id}:{error_code}:{error_string}"));
+        }
+        fn position_multi(
+            &mut self, req_id: i64, account: &str, _model_code: &str,
+            contract: &Contract, pos: f64, _avg_cost: f64,
+        ) {
+            self.events.push(format!("position_multi:{req_id}:{account}:{}:{pos}", contract.symbol));
+        }
+        fn position_multi_end(&mut self, req_id: i64) {
+            self.events.push(format!("position_multi_end:{req_id}"));
+        }
+        fn account_update_multi(
+            &mut self, req_id: i64, _account: &str, _model_code: &str,
+            key: &str, value: &str, _currency: &str,
+        ) {
+            self.events.push(format!("account_update_multi:{req_id}:{key}:{value}"));
+        }
+        fn account_update_multi_end(&mut self, req_id: i64) {
+            self.events.push(format!("account_update_multi_end:{req_id}"));
         }
         fn display_group_list(&mut self, req_id: i64, groups: &str) {
             self.events.push(format!("display_group_list:{req_id}:{groups}"));

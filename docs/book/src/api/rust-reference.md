@@ -346,10 +346,10 @@ pub fn req_managed_accts(&self, wrapper: &mut impl Wrapper)
 
 #### `req_account_updates_multi`
 
-Request account updates for multiple accounts/models.
+Request account updates for multiple accounts/models. Account values for one account or model, answered on `account_update_multi`. The reference client answers this request on its own callbacks, not on the ones `req_account_updates` uses, and a caller written against it implements those and hears nothing otherwise.
 
 ```rust
-pub fn req_account_updates_multi( &self, _req_id: i64, _account: &str, _model_code: &str, _ledger_and_nlv: bool, wrapper: &mut impl Wrapper, )
+pub fn req_account_updates_multi( &self, req_id: i64, account: &str, model_code: &str, _ledger_and_nlv: bool, wrapper: &mut impl Wrapper, )
 ```
 
 | Parameter | Type | Description |
@@ -378,10 +378,10 @@ pub fn cancel_account_updates_multi(&self, _req_id: i64)
 
 #### `req_positions_multi`
 
-Request positions for multiple accounts/models.
+Request positions for multiple accounts/models. Holdings for one account or model, answered on `position_multi`.
 
 ```rust
-pub fn req_positions_multi( &self, _req_id: i64, _account: &str, _model_code: &str, wrapper: &mut impl Wrapper, )
+pub fn req_positions_multi( &self, req_id: i64, account: &str, model_code: &str, wrapper: &mut impl Wrapper, )
 ```
 
 | Parameter | Type | Description |
@@ -1056,7 +1056,7 @@ pub fn cancel_head_time_stamp(&self, req_id: i64) -> Result<(), String>
 
 #### `req_market_rule`
 
-Request market rule by ID. Looks up cached market rules delivered during connection init.
+The price increments a market rule states. A rule is not asked for on its own: the venue sends the rules a contract uses along with that contract's details. So this answers from what those have already brought in, and says so when the rule is not among them rather than returning in silence.
 
 ```rust
 pub fn req_market_rule(&self, market_rule_id: i32, wrapper: &mut impl crate::api::wrapper::Wrapper)
@@ -1802,6 +1802,56 @@ Position entry (account, contract, size, avg cost).
 #### `position_end`
 
 End of positions list.
+
+---
+
+#### `position_multi`
+
+A holding, answering `req_positions_multi`. Separate from `position`: a caller asks per account or model and is answered per request.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `account` | `&str` | Account ID. |
+| `model_code` | `&str` | Model portfolio code (empty for default). |
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `pos` | `f64` | Position size (decimal shares). |
+| `avg_cost` | `f64` | Average cost per share. |
+
+---
+
+#### `position_multi_end`
+
+End of multi-account positions.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+
+---
+
+#### `account_update_multi`
+
+An account value, answering `req_account_updates_multi`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `account` | `&str` | Account ID. |
+| `model_code` | `&str` | Model portfolio code (empty for default). |
+| `key` | `&str` | Account value key (e.g. `"NetLiquidation"`, `"BuyingPower"`). |
+| `value` | `&str` | Account value. |
+| `currency` | `&str` | Currency code (e.g. `"USD"`). |
+
+---
+
+#### `account_update_multi_end`
+
+End of multi-account updates.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
 ---
 
