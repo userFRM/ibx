@@ -29,8 +29,8 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Replayed executions on reconnect | Verified | Live phase | Available |
 | Trade bust and correction handling | Verified | Synthetic bust and correction reports | Available |
 | Order conditions, price, volume, percent, execution | Verified | Live phase | Available |
-| Order conditions, standalone time | Blocked | Venue rejects the condition. The vendor client is refused the same condition, so the behaviour matches | None required |
-| Combination orders | Implemented | No live phase exists | W2 |
+| Order conditions, standalone time | Verified | Live session: a limit carrying a time condition rests and cancels. It was recorded as refused while the venue's reasons were being discarded by this client | Available |
+| Combination orders | Verified | Live session: a two-leg vertical previews at the margin the position carries, and the reverse legs are refused as the opposite position | Available |
 | Market data, top of book | Verified | Live phase | Available |
 | Market data, frozen and delayed | Verified | Live measurement | Available |
 | Market depth | Verified | Live measurement, 144 updates in 20 seconds | Available |
@@ -43,41 +43,50 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Fundamental data | Verified | Live phase | Available |
 | Account values | Verified | Live phase | Available |
 | Account summary | Verified | Live session, rows and completion observed | Available |
-| Positions and round trip tracking | Implemented | Live phase requires a fill it did not obtain | W2 |
+| Positions and round trip tracking | Verified | Live session: a market order fills and the holding read back moves by the quantity filled | Available |
 | P&L, per contract | Verified | Live session, valued from the venue's own overnight marks against live quotes | Available |
 | P&L, account level subscription | Verified | Live session, reporting a daily figure for a held account rather than falling back to zero | Available |
-| Option exercise and lapse | Implemented | No position has been exercised yet | W1 |
-| Option analytics, implied volatility and price | Accepted, not served | | W1 |
+| Option exercise and lapse | Verified | Live session: one call exercised, filled at the strike, and the holding it delivered observed. A lapse before the last trading day is refused by the venue | Available |
+| Option analytics, implied volatility and greeks | Verified | Live session: the venue's own model arrives on an option subscription. A volatility inverted from a caller's price cannot be served; this protocol carries no request for it | Available |
 | Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription | W3 |
 | Financial advisor allocation | Absent | | W3 |
-| Tick by tick data | Absent | Served by a separate transport whose availability the venue grants; not yet observed as granted to this account | W2 |
+| Tick by tick data | Blocked | The feed rides a service of its own. This session is sent no list of the services it may reach and a request for that list is refused | W2 |
 
 ## API surface
 
 | Measure | Count |
 | --- | --- |
-| Rust client calls | 94 |
-| Python client calls | 124 |
-| Callbacks | 127 |
-| Rust calls served | 90 |
-| Rust calls accepted, not served | 4 |
+| Canonical calls | 77 |
+| Served, Rust | 65 |
+| Served, Python | 65 |
+| Accepted and not served, Rust | 8 |
+| Accepted and not served, Python | 12 |
+| Canonical callbacks | 81 |
+
+Counted from the source by `scripts/gen_api_docs.py`, which CI re-runs and
+compares. The per-call matrix, and how each call's status was established, is
+in the coverage reference.
 
 ### Calls not served
 
-| Call | Surface | Status | Workstream |
-| --- | --- | --- | --- |
-| `calculate_implied_volatility` | Python | Accepted, not served | W1 |
-| `calculate_implied_volatility` | Rust | Absent | W1 |
-| `calculate_option_price` | Python | Accepted, not served | W1 |
-| `calculate_option_price` | Rust | Absent | W1 |
-| `cancel_calculate_implied_volatility` | Rust | Absent | W1 |
-| `cancel_calculate_option_price` | Rust, Python | Absent in Rust, accepted and not served in Python | W1 |
-| `req_wsh_meta_data` | Rust, Python | Accepted, not served | W3 |
-| `req_wsh_event_data` | Rust, Python | Accepted, not served | W3 |
-| `cancel_wsh_meta_data` | Rust | Absent | W3 |
-| `cancel_wsh_event_data` | Rust | Absent | W3 |
-| `request_fa` | Rust, Python | Accepted, not served | W3 |
-| `replace_fa` | Rust, Python | Accepted, not served | W3 |
+Every call that exists with the expected signature and reports, through
+the error callback, that it cannot be served. Taken from the generated
+coverage matrix, which CI checks against the source.
+
+| Call | Rust | Python |
+| --- | :---: | :---: |
+| `calculate_implied_volatility` | - | STUB |
+| `cancel_calculate_implied_volatility` | - | STUB |
+| `calculate_option_price` | - | STUB |
+| `cancel_calculate_option_price` | - | STUB |
+| `request_fa` | STUB | STUB |
+| `replace_fa` | STUB | STUB |
+| `query_display_groups` | STUB | STUB |
+| `subscribe_to_group_events` | STUB | STUB |
+| `unsubscribe_from_group_events` | STUB | STUB |
+| `update_display_group` | STUB | STUB |
+| `req_wsh_meta_data` | STUB | STUB |
+| `req_wsh_event_data` | STUB | STUB |
 
 ## Asset classes
 
@@ -148,7 +157,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the surface removed | Open |
 | W3.4 | Event data | Wall Street Horizon calls served, or the surface removed | Open |
 | W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it | Met. The coverage matrix carries, per call, how its status was established: exercised against a live session, exercised by the offline suites, stating why it cannot be served, or exercised by neither. Derived from the suites themselves, so it cannot go quietly out of date |
-| W3.6 | Second factor | Approval path covered by an automated live check | Open |
+| W3.6 | Second factor | Approval path covered by an automated live check, or the reason no such check can run recorded | Blocked. The paper session used for verification is never presented with a second factor, so the approval path cannot be exercised against it. The wire and the gate that waits on it are covered by fifteen tests |
 
 ## Excluded surface
 
