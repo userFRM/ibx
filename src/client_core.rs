@@ -1972,7 +1972,9 @@ impl ClientCore {
     /// placeable. What is refused is a combination that names none: the venue
     /// would be given a security type with nothing to build from.
     pub fn validate_combo_legs(sec_type: &str, leg_count: usize) -> Result<(), String> {
-        if leg_count > 0 || !sec_type.eq_ignore_ascii_case("BAG") {
+        let names_a_combination = sec_type.eq_ignore_ascii_case("BAG")
+            || sec_type.eq_ignore_ascii_case("COMBO");
+        if leg_count > 0 || !names_a_combination {
             return Ok(());
         }
         Err("a combination order has no legs: state them on the contract, \
@@ -2021,15 +2023,9 @@ impl ClientCore {
             }
             return Ok(());
         }
-        // A combination is the one kind an order cannot state on its own, because
-        // its legs have no place on this message.
-        if matches!(ty.as_str(), "BAG" | "COMBO") {
-            return Err(format!(
-                "a {ty} contract cannot be ordered by its symbol: a combination's legs \
-                 have no wire encoding here, so the order would go out as a single-leg \
-                 order on the underlying symbol"
-            ));
-        }
+        // A combination states its legs on the order itself, so it needs no
+        // identity of its own here. An order that names one and states no legs
+        // is refused by `validate_combo_legs` before this.
         Ok(())
     }
 
@@ -3203,12 +3199,12 @@ mod contract_gate_tests {
                 "{st} is named without an expiry or a strike",
             );
         }
-        // A combo does not: its legs have no encoding, so one would go out as a
-        // single-leg order on the underlying.
+        // A combination states its legs on the order, so it needs no identity
+        // here. Stating none at all is refused by the leg check instead.
         for st in ["BAG", "COMBO"] {
-            let err = ClientCore::validate_order_contract(st, "20260619|230|C|100")
-                .expect_err("a combo cannot state its legs");
-            assert!(err.contains(st), "the refusal names the type: {err}");
+            assert!(ClientCore::validate_order_contract(st, "").is_ok(), "{st} names its legs");
+            assert!(ClientCore::validate_combo_legs(st, 0).is_err(), "{st} with no legs");
+            assert!(ClientCore::validate_combo_legs(st, 2).is_ok(), "{st} with legs");
         }
     }
 }

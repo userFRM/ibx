@@ -130,7 +130,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns | Met |
 | W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session, or the venue's refusal recorded | Met. A bond is accepted and returns margin. The venue refuses an index order for every account: orders are not supported for the contract type. It refuses a warrant order placed through an interface of this kind, on the exchange and security type combination |
 | W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission | Met |
-| W2.4 | Combination orders | Live phase covering leg construction and acceptance | Open |
+| W2.4 | Combination orders | Live phase covering leg construction and acceptance | Met. A two-leg vertical is defined by the venue, ordered by the identity it returns and previewed at the margin the position carries |
 | W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause | Met |
 | W2.6 | Account summary and account level P&L | Both observed end to end in a live phase | Met |
 | W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position | Open |
