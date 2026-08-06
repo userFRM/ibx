@@ -4127,6 +4127,30 @@ mod tests {
         );
     }
 
+    /// A correction restates an execution that was already booked. Adding its
+    /// quantity on top counts the same trade twice; the cumulative figure is
+    /// what the order actually holds.
+    #[test]
+    fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        // The order already holds 50. The correction restates the trade at 60.
+        let first = exec_report_frame(&[
+            (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
+            (17, "exec-1"), (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
+        ]);
+        ccp.handle_exec_report(&first, &mut context, &shared, &None, "");
+        let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
+        assert_eq!(booked, 50, "the original execution books what it states");
+
+        let corrected = exec_report_frame(&[
+            (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
+            (17, "exec-2"), (20, "2"), (32, "60"), (31, "412.25"), (14, "60"), (38, "100"),
+        ]);
+        ccp.handle_exec_report(&corrected, &mut context, &shared, &None, "");
+        let after: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
+        assert_eq!(after, 10, "the correction books the difference, not the whole trade again");
+    }
+
     /// A live order was retired by this: `D` is not in the terminal's terminal
     /// set, and reading it as cancelled told the caller an order was gone while
     /// it was still working and still able to fill.
