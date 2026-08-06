@@ -33,7 +33,7 @@
 //! ```
 
 mod ask;
-pub use ask::{AccountValue, OptionChain, PositionRow};
+pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow};
 mod market_data;
 mod orders;
 mod account;
