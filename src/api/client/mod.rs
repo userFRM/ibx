@@ -33,6 +33,7 @@
 //! ```
 
 mod ask;
+pub use ask::OptionChain;
 mod market_data;
 mod orders;
 mod account;

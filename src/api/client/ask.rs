@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::api::types::ContractDetails;
+use crate::api::types::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
 
 use super::{Contract, EClient};
@@ -66,7 +66,147 @@ impl Wrapper for Collector {
     }
 }
 
+/// What a venue lists for options on one underlying.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptionChain {
+    /// The venue listing them.
+    pub exchange: String,
+    /// The contract the options are on.
+    pub underlying_con_id: i64,
+    pub trading_class: String,
+    pub multiplier: String,
+    pub expirations: Vec<String>,
+    pub strikes: Vec<f64>,
+}
+
+/// One question's answer as it accumulates.
+struct Pending<T> {
+    rows: Vec<T>,
+    error: Option<String>,
+    done: bool,
+}
+
+impl<T> Default for Pending<T> {
+    fn default() -> Self {
+        Self { rows: Vec::new(), error: None, done: false }
+    }
+}
+
+/// The connection notices are not answers to anything.
+fn is_connection_notice(code: i64) -> bool {
+    matches!(code, 2104 | 2106 | 2107 | 2119 | 2158)
+}
+
 impl EClient {
+    /// Pump until the collector says the answer is complete, or time runs out.
+    fn wait_for<T, W: Wrapper>(
+        &self, collector: &mut W, state: &Arc<Mutex<Pending<T>>>, what: &str,
+    ) -> Result<Vec<T>, String> {
+        let deadline = Instant::now() + ANSWER_TIMEOUT;
+        while Instant::now() < deadline {
+            self.process_msgs(collector);
+            if state.lock().unwrap().done {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut s = state.lock().unwrap();
+        if let Some(e) = s.error.take() {
+            return Err(e);
+        }
+        if !s.done {
+            return Err(format!("no answer within {}s to {what}", ANSWER_TIMEOUT.as_secs()));
+        }
+        Ok(std::mem::take(&mut s.rows))
+    }
+
+    /// Bars for a contract, as `req_historical_data` asks for them.
+    pub fn historical_data(
+        &self, contract: &Contract, end_date_time: &str, duration: &str,
+        bar_size: &str, what_to_show: &str, use_rth: bool,
+    ) -> Result<Vec<BarData>, String> {
+        struct Bars { req_id: i64, state: Arc<Mutex<Pending<BarData>>> }
+        impl Wrapper for Bars {
+            fn historical_data(&mut self, req_id: i64, bar: &BarData) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().rows.push(bar.clone());
+                }
+            }
+            fn historical_data_end(&mut self, req_id: i64, _: &str, _: &str) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Bars { req_id, state: Arc::clone(&state) };
+        self.req_historical_data(
+            req_id, contract, end_date_time, duration, bar_size, what_to_show, use_rth, 1, false,
+        )?;
+        self.wait_for(&mut collector, &state, &format!("{duration} of bars for {}", contract.symbol))
+    }
+
+    /// Every expiration and strike each venue lists for an underlying.
+    ///
+    /// `underlying` must carry the id of the contract the options are on — the
+    /// stock, not the option — which `qualify_contract` supplies.
+    pub fn option_chain(
+        &self, underlying: &Contract,
+    ) -> Result<Vec<OptionChain>, String> {
+        struct Chain { req_id: i64, state: Arc<Mutex<Pending<OptionChain>>> }
+        impl Wrapper for Chain {
+            fn security_definition_option_parameter(
+                &mut self, req_id: i64, exchange: &str, underlying_con_id: i64,
+                trading_class: &str, multiplier: &str, expirations: &[String], strikes: &[f64],
+            ) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().rows.push(OptionChain {
+                        exchange: exchange.to_string(),
+                        underlying_con_id,
+                        trading_class: trading_class.to_string(),
+                        multiplier: multiplier.to_string(),
+                        expirations: expirations.to_vec(),
+                        strikes: strikes.to_vec(),
+                    });
+                }
+            }
+            fn security_definition_option_parameter_end(&mut self, req_id: i64) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        if underlying.con_id == 0 {
+            return Err(format!(
+                "the chain is asked for by the id of the contract the options are on, and {} \
+                 carries none: qualify it first",
+                underlying.symbol,
+            ));
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Chain { req_id, state: Arc::clone(&state) };
+        self.req_sec_def_opt_params(
+            req_id, &underlying.symbol, "", &underlying.sec_type, underlying.con_id,
+        )?;
+        self.wait_for(&mut collector, &state, &format!("the option chain on {}", underlying.symbol))
+    }
+
     /// Every contract matching the one described.
     ///
     /// The same question `req_contract_details` asks, answered here instead of
