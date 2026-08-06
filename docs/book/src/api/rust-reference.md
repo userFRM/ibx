@@ -32,7 +32,7 @@ pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error
 
 #### `connect_with_events`
 
-Connect to IB and start the engine with an [`Event`] channel attached. Returns the client plus a receiver carrying every [`Event`] the engine produces. This is a second, optional delivery path that runs alongside [`process_msgs()`](EClient::process_msgs) — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks.
+Connect to IB and start the engine with an [`Event`] channel attached. Returns the client plus a receiver carrying every [`Event`] the engine produces. This is a second, optional delivery path that runs alongside [`process_msgs()`](EClient::process_msgs) — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks (ibx#242).
 
 ```rust
 pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>>
@@ -52,13 +52,13 @@ pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result
 Construct from pre-built components (for testing or custom setups).
 
 ```rust
-pub fn from_parts( shared: Arc<SharedState>, control_tx: Sender<ControlCommand>, handle: thread::JoinHandle<()>, account_id: String, ) -> Self
+pub fn from_parts( shared: Arc<SharedState>, control_tx: SyncSender<ControlCommand>, handle: thread::JoinHandle<()>, account_id: String, ) -> Self
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `shared` | `Arc<SharedState>` | Shared state handle. |
-| `control_tx` | `Sender<ControlCommand>` | Control channel sender. |
+| `control_tx` | `SyncSender<ControlCommand>` | Control channel sender. |
 | `handle` | `thread::JoinHandle<(` | Background thread handle. |
 
 **Returns:** `Self`
@@ -114,7 +114,7 @@ pub fn seed_instrument(&self, con_id: i64, instrument: InstrumentId)
 
 #### `is_connected`
 
-False after [`disconnect()`](EClient::disconnect), and after a `process_msgs()` call that observed the engine stopping.
+False after [`disconnect()`](EClient::disconnect), and after a `process_msgs()` call that observed the engine stopping (ibx#242).
 
 ```rust
 pub fn is_connected(&self) -> bool
@@ -171,6 +171,18 @@ pub fn session_token_bytes(&self) -> &[u8]
 ```
 
 **Returns:** `&[u8]`
+
+---
+
+#### `session`
+
+The session this connection established, for a caller that wants to resume from it later. Hand it back through [`EClientConfig::resume`] on a subsequent connect. Keep it wherever the process keeps secrets — it is a credential, and where it lives is the caller's decision, which is why nothing here writes it anywhere by default.
+
+```rust
+pub fn session(&self) -> &crate::auth::resume::ResumableSession
+```
+
+**Returns:** `&crate::auth::resume::ResumableSession`
 
 ---
 
@@ -409,6 +421,46 @@ pub fn account(&self) -> AccountState
 
 ## Orders
 
+#### `order_permissions`
+
+Security type → the order types the venue permits for it, as stated at logon. Empty until the session is up.
+
+```rust
+pub fn order_permissions(&self) -> std::collections::HashMap<String, Vec<String>>
+```
+
+**Returns:** `std::collections::HashMap<String, Vec<String>>`
+
+---
+
+#### `permitted_order_types`
+
+The order types permitted for one security type, or `None` when the type is not permitted at all. A combination is named `COMB`.
+
+```rust
+pub fn permitted_order_types(&self, sec_type: &str) -> Option<Vec<String>>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `sec_type` | `&str` |  |
+
+**Returns:** `Option<Vec<String>>`
+
+---
+
+#### `enabled_features`
+
+Feature tokens the venue enables for this account, as stated at logon.
+
+```rust
+pub fn enabled_features(&self) -> Vec<String>
+```
+
+**Returns:** `Vec<String>`
+
+---
+
 #### `place_order`
 
 Place an order.
@@ -422,6 +474,27 @@ pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> 
 | `order_id` | `i64` | Order identifier. Must be unique per session. |
 | `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
 | `order` | `&Order` | Order parameters (action, quantity, type, price, TIF, etc.). |
+
+**Returns:** `Result<(), String>`
+
+---
+
+#### `exercise_options`
+
+Exercise or lapse a long option position. `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `override_` is taken for signature compatibility and is not sent: it is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.
+
+```rust
+pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_action: i32, exercise_quantity: i32, account: &str, override_: bool, ) -> Result<(), String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `exercise_action` | `i32` | 1=exercise, 2=lapse. |
+| `exercise_quantity` | `i32` | Number of contracts to exercise. |
+| `account` | `&str` | Account ID. |
+| `override_` | `bool` |  |
 
 **Returns:** `Result<(), String>`
 
@@ -446,7 +519,7 @@ pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Re
 
 #### `cancel_order_by_perm_id`
 
-Cancel an order identified by `permId` — stable across sessions. `permId` is the broker-assigned identifier returned in `order_status` callbacks and surfaced in account tools. Useful for cancelling an order placed in a prior session, where the local `order_id` is not retained. The cancel is sent under the local `order_id`, which is resolved from the `permId` of any order the session is tracking — including orders recovered from a previous session on reconnect. Fails if the `permId` names no tracked order.
+Cancel an order identified by `permId` — stable across sessions. `permId` is the broker-assigned identifier returned in `order_status` callbacks and surfaced in account tools. Useful for cancelling an order placed in a prior session, where the local `order_id` is not retained. Per ib-agent#154 the CCP cancel frame is orderId-only, so ibx looks up the local `order_id` from `permId` in the open-order cache (populated by `place_order` callbacks or by the CCP session-recovery push hydrated in `handle_exec_report`). Fails if `perm_id` is not currently tracked.
 
 ```rust
 pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), String>
@@ -572,7 +645,7 @@ pub fn req_executions(&self, req_id: i64, filter: &ExecutionFilter, wrapper: &mu
 
 #### `parse_algo_params`
 
-Parse algo strategy and TagValue params into internal AlgoParams.
+Parse algo strategy and TagValue params into internal AlgoParams. A key the caller never set defaults the way IB's own algos do (0.0, false, or the documented default enum value). A key the caller *did* set — even to an empty string — is refused if it doesn't parse, instead of silently taking that same default: a typo like `riskAversion="Aggresive"` used to submit a Neutral algo with no error, and `maxPctVol=""` used to submit 0.0. See ibx#263.
 
 ```rust
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, String>
@@ -591,7 +664,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 
 #### `req_mkt_data`
 
-Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) have no emission path, and `tick_generic` never fires. To subscribe as frozen or delayed, see `req_market_data_type`.
+Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) have no emission path, and `tick_generic` never fires (ibx#234). Delayed data cannot be requested either — see `req_market_data_type`.
 
 ```rust
 pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, ) -> Result<(), String>
@@ -611,7 +684,7 @@ pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list:
 
 #### `req_mkt_data_ex`
 
-Like [`req_mkt_data`], but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen sub keeps thinly-traded names streaming after-hours when the realtime feed is silent. Issue 3-4 parallel calls per contract with different modes and pick whichever feed has data.
+Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time (ibx#233), so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`.
 
 ```rust
 pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool, mode_9887: i32, ) -> Result<(), String>
@@ -648,10 +721,10 @@ pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), String>
 
 #### `req_tick_by_tick_data`
 
-Subscribe to tick-by-tick data.
+Subscribe to tick-by-tick data. **Not implemented.** Tick-by-tick is carried by a service of its own, which this client does not yet speak: the historical service serves chart, fundamentals, news and scanner requests, and nothing else. A subscription sent there is accepted and assigned a ticker id, and then no tick ever follows — verified against a paper account, where three subscriptions on two contracts were all acknowledged and all silent (ibx#404). Refused here rather than accepted, because a subscription that is taken and never delivers is worse than one that says so.
 
 ```rust
-pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type: &str, _number_of_ticks: i32, _ignore_size: bool, ) -> Result<(), String>
+pub fn req_tick_by_tick_data( &self, _req_id: i64, _contract: &Contract, _tick_type: &str, _number_of_ticks: i32, _ignore_size: bool, ) -> Result<(), String>
 ```
 
 | Parameter | Type | Description |
@@ -755,7 +828,7 @@ pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), String>
 
 #### `req_ping`
 
-Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen). Request an auth-connection round-trip time sample: sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. The result lands asynchronously — poll `last_rtt()` after a moment. No-op while a probe is already in flight or the connection is down.
+Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen). Request an auth-connection round-trip time sample (ibx#158): sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. The result lands asynchronously — poll `last_rtt()` after a moment. No-op while a probe is already in flight or the connection is down.
 
 ```rust
 pub fn req_ping(&self) -> Result<(), String>
@@ -767,7 +840,7 @@ pub fn req_ping(&self) -> Result<(), String>
 
 #### `last_rtt`
 
-Last measured auth-connection round-trip time, if any. A gauge, not a benchmark: the sample is the interval from a probe to the first inbound traffic that followed it, which on an active feed can undercount by racing data already in flight. Also sampled automatically whenever liveness sends its own probe.
+Last measured auth-connection round-trip time, if any (ibx#158). A gauge, not a benchmark: the sample is the interval from a probe to the first inbound traffic that followed it, which on an active feed can undercount by racing data already in flight. Also sampled automatically whenever liveness sends its own probe.
 
 ```rust
 pub fn last_rtt(&self) -> Option<std::time::Duration>
@@ -779,7 +852,7 @@ pub fn last_rtt(&self) -> Option<std::time::Duration>
 
 #### `req_market_data_type`
 
-Set the market data type for subscriptions that follow: 1 live, 2 frozen, 3 delayed, 4 delayed-frozen. The type is carried per subscription, and the `market_data_type` callback reports the type each subscription was made under. A contract holds one subscription at a time, so to compare types on one contract, cancel between them.
+NOT supported end to end (ibx#234): the requested type is stored locally but never sent to the gateway, so subscriptions always deliver realtime data and delayed tick variants never arrive. Requesting a non-realtime type logs a warning, and the `market_data_type` callback reports the DELIVERED type (realtime) rather than echoing the request.
 
 ```rust
 pub fn req_market_data_type(&self, market_data_type: i32)
@@ -823,7 +896,7 @@ pub fn quote(&self, req_id: i64) -> Option<Quote>
 
 #### `quote_by_instrument`
 
-Direct SeqLock read by InstrumentId (for callers who track IDs themselves). Returns None for an out-of-range id.
+Direct SeqLock read by InstrumentId (for callers who track IDs themselves). Returns None for an out-of-range id — this used to panic (ibx#234).
 
 ```rust
 pub fn quote_by_instrument(&self, instrument: InstrumentId) -> Option<Quote>
@@ -940,6 +1013,26 @@ pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Str
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `pattern` | `&str` | Symbol search pattern. |
+
+**Returns:** `Result<(), String>`
+
+---
+
+#### `req_sec_def_opt_params`
+
+Request option chain parameters. `fut_fop_exchange` names the venue for a futures option chain and is empty for an equity or index one.
+
+```rust
+pub fn req_sec_def_opt_params( &self, req_id: i64, underlying_symbol: &str, fut_fop_exchange: &str, underlying_sec_type: &str, underlying_con_id: i64, ) -> Result<(), String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `underlying_symbol` | `&str` | Underlying symbol (e.g. `"AAPL"`). |
+| `fut_fop_exchange` | `&str` | Exchange for futures/FOP options. |
+| `underlying_sec_type` | `&str` | Underlying security type (e.g. `"STK"`). |
+| `underlying_con_id` | `i64` | Underlying contract ID. |
 
 **Returns:** `Result<(), String>`
 
@@ -1264,7 +1357,7 @@ pub fn request_fa(&self, _fa_data_type: i32)
 Replace FA data. Not yet implemented.
 
 ```rust
-pub fn replace_fa(&self, _req_id: i64, _fa_data_type: i32, _cxml: &str)
+pub fn replace_fa(&self, req_id: i64, _fa_data_type: i32, _cxml: &str)
 ```
 
 | Parameter | Type | Description |
@@ -1396,7 +1489,7 @@ pub fn req_user_info(&self, req_id: i64, wrapper: &mut impl Wrapper)
 Request WSH metadata. Not yet implemented.
 
 ```rust
-pub fn req_wsh_meta_data(&self, _req_id: i64)
+pub fn req_wsh_meta_data(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |
@@ -1410,7 +1503,7 @@ pub fn req_wsh_meta_data(&self, _req_id: i64)
 Request WSH event data. Not yet implemented.
 
 ```rust
-pub fn req_wsh_event_data(&self, _req_id: i64)
+pub fn req_wsh_event_data(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |

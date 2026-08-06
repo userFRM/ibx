@@ -12,7 +12,7 @@ Canonical IB API methods vs ibx implementation status.
 
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
-| **EClient methods** | 77 | 64 impl, 8 stub | 64 impl, 13 stub |
+| **EClient methods** | 77 | 65 impl, 8 stub | 65 impl, 12 stub |
 | **EWrapper callbacks** | 81 | 68 impl, 1 stub | 72 impl, 9 stub |
 
 ## EClient Methods
@@ -83,7 +83,7 @@ Canonical IB API methods vs ibx implementation status.
 |  | `cancel_calculate_implied_volatility` | `cancelCalculateImpliedVolatility` | - | STUB |
 |  | `calculate_option_price` | `calculateOptionPrice` | - | STUB |
 |  | `cancel_calculate_option_price` | `cancelCalculateOptionPrice` | - | STUB |
-|  | `exercise_options` | `exerciseOptions` | - | STUB |
+|  | `exercise_options` | `exerciseOptions` | Y | Y |
 |  | `req_sec_def_opt_params` | `reqSecDefOptParams` | Y | Y |
 | Reference | `req_soft_dollar_tiers` | `reqSoftDollarTiers` | Y | Y |
 |  | `req_family_codes` | `reqFamilyCodes` | Y | Y |
