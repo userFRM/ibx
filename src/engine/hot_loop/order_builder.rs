@@ -1091,6 +1091,7 @@ fn send_order_ex(
             fields.push((6245, cond_strs[base + 8].clone()));  // percent
             fields.push((6263, cond_strs[base + 9].clone()));  // volume
             fields.push((6246, cond_strs[base + 10].clone())); // execution
+
             // A time condition is still refused, and these were tried against a
             // live session to see whether the shape was the reason: writing the
             // condition's own fields first and the empty ones after, as the

@@ -45,6 +45,7 @@ fn compat_suite() {
     let start = Instant::now();
     let (mut gw, farm_conn, mut ccp_conn, hmds_conn) = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
+    common::remember_recovery_auth(&gw, &config);
     let connect_time = start.elapsed();
 
     connection::phase_ccp_auth(&gw, hmds_conn.is_some(), connect_time);

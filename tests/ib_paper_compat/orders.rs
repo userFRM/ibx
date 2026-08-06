@@ -975,12 +975,18 @@ pub(super) fn phase_price_condition_order(conns: Conns) -> Conns {
 }
 
 // ─── Phase 58: Time Condition Order ───
+//
+// After, not before. A lone time condition reading "before or exactly" is the
+// one shape the venue refuses, and the terminal refuses to build it too — the
+// check is called hasStandaloneLessEqualTimeCondition and its message is
+// "Standalone time condition <= is not allowed." The encoding was never the
+// problem; the order asked for something nobody accepts.
 
 pub(super) fn phase_time_condition_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 58: Time Condition Order (SPY)",
         OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
-            attrs: OrderAttrs { outside_rth: true, conditions: vec![OrderCondition::Time { time: "20271231-23:59:59".into(), is_more: false }], ..OrderAttrs::default() } },
+            attrs: OrderAttrs { outside_rth: true, conditions: vec![OrderCondition::Time { time: "20271231-23:59:59".into(), is_more: true }], ..OrderAttrs::default() } },
         false)
 }
 
