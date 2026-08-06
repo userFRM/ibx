@@ -137,40 +137,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 1) TRAIL — Sell 1 AAPL @ trail $2.00
-    let mut trail = Order::default();
-    trail.action = "SELL".into();
-    trail.order_type = "TRAIL".into();
-    trail.total_quantity = 1.0;
-    trail.aux_price = 2.0;
-    trail.tif = "DAY".into();
+    let trail = Order {
+        action: "SELL".into(),
+        order_type: "TRAIL".into(),
+        total_quantity: 1.0,
+        aux_price: 2.0,
+        tif: "DAY".into(),
+        ..Order::default()
+    };
     let p1 = run_one(&client, &state, &mut wrapper, "TRAIL", next_id(), trail);
 
     std::thread::sleep(Duration::from_millis(500));
 
     // 2) TRAIL LIMIT — Sell 1 AAPL @ trail $2.00, lmt offset $0.50
-    let mut trail_lmt = Order::default();
-    trail_lmt.action = "SELL".into();
-    trail_lmt.order_type = "TRAIL LIMIT".into();
-    trail_lmt.total_quantity = 1.0;
-    trail_lmt.aux_price = 2.0;
-    trail_lmt.lmt_price_offset = 0.50;
-    trail_lmt.tif = "DAY".into();
+    let trail_lmt = Order {
+        action: "SELL".into(),
+        order_type: "TRAIL LIMIT".into(),
+        total_quantity: 1.0,
+        aux_price: 2.0,
+        lmt_price_offset: 0.50,
+        tif: "DAY".into(),
+        ..Order::default()
+    };
     let p2 = run_one(&client, &state, &mut wrapper, "TRAIL LIMIT", next_id(), trail_lmt);
 
     std::thread::sleep(Duration::from_millis(500));
 
     // 3) Adaptive Limit — Buy 1 AAPL @ $1.00 (won't fill), Adaptive Normal
-    let mut adaptive = Order::default();
-    adaptive.action = "BUY".into();
-    adaptive.order_type = "LMT".into();
-    adaptive.total_quantity = 1.0;
-    adaptive.lmt_price = 1.0;
-    adaptive.tif = "DAY".into();
-    adaptive.algo_strategy = "Adaptive".into();
-    adaptive.algo_params = vec![ibx::api::types::TagValue {
-        tag: "adaptivePriority".into(),
-        value: "Normal".into(),
-    }];
+    let adaptive = Order {
+        action: "BUY".into(),
+        order_type: "LMT".into(),
+        total_quantity: 1.0,
+        lmt_price: 1.0,
+        tif: "DAY".into(),
+        algo_strategy: "Adaptive".into(),
+        algo_params: vec![ibx::api::types::TagValue {
+            tag: "adaptivePriority".into(),
+            value: "Normal".into(),
+        }],
+        ..Order::default()
+    };
     let p3 = run_one(&client, &state, &mut wrapper, "Adaptive Limit", next_id(), adaptive);
 
     println!("\n== Summary ==");

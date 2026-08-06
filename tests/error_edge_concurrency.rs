@@ -87,7 +87,12 @@ fn place_order_unsupported_algo_returns_error() {
 }
 
 #[test]
-fn place_order_zero_con_id_still_sends() {
+fn place_order_zero_con_id_asks_the_engine_to_name_it() {
+    // A contract with no id of its own cannot be cached under one: caching it
+    // under zero would point every id-less contract at the first one's slot.
+    // So the order asks the engine to name the contract, and this test holds
+    // that the request goes out. It cannot hold that the order is placed,
+    // because no engine is running to answer.
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
     let contract = Contract { con_id: 0, symbol: "TEST".into(), ..Default::default() };
@@ -95,11 +100,15 @@ fn place_order_zero_con_id_still_sends() {
         action: "BUY".into(), total_quantity: 100.0,
         order_type: "MKT".into(), ..Default::default()
     };
-    // Should not error — the engine handles zero con_id
     let result = client.place_order(1, &contract, &order);
-    assert!(result.is_ok());
-    // Drain to avoid channel filling
-    while rx.try_recv().is_ok() {}
+    assert!(
+        result.is_err_and(|e| e.contains("Registration timed out")),
+        "with nothing to answer it, the wait is what the caller is told about",
+    );
+    let asked = rx.try_iter().any(|cmd| matches!(
+        cmd, ControlCommand::RegisterInstrument { ref symbol, .. } if symbol == "TEST"
+    ));
+    assert!(asked, "the engine was asked to name the contract");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -154,8 +163,10 @@ fn disconnect_during_active_subscription() {
     assert!(!client.is_connected());
 
     // Push quote after disconnect — process_msgs should still work (no panic)
-    let mut q = Quote::default();
-    q.bid = 150 * PRICE_SCALE;
+    let q = Quote {
+        bid: 150 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q);
 
     let mut w = RecordingWrapper::default();
@@ -422,10 +433,12 @@ fn concurrent_seqlock_quote_read_write() {
 
     let writer = thread::spawn(move || {
         for i in 0..10_000i64 {
-            let mut q = Quote::default();
-            q.bid = i * PRICE_SCALE;
-            q.ask = (i + 1) * PRICE_SCALE;
-            q.last = i * PRICE_SCALE;
+            let q = Quote {
+                bid: i * PRICE_SCALE,
+                ask: (i + 1) * PRICE_SCALE,
+                last: i * PRICE_SCALE,
+                ..Quote::default()
+            };
             writer_shared.market.push_quote(0, &q);
         }
     });
@@ -449,9 +462,11 @@ fn concurrent_seqlock_quote_read_write() {
 fn concurrent_seqlock_multiple_readers() {
     let shared = Arc::new(SharedState::new());
     // Pre-write a known quote
-    let mut q = Quote::default();
-    q.bid = 100 * PRICE_SCALE;
-    q.ask = 101 * PRICE_SCALE;
+    let q = Quote {
+        bid: 100 * PRICE_SCALE,
+        ask: 101 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q);
 
     let handles: Vec<_> = (0..4).map(|_| {
@@ -481,8 +496,10 @@ fn concurrent_quote_by_instrument() {
     let client = Arc::new(EClient::from_parts(shared.clone(), tx, handle, "DU123".into()));
 
     // Write quote
-    let mut q = Quote::default();
-    q.bid = 200 * PRICE_SCALE;
+    let q = Quote {
+        bid: 200 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q);
 
     let handles: Vec<_> = (0..4).map(|_| {
@@ -559,8 +576,10 @@ fn rapid_subscribe_unsubscribe_no_stale_state() {
 
     // After all subscribe/unsubscribe cycles, mapping should be cleared
     let mut w = RecordingWrapper::default();
-    let mut q = Quote::default();
-    q.bid = 999 * PRICE_SCALE;
+    let q = Quote {
+        bid: 999 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q);
     client.process_msgs(&mut w);
     // No ticks should arrive since all subscriptions were cancelled
@@ -624,9 +643,11 @@ fn concurrent_account_read_write() {
 
     let writer = thread::spawn(move || {
         for i in 0..5_000i64 {
-            let mut a = AccountState::default();
-            a.net_liquidation = i * PRICE_SCALE;
-            a.buying_power = i * 2 * PRICE_SCALE;
+            let a = AccountState {
+                net_liquidation: i * PRICE_SCALE,
+                buying_power: i * 2 * PRICE_SCALE,
+                ..AccountState::default()
+            };
             writer_shared.portfolio.set_account(&a);
         }
     });

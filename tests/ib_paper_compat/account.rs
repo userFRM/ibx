@@ -35,8 +35,8 @@ pub(super) fn phase_account_data(conns: Conns) -> Conns {
     let mut net_liq = 0i64;
 
     while Instant::now() < deadline {
-        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(200)) {
-            if !account_checked {
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(200))
+            && !account_checked {
                 let acct = shared.portfolio.account();
                 if acct.net_liquidation != 0 {
                     net_liq = acct.net_liquidation;
@@ -45,7 +45,6 @@ pub(super) fn phase_account_data(conns: Conns) -> Conns {
                     break;
                 }
             }
-        }
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
@@ -75,7 +74,7 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -171,15 +170,14 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
                     instrument, con_id, position, avg_cost as f64 / ibx::types::PRICE_SCALE as f64);
                 got_position_update = true;
             }
-            Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Rejected {
+            Ok(Event::OrderUpdate(update))
+                if update.status == OrderStatus::Rejected => {
                     // Shut down first: the engine records the reason after it
                     // emits the update, so reading it here would race the write.
                     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
                     println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, update.order_id));
                     return conns;
                 }
-            }
             _ => {}
         }
     }
@@ -283,7 +281,7 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -374,7 +372,7 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
     }).unwrap();
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -524,7 +522,7 @@ pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
     }).unwrap();
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -857,7 +855,7 @@ pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
 
     // Submit a far-from-market order to trigger account updates
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -983,17 +981,16 @@ pub(super) fn phase_news_bulletins(conns: Conns) -> Conns {
     let mut total_bulletins = 0usize;
 
     while Instant::now() < deadline {
-        match event_rx.recv_timeout(Duration::from_millis(500)) {
-            _ => {
-                let bulletins = shared.market.drain_news_bulletins();
-                for b in &bulletins {
-                    println!("  Bulletin: id={} type={} exchange={} msg={}",
-                        b.msg_id, b.msg_type, b.exchange,
-                        &b.message[..std::cmp::min(80, b.message.len())]);
-                }
-                total_bulletins += bulletins.len();
-            }
+        // Whatever the wait returns, drain: a bulletin is published to the
+        // store, not to this channel, so the wait is only the interval.
+        let _ = event_rx.recv_timeout(Duration::from_millis(500));
+        let bulletins = shared.market.drain_news_bulletins();
+        for b in &bulletins {
+            println!("  Bulletin: id={} type={} exchange={} msg={}",
+                b.msg_id, b.msg_type, b.exchange,
+                &b.message[..std::cmp::min(80, b.message.len())]);
         }
+        total_bulletins += bulletins.len();
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);

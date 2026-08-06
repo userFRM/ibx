@@ -54,7 +54,7 @@ fn main() {
     for i in 0..iterations {
         // Submit limit order at $1.00 (far from market, won't fill)
         let submit_time = Instant::now();
-        session.send_order(OrderRequest::SubmitEx { order_id: order_id, instrument: instrument, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: PRICE_SCALE }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } });
+        session.send_order(OrderRequest::SubmitEx { order_id, instrument, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: PRICE_SCALE }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } });
 
         // Wait for ack (Submitted or PreSubmitted)
         let mut submit_latency_ns = None;

@@ -385,8 +385,11 @@ fn xor_fold_sequential() {
 // Binary payload test vectors.
 // Format: 8=O\x019=0043\x0135=G\x01 [binary OHLCV data]
 
-/// Known RTBAR captures: (raw_bytes, (time, open, high, low, close, volume, count))
-const RTBAR_CAPTURES: &[(&[u8], (u32, f64, f64, f64, f64, u32, u32))] = &[
+/// One bar as the capture states it: time, open, high, low, close, volume, count.
+type RtBar = (u32, f64, f64, f64, f64, u32, u32);
+
+/// Known RTBAR captures, each raw frame with the bar it decodes to.
+const RTBAR_CAPTURES: &[(&[u8], RtBar)] = &[
     (
         b"8=O\x019=0043\x0135=G\x01\
           \x00\xa8\x00\x00\x00\x01\x69\xa7\x01\xf2\

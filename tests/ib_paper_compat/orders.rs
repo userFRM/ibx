@@ -56,12 +56,11 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
                     break;
                 }
             }
-            Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Rejected {
+            Ok(Event::OrderUpdate(update))
+                if update.status == OrderStatus::Rejected => {
                     rejected_order = Some(update.order_id);
                     break;
                 }
-            }
             _ => {}
         }
     }
@@ -301,9 +300,8 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
                     break;
                 }
             }
-            Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Rejected { rejected_order = Some(update.order_id); break; }
-            }
+            Ok(Event::OrderUpdate(update))
+                if update.status == OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
             _ => {}
         }
     }
@@ -351,7 +349,7 @@ pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Sell, qty: 1, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Sell, qty: 1, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -498,7 +496,7 @@ pub(super) fn phase_limit_ioc(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'3', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'3', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -542,7 +540,7 @@ pub(super) fn phase_limit_fok(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'4', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'4', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -1497,9 +1495,8 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
                     phase = 3;
                 }
             }
-            Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Rejected { rejected_order = Some(update.order_id); break; }
-            }
+            Ok(Event::OrderUpdate(update))
+                if update.status == OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
             _ => {}
         }
     }
@@ -1545,7 +1542,7 @@ pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -2017,12 +2014,11 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
                     println!("  CancelReject received for filled order (expected)");
                 }
             }
-            Ok(Event::OrderUpdate(update)) => {
-                if update.status == OrderStatus::Rejected && phase <= 1 {
+            Ok(Event::OrderUpdate(update))
+                if update.status == OrderStatus::Rejected && phase <= 1 => {
                     rejected_order = Some(update.order_id);
                     break;
                 }
-            }
             _ => {}
         }
         // Give IB a moment to respond, then move on

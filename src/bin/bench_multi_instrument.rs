@@ -93,7 +93,7 @@ fn main() {
                 *per_instrument.entry(instrument).or_insert(0) += 1;
                 count += 1;
 
-                if count % 2000 == 0 {
+                if count.is_multiple_of(2000) {
                     println!(
                         "[{:.3}s] {}/{} ticks...",
                         start.elapsed().as_secs_f64(),

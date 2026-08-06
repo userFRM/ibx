@@ -66,7 +66,7 @@ fn hotloop_auto_reconnect_on_farm_disconnect() {
         Gateway::connect(&cfg).expect("Initial connect failed");
 
     let shared = Arc::new(SharedState::new());
-    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(256);
 
     let (mut hot_loop, _control_tx) = gw.into_hot_loop_with_farms(
         shared.clone(), Some(event_tx),
@@ -108,7 +108,7 @@ fn hotloop_auto_reconnect_on_farm_disconnect() {
     while hot_loop.is_farm_disconnected() && Instant::now() < deadline {
         hot_loop.poll_farm_reconnect_for_test();
         polls += 1;
-        if polls % 50 == 0 {
+        if polls.is_multiple_of(50) {
             println!("  ...still waiting ({:.0}s elapsed)", Instant::now().duration_since(deadline - Duration::from_secs(60)).as_secs_f64());
         }
         std::thread::sleep(Duration::from_millis(100));

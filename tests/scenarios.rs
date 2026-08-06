@@ -318,9 +318,11 @@ fn market_data_subscribe_ticks_unsubscribe() {
     client.map_req_instrument(1, 0);
 
     // Simulate quote arriving
-    let mut q = Quote::default();
-    q.bid = 450 * PRICE_SCALE;
-    q.ask = 451 * PRICE_SCALE;
+    let mut q = Quote {
+        bid: 450 * PRICE_SCALE,
+        ask: 451 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q);
 
     let mut w = RecordingWrapper::default();
@@ -350,12 +352,16 @@ fn market_data_multi_instrument_independent() {
     client.map_req_instrument(2, 1);
 
     // Quote for instrument 0
-    let mut q0 = Quote::default();
-    q0.bid = 450 * PRICE_SCALE;
+    let q0 = Quote {
+        bid: 450 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q0);
     // Quote for instrument 1
-    let mut q1 = Quote::default();
-    q1.bid = 150 * PRICE_SCALE;
+    let mut q1 = Quote {
+        bid: 150 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(1, &q1);
 
     let mut w = RecordingWrapper::default();
@@ -487,9 +493,11 @@ fn account_multi_instrument_positions() {
 #[test]
 fn account_state_via_eclient() {
     let (client, _rx, shared) = test_client();
-    let mut acct = AccountState::default();
-    acct.net_liquidation = 100_000 * PRICE_SCALE;
-    acct.buying_power = 200_000 * PRICE_SCALE;
+    let mut acct = AccountState {
+        net_liquidation: 100_000 * PRICE_SCALE,
+        buying_power: 200_000 * PRICE_SCALE,
+        ..AccountState::default()
+    };
     shared.portfolio.set_account(&acct);
 
     let state = client.account();
@@ -647,9 +655,11 @@ fn contract_lookup_then_subscribe() {
     let _ = client.req_mkt_data(21, &aapl(), "", false, false);
 
     // Simulate ticks
-    let mut q = Quote::default();
-    q.bid = 178 * PRICE_SCALE;
-    q.ask = 179 * PRICE_SCALE;
+    let q = Quote {
+        bid: 178 * PRICE_SCALE,
+        ask: 179 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q);
 
     // Map (simulating what engine would do)
@@ -793,9 +803,11 @@ fn mixed_ticks_during_fills() {
     client.map_req_instrument(1, 0);
 
     // Quote arrives
-    let mut q = Quote::default();
-    q.bid = 150 * PRICE_SCALE;
-    q.ask = 151 * PRICE_SCALE;
+    let q = Quote {
+        bid: 150 * PRICE_SCALE,
+        ask: 151 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q);
 
     // Fill arrives at same time
@@ -866,8 +878,10 @@ fn mixed_all_data_types_single_process() {
     client.map_req_instrument(1, 0);
 
     // Quotes
-    let mut q = Quote::default();
-    q.bid = 150 * PRICE_SCALE;
+    let q = Quote {
+        bid: 150 * PRICE_SCALE,
+        ..Quote::default()
+    };
     shared.market.push_quote(0, &q);
 
     // Fill
@@ -965,10 +979,12 @@ fn pnl_subscription_fires_on_change() {
     client.req_pnl(10, "DU123", "");
 
     // Set initial account state with PnL
-    let mut acct = AccountState::default();
-    acct.daily_pnl = 500 * PRICE_SCALE;
-    acct.unrealized_pnl = 1000 * PRICE_SCALE;
-    acct.realized_pnl = 200 * PRICE_SCALE;
+    let mut acct = AccountState {
+        daily_pnl: 500 * PRICE_SCALE,
+        unrealized_pnl: 1000 * PRICE_SCALE,
+        realized_pnl: 200 * PRICE_SCALE,
+        ..AccountState::default()
+    };
     shared.portfolio.set_account(&acct);
 
     let mut w = RecordingWrapper::default();
@@ -993,8 +1009,10 @@ fn cancel_pnl_stops_dispatch() {
     let (client, _rx, shared) = test_client();
 
     client.req_pnl(10, "DU123", "");
-    let mut acct = AccountState::default();
-    acct.daily_pnl = 500 * PRICE_SCALE;
+    let mut acct = AccountState {
+        daily_pnl: 500 * PRICE_SCALE,
+        ..AccountState::default()
+    };
     shared.portfolio.set_account(&acct);
 
     // First call should fire
@@ -1044,10 +1062,12 @@ fn pnl_single_dispatches_position_info() {
 fn account_summary_one_shot_delivery() {
     let (client, _rx, shared) = test_client();
 
-    let mut acct = AccountState::default();
-    acct.net_liquidation = 100_000 * PRICE_SCALE;
-    acct.buying_power = 400_000 * PRICE_SCALE;
-    acct.available_funds = 50_000 * PRICE_SCALE;
+    let acct = AccountState {
+        net_liquidation: 100_000 * PRICE_SCALE,
+        buying_power: 400_000 * PRICE_SCALE,
+        available_funds: 50_000 * PRICE_SCALE,
+        ..AccountState::default()
+    };
     shared.portfolio.set_account(&acct);
 
     client.req_account_summary(5, "All", "NetLiquidation,BuyingPower,AvailableFunds");
@@ -1076,8 +1096,10 @@ fn account_summary_one_shot_delivery() {
 fn cancel_account_summary_prevents_delivery() {
     let (client, _rx, shared) = test_client();
 
-    let mut acct = AccountState::default();
-    acct.net_liquidation = 100_000 * PRICE_SCALE;
+    let acct = AccountState {
+        net_liquidation: 100_000 * PRICE_SCALE,
+        ..AccountState::default()
+    };
     shared.portfolio.set_account(&acct);
 
     client.req_account_summary(5, "All", "NetLiquidation");
@@ -1092,10 +1114,12 @@ fn cancel_account_summary_prevents_delivery() {
 fn account_summary_empty_tags_returns_all() {
     let (client, _rx, shared) = test_client();
 
-    let mut acct = AccountState::default();
-    acct.net_liquidation = 100_000 * PRICE_SCALE;
-    acct.buying_power = 400_000 * PRICE_SCALE;
-    acct.total_cash_value = 50_000 * PRICE_SCALE;
+    let acct = AccountState {
+        net_liquidation: 100_000 * PRICE_SCALE,
+        buying_power: 400_000 * PRICE_SCALE,
+        total_cash_value: 50_000 * PRICE_SCALE,
+        ..AccountState::default()
+    };
     shared.portfolio.set_account(&acct);
 
     // Empty tags string → all non-zero fields

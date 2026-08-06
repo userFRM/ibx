@@ -156,7 +156,7 @@ fn main() {
             shared.market.push_quote(id, market.quote(id));
             let _ = tx.try_send(Event::Tick(id));
             sent += 1;
-            if sent % 60000 == 0 {
+            if sent.is_multiple_of(60000) {
                 while rx.try_recv().is_ok() {}
             }
         });
@@ -211,7 +211,10 @@ fn build_35p_payload(server_tag: u32, ticks: &[(u64, u64, u64, bool)]) -> Vec<u8
     finalize_payload(&bits)
 }
 
-fn build_35p_payload_multi(tags: &[(u32, &[(u64, u64, u64, bool)])]) -> Vec<u8> {
+/// One tick as the payload builder states it: price, size, time and a flag.
+type TickTuple = (u64, u64, u64, bool);
+
+fn build_35p_payload_multi(tags: &[(u32, &[TickTuple])]) -> Vec<u8> {
     let mut bits: Vec<u8> = Vec::new();
 
     for (tag_idx, &(server_tag, ticks)) in tags.iter().enumerate() {

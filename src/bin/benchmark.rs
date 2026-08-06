@@ -117,12 +117,11 @@ fn load_dotenv(path: &str) {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            if let Some((key, value)) = line.split_once('=') {
-                if env::var(key.trim()).is_err() {
+            if let Some((key, value)) = line.split_once('=')
+                && env::var(key.trim()).is_err() {
                     // Safety: called at startup before any threads are spawned.
                     unsafe { env::set_var(key.trim(), value.trim()) };
                 }
-            }
         }
     }
 }
@@ -267,7 +266,7 @@ fn main() {
                 last_tick_time = Some(now);
                 tick_count += 1;
 
-                if tick_count % 2000 == 0 {
+                if tick_count.is_multiple_of(2000) {
                     println!(
                         "[{:.3}s] Collected {}/{} samples...",
                         start.elapsed().as_secs_f64(), tick_count, collect_ticks,
