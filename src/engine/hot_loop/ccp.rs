@@ -133,6 +133,26 @@ fn perm_id_from_fix_order_id(s: &str) -> i64 {
     (h >> 1) as i64
 }
 
+/// A market data subscription held back until the venue names its contract.
+///
+/// The venue answers a subscription only when it is named by contract id, and
+/// says nothing at all to one named any other way. A caller who names a
+/// contract the ordinary way — symbol, security type, exchange — is owed the
+/// lookup that turns it into an id.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingSubscribe {
+    pub(crate) instrument: crate::types::InstrumentId,
+    pub(crate) symbol: String,
+    pub(crate) exchange: String,
+    pub(crate) sec_type: String,
+    pub(crate) currency: String,
+    pub(crate) last_trade_date: String,
+    pub(crate) strike: f64,
+    pub(crate) right: String,
+    pub(crate) multiplier: String,
+    pub(crate) mode_9887: i32,
+}
+
 /// Which tag carries a maturity.
 ///
 /// A full expiry date is MaturityDate (541) and a contract month is
@@ -276,6 +296,11 @@ pub(crate) struct CcpState {
     pub(crate) next_fanout_id: u32,
     /// Counter for internal secdef req IDs (auto-fetch on cold-cache positions).
     pub(crate) next_internal_secdef_id: u32,
+    /// Market data subscriptions waiting on the lookup that will name their
+    /// contract, keyed by that lookup's request id.
+    pub(crate) pending_md_subscribe: Vec<(u32, PendingSubscribe)>,
+    /// Those whose contract the venue has now named.
+    pub(crate) resolved_md_subscribe: Vec<(i64, PendingSubscribe)>,
     /// conIds we've already auto-fetched secdef for, keyed by con_id (dedup).
     pub(crate) auto_fetched_conids: HashSet<i64>,
     /// Scanner results awaiting per-conId contract-detail enrichment.
@@ -339,6 +364,8 @@ impl CcpState {
             details_delivered: std::collections::HashMap::new(),
             next_fanout_id: 1,
             next_internal_secdef_id: 0xF000_0000,
+            pending_md_subscribe: Vec::new(),
+            resolved_md_subscribe: Vec::new(),
             auto_fetched_conids: HashSet::new(),
             pending_scanner_enrichment: Vec::new(),
         }
@@ -710,6 +737,17 @@ impl CcpState {
                         });
                         identify_position(shared, &def);
                         self.try_release_scanner_enrichments(def.con_id as i64, shared);
+                        // A subscription held back for want of an id. Answered
+                        // here rather than alongside the caller-facing rows: a
+                        // by-symbol lookup fans out and its rows do not all
+                        // take the same path, and this one only needs the first
+                        // definition that names the contract.
+                        if let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())
+                            && let Some(at) = self.pending_md_subscribe.iter().position(|(pid, _)| *pid == rid)
+                        {
+                            let (_, pending) = self.pending_md_subscribe.remove(at);
+                            self.resolved_md_subscribe.push((def.con_id as i64, pending));
+                        }
                     }
                     // Match the response to its originating pending_secdef entry
                     // by tag 320 (response_req_id). Without this, an internal
@@ -2165,6 +2203,32 @@ impl CcpState {
         self.pending_secdef.push((req_id, true, Instant::now() + SECDEF_TIMEOUT));
     }
 
+
+    /// Ask the venue to name a contract so a subscription can be sent for it.
+    pub(crate) fn resolve_for_subscribe(
+        &mut self,
+        pending: PendingSubscribe,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        let req_id = self.next_internal_secdef_id;
+        self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
+        let filters = crate::types::SecDefFilters {
+            last_trade_date_or_contract_month: pending.last_trade_date.clone(),
+            strike: pending.strike,
+            right: pending.right.clone(),
+            multiplier: pending.multiplier.clone(),
+            ..Default::default()
+        };
+        let (symbol, sec_type, exchange, currency) = (
+            pending.symbol.clone(), pending.sec_type.clone(),
+            pending.exchange.clone(), pending.currency.clone(),
+        );
+        self.pending_md_subscribe.push((req_id, pending));
+        self.send_secdef_request_by_symbol(
+            req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
+        );
+    }
 
     pub(crate) fn send_secdef_request_by_symbol(&mut self, req_id: u32, symbol: &str, sec_type: &str, exchange: &str, currency: &str, filters: &crate::types::SecDefFilters, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         if let Some(conn) = ccp_conn.as_mut() {
@@ -5145,6 +5209,48 @@ mod tests {
             (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
             (crate::control::contracts::TAG_IB_CON_ID, "0"),
         ], 1)
+    }
+
+    /// The venue answers a market data subscription only when it is named by
+    /// contract id, so a subscription for a contract named by symbol waits on
+    /// the lookup that names it. It is held until the definition arrives, and
+    /// released with the id the definition carried.
+    #[test]
+    fn a_subscription_waits_for_the_lookup_that_names_its_contract() {
+        let (mut ccp, mut context, shared) = u186_test_state();
+        let parked = PendingSubscribe {
+            instrument: 3,
+            symbol: "SPY".into(),
+            exchange: "SMART".into(),
+            sec_type: "STK".into(),
+            currency: "USD".into(),
+            last_trade_date: String::new(),
+            strike: 0.0,
+            right: String::new(),
+            multiplier: String::new(),
+            mode_9887: 0,
+        };
+        ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new());
+        let req_id = ccp.pending_md_subscribe[0].0;
+        assert!(req_id >= 0xF000_0000, "asked for on the engine's own account, not a caller's");
+        assert!(ccp.resolved_md_subscribe.is_empty(), "nothing to send until it is named");
+
+        let named = crate::protocol::fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, "d"),
+            (crate::control::contracts::TAG_SECURITY_REQ_ID, &req_id.to_string()),
+            (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
+            (55, "SPY"),
+            (crate::control::contracts::TAG_IB_CON_ID, "756733"),
+        ], 1);
+        ccp.process_ccp_message(&named, &mut None, &mut context, &shared,
+            &None, &mut HeartbeatState::new(), "DU1");
+
+        assert!(ccp.pending_md_subscribe.is_empty(), "no longer waiting");
+        assert_eq!(ccp.resolved_md_subscribe.len(), 1);
+        let (con_id, released) = &ccp.resolved_md_subscribe[0];
+        assert_eq!(*con_id, 756733, "the id the venue gave it");
+        assert_eq!(released.instrument, 3, "for the slot that asked");
+        assert_eq!(released.symbol, "SPY");
     }
 
     #[test]

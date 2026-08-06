@@ -111,6 +111,28 @@ impl MarketState {
         Some(id)
     }
 
+    /// Give a slot the contract id a lookup found for it.
+    ///
+    /// A caller who names a contract by symbol gets a slot with no id, and the
+    /// venue answers a market data subscription only when it is named by id.
+    /// The lookup that resolves it lands here. A slot that already has an id
+    /// keeps it, and an id already held by another slot is not stolen: either
+    /// would leave two slots claiming one contract.
+    pub fn adopt_con_id(&mut self, id: InstrumentId, con_id: i64) -> bool {
+        if con_id == 0 || id as usize >= MAX_INSTRUMENTS {
+            return false;
+        }
+        if self.instrument_to_con_id[id as usize] != 0 {
+            return false;
+        }
+        if self.con_id_to_instrument.contains_key(&con_id) {
+            return false;
+        }
+        self.con_id_to_instrument.insert(con_id, id);
+        self.instrument_to_con_id[id as usize] = con_id;
+        true
+    }
+
     /// Register a client-supplied contract, which may carry no conId. `0` is
     /// not an identity (ibx#278): keyed on it, every contract specified the
     /// ordinary way — symbol, secType, exchange — collapses into the slot the
@@ -933,5 +955,25 @@ mod tests {
     fn zero_all_quotes_no_registered_is_noop() {
         let mut ms = MarketState::new();
         ms.zero_all_quotes(); // should not panic
+    }
+
+    #[test]
+    fn a_slot_named_by_symbol_adopts_the_id_a_lookup_finds() {
+        let mut m = MarketState::new();
+        let id = m.try_register_contract(0, "SPY", "STK", "SMART", "").unwrap();
+        // A live slot with no id reads as zero, which is not an identity.
+        assert_eq!(m.con_id(id), Some(0), "named by symbol, so it has no id yet");
+
+        assert!(m.adopt_con_id(id, 756733));
+        assert_eq!(m.con_id(id), Some(756733));
+        assert_eq!(m.instrument_by_con_id(756733), Some(id), "and it is found by it");
+
+        assert!(!m.adopt_con_id(id, 999), "a slot that has an id keeps it");
+        assert_eq!(m.con_id(id), Some(756733));
+
+        let other = m.try_register_contract(0, "QQQ", "STK", "SMART", "").unwrap();
+        assert!(!m.adopt_con_id(other, 756733), "and an id is not taken from the slot holding it");
+        assert_eq!(m.instrument_by_con_id(756733), Some(id));
+        assert!(!m.adopt_con_id(other, 0), "nothing is not an identity");
     }
 }

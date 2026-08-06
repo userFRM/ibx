@@ -54,6 +54,7 @@ impl EClient {
         self.core.register_mkt_data(
             &self.shared, &self.control_tx, req_id,
             contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
+            &contract.currency,
             &contract.last_trade_date_or_contract_month, contract.strike, &contract.right, &contract.multiplier,
             snapshot, generic_tick_list, mode_9887,
         )?;

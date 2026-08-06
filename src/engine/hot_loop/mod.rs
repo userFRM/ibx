@@ -434,6 +434,23 @@ impl HotLoop {
                 &mut self.ccp_conn, &mut self.context, &self.shared,
                 &self.event_tx, &mut self.hb, &self.account_id,
             );
+            // A subscription the venue can now be asked for: its contract was
+            // named by symbol and the lookup has come back with an id.
+            if !self.ccp.resolved_md_subscribe.is_empty() {
+                for (con_id, p) in std::mem::take(&mut self.ccp.resolved_md_subscribe) {
+                    // The slot keeps the id so a reconnect resubscribes by it
+                    // rather than starting the lookup again.
+                    self.context.market.adopt_con_id(p.instrument, con_id);
+                    self.farm.send_mktdata_subscribe(
+                        con_id, &p.symbol, &p.exchange, &p.sec_type,
+                        &p.last_trade_date, p.strike, &p.right, &p.multiplier,
+                        p.instrument, p.mode_9887,
+                        &mut self.farm_conn,
+                        &mut self.hb,
+                    );
+                }
+            }
+
             // A holding that has since been closed releases the slot the
             // caller already asked to free.
             if !self.pinned_by_position.is_empty() {
@@ -523,7 +540,7 @@ impl HotLoop {
         let cmds: Vec<ControlCommand> = self.cmd_buf.drain(..).collect();
         for cmd in cmds {
             match cmd {
-                ControlCommand::Subscribe { con_id, symbol, exchange, sec_type, last_trade_date, strike, right, multiplier, mode_9887, reply_tx } => {
+                ControlCommand::Subscribe { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier, mode_9887, reply_tx } => {
                     // What tells two conId-less contracts on one underlying apart. Absent for
                     // anything that is not an option, which leaves the key empty.
                     let option_key = if strike > 0.0 || !right.is_empty() || !last_trade_date.is_empty() {
@@ -557,13 +574,36 @@ impl HotLoop {
                             if let Some(tx) = &reply_tx {
                                 let _ = tx.send(Ok(id));
                             }
-                            self.farm.send_mktdata_subscribe(
-                                con_id, &symbol, &exchange, &sec_type,
-                                &last_trade_date, strike, &right, &multiplier,
-                                id, mode_9887,
-                                &mut self.farm_conn,
-                                &mut self.hb,
-                            );
+                            if con_id == 0 {
+                                // The venue answers a subscription only when it
+                                // is named by contract id, and says nothing at
+                                // all — no tick and no refusal — to one named
+                                // by symbol. Ask it to name the contract first.
+                                self.ccp.resolve_for_subscribe(
+                                    crate::engine::hot_loop::ccp::PendingSubscribe {
+                                        instrument: id,
+                                        symbol: symbol.clone(),
+                                        exchange: exchange.clone(),
+                                        sec_type: sec_type.clone(),
+                                        currency: currency.clone(),
+                                        last_trade_date: last_trade_date.clone(),
+                                        strike,
+                                        right: right.clone(),
+                                        multiplier: multiplier.clone(),
+                                        mode_9887,
+                                    },
+                                    &mut self.ccp_conn,
+                                    &mut self.hb,
+                                );
+                            } else {
+                                self.farm.send_mktdata_subscribe(
+                                    con_id, &symbol, &exchange, &sec_type,
+                                    &last_trade_date, strike, &right, &multiplier,
+                                    id, mode_9887,
+                                    &mut self.farm_conn,
+                                    &mut self.hb,
+                                );
+                            }
                         }
                     }
                 }

@@ -128,6 +128,7 @@ impl BenchSession {
                 symbol: symbol.to_string(),
                 exchange: String::new(),
                 sec_type: String::new(),
+                currency: String::new(),
                 last_trade_date: String::new(),
                 strike: 0.0,
                 right: String::new(),
