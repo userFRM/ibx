@@ -44,8 +44,8 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Account values | Verified | Live phase | Available |
 | Account summary | Verified | Live session, rows and completion observed | Available |
 | Positions and round trip tracking | Implemented | Live phase requires a fill it did not obtain | W2 |
-| P&L, per contract | Verified | Live phase, and the venue's own midnight values and prices are used where it states them | Available |
-| P&L, account level subscription | Verified | Live session, reported from the gateway's own account figures | Available |
+| P&L, per contract | Verified | Live session, valued from the venue's own overnight marks against live quotes | Available |
+| P&L, account level subscription | Verified | Live session, reporting a daily figure for a held account rather than falling back to zero | Available |
 | Option exercise and lapse | Implemented | No position has been exercised yet | W1 |
 | Option analytics, implied volatility and price | Accepted, not served | | W1 |
 | Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription | W3 |
