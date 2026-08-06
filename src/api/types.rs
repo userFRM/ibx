@@ -523,6 +523,10 @@ impl Order {
                 1..=4 => self.oca_type as u8,
                 _ => 0,
             },
+            // No field on an order sets this. An exercise names an action and a
+            // number of contracts and nothing else an order carries, so it has
+            // a call of its own that builds the request directly.
+            exercise_action: 0,
         }
     }
 
@@ -1198,6 +1202,9 @@ mod tests {
             include_overnight: _, auto_cancel_parent: _, min_trade_qty: _,
             block_order: _, auto_cancel_date: _, clearing_account: _, clearing_intent: _,
             primary_exchange: _, delta_neutral_contract: _,
+            // Reached by `exercise_options` rather than by an order, so there is
+            // no setter to list above and nothing for the predicate to name.
+            exercise_action: _,
         } = Order::default().attrs();
 
         assert!(

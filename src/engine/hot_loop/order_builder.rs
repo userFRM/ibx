@@ -1160,6 +1160,12 @@ fn push_order_attrs(
     if !attrs.open_close.is_empty() {
         fields.push((77, attrs.open_close.clone()));
     }
+    // Whether this order exercises the option it names or lapses it. The venue
+    // has no exercise message: it reads the action off an ordinary order, and
+    // it rides here so a replace restates it like every other attribute.
+    if attrs.exercise_action != 0 {
+        fields.push((6809, attrs.exercise_action.to_string()));
+    }
     // The ladder. Sending the sizes and not the step, or the step and not the
     // sizes, describes no ladder at all, so an order that names one names all
     // of what it set.
@@ -2951,6 +2957,37 @@ mod modify_wire_tests {
         assert!(sent.contains("|202=230|"), "the strike: {sent}");
         assert!(sent.contains("|201=1|"), "the right, as the wire code for a call: {sent}");
         assert!(sent.contains("|231=100|"), "the multiplier: {sent}");
+    }
+
+    /// An exercise and a lapse are new orders carrying the action, and nothing
+    /// else tells them apart from each other or from an ordinary order. Read
+    /// off the socket, because the request that carries the action and the
+    /// message that states it are two different things.
+    #[test]
+    fn an_exercise_and_a_lapse_go_out_as_new_orders_carrying_the_action() {
+        for (action, stated) in [(1u8, "1"), (2, "2")] {
+            let mut context = Context::new();
+            let instrument = context
+                .market
+                .try_register_contract(0, "AAPL", "OPT", "SMART", "20260619|230|C|100")
+                .expect("slot");
+            context.market.set_symbol(instrument, "AAPL".into());
+            context.market.set_routing(instrument, "OPT", "SMART");
+
+            context.pending_orders.push(
+                crate::client_core::ClientCore::build_exercise_request(7, instrument, action, 3),
+            );
+            let sent = drain(&mut context);
+
+            assert!(sent.contains("|35=D|"), "an exercise is a new order: {sent}");
+            assert!(
+                sent.contains(&format!("|6809={stated}|")),
+                "carrying the action it was asked for: {sent}",
+            );
+            assert!(sent.contains("|38=3|"), "for the contracts named: {sent}");
+            assert!(sent.contains("|54=1|"), "on the buy side: {sent}");
+            assert!(sent.contains("|541=20260619|"), "and naming the option: {sent}");
+        }
     }
 
     /// A stock names itself with its symbol, so none of those tags belong on it.

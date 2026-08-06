@@ -1683,6 +1683,42 @@ fn place_order_non_stk_contract_rejected() {
     // the identity reaches the wire by `an_option_order_names_its_contract`.
 }
 
+/// What an exercise refuses, and it refuses before it builds anything: a
+/// caller told the request went out believes the position was dealt with.
+///
+/// The documented API names a third action, a hold, which is not served here.
+/// A quantity that is not a count reaches the wire through `as u32` as a very
+/// large one. And the account is not carried on the order at all, so an
+/// exercise naming another one would be taken on the connected account.
+#[test]
+fn an_exercise_it_cannot_serve_is_refused_before_anything_is_sent() {
+    let (client, rx, _shared) = test_client();
+    let opt = Contract {
+        con_id: 999002, symbol: "AAPL".into(), sec_type: "OPT".into(),
+        last_trade_date_or_contract_month: "20260619".into(), strike: 230.0,
+        right: "C".into(), multiplier: "100".into(), ..Default::default()
+    };
+    let cases: [(&str, i32, i32, &str); 5] = [
+        ("a hold", 3, 1, ""),
+        ("no action at all", 0, 1, ""),
+        ("no contracts", 1, 0, ""),
+        ("a negative count", 1, -1, ""),
+        ("another account", 1, 1, "DU999"),
+    ];
+    for (name, action, qty, account) in cases {
+        client.exercise_options(1, &opt, action, qty, account, false).expect_err(name);
+        assert!(rx.try_recv().is_err(), "{name} reached the engine");
+    }
+
+    // One it can serve gets as far as naming the contract. This fixture has no
+    // engine to answer the registration, so the call ends there.
+    let _ = client.exercise_options(1, &opt, 1, 1, "DU123", false);
+    assert!(
+        matches!(rx.try_recv(), Ok(ControlCommand::RegisterInstrument { con_id: 999002, .. })),
+        "a served exercise registers its contract",
+    );
+}
+
 #[test]
 fn place_order_explicit_stk_contract_accepted() {
     // An explicit sec_type="STK" must still be accepted.
