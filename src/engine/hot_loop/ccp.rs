@@ -298,7 +298,7 @@ pub(crate) struct CcpState {
     pub(crate) next_internal_secdef_id: u32,
     /// Market data subscriptions waiting on the lookup that will name their
     /// contract, keyed by that lookup's request id.
-    pub(crate) pending_md_subscribe: Vec<(u32, PendingSubscribe)>,
+    pub(crate) pending_md_subscribe: Vec<(u32, PendingSubscribe, Instant)>,
     /// Those whose contract the venue has now named.
     pub(crate) resolved_md_subscribe: Vec<(i64, PendingSubscribe)>,
     /// conIds we've already auto-fetched secdef for, keyed by con_id (dedup).
@@ -743,9 +743,9 @@ impl CcpState {
                         // take the same path, and this one only needs the first
                         // definition that names the contract.
                         if let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())
-                            && let Some(at) = self.pending_md_subscribe.iter().position(|(pid, _)| *pid == rid)
+                            && let Some(at) = self.pending_md_subscribe.iter().position(|(pid, ..)| *pid == rid)
                         {
-                            let (_, pending) = self.pending_md_subscribe.remove(at);
+                            let (_, pending, _) = self.pending_md_subscribe.remove(at);
                             self.resolved_md_subscribe.push((def.con_id as i64, pending));
                         }
                     }
@@ -1946,6 +1946,37 @@ impl CcpState {
     /// blocked wait unblocks with no API change. Internal sentinel req_ids
     /// (>= 0xF000_0000: cache auto-fetch, scanner enrichment) are dropped
     /// silently — no user is waiting on them.
+    /// How long a subscription waits for the lookup that would name its
+    /// contract. Longer than the lookup's own deadline, so its answer — a
+    /// definition, or a refusal — is preferred to this.
+    const NAMING_TIMEOUT: Duration = Duration::from_secs(20);
+
+    /// A subscription whose contract the venue never named. Reported rather
+    /// than left waiting: silence is what this whole path exists to remove.
+    pub(crate) fn sweep_pending_subscribes(&mut self, shared: &SharedState) {
+        if self.pending_md_subscribe.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut gave_up = Vec::new();
+        self.pending_md_subscribe.retain(|(_, pending, asked_at)| {
+            if now.duration_since(*asked_at) < Self::NAMING_TIMEOUT {
+                return true;
+            }
+            gave_up.push(pending.clone());
+            false
+        });
+        for p in gave_up {
+            let reason = format!(
+                "no security definition has been found for {} {} on {}, so no market \
+                 data subscription could be made for it",
+                p.sec_type, p.symbol, p.exchange,
+            );
+            log::warn!("Subscription abandoned: {reason}");
+            shared.market.push_subscription_failure(p.instrument, reason);
+        }
+    }
+
     pub(crate) fn sweep_contract_details(
         &mut self,
         shared: &SharedState,
@@ -2224,7 +2255,7 @@ impl CcpState {
             pending.symbol.clone(), pending.sec_type.clone(),
             pending.exchange.clone(), pending.currency.clone(),
         );
-        self.pending_md_subscribe.push((req_id, pending));
+        self.pending_md_subscribe.push((req_id, pending, Instant::now()));
         self.send_secdef_request_by_symbol(
             req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
         );
@@ -5209,6 +5240,42 @@ mod tests {
             (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
             (crate::control::contracts::TAG_IB_CON_ID, "0"),
         ], 1)
+    }
+
+    /// A lookup the venue never answers must not leave the subscription
+    /// waiting in silence. That is the failure this whole path exists to
+    /// remove, and it would have reappeared one level down.
+    #[test]
+    fn a_subscription_the_venue_never_names_is_reported() {
+        let (mut ccp, _context, shared) = u186_test_state();
+        let parked = PendingSubscribe {
+            instrument: 4,
+            symbol: "NOSUCH".into(),
+            exchange: "SMART".into(),
+            sec_type: "STK".into(),
+            currency: "USD".into(),
+            last_trade_date: String::new(),
+            strike: 0.0,
+            right: String::new(),
+            multiplier: String::new(),
+            mode_9887: 0,
+        };
+        ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new());
+
+        ccp.sweep_pending_subscribes(&shared);
+        assert_eq!(ccp.pending_md_subscribe.len(), 1, "still within its wait");
+        assert!(shared.market.drain_subscription_failures().is_empty());
+
+        // Wind the clock back past the wait.
+        let asked_at = &mut ccp.pending_md_subscribe[0].2;
+        *asked_at -= CcpState::NAMING_TIMEOUT + Duration::from_secs(1);
+        ccp.sweep_pending_subscribes(&shared);
+
+        assert!(ccp.pending_md_subscribe.is_empty(), "given up on");
+        let failures = shared.market.drain_subscription_failures();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, 4, "reported against the slot that asked");
+        assert!(failures[0].1.contains("NOSUCH"), "and names it: {}", failures[0].1);
     }
 
     /// The venue answers a market data subscription only when it is named by

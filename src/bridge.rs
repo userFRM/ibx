@@ -289,6 +289,8 @@ pub struct MarketDataState {
     tick_news: Mutex<Vec<TickNews>>,
     news_bulletins: Mutex<Vec<NewsBulletin>>,
     option_computations: Mutex<Vec<crate::types::OptionComputation>>,
+    /// Subscriptions the venue was never able to be asked for, and why.
+    subscription_failures: Mutex<Vec<(crate::types::InstrumentId, String)>>,
 }
 
 impl MarketDataState {
@@ -303,6 +305,7 @@ impl MarketDataState {
             tick_news: Mutex::new(Vec::with_capacity(32)),
             news_bulletins: Mutex::new(Vec::with_capacity(16)),
             option_computations: Mutex::new(Vec::with_capacity(16)),
+            subscription_failures: Mutex::new(Vec::new()),
         }
     }
 
@@ -360,6 +363,10 @@ impl MarketDataState {
         self.option_computations.lock().unwrap().drain(..).collect()
     }
 
+    pub fn drain_subscription_failures(&self) -> Vec<(crate::types::InstrumentId, String)> {
+        self.subscription_failures.lock().unwrap().drain(..).collect()
+    }
+
     // ── Hot-loop-side writers ──
 
     #[doc(hidden)]
@@ -399,6 +406,10 @@ impl MarketDataState {
 
     #[doc(hidden)] pub fn push_option_computation(&self, comp: crate::types::OptionComputation) {
         self.option_computations.lock().unwrap().push(comp);
+    }
+
+    #[doc(hidden)] pub fn push_subscription_failure(&self, instrument: crate::types::InstrumentId, reason: String) {
+        self.subscription_failures.lock().unwrap().push((instrument, reason));
     }
 
     #[doc(hidden)] pub fn set_instrument_count(&self, count: u32) {
