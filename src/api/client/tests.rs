@@ -6,7 +6,7 @@ use crate::api::wrapper::Wrapper;
 use crate::api::wrapper::tests::RecordingWrapper;
 use crate::bridge::SharedState;
 use crate::control::historical::{HistoricalResponse, HistoricalBar, HeadTimestampResponse};
-use crate::control::contracts::{ContractDefinition, SecurityType, SymbolMatch};
+use crate::control::contracts::{ContractDefinition, OptionChainScope, SecurityType, SymbolMatch};
 use crate::control::scanner::{ScannerEntry, ScannerResult};
 use crate::control::news::NewsHeadline;
 use crate::control::histogram::HistogramEntry;
@@ -2280,6 +2280,7 @@ fn an_unwireable_req_id_is_refused() {
         ("cancel_head_time_stamp", |c, id| c.cancel_head_time_stamp(id)),
         ("req_contract_details", |c, id| c.req_contract_details(id, &spy())),
         ("req_matching_symbols", |c, id| c.req_matching_symbols(id, "SP")),
+        ("req_sec_def_opt_params", |c, id| c.req_sec_def_opt_params(id, "SPY", "", "STK", 756733)),
         ("req_scanner_subscription", |c, id| c.req_scanner_subscription(id, "STK", "STK.US", "TOP_PERC_GAIN", 10, &[])),
         ("cancel_scanner_subscription", |c, id| c.cancel_scanner_subscription(id)),
         ("req_historical_news", |c, id| c.req_historical_news(id, 756733, "BRFG", "", "", 10)),
@@ -3187,6 +3188,44 @@ fn process_msgs_dispatches_symbol_samples() {
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
     assert!(w.events.iter().any(|e| e == "symbol_samples:8:1"));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  process_msgs — option chain
+// ═══════════════════════════════════════════════════════════════════
+
+/// Every class of the underlying is reported, and the request ends once.
+#[test]
+fn process_msgs_dispatches_option_chain_parameters() {
+    let (client, _rx, shared) = test_client();
+    shared.reference.push_option_params(9, 265598, vec![
+        OptionChainScope {
+            symbol: "AAPL".into(), exchange: "SMART".into(), trading_class: "AAPL".into(),
+            multiplier: "100".into(), expirations: vec!["20260116".into(), "20260320".into()],
+            strikes: vec![140.0, 145.0],
+        },
+        OptionChainScope {
+            symbol: "AAPL".into(), exchange: "CBOE".into(), trading_class: "AAPL1".into(),
+            multiplier: "100".into(), expirations: vec!["20260116".into()],
+            strikes: vec![145.0],
+        },
+    ]);
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(w.events.iter().any(|e| e == "sec_def_opt_param:9:SMART:265598:AAPL:100:20260116,20260320:140,145"), "{:?}", w.events);
+    assert!(w.events.iter().any(|e| e == "sec_def_opt_param:9:CBOE:265598:AAPL1:100:20260116:145"), "{:?}", w.events);
+    assert_eq!(w.events.iter().filter(|e| *e == "sec_def_opt_param_end:9").count(), 1);
+}
+
+/// A chain the venue lists nothing for is still an answer: the caller is
+/// waiting on the end of the request, not on a class that does not exist.
+#[test]
+fn process_msgs_ends_an_empty_option_chain() {
+    let (client, _rx, shared) = test_client();
+    shared.reference.push_option_params(9, 265598, Vec::new());
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert_eq!(w.events, vec!["sec_def_opt_param_end:9".to_string()]);
 }
 
 // ═══════════════════════════════════════════════════════════════════
