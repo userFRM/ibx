@@ -183,6 +183,11 @@ pub fn build_ccp_logon(hw_info: &str, encoded: &str, heartbeat: u64, seq: u32) -
             (6947, tz),
             (8361, "(rolling)"),
             (8098, "0"),
+            // Declared at logon, and the server will not answer a request on a
+            // user message without it: asking the same question three times
+            // drew three replies with it and none without, while an idle
+            // stretch of the same length drew the opposite.
+            (6900, "1"),
         ],
         seq,
     )
