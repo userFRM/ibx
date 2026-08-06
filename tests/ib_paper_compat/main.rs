@@ -794,6 +794,12 @@ fn routing_table_probe() {
                         && let Some(sub) = tags.get(&6040)
                     {
                         *seen.entry(sub.clone()).or_default() += 1;
+                        // The two that state profit and loss, printed whole, so
+                        // what the fields mean can be read off real values
+                        // rather than assumed.
+                        if sub == "143" || sub == "152" {
+                            println!("  [{sub}] {}", String::from_utf8_lossy(&msg).replace('\u{1}', "|"));
+                        }
                     }
                 }
             }
