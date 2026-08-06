@@ -20,7 +20,11 @@ impl EClient {
         &self, req_id: i64, contract: &Contract,
         generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool,
     ) -> Result<(), String> {
-        self.req_mkt_data_ex(req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, 0)
+        // The mode the caller asked for on `req_market_data_type`, which names
+        // the type once for every subscription that follows. `req_mkt_data_ex`
+        // states it per request instead.
+        let mode = self.core.subscription_mode();
+        self.req_mkt_data_ex(req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, mode)
     }
 
     /// Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via
@@ -34,9 +38,14 @@ impl EClient {
     /// | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` |
     /// | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` |
     ///
-    /// The frozen sub keeps thinly-traded names streaming after-hours when the
-    /// realtime feed is silent. Issue 3-4 parallel calls per contract with
-    /// different modes and pick whichever feed has data.
+    /// The frozen mode keeps thinly-traded names quoting after-hours, when the
+    /// realtime feed is silent.
+    ///
+    /// A contract holds one subscription at a time (ibx#233), so this states
+    /// the mode for that subscription rather than adding a parallel one — to
+    /// compare modes on one contract, cancel between them. To set the mode for
+    /// every subscription instead of naming it per request, call
+    /// `req_market_data_type`.
     pub fn req_mkt_data_ex(
         &self, req_id: i64, contract: &Contract,
         generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool,

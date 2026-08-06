@@ -55,16 +55,16 @@ pub(crate) fn drain_and_send_orders(
         // a recovery that has nothing to do with it can let it fill first.
         // Cancel-all is included: it sends the same per-order frames, so it
         // carries the same speculative versions.
-        let waits_for_recovery = recovery_pending && match order_req {
-            OrderRequest::Cancel { order_id } | OrderRequest::Modify { order_id, .. } => context
-                .order(order_id)
-                .is_some_and(|o| o.status == OrderStatus::Uncertain),
-            OrderRequest::CancelAll { .. } => context
-                .uncertain_orders()
-                .iter()
-                .any(|o| o.status == OrderStatus::Uncertain),
-            _ => false,
-        };
+        let waits_for_recovery = recovery_pending
+            && match order_req {
+                OrderRequest::Cancel { order_id } | OrderRequest::Modify { order_id, .. } => {
+                    context.order(order_id).is_some_and(|o| o.status == OrderStatus::Uncertain)
+                }
+                OrderRequest::CancelAll { .. } => {
+                    context.uncertain_orders().iter().any(|o| o.status == OrderStatus::Uncertain)
+                }
+                _ => false,
+            };
         if waits_for_recovery {
             unsent.push(order_req);
             continue;
@@ -87,11 +87,25 @@ pub(crate) fn drain_and_send_orders(
         }
         let result = match order_req {
             OrderRequest::SubmitEx { order_id, instrument, side, qty, kind, tif, attrs } => {
-                send_order_ex(conn, context, account_id, order_id, instrument, side, qty,
-                    kind, tif, &attrs)
+                send_order_ex(
+                    conn, context, account_id, order_id, instrument, side, qty, kind, tif, &attrs,
+                )
             }
-            OrderRequest::SubmitBracket { parent_id, tp_id, sl_id, instrument, side, qty, entry_price, take_profit, stop_loss } => {
-                let exit_side = match side { Side::Buy => Side::Sell, Side::Sell | Side::ShortSell => Side::Buy };
+            OrderRequest::SubmitBracket {
+                parent_id,
+                tp_id,
+                sl_id,
+                instrument,
+                side,
+                qty,
+                entry_price,
+                take_profit,
+                stop_loss,
+            } => {
+                let exit_side = match side {
+                    Side::Buy => Side::Sell,
+                    Side::Sell | Side::ShortSell => Side::Buy,
+                };
                 let exit_side_str = fix_side(exit_side);
                 let side_str = fix_side(side);
                 let qty_str = format_uint(qty as u64);
@@ -112,7 +126,14 @@ pub(crate) fn drain_and_send_orders(
 
                 // 1. Parent order: limit entry
                 context.insert_order(crate::types::Order::new(
-                    parent_id, instrument, side, qty, entry_price, b'2', b'0', 0,
+                    parent_id,
+                    instrument,
+                    side,
+                    qty,
+                    entry_price,
+                    b'2',
+                    b'0',
+                    0,
                 ));
                 let now = chrono_free_timestamp();
                 let parent_sent = conn.send_fix(&[
@@ -124,9 +145,9 @@ pub(crate) fn drain_and_send_orders(
                     (55, &symbol),
                     (54, side_str),
                     (38, &qty_str),
-                    (40, "2"),          // Limit
+                    (40, "2"), // Limit
                     (44, &entry_str),
-                    (59, "0"),          // DAY
+                    (59, "0"), // DAY
                     (60, &now),
                     (167, &sec_type_str),
                     (100, &destination),
@@ -137,7 +158,14 @@ pub(crate) fn drain_and_send_orders(
 
                 // 2. Take-profit child: limit exit, linked to parent, in OCA group
                 context.insert_order(crate::types::Order::new(
-                    tp_id, instrument, exit_side, qty, take_profit, b'2', b'1', 0,
+                    tp_id,
+                    instrument,
+                    exit_side,
+                    qty,
+                    take_profit,
+                    b'2',
+                    b'1',
+                    0,
                 ));
                 let now = chrono_free_timestamp();
                 let tp_sent = conn.send_fix(&[
@@ -149,17 +177,17 @@ pub(crate) fn drain_and_send_orders(
                     (55, &symbol),
                     (54, exit_side_str),
                     (38, &qty_str),
-                    (40, "2"),          // Limit
+                    (40, "2"), // Limit
                     (44, &tp_price_str),
-                    (59, "1"),          // GTC
+                    (59, "1"), // GTC
                     (60, &now),
                     (167, &sec_type_str),
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
                     (204, "0"),
-                    (6107, &parent_str),       // ParentOrderID
-                    (583, &oca_group),         // OCAGroup
+                    (6107, &parent_str),            // ParentOrderID
+                    (583, &oca_group),              // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
                 ]);
 
@@ -180,17 +208,17 @@ pub(crate) fn drain_and_send_orders(
                     (55, &symbol),
                     (54, exit_side_str),
                     (38, &qty_str),
-                    (40, "3"),          // Stop
+                    (40, "3"), // Stop
                     (99, &sl_price_str),
-                    (59, "1"),          // GTC
+                    (59, "1"), // GTC
                     (60, &now),
                     (167, &sec_type_str),
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
                     (204, "0"),
-                    (6107, &parent_str),       // ParentOrderID
-                    (583, &oca_group),         // OCAGroup
+                    (6107, &parent_str),            // ParentOrderID
+                    (583, &oca_group),              // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
                 ]))
             }
@@ -214,8 +242,8 @@ pub(crate) fn drain_and_send_orders(
                     (21, "2"),
                     (55, &symbol),
                     (54, side_str),
-                    (38, &qty_str),      // Decimal qty (e.g., "0.5")
-                    (40, "2"),           // OrdType = Limit
+                    (38, &qty_str), // Decimal qty (e.g., "0.5")
+                    (40, "2"),      // OrdType = Limit
                     (44, &price_str),
                     (59, "0"),
                     (60, &now),
@@ -234,10 +262,8 @@ pub(crate) fn drain_and_send_orders(
                 result
             }
             OrderRequest::CancelAll { instrument } => {
-                let open_ids: Vec<u64> = context.open_orders_for(instrument)
-                    .iter()
-                    .map(|o| o.order_id)
-                    .collect();
+                let open_ids: Vec<u64> =
+                    context.open_orders_for(instrument).iter().map(|o| o.order_id).collect();
                 let mut last_result = Ok(());
                 for oid in open_ids {
                     last_result = send_cancel(conn, context, account_id, oid);
@@ -248,7 +274,14 @@ pub(crate) fn drain_and_send_orders(
                 last_result
             }
             OrderRequest::Modify {
-                new_order_id, order_id, price, qty, outside_rth, ord_type, tif, stop_price,
+                new_order_id,
+                order_id,
+                price,
+                qty,
+                outside_rth,
+                ord_type,
+                tif,
+                stop_price,
             } => {
                 let orig = context.order(order_id).copied();
                 let spec = context.submitted.get(&order_id).cloned();
@@ -261,7 +294,8 @@ pub(crate) fn drain_and_send_orders(
                 // below overwrites it. A trigger on the request only means one
                 // when the replace also states what it is replacing into.
                 let ord_type_stated = ord_type != 0;
-                let ord_type = if ord_type != 0 { ord_type } else { orig.map_or(b'2', |o| o.ord_type) };
+                let ord_type =
+                    if ord_type != 0 { ord_type } else { orig.map_or(b'2', |o| o.ord_type) };
                 let tif = if tif != 0 { tif } else { orig.map_or(b'0', |o| o.tif) };
                 // Modify carries no instrument, so `snap_prices` cannot reach
                 // it and both price-like fields are snapped here against the
@@ -272,7 +306,11 @@ pub(crate) fn drain_and_send_orders(
                     let tick = context.market.min_tick_scaled(o.instrument);
                     (
                         crate::types::snap_to_tick(price, tick),
-                        if stop_price != 0 { crate::types::snap_to_tick(stop_price, tick) } else { 0 },
+                        if stop_price != 0 {
+                            crate::types::snap_to_tick(stop_price, tick)
+                        } else {
+                            0
+                        },
                     )
                 });
                 // Which tag each price belongs on depends on the order type,
@@ -333,8 +371,14 @@ pub(crate) fn drain_and_send_orders(
                     // kept the old one would leave the next modify restating a
                     // price this one just moved.
                     context.insert_order(crate::types::Order::new(
-                        new_order_id, orig.instrument, orig.side, qty, price,
-                        ord_type, tif, new_stop,
+                        new_order_id,
+                        orig.instrument,
+                        orig.side,
+                        qty,
+                        price,
+                        ord_type,
+                        tif,
+                        new_stop,
                     ));
                 }
                 // Versioned ClOrdID chaining: orderId.0 → .1 → .2
@@ -344,7 +388,10 @@ pub(crate) fn drain_and_send_orders(
                 let clord_str = format!("{order_id}.{new_ver}");
                 // OrigClOrdID matches whatever the server last recorded for
                 // this order (which may pre-date the versioned scheme — ibx#179).
-                let orig_clord = context.last_clord.get(&order_id).cloned()
+                let orig_clord = context
+                    .last_clord
+                    .get(&order_id)
+                    .cloned()
                     .unwrap_or_else(|| format!("{order_id}.{prev_ver}"));
                 // Pre-seed `last_clord` with what we're about to emit so a
                 // subsequent cancel before the modify-ack still references the
@@ -371,7 +418,8 @@ pub(crate) fn drain_and_send_orders(
                 let price_str = format_price(price);
                 let now = chrono_free_timestamp();
                 let side_str = orig.map(|o| fix_side(o.side)).unwrap_or("1");
-                let symbol = orig.map(|o| context.market.symbol(o.instrument).to_string())
+                let symbol = orig
+                    .map(|o| context.market.symbol(o.instrument).to_string())
                     .unwrap_or_default();
                 let (sec_type_str, _destination) = orig
                     .map(|o| context.market.order_routing(o.instrument))
@@ -382,15 +430,17 @@ pub(crate) fn drain_and_send_orders(
                 // guess here would set what the gateway is holding — omitted
                 // instead, leaving the resting order's own value in force.
                 let tif_str = std::str::from_utf8(&[tif]).unwrap_or("0").to_string();
-                let con_id_str = orig.and_then(|o| context.market.con_id(o.instrument))
-                    .map(|c| c.to_string()).unwrap_or_default();
+                let con_id_str = orig
+                    .and_then(|o| context.market.con_id(o.instrument))
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
 
                 // Lean modify message — omit identity tags (6121, 6119, 231, 100, 15, 204)
                 let mut fields: Vec<(u32, &str)> = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_ORDER_REPLACE),
                     (fix::TAG_SENDING_TIME, &now),
-                    (11, &clord_str),    // ClOrdID (versioned)
-                    (41, &orig_clord),   // OrigClOrdID (previous version)
+                    (11, &clord_str),  // ClOrdID (versioned)
+                    (41, &orig_clord), // OrigClOrdID (previous version)
                 ];
                 // Each price goes to the tag its order type uses. A
                 // trigger-only type has no limit leg, so its price is the
@@ -400,7 +450,7 @@ pub(crate) fn drain_and_send_orders(
                     fields.push((44, &price_str)); // Price
                 }
                 fields.push((1, account_id)); // Account
-                fields.push((6122, "c"));     // Client version
+                fields.push((6122, "c")); // Client version
                 // OutsideRTH, from the order the caller resubmitted rather than
                 // hard-coded: the tracked record cannot express it, and asserting
                 // 1 unconditionally opted every modified order into the extended
@@ -409,17 +459,17 @@ pub(crate) fn drain_and_send_orders(
                     fields.push((6433, "1"));
                 }
                 let rest: [(u32, &str); 11] = [
-                    (38, &qty_str),      // OrderQty
-                    (54, side_str),      // Side
-                    (40, &ord_type_str), // OrdType
-                    (55, &symbol),       // Symbol
-                    (167, &sec_type_str),        // SecurityType
-                    (6035, &symbol),     // LocalSymbol echo
-                    (59, &tif_str),      // TIF — dropped below when unstated
-                    (6008, &con_id_str), // ConId
-                    (6088, "Socket"),    // Connection type
-                    (6211, ""),          // Empty (matches reference)
-                    (6238, ""),          // Empty (matches reference)
+                    (38, &qty_str),       // OrderQty
+                    (54, side_str),       // Side
+                    (40, &ord_type_str),  // OrdType
+                    (55, &symbol),        // Symbol
+                    (167, &sec_type_str), // SecurityType
+                    (6035, &symbol),      // LocalSymbol echo
+                    (59, &tif_str),       // TIF — dropped below when unstated
+                    (6008, &con_id_str),  // ConId
+                    (6088, "Socket"),     // Connection type
+                    (6211, ""),           // Empty (matches reference)
+                    (6238, ""),           // Empty (matches reference)
                 ];
                 fields.extend(rest);
                 if tif == crate::types::TIF_UNSTATED {
@@ -500,7 +550,10 @@ pub(crate) fn drain_and_send_orders(
                     // not announced, so a caller reading the event channel —
                     // told this is a second delivery of everything, not a
                     // lesser one — was not told at all.
-                    crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::OrderUpdate(update));
+                    crate::engine::hot_loop::emit(
+                        event_tx,
+                        crate::bridge::Event::OrderUpdate(update),
+                    );
                 }
             }
         }
@@ -531,11 +584,8 @@ fn send_cancel(
         format!("{order_id}.{ver}")
     });
     let attempt = context.cancel_attempts.entry(order_id).and_modify(|n| *n += 1).or_insert(0);
-    let clord_str = if *attempt == 0 {
-        format!("C{order_id}")
-    } else {
-        format!("C{order_id}.{attempt}")
-    };
+    let clord_str =
+        if *attempt == 0 { format!("C{order_id}") } else { format!("C{order_id}.{attempt}") };
     let now = chrono_free_timestamp();
     let side = context.order(order_id).map(|o| fix_side(o.side));
     let mut fields = vec![
@@ -629,7 +679,9 @@ fn is_trigger_only(ord_type: u8) -> bool {
 /// contract month, which is why those types were refused outright rather than
 /// sent under-specified (ibx#202).
 fn push_contract_identity(
-    fields: &mut Vec<(u32, String)>, context: &Context, instrument: crate::types::InstrumentId,
+    fields: &mut Vec<(u32, String)>,
+    context: &Context,
+    instrument: crate::types::InstrumentId,
 ) {
     // Name the contract by its id where one is known — before anything else,
     // and for every kind of contract including a stock, which has no other
@@ -647,7 +699,13 @@ fn push_contract_identity(
         return;
     };
     let crate::engine::market_state::OrderIdentity {
-        expiry, strike, right, multiplier, trading_class, local_symbol, currency: _,
+        expiry,
+        strike,
+        right,
+        multiplier,
+        trading_class,
+        local_symbol,
+        currency: _,
     } = id;
     // A contract month goes on MaturityMonthYear and anything longer on
     // MaturityDate. That is the rule the terminal's own contract writer
@@ -662,9 +720,15 @@ fn push_contract_identity(
     // not. The terminal writes both alongside the symbol and the security type;
     // sending neither left a futures order naming a family and no member of it,
     // which the venue called ambiguous.
-    if !trading_class.is_empty() { fields.push((6058, trading_class)); }
-    if !local_symbol.is_empty() { fields.push((6035, local_symbol)); }
-    if strike.parse::<f64>().unwrap_or(0.0) > 0.0 { fields.push((202, strike)); }
+    if !trading_class.is_empty() {
+        fields.push((6058, trading_class));
+    }
+    if !local_symbol.is_empty() {
+        fields.push((6035, local_symbol));
+    }
+    if strike.parse::<f64>().unwrap_or(0.0) > 0.0 {
+        fields.push((202, strike));
+    }
     // PutOrCall is a code on this wire, not the letter: Call = 1, Put = 0, the
     // same mapping the security-definition request uses. Sending "C" would name
     // no side the gateway recognises.
@@ -672,9 +736,13 @@ fn push_contract_identity(
         "C" | "CALL" | "1" => fields.push((201, "1".to_string())),
         "P" | "PUT" | "0" => fields.push((201, "0".to_string())),
         "" => {}
-        other => log::warn!("order for an option with an unrecognised right {other:?}; omitting tag 201"),
+        other => {
+            log::warn!("order for an option with an unrecognised right {other:?}; omitting tag 201")
+        }
     }
-    if !multiplier.is_empty() { fields.push((231, multiplier)); }
+    if !multiplier.is_empty() {
+        fields.push((231, multiplier));
+    }
 }
 
 fn send_order_ex(
@@ -723,7 +791,14 @@ fn send_order_ex(
         K::WhatIf { price } => (crate::types::ORD_WHAT_IF, price, 0),
     };
     context.insert_order(crate::types::Order::new(
-        order_id, instrument, side, qty, track_price, ord_type_byte, tif, track_stop,
+        order_id,
+        instrument,
+        side,
+        qty,
+        track_price,
+        ord_type_byte,
+        tif,
+        track_stop,
     ));
     // Kept so a replace can restate it: the gateway takes a replace as a full
     // statement of the order, so an attribute this submit made and the replace
@@ -782,8 +857,8 @@ fn send_order_ex(
             // Base order type only. The 6257+ adjustable tags are appended after
             // the attribute block below, where the dedicated encoder this path
             // replaced put them.
-            fields.push((40, "3".to_string()));                       // OrdType = Stop
-            fields.push((99, format_price(stop_price).to_string()));  // StopPx
+            fields.push((40, "3".to_string())); // OrdType = Stop
+            fields.push((99, format_price(stop_price).to_string())); // StopPx
         }
         K::TrailingStop { trail_amt, .. } => {
             // Per ib-agent#136 capture: amount-based trailing stop carries
@@ -857,8 +932,14 @@ fn send_order_ex(
         // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
         // OrdType sent the two as the same message, saying which peg neither.
         K::PegBench {
-            ref_con_id, is_peg_decrease, pegged_change_amount, ref_change_amount,
-            starting_price, stock_ref_price, ref ref_exchange, ..
+            ref_con_id,
+            is_peg_decrease,
+            pegged_change_amount,
+            ref_change_amount,
+            starting_price,
+            stock_ref_price,
+            ref ref_exchange,
+            ..
         } => {
             fields.push((40, "PB".to_string()));
             fields.push((6941, ref_con_id.to_string()));
@@ -913,8 +994,12 @@ fn send_order_ex(
     // MIDPX / SNAP* / PEG* require a directed exchange; everything else
     // routes per the instrument's registered routing (ibx#217).
     let destination = match kind {
-        K::MidPrice { .. } | K::SnapMkt { .. } | K::SnapMid { .. } | K::SnapPri { .. }
-        | K::PegMkt { .. } | K::PegMid { .. } => "ISLAND".to_string(),
+        K::MidPrice { .. }
+        | K::SnapMkt { .. }
+        | K::SnapMid { .. }
+        | K::SnapPri { .. }
+        | K::PegMkt { .. }
+        | K::PegMid { .. } => "ISLAND".to_string(),
         _ => destination,
     };
     fields.push((100, destination.clone()));
@@ -925,8 +1010,13 @@ fn send_order_ex(
     // constant, which is right for a US instrument and wrong for every other:
     // an order on a contract quoted in another currency named a contract that
     // is not the one it meant.
-    fields.push((15, context.market.order_identity(instrument)
-        .map_or_else(|| "USD".to_string(), |id| id.currency)));
+    fields.push((
+        15,
+        context
+            .market
+            .order_identity(instrument)
+            .map_or_else(|| "USD".to_string(), |id| id.currency),
+    ));
     fields.push((204, "0".to_string()));
 
     push_order_attrs(&mut fields, attrs, &kind, exec_inst);
@@ -964,449 +1054,493 @@ fn push_order_attrs(
     mut exec_inst: String,
 ) {
     use crate::types::OrderKind as K;
-// Extended attributes — same tag order as the historical SubmitLimitEx
-// block.
-if attrs.display_size > 0 {
-    fields.push((111, format_uint(attrs.display_size as u64).to_string()));
-}
-if attrs.min_qty > 0 {
-    fields.push((110, format_uint(attrs.min_qty as u64).to_string()));
-}
-if attrs.outside_rth {
-    fields.push((6433, "1".to_string()));
-}
-if attrs.hidden {
-    fields.push((6135, "1".to_string()));
-}
-if attrs.good_after > 0 {
-    fields.push((168, unix_to_ib_datetime(attrs.good_after)));
-}
-// GTD expiry: date-only -> tag 432; time-precise -> tag 126 (UTC).
-// Mutually exclusive — never both (gateway rejects both together).
-if attrs.good_till_date_ymd > 0 {
-    fields.push((432, format!("{:08}", attrs.good_till_date_ymd)));
-} else if attrs.good_till > 0 {
-    fields.push((126, unix_to_ib_utc_dash(attrs.good_till)));
-}
-let oca_str = if !attrs.oca_group_str.is_empty() {
-    attrs.oca_group_str.clone()
-} else if attrs.oca_group > 0 {
-    format!("OCA_{}", attrs.oca_group)
-} else {
-    String::new()
-};
-if !oca_str.is_empty() {
-    fields.push((583, oca_str));
-    fields.push((6209, oca_type_str(attrs.oca_type).to_string()));
-}
-if attrs.parent_id > 0 {
-    // Match parent ClOrdID format: "{order_id}.{ver}" — assume ver=0
-    // for initial submission.
-    fields.push((6107, format!("{}.0", attrs.parent_id)));
-}
-if attrs.discretionary_amt > 0 {
-    fields.push((9813, format_price(attrs.discretionary_amt).to_string()));
-}
-if attrs.sweep_to_fill {
-    fields.push((6102, "1".to_string()));
-}
-if attrs.all_or_none {
-    exec_inst.push('G');
-}
-if !exec_inst.is_empty() {
-    fields.push((18, exec_inst));
-}
-// Instructions the caller set that used to reach no encoder. Each changes
-// what is traded, so each goes on the wire: a volatility order priced in
-// volatility, an offset the venue works from, a discretion the floor is
-// told about, the caller's own reference, and whether this opens a position
-// or closes one.
-if attrs.volatility > 0.0 {
-    fields.push((9816, format!("{:.6}", attrs.volatility)));
-}
-if attrs.volatility_type > 0 {
-    fields.push((6280, attrs.volatility_type.to_string()));
-}
-if attrs.percent_offset != f64::MAX {
-    fields.push((9822, format!("{:.6}", attrs.percent_offset)));
-}
-if attrs.not_held {
-    fields.push((6287, "1".to_string()));
-}
-if !attrs.order_ref.is_empty() {
-    fields.push((6010, attrs.order_ref.clone()));
-}
-if !attrs.open_close.is_empty() {
-    fields.push((77, attrs.open_close.clone()));
-}
-// The ladder. Sending the sizes and not the step, or the step and not the
-// sizes, describes no ladder at all, so an order that names one names all
-// of what it set.
-// The hedge. An order that asked for one and did not say so left the
-// position naked, which is the opposite of what it was for.
-// A combination states its legs on the order itself. There is no repeating
-// group for them and no standard leg tag: the count goes on 6079 and each
-// leg's contract, ratio and side on 6080, 6081 and 6082, with its venue,
-// position effect and short-sale slot after. The side is a flag, not the
-// letter the rest of the message uses.
-if !attrs.combo_legs.is_empty() {
-    fields.push((6079, format_uint(attrs.combo_legs.len() as u64).to_string()));
-    for leg in &attrs.combo_legs {
-        fields.push((6080, leg.con_id.to_string()));
-        fields.push((6081, format_uint(leg.ratio as u64).to_string()));
-        fields.push((6082, if leg.is_sell { "1" } else { "0" }.to_string()));
-        // Empty where the leg routes with the combination rather than on a
-        // venue of its own, which is what the terminal writes for SMART.
-        fields.push((616, leg.exchange.clone()));
-        if leg.open_close != 0 {
-            fields.push((654, leg.open_close.to_string()));
-        }
-        if leg.short_sale_slot != 0 {
-            fields.push((6086, leg.short_sale_slot.to_string()));
-            if !leg.designated_location.is_empty() {
-                fields.push((6216, leg.designated_location.clone()));
+    // Extended attributes — same tag order as the historical SubmitLimitEx
+    // block.
+    if attrs.display_size > 0 {
+        fields.push((111, format_uint(attrs.display_size as u64).to_string()));
+    }
+    if attrs.min_qty > 0 {
+        fields.push((110, format_uint(attrs.min_qty as u64).to_string()));
+    }
+    if attrs.outside_rth {
+        fields.push((6433, "1".to_string()));
+    }
+    if attrs.hidden {
+        fields.push((6135, "1".to_string()));
+    }
+    if attrs.good_after > 0 {
+        fields.push((168, unix_to_ib_datetime(attrs.good_after)));
+    }
+    // GTD expiry: date-only -> tag 432; time-precise -> tag 126 (UTC).
+    // Mutually exclusive — never both (gateway rejects both together).
+    if attrs.good_till_date_ymd > 0 {
+        fields.push((432, format!("{:08}", attrs.good_till_date_ymd)));
+    } else if attrs.good_till > 0 {
+        fields.push((126, unix_to_ib_utc_dash(attrs.good_till)));
+    }
+    let oca_str = if !attrs.oca_group_str.is_empty() {
+        attrs.oca_group_str.clone()
+    } else if attrs.oca_group > 0 {
+        format!("OCA_{}", attrs.oca_group)
+    } else {
+        String::new()
+    };
+    if !oca_str.is_empty() {
+        fields.push((583, oca_str));
+        fields.push((6209, oca_type_str(attrs.oca_type).to_string()));
+    }
+    if attrs.parent_id > 0 {
+        // Match parent ClOrdID format: "{order_id}.{ver}" — assume ver=0
+        // for initial submission.
+        fields.push((6107, format!("{}.0", attrs.parent_id)));
+    }
+    if attrs.discretionary_amt > 0 {
+        fields.push((9813, format_price(attrs.discretionary_amt).to_string()));
+    }
+    if attrs.sweep_to_fill {
+        fields.push((6102, "1".to_string()));
+    }
+    if attrs.all_or_none {
+        exec_inst.push('G');
+    }
+    if !exec_inst.is_empty() {
+        fields.push((18, exec_inst));
+    }
+    // Instructions the caller set that used to reach no encoder. Each changes
+    // what is traded, so each goes on the wire: a volatility order priced in
+    // volatility, an offset the venue works from, a discretion the floor is
+    // told about, the caller's own reference, and whether this opens a position
+    // or closes one.
+    if attrs.volatility > 0.0 {
+        fields.push((9816, format!("{:.6}", attrs.volatility)));
+    }
+    if attrs.volatility_type > 0 {
+        fields.push((6280, attrs.volatility_type.to_string()));
+    }
+    if attrs.percent_offset != f64::MAX {
+        fields.push((9822, format!("{:.6}", attrs.percent_offset)));
+    }
+    if attrs.not_held {
+        fields.push((6287, "1".to_string()));
+    }
+    if !attrs.order_ref.is_empty() {
+        fields.push((6010, attrs.order_ref.clone()));
+    }
+    if !attrs.open_close.is_empty() {
+        fields.push((77, attrs.open_close.clone()));
+    }
+    // The ladder. Sending the sizes and not the step, or the step and not the
+    // sizes, describes no ladder at all, so an order that names one names all
+    // of what it set.
+    // The hedge. An order that asked for one and did not say so left the
+    // position naked, which is the opposite of what it was for.
+    // A combination states its legs on the order itself. There is no repeating
+    // group for them and no standard leg tag: the count goes on 6079 and each
+    // leg's contract, ratio and side on 6080, 6081 and 6082, with its venue,
+    // position effect and short-sale slot after. The side is a flag, not the
+    // letter the rest of the message uses.
+    if !attrs.combo_legs.is_empty() {
+        fields.push((6079, format_uint(attrs.combo_legs.len() as u64).to_string()));
+        for leg in &attrs.combo_legs {
+            fields.push((6080, leg.con_id.to_string()));
+            fields.push((6081, format_uint(leg.ratio as u64).to_string()));
+            fields.push((6082, if leg.is_sell { "1" } else { "0" }.to_string()));
+            // Empty where the leg routes with the combination rather than on a
+            // venue of its own, which is what the terminal writes for SMART.
+            fields.push((616, leg.exchange.clone()));
+            if leg.open_close != 0 {
+                fields.push((654, leg.open_close.to_string()));
+            }
+            if leg.short_sale_slot != 0 {
+                fields.push((6086, leg.short_sale_slot.to_string()));
+                if !leg.designated_location.is_empty() {
+                    fields.push((6216, leg.designated_location.clone()));
+                }
+            }
+            if leg.exempt_code != -1 {
+                fields.push((1689, leg.exempt_code.to_string()));
             }
         }
-        if leg.exempt_code != -1 {
-            fields.push((1689, leg.exempt_code.to_string()));
+    }
+
+    // Where the order clears, which is not the account it trades in. This
+    // already read both of these back off the wire and sent neither.
+    if !attrs.clearing_account.is_empty() {
+        fields.push((440, attrs.clearing_account.clone()));
+    }
+    if !attrs.clearing_intent.is_empty() {
+        fields.push((6419, attrs.clearing_intent.clone()));
+    }
+
+    // Lifecycle: whether the venue holds this order rather than working it,
+    // whether it may work overnight, when it cancels itself, and what it takes
+    // with it when it goes.
+    if attrs.deactivate {
+        fields.push((6521, "1".to_string()));
+    }
+    if attrs.deactivate_on_disconnect {
+        fields.push((6661, "1".to_string()));
+    }
+    if attrs.include_overnight {
+        fields.push((8534, "1".to_string()));
+    }
+    if attrs.auto_cancel_parent {
+        fields.push((6965, "1".to_string()));
+    }
+    if attrs.min_trade_qty > 0 {
+        fields.push((8415, format_uint(attrs.min_trade_qty as u64).to_string()));
+    }
+    if attrs.block_order {
+        fields.push((9801, "1".to_string()));
+    }
+    if !attrs.auto_cancel_date.is_empty() {
+        fields.push((6596, attrs.auto_cancel_date.clone()));
+    }
+
+    // Who the order is for, which the venue reads as a regulatory statement.
+    if !attrs.rule80a.is_empty() {
+        fields.push((47, attrs.rule80a.clone()));
+    }
+    if attrs.post_to_ats != 0 {
+        fields.push((8405, format_uint(attrs.post_to_ats as u64).to_string()));
+    }
+
+    // Short-sale handling. The location is stated only for the slot that has
+    // one, which is the rule the venue applies, and the exemption rides its own
+    // tag rather than the slot.
+    if attrs.short_sale_slot != 0 {
+        fields.push((6086, attrs.short_sale_slot.to_string()));
+        if attrs.short_sale_slot == 2 && !attrs.designated_location.is_empty() {
+            fields.push((5700, attrs.designated_location.clone()));
         }
     }
-}
+    if attrs.exempt_code != -1 {
+        fields.push((1688, attrs.exempt_code.to_string()));
+    }
+    // Whether the shares have been located, which the terminal states as a
+    // plain yes or no beside the slot rather than leaving it to be inferred.
+    if attrs.short_sale_slot != 0 {
+        let located = matches!(attrs.designated_location.as_str(), "TMBR" | "IBKR");
+        fields.push((114, if located { "Y" } else { "N" }.to_string()));
+    }
+    // The hedge, as a number rather than the API's letter, with the parameter
+    // the chosen kind takes: a beta or a pair ratio. Delta and FX take none.
+    if attrs.hedge_type != 0 {
+        fields.push((6665, attrs.hedge_type.to_string()));
+        if attrs.hedge_beta != 0.0 {
+            fields.push((6703, format!("{:.6}", attrs.hedge_beta)));
+        }
+        if attrs.hedge_ratio != 0.0 {
+            fields.push((6666, format!("{:.6}", attrs.hedge_ratio)));
+        }
+    }
+    // Where the contract is listed, which is not where the order routes. The
+    // venue reads the two separately and this stated only the routing.
+    if !attrs.primary_exchange.is_empty() {
+        fields.push((207, attrs.primary_exchange.clone()));
+    }
+    // The contract the order hedges against: which one, its delta and its
+    // price. Stated on the contract rather than the order, so an order that
+    // named a hedging leg still said nothing about what to hedge with.
+    if let Some(dnc) = attrs.delta_neutral_contract.as_deref() {
+        if dnc.con_id != 0 {
+            fields.push((6150, dnc.con_id.to_string()));
+        }
+        fields.push((6148, format!("{:.6}", dnc.delta)));
+        fields.push((6149, format!("{:.6}", dnc.price)));
+    }
+    if let Some(dn) = attrs.delta_neutral.as_deref() {
+        fields.push((6290, dn.order_type.clone()));
+        if dn.aux_price != 0 {
+            fields.push((6291, format_price(dn.aux_price).to_string()));
+        }
+        if dn.con_id != 0 {
+            fields.push((6150, dn.con_id.to_string()));
+        }
+    }
+    if let Some(scale) = attrs.scale.as_deref() {
+        if scale.init_level_size > 0 {
+            fields.push((6403, format_uint(scale.init_level_size as u64).to_string()));
+        }
+        if scale.subs_level_size > 0 {
+            fields.push((6445, format_uint(scale.subs_level_size as u64).to_string()));
+        }
+        if scale.price_increment > 0 {
+            fields.push((6405, format_price(scale.price_increment).to_string()));
+        }
+        if scale.profit_offset > 0 {
+            fields.push((6446, format_price(scale.profit_offset).to_string()));
+        }
+        if scale.price_adjust_value != 0 {
+            fields.push((6527, format_price(scale.price_adjust_value).to_string()));
+        }
+        if scale.price_adjust_interval > 0 {
+            fields.push((6526, format_uint(scale.price_adjust_interval as u64).to_string()));
+        }
+        if scale.auto_reset {
+            fields.push((6461, "1".to_string()));
+        }
+        if scale.random_percent {
+            fields.push((6795, "1".to_string()));
+        }
+    }
+    if attrs.trigger_method > 0 {
+        fields.push((6115, attrs.trigger_method.to_string()));
+    }
+    if attrs.cash_qty > 0 {
+        // 152, not 5920. The vendor's attribute declares `super(152, …, 5920, …)`
+        // — the same shape as all-or-none's `super(18, …, 3570, …)`, where 18 is
+        // the tag this already sends and 3570 is a selector for its own screens.
+        // 5920 is that selector, and it is written by no encoder anywhere; 152
+        // is CashOrderQty. An order by cash amount was naming a field the venue
+        // does not read.
+        fields.push((152, format_price(attrs.cash_qty).to_string()));
+    }
+    // Condition tags. The vendor's audit renderer names the whole set:
+    // 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 cancel-on-condition,
+    // 6136 list size, 6137 conjunction, 6166 strike, 6168 expiry, 6169
+    // security type, 6220 multiplier, 6222 type, 6223 time, 6224 send-email,
+    // 6226 email text, 6227 TWS actions, 6241 inactive, 6245 percentage,
+    // 6246 execution pattern, 6263 volume, 6151 ignore-RTH, 8569 amount,
+    // 6947 a type discriminator (NOT a timezone).
+    //
+    // A time condition is still refused with every one of these read and the
+    // relevant ones sent, including the timezone, so what it wants is not in
+    // this list.
+    if !attrs.conditions.is_empty() {
+        let cond_strs = build_condition_strings(&attrs.conditions);
+        fields.push((6136, cond_strs[0].clone())); // first element is count
+        // 6128 cancels the order when its condition fails; 6151 lets the
+        // conditions ignore regular hours. The audit renderer names 6128
+        // "CondIgnoreRth" and 6151 "StockRefPrice" — both names belong to
+        // other messages. The order serializer writes these two, for these two
+        // flags, in this order. Swapping them to match the renderer was tried
+        // and was wrong.
+        if attrs.conditions_cancel_order {
+            fields.push((6128, "1".to_string()));
+        }
+        if attrs.conditions_ignore_rth {
+            fields.push((6151, "1".to_string()));
+        }
+        // Per-condition tags start at index 1, 11 strings per condition
+        for i in 0..attrs.conditions.len() {
+            let base = 1 + i * 11;
+            fields.push((6222, cond_strs[base].clone())); // condType
+            // Every slot, including the ones this condition has no use for.
+            // The terminal writes only what applies, and following it here was
+            // tried: it did not make the time condition acceptable, and it
+            // broke the multi-condition order, which is refused for a missing
+            // volume field the moment the price condition alongside it stops
+            // stating an empty one. The gateway is reading these positionally.
+            fields.push((6137, cond_strs[base + 1].clone())); // conjunction
+            fields.push((6126, cond_strs[base + 2].clone())); // operator
+            fields.push((6123, cond_strs[base + 3].clone())); // conId
+            fields.push((6124, cond_strs[base + 4].clone())); // exchange
+            fields.push((6127, cond_strs[base + 5].clone())); // triggerMethod
+            fields.push((6125, cond_strs[base + 6].clone())); // price
+            fields.push((6223, cond_strs[base + 7].clone())); // time
+            fields.push((6245, cond_strs[base + 8].clone())); // percent
+            fields.push((6263, cond_strs[base + 9].clone())); // volume
+            fields.push((6246, cond_strs[base + 10].clone())); // execution
 
-// Where the order clears, which is not the account it trades in. This
-// already read both of these back off the wire and sent neither.
-if !attrs.clearing_account.is_empty() {
-    fields.push((440, attrs.clearing_account.clone()));
-}
-if !attrs.clearing_intent.is_empty() {
-    fields.push((6419, attrs.clearing_intent.clone()));
-}
+            // A time condition is still refused, and these were tried against a
+            // live session to see whether the shape was the reason: writing the
+            // condition's own fields first and the empty ones after, as the
+            // terminal does, and adding the empty 6947 it pads with. Neither
+            // changed the answer, and both are churn on a path that price,
+            // volume and multi-condition orders already go through, so the
+            // order here stays fixed
+        }
+    }
 
-// Lifecycle: whether the venue holds this order rather than working it,
-// whether it may work overnight, when it cancels itself, and what it takes
-// with it when it goes.
-if attrs.deactivate {
-    fields.push((6521, "1".to_string()));
-}
-if attrs.deactivate_on_disconnect {
-    fields.push((6661, "1".to_string()));
-}
-if attrs.include_overnight {
-    fields.push((8534, "1".to_string()));
-}
-if attrs.auto_cancel_parent {
-    fields.push((6965, "1".to_string()));
-}
-if attrs.min_trade_qty > 0 {
-    fields.push((8415, format_uint(attrs.min_trade_qty as u64).to_string()));
-}
-if attrs.block_order {
-    fields.push((9801, "1".to_string()));
-}
-if !attrs.auto_cancel_date.is_empty() {
-    fields.push((6596, attrs.auto_cancel_date.clone()));
-}
-
-// Who the order is for, which the venue reads as a regulatory statement.
-if !attrs.rule80a.is_empty() {
-    fields.push((47, attrs.rule80a.clone()));
-}
-if attrs.post_to_ats != 0 {
-    fields.push((8405, format_uint(attrs.post_to_ats as u64).to_string()));
-}
-
-// Short-sale handling. The location is stated only for the slot that has
-// one, which is the rule the venue applies, and the exemption rides its own
-// tag rather than the slot.
-if attrs.short_sale_slot != 0 {
-    fields.push((6086, attrs.short_sale_slot.to_string()));
-    if attrs.short_sale_slot == 2 && !attrs.designated_location.is_empty() {
-        fields.push((5700, attrs.designated_location.clone()));
-    }
-}
-if attrs.exempt_code != -1 {
-    fields.push((1688, attrs.exempt_code.to_string()));
-}
-// Whether the shares have been located, which the terminal states as a
-// plain yes or no beside the slot rather than leaving it to be inferred.
-if attrs.short_sale_slot != 0 {
-    let located = matches!(attrs.designated_location.as_str(), "TMBR" | "IBKR");
-    fields.push((114, if located { "Y" } else { "N" }.to_string()));
-}
-// The hedge, as a number rather than the API's letter, with the parameter
-// the chosen kind takes: a beta or a pair ratio. Delta and FX take none.
-if attrs.hedge_type != 0 {
-    fields.push((6665, attrs.hedge_type.to_string()));
-    if attrs.hedge_beta != 0.0 {
-        fields.push((6703, format!("{:.6}", attrs.hedge_beta)));
-    }
-    if attrs.hedge_ratio != 0.0 {
-        fields.push((6666, format!("{:.6}", attrs.hedge_ratio)));
-    }
-}
-// Where the contract is listed, which is not where the order routes. The
-// venue reads the two separately and this stated only the routing.
-if !attrs.primary_exchange.is_empty() {
-    fields.push((207, attrs.primary_exchange.clone()));
-}
-// The contract the order hedges against: which one, its delta and its
-// price. Stated on the contract rather than the order, so an order that
-// named a hedging leg still said nothing about what to hedge with.
-if let Some(dnc) = attrs.delta_neutral_contract.as_deref() {
-    if dnc.con_id != 0 {
-        fields.push((6150, dnc.con_id.to_string()));
-    }
-    fields.push((6148, format!("{:.6}", dnc.delta)));
-    fields.push((6149, format!("{:.6}", dnc.price)));
-}
-if let Some(dn) = attrs.delta_neutral.as_deref() {
-    fields.push((6290, dn.order_type.clone()));
-    if dn.aux_price != 0 {
-        fields.push((6291, format_price(dn.aux_price).to_string()));
-    }
-    if dn.con_id != 0 {
-        fields.push((6150, dn.con_id.to_string()));
-    }
-}
-if let Some(scale) = attrs.scale.as_deref() {
-    if scale.init_level_size > 0 {
-        fields.push((6403, format_uint(scale.init_level_size as u64).to_string()));
-    }
-    if scale.subs_level_size > 0 {
-        fields.push((6445, format_uint(scale.subs_level_size as u64).to_string()));
-    }
-    if scale.price_increment > 0 {
-        fields.push((6405, format_price(scale.price_increment).to_string()));
-    }
-    if scale.profit_offset > 0 {
-        fields.push((6446, format_price(scale.profit_offset).to_string()));
-    }
-    if scale.price_adjust_value != 0 {
-        fields.push((6527, format_price(scale.price_adjust_value).to_string()));
-    }
-    if scale.price_adjust_interval > 0 {
-        fields.push((6526, format_uint(scale.price_adjust_interval as u64).to_string()));
-    }
-    if scale.auto_reset {
-        fields.push((6461, "1".to_string()));
-    }
-    if scale.random_percent {
-        fields.push((6795, "1".to_string()));
-    }
-}
-if attrs.trigger_method > 0 {
-    fields.push((6115, attrs.trigger_method.to_string()));
-}
-if attrs.cash_qty > 0 {
-    // 152, not 5920. The vendor's attribute declares `super(152, …, 5920, …)`
-    // — the same shape as all-or-none's `super(18, …, 3570, …)`, where 18 is
-    // the tag this already sends and 3570 is a selector for its own screens.
-    // 5920 is that selector, and it is written by no encoder anywhere; 152
-    // is CashOrderQty. An order by cash amount was naming a field the venue
-    // does not read.
-    fields.push((152, format_price(attrs.cash_qty).to_string()));
-}
-// Condition tags. The vendor's audit renderer names the whole set:
-// 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 cancel-on-condition,
-// 6136 list size, 6137 conjunction, 6166 strike, 6168 expiry, 6169
-// security type, 6220 multiplier, 6222 type, 6223 time, 6224 send-email,
-// 6226 email text, 6227 TWS actions, 6241 inactive, 6245 percentage,
-// 6246 execution pattern, 6263 volume, 6151 ignore-RTH, 8569 amount,
-// 6947 a type discriminator (NOT a timezone).
-//
-// A time condition is still refused with every one of these read and the
-// relevant ones sent, including the timezone, so what it wants is not in
-// this list.
-if !attrs.conditions.is_empty() {
-    let cond_strs = build_condition_strings(&attrs.conditions);
-    fields.push((6136, cond_strs[0].clone())); // first element is count
-    // 6128 cancels the order when its condition fails; 6151 lets the
-    // conditions ignore regular hours. The audit renderer names 6128
-    // "CondIgnoreRth" and 6151 "StockRefPrice" — both names belong to
-    // other messages. The order serializer writes these two, for these two
-    // flags, in this order. Swapping them to match the renderer was tried
-    // and was wrong.
-    if attrs.conditions_cancel_order {
-        fields.push((6128, "1".to_string()));
-    }
-    if attrs.conditions_ignore_rth {
-        fields.push((6151, "1".to_string()));
-    }
-    // Per-condition tags start at index 1, 11 strings per condition
-    for i in 0..attrs.conditions.len() {
-        let base = 1 + i * 11;
-        fields.push((6222, cond_strs[base].clone()));      // condType
-        // Every slot, including the ones this condition has no use for.
-        // The terminal writes only what applies, and following it here was
-        // tried: it did not make the time condition acceptable, and it
-        // broke the multi-condition order, which is refused for a missing
-        // volume field the moment the price condition alongside it stops
-        // stating an empty one. The gateway is reading these positionally.
-        fields.push((6137, cond_strs[base + 1].clone()));  // conjunction
-        fields.push((6126, cond_strs[base + 2].clone()));  // operator
-        fields.push((6123, cond_strs[base + 3].clone()));  // conId
-        fields.push((6124, cond_strs[base + 4].clone()));  // exchange
-        fields.push((6127, cond_strs[base + 5].clone()));  // triggerMethod
-        fields.push((6125, cond_strs[base + 6].clone()));  // price
-        fields.push((6223, cond_strs[base + 7].clone()));  // time
-        fields.push((6245, cond_strs[base + 8].clone()));  // percent
-        fields.push((6263, cond_strs[base + 9].clone()));  // volume
-        fields.push((6246, cond_strs[base + 10].clone())); // execution
-
-        // A time condition is still refused, and these were tried against a
-        // live session to see whether the shape was the reason: writing the
-        // condition's own fields first and the empty ones after, as the
-        // terminal does, and adding the empty 6947 it pads with. Neither
-        // changed the answer, and both are churn on a path that price,
-        // volume and multi-condition orders already go through, so the
-        // order here stays fixed
-    }
-}
-
-// Adjustable-stop tags last, keeping the position they held in the encoder
-// this path replaced: after 204 and the attribute block, not in among the
-// order-type tags. Values and conditions are unchanged; only the encoder
-// they come from is new (ibx#240).
-if let K::AdjustableStop {
-    trigger_price, adjusted_order_type, adjusted_stop_price,
-    adjusted_stop_limit_price, adjusted_trailing_amount, adjustable_trailing_unit, ..
-} = &kind {
-    fields.push((6257, "1".to_string()));                     // has adjustable params
-    fields.push((6261, adjusted_order_type.fix_code().to_string()));
-    fields.push((6258, format_price(*trigger_price).to_string()));
-    fields.push((6259, format_price(*adjusted_stop_price).to_string()));
-    if *adjusted_stop_limit_price > 0 {
-        fields.push((6262, format_price(*adjusted_stop_limit_price).to_string()));
-    }
-    // Trailing amount + unit for a Trail/TrailLimit conversion
-    // (ib-agent#167, ibx#225).
-    if matches!(adjusted_order_type,
-        crate::types::AdjustedOrderType::Trail
-        | crate::types::AdjustedOrderType::TrailLimit)
+    // Adjustable-stop tags last, keeping the position they held in the encoder
+    // this path replaced: after 204 and the attribute block, not in among the
+    // order-type tags. Values and conditions are unchanged; only the encoder
+    // they come from is new (ibx#240).
+    if let K::AdjustableStop {
+        trigger_price,
+        adjusted_order_type,
+        adjusted_stop_price,
+        adjusted_stop_limit_price,
+        adjusted_trailing_amount,
+        adjustable_trailing_unit,
+        ..
+    } = &kind
     {
-        fields.push((6260, format_price(*adjusted_trailing_amount).to_string()));
-        fields.push((6269, adjustable_trailing_unit.to_string()));
-    }
-}
-
-// The optional tags each type appends last, in the position the per-type
-// encoders give them: after 204 and the attribute block, not in among the
-// order-type tags. The values and the conditions are unchanged.
-match &kind {
-    K::MidPrice { price_cap } if *price_cap > 0 => {
-        fields.push((44, format_price(*price_cap).to_string()));
-    }
-    // The offset is stated whether or not it is zero. Pegging at the price
-    // with no offset is an ordinary order, and omitting the tag for it had
-    // the gateway refuse the whole thing — seen against a paper account as
-    // "Invalid value in field # 44", which is what an absent offset leaves
-    // it looking for.
-    K::PegMkt { offset, price_cap } => {
-        fields.push((211, format_price(*offset).to_string()));
-        if *price_cap > 0 {
-            fields.push((44, format_price(*price_cap).to_string()));
+        fields.push((6257, "1".to_string())); // has adjustable params
+        fields.push((6261, adjusted_order_type.fix_code().to_string()));
+        fields.push((6258, format_price(*trigger_price).to_string()));
+        fields.push((6259, format_price(*adjusted_stop_price).to_string()));
+        if *adjusted_stop_limit_price > 0 {
+            fields.push((6262, format_price(*adjusted_stop_limit_price).to_string()));
+        }
+        // Trailing amount + unit for a Trail/TrailLimit conversion
+        // (ib-agent#167, ibx#225).
+        if matches!(
+            adjusted_order_type,
+            crate::types::AdjustedOrderType::Trail | crate::types::AdjustedOrderType::TrailLimit
+        ) {
+            fields.push((6260, format_price(*adjusted_trailing_amount).to_string()));
+            fields.push((6269, adjustable_trailing_unit.to_string()));
         }
     }
-    K::PegMid { offset, price_cap } => {
-        fields.push((8403, "0.0".to_string())); // midOffsetAtWhole — differentiates PEGMID
-        fields.push((8404, "0.0".to_string())); // midOffsetAtHalf
-        fields.push((211, format_price(*offset).to_string()));
-        // The worst price the peg may reach, which IBKR documents as the
-        // limit-price field for these types. A zero cap is no cap, and zero
-        // is not a price, so it is left off rather than stated as one.
-        if *price_cap > 0 {
+
+    // The optional tags each type appends last, in the position the per-type
+    // encoders give them: after 204 and the attribute block, not in among the
+    // order-type tags. The values and the conditions are unchanged.
+    match &kind {
+        K::MidPrice { price_cap } if *price_cap > 0 => {
             fields.push((44, format_price(*price_cap).to_string()));
         }
+        // The offset is stated whether or not it is zero. Pegging at the price
+        // with no offset is an ordinary order, and omitting the tag for it had
+        // the gateway refuse the whole thing — seen against a paper account as
+        // "Invalid value in field # 44", which is what an absent offset leaves
+        // it looking for.
+        K::PegMkt { offset, price_cap } => {
+            fields.push((211, format_price(*offset).to_string()));
+            if *price_cap > 0 {
+                fields.push((44, format_price(*price_cap).to_string()));
+            }
+        }
+        K::PegMid { offset, price_cap } => {
+            fields.push((8403, "0.0".to_string())); // midOffsetAtWhole — differentiates PEGMID
+            fields.push((8404, "0.0".to_string())); // midOffsetAtHalf
+            fields.push((211, format_price(*offset).to_string()));
+            // The worst price the peg may reach, which IBKR documents as the
+            // limit-price field for these types. A zero cap is no cap, and zero
+            // is not a price, so it is left off rather than stated as one.
+            if *price_cap > 0 {
+                fields.push((44, format_price(*price_cap).to_string()));
+            }
+        }
+        // Optional initial stop trigger (ib-agent#173).
+        K::TrailingStop { trail_stop_price, .. }
+        | K::TrailingStopLimit { trail_stop_price, .. }
+        | K::TrailPct { trail_stop_price, .. }
+            if *trail_stop_price > 0 =>
+        {
+            fields.push((6117, format_price(*trail_stop_price).to_string()));
+        }
+        _ => {}
     }
-    // Optional initial stop trigger (ib-agent#173).
-    K::TrailingStop { trail_stop_price, .. }
-    | K::TrailingStopLimit { trail_stop_price, .. }
-    | K::TrailPct { trail_stop_price, .. } if *trail_stop_price > 0 => {
-        fields.push((6117, format_price(*trail_stop_price).to_string()));
-    }
-    _ => {}
-}
 
-// Strategy and preview tags last, in the position they held in the encoders
-// this path replaced: after 204 and the attribute block (ibx#318).
-match &kind {
-    K::Adaptive { priority, .. } => {
-        fields.push((847, "Adaptive".to_string()));
-        fields.push((5957, "1".to_string()));
-        fields.push((5958, "adaptivePriority".to_string()));
-        fields.push((5960, priority.as_str().to_string()));
-    }
-    K::Algo { algo, .. } => {
-        let (algo_name, param_strs) = build_algo_tags(algo);
-        fields.push((847, algo_name.to_string()));
-        // Tag 849 (maxPctVol) for the algos that use it.
-        if let AlgoParams::Vwap { max_pct_vol, .. }
+    // Strategy and preview tags last, in the position they held in the encoders
+    // this path replaced: after 204 and the attribute block (ibx#318).
+    match &kind {
+        K::Adaptive { priority, .. } => {
+            fields.push((847, "Adaptive".to_string()));
+            fields.push((5957, "1".to_string()));
+            fields.push((5958, "adaptivePriority".to_string()));
+            fields.push((5960, priority.as_str().to_string()));
+        }
+        K::Algo { algo, .. } => {
+            let (algo_name, param_strs) = build_algo_tags(algo);
+            fields.push((847, algo_name.to_string()));
+            // Tag 849 (maxPctVol) for the algos that use it.
+            if let AlgoParams::Vwap { max_pct_vol, .. }
             | AlgoParams::ArrivalPx { max_pct_vol, .. }
             | AlgoParams::ClosePx { max_pct_vol, .. } = algo
-        {
-            fields.push((849, format!("{max_pct_vol}")));
+            {
+                fields.push((849, format!("{max_pct_vol}")));
+            }
+            fields.push((5957, (param_strs.len() / 2).to_string()));
+            // Key/value pairs: 5958=key, 5960=value, repeated.
+            for pair in param_strs.chunks_exact(2) {
+                fields.push((5958, pair[0].clone()));
+                fields.push((5960, pair[1].clone()));
+            }
         }
-        fields.push((5957, (param_strs.len() / 2).to_string()));
-        // Key/value pairs: 5958=key, 5960=value, repeated.
-        for pair in param_strs.chunks_exact(2) {
-            fields.push((5958, pair[0].clone()));
-            fields.push((5960, pair[1].clone()));
-        }
+        K::WhatIf { .. } => fields.push((6091, "1".to_string())),
+        _ => {}
     }
-    K::WhatIf { .. } => fields.push((6091, "1".to_string())),
-    _ => {}
-}
 }
 
 fn build_algo_tags(algo: &AlgoParams) -> (&'static str, Vec<String>) {
     match algo {
-        AlgoParams::Vwap { no_take_liq, allow_past_end_time, start_time, end_time, .. } => {
-            ("Vwap", vec![
-                "noTakeLiq".into(), if *no_take_liq { "1" } else { "0" }.into(),
-                "allowPastEndTime".into(), if *allow_past_end_time { "1" } else { "0" }.into(),
-                "startTime".into(), start_time.clone(),
-                "endTime".into(), end_time.clone(),
-            ])
-        }
-        AlgoParams::Twap { allow_past_end_time, start_time, end_time } => {
-            ("Twap", vec![
-                "allowPastEndTime".into(), if *allow_past_end_time { "1" } else { "0" }.into(),
-                "startTime".into(), start_time.clone(),
-                "endTime".into(), end_time.clone(),
-            ])
-        }
-        AlgoParams::ArrivalPx { risk_aversion, allow_past_end_time, force_completion, start_time, end_time, .. } => {
-            ("ArrivalPx", vec![
-                "riskAversion".into(), risk_aversion.as_str().into(),
-                "allowPastEndTime".into(), if *allow_past_end_time { "1" } else { "0" }.into(),
-                "forceCompletion".into(), if *force_completion { "1" } else { "0" }.into(),
-                "startTime".into(), start_time.clone(),
-                "endTime".into(), end_time.clone(),
-            ])
-        }
-        AlgoParams::ClosePx { risk_aversion, force_completion, start_time, .. } => {
-            ("ClosePx", vec![
-                "riskAversion".into(), risk_aversion.as_str().into(),
-                "forceCompletion".into(), if *force_completion { "1" } else { "0" }.into(),
-                "startTime".into(), start_time.clone(),
-            ])
-        }
-        AlgoParams::DarkIce { allow_past_end_time, display_size, start_time, end_time } => {
-            ("DarkIce", vec![
-                "allowPastEndTime".into(), if *allow_past_end_time { "1" } else { "0" }.into(),
-                "displaySize".into(), display_size.to_string(),
-                "startTime".into(), start_time.clone(),
-                "endTime".into(), end_time.clone(),
-            ])
-        }
-        AlgoParams::PctVol { pct_vol, no_take_liq, start_time, end_time } => {
-            ("PctVol", vec![
-                "noTakeLiq".into(), if *no_take_liq { "1" } else { "0" }.into(),
-                "pctVol".into(), format!("{}", pct_vol),
-                "startTime".into(), start_time.clone(),
-                "endTime".into(), end_time.clone(),
-            ])
-        }
+        AlgoParams::Vwap { no_take_liq, allow_past_end_time, start_time, end_time, .. } => (
+            "Vwap",
+            vec![
+                "noTakeLiq".into(),
+                if *no_take_liq { "1" } else { "0" }.into(),
+                "allowPastEndTime".into(),
+                if *allow_past_end_time { "1" } else { "0" }.into(),
+                "startTime".into(),
+                start_time.clone(),
+                "endTime".into(),
+                end_time.clone(),
+            ],
+        ),
+        AlgoParams::Twap { allow_past_end_time, start_time, end_time } => (
+            "Twap",
+            vec![
+                "allowPastEndTime".into(),
+                if *allow_past_end_time { "1" } else { "0" }.into(),
+                "startTime".into(),
+                start_time.clone(),
+                "endTime".into(),
+                end_time.clone(),
+            ],
+        ),
+        AlgoParams::ArrivalPx {
+            risk_aversion,
+            allow_past_end_time,
+            force_completion,
+            start_time,
+            end_time,
+            ..
+        } => (
+            "ArrivalPx",
+            vec![
+                "riskAversion".into(),
+                risk_aversion.as_str().into(),
+                "allowPastEndTime".into(),
+                if *allow_past_end_time { "1" } else { "0" }.into(),
+                "forceCompletion".into(),
+                if *force_completion { "1" } else { "0" }.into(),
+                "startTime".into(),
+                start_time.clone(),
+                "endTime".into(),
+                end_time.clone(),
+            ],
+        ),
+        AlgoParams::ClosePx { risk_aversion, force_completion, start_time, .. } => (
+            "ClosePx",
+            vec![
+                "riskAversion".into(),
+                risk_aversion.as_str().into(),
+                "forceCompletion".into(),
+                if *force_completion { "1" } else { "0" }.into(),
+                "startTime".into(),
+                start_time.clone(),
+            ],
+        ),
+        AlgoParams::DarkIce { allow_past_end_time, display_size, start_time, end_time } => (
+            "DarkIce",
+            vec![
+                "allowPastEndTime".into(),
+                if *allow_past_end_time { "1" } else { "0" }.into(),
+                "displaySize".into(),
+                display_size.to_string(),
+                "startTime".into(),
+                start_time.clone(),
+                "endTime".into(),
+                end_time.clone(),
+            ],
+        ),
+        AlgoParams::PctVol { pct_vol, no_take_liq, start_time, end_time } => (
+            "PctVol",
+            vec![
+                "noTakeLiq".into(),
+                if *no_take_liq { "1" } else { "0" }.into(),
+                "pctVol".into(),
+                format!("{}", pct_vol),
+                "startTime".into(),
+                start_time.clone(),
+                "endTime".into(),
+                end_time.clone(),
+            ],
+        ),
     }
 }
 
@@ -1419,17 +1553,17 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
         let op = |is_more: bool| if is_more { ">=" } else { "<=" };
         match cond {
             OrderCondition::Price { con_id, exchange, price, is_more, trigger_method } => {
-                out.push("1".into());                              // condType
-                out.push(conj.into());                             // conjunction
-                out.push(op(*is_more).into());                     // operator
-                out.push(con_id.to_string());                      // conId
-                out.push(exchange.clone());                        // exchange
-                out.push(trigger_method.to_string());              // triggerMethod
-                out.push(format_price(*price).to_string());         // price
-                out.push(String::new());                           // time (unused)
-                out.push(String::new());                           // percent (unused)
-                out.push(String::new());                           // volume (unused)
-                out.push(String::new());                           // execution (unused)
+                out.push("1".into()); // condType
+                out.push(conj.into()); // conjunction
+                out.push(op(*is_more).into()); // operator
+                out.push(con_id.to_string()); // conId
+                out.push(exchange.clone()); // exchange
+                out.push(trigger_method.to_string()); // triggerMethod
+                out.push(format_price(*price).to_string()); // price
+                out.push(String::new()); // time (unused)
+                out.push(String::new()); // percent (unused)
+                out.push(String::new()); // volume (unused)
+                out.push(String::new()); // execution (unused)
             }
             // The venue refuses a time condition, and it is not this
             // encoding. Every field was checked against the terminal's own
@@ -1452,14 +1586,14 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push("3".into());
                 out.push(conj.into());
                 out.push(op(*is_more).into());
-                out.push(String::new());                           // conId (unused)
-                out.push(String::new());                           // exchange (unused)
-                out.push(String::new());                           // triggerMethod (unused)
-                out.push(String::new());                           // price (unused)
-                out.push(time.clone());                            // time
-                out.push(String::new());                           // percent (unused)
-                out.push(String::new());                           // volume (unused)
-                out.push(String::new());                           // execution (unused)
+                out.push(String::new()); // conId (unused)
+                out.push(String::new()); // exchange (unused)
+                out.push(String::new()); // triggerMethod (unused)
+                out.push(String::new()); // price (unused)
+                out.push(time.clone()); // time
+                out.push(String::new()); // percent (unused)
+                out.push(String::new()); // volume (unused)
+                out.push(String::new()); // execution (unused)
             }
             OrderCondition::Margin { percent, is_more } => {
                 out.push("4".into());
@@ -1470,14 +1604,14 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());
                 out.push(String::new());
                 out.push(String::new());
-                out.push(percent.to_string());                     // percent
+                out.push(percent.to_string()); // percent
                 out.push(String::new());
                 out.push(String::new());
             }
             OrderCondition::Execution { symbol, exchange, sec_type } => {
                 out.push("5".into());
                 out.push(conj.into());
-                out.push(String::new());                           // operator (unused)
+                out.push(String::new()); // operator (unused)
                 out.push(String::new());
                 out.push(String::new());
                 out.push(String::new());
@@ -1498,7 +1632,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());
                 out.push(String::new());
                 out.push(String::new());
-                out.push(volume.to_string());                      // volume
+                out.push(volume.to_string()); // volume
                 out.push(String::new());
             }
             OrderCondition::PercentChange { con_id, exchange, percent, is_more } => {
@@ -1510,7 +1644,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());
                 out.push(String::new());
                 out.push(String::new());
-                out.push(format!("{percent}"));                   // percent
+                out.push(format!("{percent}")); // percent
                 out.push(String::new());
                 out.push(String::new());
             }
@@ -1548,7 +1682,16 @@ mod tests {
             tif: b'0',
             attrs,
         });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
         let mut buf = [0u8; 8192];
         let n = peer.read(&mut buf).unwrap();
         let placed = String::from_utf8_lossy(&buf[..n]).to_string();
@@ -1564,7 +1707,16 @@ mod tests {
             tif: 0,
             stop_price: 0,
         });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
         let n = peer.read(&mut buf).unwrap();
         let msg = String::from_utf8_lossy(&buf[..n]).to_string();
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
@@ -1587,7 +1739,14 @@ mod tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.insert_order(crate::types::Order::new(
-            42, instrument, Side::Sell, 100, 150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            42,
+            instrument,
+            Side::Sell,
+            100,
+            150 * crate::types::PRICE_SCALE,
+            b'2',
+            b'0',
+            0,
         ));
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
@@ -1595,11 +1754,21 @@ mod tests {
         let mut names = Vec::new();
         for _ in 0..2 {
             context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 42 });
-            drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+            drain_and_send_orders(
+                &mut conn,
+                &mut context,
+                "DU1",
+                &mut hb,
+                false,
+                &shared,
+                false,
+                &None,
+            );
             let mut buf = [0u8; 4096];
             let n = peer.read(&mut buf).unwrap();
             let msg = String::from_utf8_lossy(&buf[..n]).to_string();
-            let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+            let tag =
+                |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
             assert_eq!(tag("35=").as_deref(), Some("F"), "a cancel was sent: {msg}");
             assert_eq!(tag("41=").as_deref(), Some("42.0"), "the order it cancels: {msg}");
@@ -1628,17 +1797,38 @@ mod tests {
         context.set_symbol(instrument, "SPY".to_string());
         // Resting: a DAY limit with no trigger.
         context.insert_order(crate::types::Order::new(
-            42, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            42,
+            instrument,
+            Side::Buy,
+            100,
+            150 * crate::types::PRICE_SCALE,
+            b'2',
+            b'0',
+            0,
         ));
 
         // Modified to a GTC stop at 149.
         context.modify_ex(
-            42, 150 * crate::types::PRICE_SCALE, 100, false,
-            b'3', b'1', 149 * crate::types::PRICE_SCALE,
+            42,
+            150 * crate::types::PRICE_SCALE,
+            100,
+            false,
+            b'3',
+            b'1',
+            149 * crate::types::PRICE_SCALE,
         );
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1648,8 +1838,11 @@ mod tests {
         assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
         assert_eq!(tag("40=").as_deref(), Some("3"), "the type the caller stated: {msg}");
         assert_eq!(tag("59=").as_deref(), Some("1"), "the tif the caller stated: {msg}");
-        assert_eq!(tag("99="), Some(format_price(149 * crate::types::PRICE_SCALE).to_string()),
-            "the trigger the caller stated: {msg}");
+        assert_eq!(
+            tag("99="),
+            Some(format_price(149 * crate::types::PRICE_SCALE).to_string()),
+            "the trigger the caller stated: {msg}"
+        );
     }
 
     /// The trigger is a price and lands on the instrument's grid like any
@@ -1667,8 +1860,14 @@ mod tests {
         context.set_symbol(instrument, "SPY".to_string());
         context.market.set_min_tick(instrument, 0.05);
         context.insert_order(crate::types::Order::new(
-            42, instrument, Side::Sell, 100, 150 * crate::types::PRICE_SCALE,
-            b'3', b'0', 149 * crate::types::PRICE_SCALE,
+            42,
+            instrument,
+            Side::Sell,
+            100,
+            150 * crate::types::PRICE_SCALE,
+            b'3',
+            b'0',
+            149 * crate::types::PRICE_SCALE,
         ));
 
         // 149.03 is off a five-cent grid.
@@ -1676,7 +1875,16 @@ mod tests {
         context.modify_ex(42, 150 * crate::types::PRICE_SCALE, 100, false, b'3', b'0', off_grid);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1684,7 +1892,10 @@ mod tests {
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
         assert_eq!(
             tag("99="),
-            Some(format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100).to_string()),
+            Some(
+                format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100)
+                    .to_string()
+            ),
             "the trigger must be on the grid: {msg}",
         );
     }
@@ -1703,7 +1914,14 @@ mod tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.insert_order(crate::types::Order::new(
-            42, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
+            42,
+            instrument,
+            Side::Buy,
+            100,
+            150 * crate::types::PRICE_SCALE,
+            b'2',
+            b'1',
+            0,
         ));
         // This is the order in doubt: a write for it failed, so what the broker
         // holds for it is exactly what the recovery is about to say.
@@ -1723,7 +1941,14 @@ mod tests {
         // An order placed since the reconnect is in no doubt, so its own cancel
         // is not made to wait on a recovery that has nothing to do with it.
         context.insert_order(crate::types::Order::new(
-            43, instrument, Side::Buy, 1, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
+            43,
+            instrument,
+            Side::Buy,
+            1,
+            150 * crate::types::PRICE_SCALE,
+            b'2',
+            b'1',
+            0,
         ));
         context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 43 });
         drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true, &None);
@@ -1734,12 +1959,18 @@ mod tests {
         );
 
         // Once it has settled, the held one goes too.
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
-        let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
-        assert!(
-            String::from_utf8_lossy(&buf[..n]).contains("35=F"),
-            "and then it is sent",
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
         );
+        let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
+        assert!(String::from_utf8_lossy(&buf[..n]).contains("35=F"), "and then it is sent",);
     }
 
     /// A write that fails has not established that the broker has nothing —
@@ -1758,18 +1989,40 @@ mod tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.insert_order(crate::types::Order::new(
-            42, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'1', 0,
+            42,
+            instrument,
+            Side::Buy,
+            100,
+            150 * crate::types::PRICE_SCALE,
+            b'2',
+            b'1',
+            0,
         ));
         context.last_clord.insert(42, "42.7".to_string());
         context.pending_orders.push(crate::types::OrderRequest::Modify {
-            new_order_id: 43, order_id: 42, price: 151 * crate::types::PRICE_SCALE,
-            qty: 100, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+            new_order_id: 43,
+            order_id: 42,
+            price: 151 * crate::types::PRICE_SCALE,
+            qty: 100,
+            outside_rth: false,
+            ord_type: 0,
+            tif: 0,
+            stop_price: 0,
         });
 
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &Some(tx));
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &Some(tx),
+        );
 
         // Both deliveries, because the event channel is documented as a second
         // delivery of everything rather than a lesser one — and an order whose
@@ -1783,8 +2036,9 @@ mod tests {
 
         let updates = shared.orders.drain_order_updates();
         assert!(
-            updates.iter().any(|u| u.order_id == 42
-                && u.status == crate::types::OrderStatus::Uncertain),
+            updates
+                .iter()
+                .any(|u| u.order_id == 42 && u.status == crate::types::OrderStatus::Uncertain),
             "the caller is told, and told it is unknown: {updates:?}",
         );
         assert!(
@@ -1819,7 +2073,14 @@ mod tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.insert_order(crate::types::Order::new(
-            7, instrument, Side::Buy, 1, crate::types::PRICE_SCALE, b'2', b'0', 0,
+            7,
+            instrument,
+            Side::Buy,
+            1,
+            crate::types::PRICE_SCALE,
+            b'2',
+            b'0',
+            0,
         ));
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
@@ -1827,19 +2088,49 @@ mod tests {
 
         // 7 -> 8, then 8 -> 9, as a caller stepping an order up twice does.
         context.pending_orders.push(crate::types::OrderRequest::Modify {
-            new_order_id: 8, order_id: 7, price: 2 * crate::types::PRICE_SCALE,
-            qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+            new_order_id: 8,
+            order_id: 7,
+            price: 2 * crate::types::PRICE_SCALE,
+            qty: 1,
+            outside_rth: false,
+            ord_type: 0,
+            tif: 0,
+            stop_price: 0,
         });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
         let n = peer.read(&mut buf).unwrap();
         let first = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
         assert!(first.contains("|41=7.0|"), "the first replace names the original: {first}");
 
         context.pending_orders.push(crate::types::OrderRequest::Modify {
-            new_order_id: 9, order_id: 8, price: 3 * crate::types::PRICE_SCALE,
-            qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+            new_order_id: 9,
+            order_id: 8,
+            price: 3 * crate::types::PRICE_SCALE,
+            qty: 1,
+            outside_rth: false,
+            ord_type: 0,
+            tif: 0,
+            stop_price: 0,
         });
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
         let n = peer.read(&mut buf).unwrap();
         let second = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
         assert!(
@@ -1860,13 +2151,26 @@ mod tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
-            order_id: 1, instrument, side: Side::Buy, qty: 1,
+            order_id: 1,
+            instrument,
+            side: Side::Buy,
+            qty: 1,
             kind: crate::types::OrderKind::PegMkt { offset: 0, price_cap: 0 },
-            tif: b'0', attrs: Default::default(),
+            tif: b'0',
+            attrs: Default::default(),
         });
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1890,15 +2194,30 @@ mod tests {
         context.set_symbol(instrument, "SPY".to_string());
         // A resting stop with a trigger at 149.
         context.insert_order(crate::types::Order::new(
-            42, instrument, Side::Sell, 100, 150 * crate::types::PRICE_SCALE,
-            b'3', b'1', 149 * crate::types::PRICE_SCALE,
+            42,
+            instrument,
+            Side::Sell,
+            100,
+            150 * crate::types::PRICE_SCALE,
+            b'3',
+            b'1',
+            149 * crate::types::PRICE_SCALE,
         ));
 
         // Replaced as a plain limit at 151.
         context.modify_ex(42, 151 * crate::types::PRICE_SCALE, 100, false, b'2', 0, 0);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1906,8 +2225,11 @@ mod tests {
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
         assert_eq!(tag("40=").as_deref(), Some("2"), "the stated type: {msg}");
-        assert_eq!(tag("44=").as_deref(), Some(&*format_price(151 * crate::types::PRICE_SCALE)),
-            "the limit price: {msg}");
+        assert_eq!(
+            tag("44=").as_deref(),
+            Some(&*format_price(151 * crate::types::PRICE_SCALE)),
+            "the limit price: {msg}"
+        );
         assert_eq!(tag("99="), None, "and no trigger from the order it replaced: {msg}");
     }
 
@@ -1924,14 +2246,29 @@ mod tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.insert_order(crate::types::Order::new(
-            42, instrument, Side::Sell, 100, 150 * crate::types::PRICE_SCALE,
-            b'3', b'1', 149 * crate::types::PRICE_SCALE,
+            42,
+            instrument,
+            Side::Sell,
+            100,
+            150 * crate::types::PRICE_SCALE,
+            b'3',
+            b'1',
+            149 * crate::types::PRICE_SCALE,
         ));
 
         context.modify(42, 151 * crate::types::PRICE_SCALE, 100, false);
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -1943,8 +2280,11 @@ mod tests {
         // A stop has one price and it is the trigger, so the single price the
         // caller passed can only have meant that. Leaving 149 in place would
         // put 151 on no tag at all and move nothing.
-        assert_eq!(tag("99="), Some(format_price(151 * crate::types::PRICE_SCALE).to_string()),
-            "the moved trigger: {msg}");
+        assert_eq!(
+            tag("99="),
+            Some(format_price(151 * crate::types::PRICE_SCALE).to_string()),
+            "the moved trigger: {msg}"
+        );
         assert!(!msg.contains("\u{1}44="), "a stop states no limit price: {msg}");
     }
     use super::*;
@@ -1952,8 +2292,16 @@ mod tests {
 
     fn order(oid: u64, filled: u32, status: OrderStatus) -> Order {
         Order {
-            order_id: oid, instrument: 0, side: Side::Buy, price: 100,
-            qty: 10, filled, status, ord_type: b'2', tif: b'0', stop_price: 0,
+            order_id: oid,
+            instrument: 0,
+            side: Side::Buy,
+            price: 100,
+            qty: 10,
+            filled,
+            status,
+            ord_type: b'2',
+            tif: b'0',
+            stop_price: 0,
         }
     }
 
@@ -2018,8 +2366,10 @@ mod tests {
         assert_eq!(tag("5957=").as_deref(), Some("1"));
         assert_eq!(tag("5958=").as_deref(), Some("adaptivePriority"));
         assert_eq!(tag("5960=").as_deref(), Some("Urgent"));
-        assert!(msg.find("204=").unwrap() < msg.find("847=").unwrap(),
-            "the strategy tags keep their position after 204: {msg}");
+        assert!(
+            msg.find("204=").unwrap() < msg.find("847=").unwrap(),
+            "the strategy tags keep their position after 204: {msg}"
+        );
     }
 
     #[test]
@@ -2065,8 +2415,10 @@ mod tests {
         assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
         assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
         assert_eq!(tag("6091=").as_deref(), Some("1"), "what-if flag missing: {msg}");
-        assert!(msg.find("204=").unwrap() < msg.find("6091=").unwrap(),
-            "the preview flag keeps its position after 204: {msg}");
+        assert!(
+            msg.find("204=").unwrap() < msg.find("6091=").unwrap(),
+            "the preview flag keeps its position after 204: {msg}"
+        );
     }
 
     fn bracket_child_attrs() -> crate::types::OrderAttrs {
@@ -2110,7 +2462,13 @@ mod tests {
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 7, 0, Side::Sell, 1,
+            &mut conn,
+            &mut context,
+            "DU123456",
+            7,
+            0,
+            Side::Sell,
+            1,
             crate::types::OrderKind::AdjustableStop {
                 stop_price: 11 * crate::types::PRICE_SCALE,
                 trigger_price: 12 * crate::types::PRICE_SCALE,
@@ -2120,9 +2478,10 @@ mod tests {
                 adjusted_trailing_amount: 0,
                 adjustable_trailing_unit: 0,
             },
-            b'1',           // GTC
+            b'1', // GTC
             &attrs,
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -2140,8 +2499,13 @@ mod tests {
         assert_eq!(tag("6257=").as_deref(), Some("1"));
         assert_eq!(tag("6261=").as_deref(), Some(crate::types::AdjustedOrderType::Stop.fix_code()));
         assert_eq!(tag("6258="), Some(format_price(12 * crate::types::PRICE_SCALE).to_string()));
-        assert_eq!(tag("6259="),
-            Some(format_price(11 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2).to_string()));
+        assert_eq!(
+            tag("6259="),
+            Some(
+                format_price(11 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2)
+                    .to_string()
+            )
+        );
     }
 
     /// A contract is priced in what it is priced in. The field was a constant,
@@ -2156,12 +2520,22 @@ mod tests {
             let mut context = Context::new();
             let id = context.market.try_register_contract(0, "BMW", "STK", "IBIS", "").unwrap();
             context.set_symbol(id, "BMW".to_string());
-            if let Some(k) = key { context.set_order_identity(id, k); }
+            if let Some(k) = key {
+                context.set_order_identity(id, k);
+            }
             send_order_ex(
-                &mut conn, &mut context, "DU123456", 12, id, Side::Buy, 1,
+                &mut conn,
+                &mut context,
+                "DU123456",
+                12,
+                id,
+                Side::Buy,
+                1,
                 crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
-                b'0', &crate::types::OrderAttrs::default(),
-            ).unwrap();
+                b'0',
+                &crate::types::OrderAttrs::default(),
+            )
+            .unwrap();
             let mut buf = [0u8; 4096];
             let n = peer.read(&mut buf).unwrap();
             let msg = String::from_utf8_lossy(&buf[..n]).to_string();
@@ -2182,11 +2556,18 @@ mod tests {
         let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
         let mut context = Context::new();
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 9, 0, Side::Sell, 1,
+            &mut conn,
+            &mut context,
+            "DU123456",
+            9,
+            0,
+            Side::Sell,
+            1,
             crate::types::OrderKind::TrailPct { trail_pct: 250, trail_stop_price: 0 },
             b'0',
             &crate::types::OrderAttrs::default(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -2206,7 +2587,13 @@ mod tests {
         let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
         let mut context = Context::new();
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 8, 0, Side::Sell, 1,
+            &mut conn,
+            &mut context,
+            "DU123456",
+            8,
+            0,
+            Side::Sell,
+            1,
             crate::types::OrderKind::AdjustableStop {
                 stop_price: 11 * crate::types::PRICE_SCALE,
                 trigger_price: 12 * crate::types::PRICE_SCALE,
@@ -2218,7 +2605,8 @@ mod tests {
             },
             b'0',
             &crate::types::OrderAttrs::default(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -2264,7 +2652,9 @@ mod modify_wire_tests {
 
         let shared = std::sync::Arc::new(SharedState::new());
         let mut hb = HeartbeatState::new();
-        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn, context, "DU111111", &mut hb, false, &shared, false, &None,
+        );
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -2275,7 +2665,14 @@ mod modify_wire_tests {
     fn replace_bytes(outside_rth: bool) -> String {
         let mut context = Context::new();
         context.insert_order(crate::types::Order::new(
-            7, 0, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            7,
+            0,
+            Side::Buy,
+            1,
+            100 * crate::types::PRICE_SCALE,
+            b'2',
+            b'0',
+            0,
         ));
         context.modify(7, 200 * crate::types::PRICE_SCALE, 50, outside_rth);
         drain(&mut context)
@@ -2288,8 +2685,10 @@ mod modify_wire_tests {
     #[test]
     fn modify_emits_outside_rth_only_when_the_caller_set_it() {
         let on = replace_bytes(true);
-        assert!(on.contains("|6122=c|6433=1|38=50|"),
-            "6433 must keep its captured position between 6122 and 38: {on}");
+        assert!(
+            on.contains("|6122=c|6433=1|38=50|"),
+            "6433 must keep its captured position between 6122 and 38: {on}"
+        );
 
         let off = replace_bytes(false);
         assert!(!off.contains("|6433="), "an RTH-only order must not assert 6433: {off}");
@@ -2306,7 +2705,13 @@ mod modify_wire_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
         context.insert_order(crate::types::Order::new(
-            7, instrument, Side::Sell, 1, 600 * crate::types::PRICE_SCALE, b'3', b'0',
+            7,
+            instrument,
+            Side::Sell,
+            1,
+            600 * crate::types::PRICE_SCALE,
+            b'3',
+            b'0',
             600 * crate::types::PRICE_SCALE,
         ));
 
@@ -2322,13 +2727,19 @@ mod modify_wire_tests {
     /// stop-with-protection have no limit leg either.
     #[test]
     fn every_trigger_only_type_moves_its_trigger() {
-        for (ord_type, name) in [
-            (b'3', "STP"), (b'J', "MIT"), (crate::types::ORD_STP_PRT, "STP PRT"),
-        ] {
+        for (ord_type, name) in
+            [(b'3', "STP"), (b'J', "MIT"), (crate::types::ORD_STP_PRT, "STP PRT")]
+        {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
             context.insert_order(crate::types::Order::new(
-                7, instrument, Side::Sell, 1, 600 * crate::types::PRICE_SCALE, ord_type, b'0',
+                7,
+                instrument,
+                Side::Sell,
+                1,
+                600 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
                 600 * crate::types::PRICE_SCALE,
             ));
 
@@ -2345,7 +2756,14 @@ mod modify_wire_tests {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
             context.insert_order(crate::types::Order::new(
-                7, instrument, Side::Sell, 1, 100 * crate::types::PRICE_SCALE, ord_type, b'0', 0,
+                7,
+                instrument,
+                Side::Sell,
+                1,
+                100 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
+                0,
             ));
             context.modify(7, 610 * crate::types::PRICE_SCALE, 1, false);
             let sent = drain(&mut context);
@@ -2365,7 +2783,14 @@ mod modify_wire_tests {
         let instrument = context.register_instrument(756733);
         // A plain limit, so there is no resting trigger to fall back on.
         context.insert_order(crate::types::Order::new(
-            7, instrument, Side::Sell, 1, 100 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            7,
+            instrument,
+            Side::Sell,
+            1,
+            100 * crate::types::PRICE_SCALE,
+            b'2',
+            b'0',
+            0,
         ));
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             new_order_id: 8,
@@ -2390,7 +2815,10 @@ mod modify_wire_tests {
     #[test]
     fn a_type_without_a_trigger_never_gains_one() {
         for (ord_type, name) in [
-            (b'2', "LMT"), (b'1', "MKT"), (b'P', "TRAIL"), (b'K', "MTL"),
+            (b'2', "LMT"),
+            (b'1', "MKT"),
+            (b'P', "TRAIL"),
+            (b'K', "MTL"),
             (crate::types::ORD_PEG_MID, "PEG MID"),
         ] {
             let mut context = Context::new();
@@ -2399,7 +2827,14 @@ mod modify_wire_tests {
             // offset in this field, so this pins the request-supplied path
             // rather than claiming those types never emit a 99.
             context.insert_order(crate::types::Order::new(
-                7, instrument, Side::Sell, 1, 100 * crate::types::PRICE_SCALE, ord_type, b'0', 0,
+                7,
+                instrument,
+                Side::Sell,
+                1,
+                100 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
+                0,
             ));
 
             // A trigger arrives on the request anyway.
@@ -2433,16 +2868,21 @@ mod modify_wire_tests {
     #[test]
     fn an_option_order_names_its_contract() {
         let mut context = Context::new();
-        let instrument = context.market.try_register_contract(
-            0, "AAPL", "OPT", "SMART", "20260619|230|C|100",
-        ).expect("slot");
+        let instrument = context
+            .market
+            .try_register_contract(0, "AAPL", "OPT", "SMART", "20260619|230|C|100")
+            .expect("slot");
         context.market.set_symbol(instrument, "AAPL".into());
         context.market.set_routing(instrument, "OPT", "SMART");
 
         context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
-            order_id: 7, instrument, side: Side::Buy, qty: 1,
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: 1,
             kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
-            tif: b'0', attrs: crate::types::OrderAttrs::default(),
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
         });
         let sent = drain(&mut context);
 
@@ -2460,16 +2900,21 @@ mod modify_wire_tests {
     #[test]
     fn a_future_known_by_con_id_still_names_its_month() {
         let mut context = Context::new();
-        let instrument = context.market
+        let instrument = context
+            .market
             .try_register_contract(793_356_217, "MES", "FUT", "CME", "202609|0||5")
             .expect("slot");
         context.market.set_symbol(instrument, "MES".into());
         context.market.set_routing(instrument, "FUT", "CME");
 
         context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
-            order_id: 7, instrument, side: Side::Buy, qty: 1,
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: 1,
             kind: crate::types::OrderKind::Limit { price: 3827 * crate::types::PRICE_SCALE },
-            tif: b'0', attrs: crate::types::OrderAttrs::default(),
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
         });
         let sent = drain(&mut context);
         assert!(sent.contains("|167=FUT|"), "the security type: {sent}");
@@ -2483,9 +2928,13 @@ mod modify_wire_tests {
         let instrument = context.register_instrument(756733);
         context.market.set_symbol(instrument, "SPY".into());
         context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
-            order_id: 7, instrument, side: Side::Buy, qty: 1,
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: 1,
             kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
-            tif: b'0', attrs: crate::types::OrderAttrs::default(),
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
         });
         let sent = drain(&mut context);
         for tag in ["|200=", "|201=", "|202=", "|231="] {
@@ -2503,8 +2952,13 @@ mod modify_wire_tests {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
             context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
-                order_id: 7, instrument, side: Side::Buy, qty: 1, kind,
-                tif: b'0', attrs: crate::types::OrderAttrs::default(),
+                order_id: 7,
+                instrument,
+                side: Side::Buy,
+                qty: 1,
+                kind,
+                tif: b'0',
+                attrs: crate::types::OrderAttrs::default(),
             });
             sent.push(drain(&mut context));
         }
@@ -2521,7 +2975,13 @@ mod modify_wire_tests {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
             context.insert_order(crate::types::Order::new(
-                7, instrument, Side::Sell, 1, 605 * crate::types::PRICE_SCALE, ord_type, b'0',
+                7,
+                instrument,
+                Side::Sell,
+                1,
+                605 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
                 600 * crate::types::PRICE_SCALE,
             ));
 
@@ -2549,7 +3009,13 @@ mod modify_wire_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
         context.insert_order(crate::types::Order::new(
-            7, instrument, Side::Sell, 1, 600 * crate::types::PRICE_SCALE, b'3', b'0',
+            7,
+            instrument,
+            Side::Sell,
+            1,
+            600 * crate::types::PRICE_SCALE,
+            b'3',
+            b'0',
             600 * crate::types::PRICE_SCALE,
         ));
 
@@ -2572,7 +3038,13 @@ mod modify_wire_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
         context.insert_order(crate::types::Order::new(
-            7, instrument, Side::Sell, 1, 605 * crate::types::PRICE_SCALE, b'4', b'0',
+            7,
+            instrument,
+            Side::Sell,
+            1,
+            605 * crate::types::PRICE_SCALE,
+            b'4',
+            b'0',
             600 * crate::types::PRICE_SCALE,
         ));
 
@@ -2593,7 +3065,9 @@ mod modify_wire_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
         let (parent, tp, sl) = context.submit_bracket(
-            instrument, Side::Buy, 1,
+            instrument,
+            Side::Buy,
+            1,
             100 * crate::types::PRICE_SCALE,
             110 * crate::types::PRICE_SCALE,
             90 * crate::types::PRICE_SCALE,
@@ -2601,17 +3075,24 @@ mod modify_wire_tests {
         let submitted = drain(&mut context);
 
         for id in [parent, tp, sl] {
-            assert!(submitted.contains(&format!("|11={id}.0|")),
-                "leg {id} is submitted versioned: {submitted}");
+            assert!(
+                submitted.contains(&format!("|11={id}.0|")),
+                "leg {id} is submitted versioned: {submitted}"
+            );
         }
-        assert_eq!(submitted.matches(&format!("|6107={parent}.0|")).count(), 2,
-            "both children link the parent by the id it was submitted under: {submitted}");
+        assert_eq!(
+            submitted.matches(&format!("|6107={parent}.0|")).count(),
+            2,
+            "both children link the parent by the id it was submitted under: {submitted}"
+        );
 
         // Nothing has echoed, so the cancel computes the OrigClOrdID.
         context.cancel(tp);
         let cancelled = drain(&mut context);
-        assert!(cancelled.contains(&format!("|41={tp}.0|")),
-            "the cancel names the submitted id: {cancelled}");
+        assert!(
+            cancelled.contains(&format!("|41={tp}.0|")),
+            "the cancel names the submitted id: {cancelled}"
+        );
     }
 }
 
@@ -2632,7 +3113,9 @@ mod outside_rth_polarity_tests {
 
         let shared = std::sync::Arc::new(SharedState::new());
         let mut hb = HeartbeatState::new();
-        drain_and_send_orders(&mut conn, context, "DU111111", &mut hb, false, &shared, false, &None);
+        drain_and_send_orders(
+            &mut conn, context, "DU111111", &mut hb, false, &shared, false, &None,
+        );
 
         let mut buf = vec![0u8; 8192];
         let n = peer.read(&mut buf).unwrap();
@@ -2654,14 +3137,29 @@ mod outside_rth_polarity_tests {
     #[test]
     fn every_submit_path_emits_outside_rth_only_when_it_was_asked_for() {
         let cases: Vec<SubmitCase> = vec![
-            ("limit gtc", |c, i, o| c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)),
-            ("stop gtc", |c, i, o| c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)),
+            ("limit gtc", |c, i, o| {
+                c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)
+            }),
+            ("stop gtc", |c, i, o| {
+                c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)
+            }),
             ("stop limit gtc", |c, i, o| {
-                c.submit_stop_limit_gtc(i, Side::Sell, 1, 89 * crate::types::PRICE_SCALE, 90 * crate::types::PRICE_SCALE, o)
+                c.submit_stop_limit_gtc(
+                    i,
+                    Side::Sell,
+                    1,
+                    89 * crate::types::PRICE_SCALE,
+                    90 * crate::types::PRICE_SCALE,
+                    o,
+                )
             }),
             ("extended encoder", |c, i, o| {
                 c.submit_limit_ex(
-                    i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, b'0',
+                    i,
+                    Side::Buy,
+                    1,
+                    100 * crate::types::PRICE_SCALE,
+                    b'0',
                     crate::types::OrderAttrs { outside_rth: o, ..Default::default() },
                 )
             }),
@@ -2675,7 +3173,8 @@ mod outside_rth_polarity_tests {
                 let sent = drain(&mut context);
 
                 assert_eq!(
-                    sent.contains("|6433=1|"), asked,
+                    sent.contains("|6433=1|"),
+                    asked,
                     "{label}, outside_rth={asked}: {sent}",
                 );
             }
@@ -2696,23 +3195,41 @@ mod outside_rth_polarity_tests {
         let attrs = crate::types::OrderAttrs {
             combo_legs: vec![
                 crate::types::ComboLegSpec {
-                    con_id: 265598, ratio: 1, is_sell: false,
-                    exchange: String::new(), open_close: 1, short_sale_slot: 0,
-                    designated_location: String::new(), exempt_code: -1,
+                    con_id: 265598,
+                    ratio: 1,
+                    is_sell: false,
+                    exchange: String::new(),
+                    open_close: 1,
+                    short_sale_slot: 0,
+                    designated_location: String::new(),
+                    exempt_code: -1,
                 },
                 crate::types::ComboLegSpec {
-                    con_id: 272093, ratio: 2, is_sell: true,
-                    exchange: "ARCA".into(), open_close: 0, short_sale_slot: 0,
-                    designated_location: String::new(), exempt_code: -1,
+                    con_id: 272093,
+                    ratio: 2,
+                    is_sell: true,
+                    exchange: "ARCA".into(),
+                    open_close: 0,
+                    short_sale_slot: 0,
+                    designated_location: String::new(),
+                    exempt_code: -1,
                 },
             ],
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 31, instrument, Side::Buy, 1,
+            &mut conn,
+            &mut context,
+            "DU123456",
+            31,
+            instrument,
+            Side::Buy,
+            1,
             crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
-            b'0', &attrs,
-        ).unwrap();
+            b'0',
+            &attrs,
+        )
+        .unwrap();
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -2722,8 +3239,10 @@ mod outside_rth_polarity_tests {
         assert!(f.contains(&"6080=265598") && f.contains(&"6080=272093"), "each contract: {msg}");
         assert!(f.contains(&"6081=1") && f.contains(&"6081=2"), "each ratio: {msg}");
         assert!(f.contains(&"6082=0") && f.contains(&"6082=1"), "each side, as a flag: {msg}");
-        assert!(f.contains(&"616=") && f.contains(&"616=ARCA"),
-            "a venue only where the leg has its own: {msg}");
+        assert!(
+            f.contains(&"616=") && f.contains(&"616=ARCA"),
+            "a venue only where the leg has its own: {msg}"
+        );
         assert!(f.contains(&"654=1"), "the position effect where set: {msg}");
     }
 
@@ -2740,29 +3259,51 @@ mod outside_rth_polarity_tests {
         context.set_symbol(instrument, "SPY".to_string());
         let attrs = crate::types::OrderAttrs {
             scale: Some(Box::new(crate::types::ScaleAttrs {
-                init_level_size: 100, subs_level_size: 50,
+                init_level_size: 100,
+                subs_level_size: 50,
                 price_increment: crate::types::PRICE_SCALE / 20,
                 profit_offset: crate::types::PRICE_SCALE / 10,
-                price_adjust_interval: 60, auto_reset: true, random_percent: true,
+                price_adjust_interval: 60,
+                auto_reset: true,
+                random_percent: true,
                 ..Default::default()
             })),
             delta_neutral: Some(Box::new(crate::types::DeltaNeutralAttrs {
-                order_type: "MKT".into(), aux_price: 0, con_id: 265598,
+                order_type: "MKT".into(),
+                aux_price: 0,
+                con_id: 265598,
             })),
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 21, instrument, Side::Buy, 100,
+            &mut conn,
+            &mut context,
+            "DU123456",
+            21,
+            instrument,
+            Side::Buy,
+            100,
             crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
-            b'0', &attrs,
-        ).unwrap();
+            b'0',
+            &attrs,
+        )
+        .unwrap();
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
         let msg = String::from_utf8_lossy(&buf[..n]);
         let has = |t: &str| msg.split('\u{1}').any(|f| f.starts_with(t));
-        for tag in ["6403=100", "6445=50", "6405=0.05", "6446=0.1", "6526=60",
-                    "6461=1", "6795=1", "6290=MKT", "6150=265598"] {
+        for tag in [
+            "6403=100",
+            "6445=50",
+            "6405=0.05",
+            "6446=0.1",
+            "6526=60",
+            "6461=1",
+            "6795=1",
+            "6290=MKT",
+            "6150=265598",
+        ] {
             assert!(has(tag), "{tag} is on the order: {msg}");
         }
     }
@@ -2775,18 +3316,34 @@ mod outside_rth_polarity_tests {
     #[test]
     fn every_submit_path_names_the_contract_and_not_just_its_symbol() {
         let cases: Vec<SubmitCase> = vec![
-            ("limit gtc", |c, i, o| c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)),
-            ("stop gtc", |c, i, o| c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)),
-            ("stop limit gtc", |c, i, o| {
-                c.submit_stop_limit_gtc(i, Side::Sell, 1, 89 * crate::types::PRICE_SCALE, 90 * crate::types::PRICE_SCALE, o)
+            ("limit gtc", |c, i, o| {
+                c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)
             }),
-            ("limit ioc", |c, i, _| c.submit_limit_ioc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)),
-            ("limit fok", |c, i, _| c.submit_limit_fok(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)),
+            ("stop gtc", |c, i, o| {
+                c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)
+            }),
+            ("stop limit gtc", |c, i, o| {
+                c.submit_stop_limit_gtc(
+                    i,
+                    Side::Sell,
+                    1,
+                    89 * crate::types::PRICE_SCALE,
+                    90 * crate::types::PRICE_SCALE,
+                    o,
+                )
+            }),
+            ("limit ioc", |c, i, _| {
+                c.submit_limit_ioc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)
+            }),
+            ("limit fok", |c, i, _| {
+                c.submit_limit_fok(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)
+            }),
         ];
 
         for (label, submit) in cases {
             let mut context = Context::new();
-            let instrument = context.market
+            let instrument = context
+                .market
                 .try_register_contract(893091670, "MES", "FUT", "CME", "20270917|0||5")
                 .expect("register a future");
             context.set_symbol(instrument, "MES".to_string());

@@ -75,23 +75,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let contract = Contract { con_id, symbol: symbol.clone(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(), ..Default::default() };
 
-    println!("Subscribing to {symbol} (con_id={con_id}) on 3 parallel feeds...");
-    client.req_mkt_data_ex(1, &contract, "", false, false, 0)?;  // realtime
-    client.req_mkt_data_ex(2, &contract, "", false, false, 2)?;  // frozen
-    client.req_mkt_data_ex(3, &contract, "", false, false, 3)?;  // delayed_frozen
-
     let counts = Arc::new(Mutex::new(Counts::default()));
     let mut wrapper = PrintWrapper { counts: counts.clone() };
 
-    let deadline = Instant::now() + Duration::from_secs(duration);
-    while Instant::now() < deadline {
-        client.process_msgs(&mut wrapper);
-        std::thread::sleep(Duration::from_millis(20));
+    // One at a time, because a contract holds one subscription at a time
+    // (ibx#233). Each mode gets the same stretch of wall clock, so the counts
+    // below are comparable.
+    let each = Duration::from_secs((duration / 3).max(1));
+    for (req_id, mode, label) in [(1i64, 0i32, "realtime"), (2, 2, "frozen"), (3, 3, "delayed_frozen")] {
+        println!("Subscribing to {symbol} (con_id={con_id}) as {label}...");
+        client.req_mkt_data_ex(req_id, &contract, "", false, false, mode)?;
+        let deadline = Instant::now() + each;
+        while Instant::now() < deadline {
+            client.process_msgs(&mut wrapper);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = client.cancel_mkt_data(req_id);
+        // The cancel has to reach the engine before the next mode claims the
+        // contract, or the next subscription is refused as a duplicate.
+        let settle = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < settle {
+            client.process_msgs(&mut wrapper);
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
-
-    let _ = client.cancel_mkt_data(1);
-    let _ = client.cancel_mkt_data(2);
-    let _ = client.cancel_mkt_data(3);
     client.disconnect();
 
     let c = counts.lock().unwrap();
