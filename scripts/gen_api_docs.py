@@ -1075,8 +1075,13 @@ def generate_coverage_md(ver: str) -> str:
         "",
         "The evidence column says how each status was established, and is",
         "derived rather than asserted: a call is credited to the live session",
-        "only when the suite that runs against a real account names it, and to",
+        "only when a suite that runs against a real account names it, and to",
         "the offline suites only when a test names it.",
+        "",
+        "One caveat it cannot express: the suite that compares against recorded",
+        "captures skips when those captures are absent, and they are not kept in",
+        "this repository. A call named only by that suite is named by something",
+        "that did not run.",
         "",
     ]
 

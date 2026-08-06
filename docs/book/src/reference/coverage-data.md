@@ -10,8 +10,13 @@ Canonical IB API methods vs ibx implementation status.
 
 The evidence column says how each status was established, and is
 derived rather than asserted: a call is credited to the live session
-only when the suite that runs against a real account names it, and to
+only when a suite that runs against a real account names it, and to
 the offline suites only when a test names it.
+
+One caveat it cannot express: the suite that compares against recorded
+captures skips when those captures are absent, and they are not kept in
+this repository. A call named only by that suite is named by something
+that did not run.
 
 ## Summary
 
@@ -27,16 +32,16 @@ the offline suites only when a test names it.
 | Connection | `connect` | `eConnect` | Y | Y | Live session |
 |  | `disconnect` | `eDisconnect` | Y | Y | Live session |
 |  | `is_connected` | `isConnected` | Y | Y | Live session |
-|  | `set_server_log_level` | `setServerLogLevel` | Y | Y | Not exercised |
+|  | `set_server_log_level` | `setServerLogLevel` | Y | Y | Live session |
 |  | `req_current_time` | `reqCurrentTime` | Y | Y | Live session |
 | Market Data | `req_mkt_data` | `reqMktData` | Y | Y | Live session |
 |  | `cancel_mkt_data` | `cancelMktData` | Y | Y | Live session |
-|  | `req_market_data_type` | `reqMarketDataType` | Y | Y | Not exercised |
+|  | `req_market_data_type` | `reqMarketDataType` | Y | Y | Live session |
 |  | `req_tick_by_tick_data` | `reqTickByTickData` | Y | Y | Offline suites |
 |  | `cancel_tick_by_tick_data` | `cancelTickByTickData` | Y | Y | Offline suites |
-|  | `req_mkt_depth` | `reqMktDepth` | Y | Y | Offline suites |
+|  | `req_mkt_depth` | `reqMktDepth` | Y | Y | Live session |
 |  | `cancel_mkt_depth` | `cancelMktDepth` | Y | Y | Offline suites |
-|  | `req_mkt_depth_exchanges` | `reqMktDepthExchanges` | Y | Y | Not exercised |
+|  | `req_mkt_depth_exchanges` | `reqMktDepthExchanges` | Y | Y | Live session |
 |  | `req_smart_components` | `reqSmartComponents` | Y | Y | Live session |
 |  | `req_real_time_bars` | `reqRealTimeBars` | Y | Y | Offline suites |
 |  | `cancel_real_time_bars` | `cancelRealTimeBars` | Y | Y | Offline suites |
@@ -52,7 +57,7 @@ the offline suites only when a test names it.
 |  | `cancel_order` | `cancelOrder` | Y | Y | Live session |
 |  | `req_open_orders` | `reqOpenOrders` | Y | Y | Offline suites |
 |  | `req_all_open_orders` | `reqAllOpenOrders` | Y | Y | Live session |
-|  | `req_auto_open_orders` | `reqAutoOpenOrders` | Y | Y | Not exercised |
+|  | `req_auto_open_orders` | `reqAutoOpenOrders` | Y | Y | Live session |
 |  | `req_ids` | `reqIds` | Y | Y | Live session |
 |  | `req_global_cancel` | `reqGlobalCancel` | Y | Y | Live session |
 |  | `req_completed_orders` | `reqCompletedOrders` | Y | Y | Live session |
@@ -61,19 +66,19 @@ the offline suites only when a test names it.
 |  | `req_account_summary` | `reqAccountSummary` | Y | Y | Live session |
 |  | `cancel_account_summary` | `cancelAccountSummary` | Y | Y | Live session |
 |  | `req_positions` | `reqPositions` | Y | Y | Live session |
-|  | `cancel_positions` | `cancelPositions` | Y | Y | Not exercised |
+|  | `cancel_positions` | `cancelPositions` | Y | Y | Live session |
 |  | `req_pnl` | `reqPnL` | Y | Y | Live session |
 |  | `cancel_pnl` | `cancelPnL` | Y | Y | Live session |
 |  | `req_pnl_single` | `reqPnLSingle` | Y | Y | Live session |
 |  | `cancel_pnl_single` | `cancelPnLSingle` | Y | Y | Live session |
-|  | `req_managed_accts` | `reqManagedAccts` | Y | Y | Not exercised |
-|  | `req_account_updates_multi` | `reqAccountUpdatesMulti` | Y | Y | Not exercised |
-|  | `cancel_account_updates_multi` | `cancelAccountUpdatesMulti` | Y | Y | Not exercised |
-|  | `req_positions_multi` | `reqPositionsMulti` | Y | Y | Not exercised |
-|  | `cancel_positions_multi` | `cancelPositionsMulti` | Y | Y | Not exercised |
+|  | `req_managed_accts` | `reqManagedAccts` | Y | Y | Live session |
+|  | `req_account_updates_multi` | `reqAccountUpdatesMulti` | Y | Y | Live session |
+|  | `cancel_account_updates_multi` | `cancelAccountUpdatesMulti` | Y | Y | Live session |
+|  | `req_positions_multi` | `reqPositionsMulti` | Y | Y | Live session |
+|  | `cancel_positions_multi` | `cancelPositionsMulti` | Y | Y | Live session |
 | Contract | `req_contract_details` | `reqContractDetails` | Y | Y | Live session |
 |  | `req_matching_symbols` | `reqMatchingSymbols` | Y | Y | Live session |
-|  | `req_market_rule` | `reqMarketRule` | Y | Y | Not exercised |
+|  | `req_market_rule` | `reqMarketRule` | Y | Y | Live session |
 | Scanner | `req_scanner_parameters` | `reqScannerParameters` | Y | Y | Live session |
 |  | `req_scanner_subscription` | `reqScannerSubscription` | Y | Y | Live session |
 |  | `cancel_scanner_subscription` | `cancelScannerSubscription` | Y | Y | Live session |

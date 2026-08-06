@@ -448,6 +448,11 @@ fn api_gt_suite() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
+    if !gt_dir().exists() {
+        println!("Skipping: no recorded captures at {}", gt_dir().display());
+        return;
+    }
+
     println!("=== Rust API GT Integration Suite ===\n");
     let suite_start = Instant::now();
 
@@ -1457,4 +1462,105 @@ fn api_gt_suite() {
     println!("\n=== Results: {} PASS, {} FAIL, {} SKIP ({:.1}s) ===",
         pass_count, fail_count, skip_count, suite_start.elapsed().as_secs_f64());
     assert_eq!(fail_count, 0, "Some API GT tests failed");
+}
+
+/// Calls the client serves that no suite exercised.
+///
+/// Two of them answered on the callbacks belonging to the requests without
+/// "multi" in the name, and a third returned in silence when it had nothing
+/// cached. Nothing caught it because nothing called them. This does, and it
+/// stands on its own so it runs whether or not the recorded captures the
+/// comparison suite needs are present.
+#[test]
+fn reference_and_account_calls_live() {
+    let _ = env_logger::try_init();
+    let Some(config) = get_config() else {
+        println!("Skipping: IB credentials not set");
+        return;
+    };
+    let client = EClient::connect(&config).expect("EClient::connect failed");
+
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Heard {
+        accounts: Vec<String>,
+        depth_venues: usize,
+        rule_refusals: Vec<String>,
+        positions_multi: Vec<(i64, String)>,
+        positions_multi_end: Vec<i64>,
+        values_multi: Vec<(i64, String)>,
+        values_multi_end: Vec<i64>,
+    }
+    struct W(Arc<Mutex<Heard>>);
+    impl ibx::api::wrapper::Wrapper for W {
+        fn managed_accounts(&mut self, accounts: &str) {
+            self.0.lock().unwrap().accounts.push(accounts.to_string());
+        }
+        fn mkt_depth_exchanges(&mut self, d: &[ibx::types::DepthMktDataDescription]) {
+            self.0.lock().unwrap().depth_venues += d.len();
+        }
+        fn position_multi(
+            &mut self, req_id: i64, account: &str, _model: &str,
+            _c: &Contract, _pos: f64, _avg: f64,
+        ) {
+            self.0.lock().unwrap().positions_multi.push((req_id, account.to_string()));
+        }
+        fn position_multi_end(&mut self, req_id: i64) {
+            self.0.lock().unwrap().positions_multi_end.push(req_id);
+        }
+        fn account_update_multi(
+            &mut self, req_id: i64, _account: &str, _model: &str,
+            key: &str, _value: &str, _currency: &str,
+        ) {
+            self.0.lock().unwrap().values_multi.push((req_id, key.to_string()));
+        }
+        fn account_update_multi_end(&mut self, req_id: i64) {
+            self.0.lock().unwrap().values_multi_end.push(req_id);
+        }
+        fn error(&mut self, req_id: i64, _code: i64, message: &str, _: &str) {
+            if req_id == 999_777 {
+                self.0.lock().unwrap().rule_refusals.push(message.to_string());
+            }
+        }
+    }
+
+    let heard = Arc::new(Mutex::new(Heard::default()));
+    let mut w = W(Arc::clone(&heard));
+
+    // None of these answers anything; they must simply not fall over.
+    client.set_server_log_level(2);
+    client.req_market_data_type(1);
+    client.req_auto_open_orders(true);
+    client.cancel_positions();
+    client.cancel_account_updates_multi(1);
+    client.cancel_positions_multi(1);
+
+    client.req_managed_accts(&mut w);
+    // A rule this session cannot have seen, so the refusal is the answer.
+    client.req_market_rule(999_777, &mut w);
+    client.req_positions_multi(9101, "", "", &mut w);
+    client.req_account_updates_multi(9102, "", "", true, &mut w);
+    let _ = client.req_mkt_depth_exchanges();
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        client.process_msgs(&mut w);
+        if heard.lock().unwrap().depth_venues > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let h = heard.lock().unwrap();
+    assert!(!h.accounts.is_empty(), "the session names the account it manages");
+    assert_eq!(h.rule_refusals.len(), 1, "a rule never seen says so: {:?}", h.rule_refusals);
+    assert_eq!(h.positions_multi_end, vec![9101], "holdings answer on their own callback");
+    assert_eq!(h.values_multi_end, vec![9102], "account values answer on their own callback");
+    assert!(!h.values_multi.is_empty(), "and state something");
+    assert!(h.depth_venues > 0, "the venues carrying depth are named");
+    assert!(h.positions_multi.iter().all(|(r, _)| *r == 9101), "under the request that asked");
+    assert!(h.values_multi.iter().all(|(r, _)| *r == 9102), "under the request that asked");
+    drop(h);
+    client.disconnect();
 }
