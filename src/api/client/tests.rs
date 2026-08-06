@@ -2173,7 +2173,7 @@ fn build_order_request_adaptive_rejects_unknown_priority() {
         algo_params: vec![TagValue { tag: "adaptivePriority".into(), value: "Aggressive".into() }],
         ..Default::default()
     };
-    let err = crate::client_core::ClientCore::build_order_request(&order, 1, 0, &[]).unwrap_err();
+    let err = crate::client_core::ClientCore::build_order_request(&order, 1, 0, None).unwrap_err();
     assert!(err.contains("adaptivePriority"), "got: {err}");
 }
 

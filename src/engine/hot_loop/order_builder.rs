@@ -1033,6 +1033,21 @@ fn send_order_ex(
             fields.push((6666, format!("{:.6}", attrs.hedge_ratio)));
         }
     }
+    // Where the contract is listed, which is not where the order routes. The
+    // venue reads the two separately and this stated only the routing.
+    if !attrs.primary_exchange.is_empty() {
+        fields.push((207, attrs.primary_exchange.clone()));
+    }
+    // The contract the order hedges against: which one, its delta and its
+    // price. Stated on the contract rather than the order, so an order that
+    // named a hedging leg still said nothing about what to hedge with.
+    if let Some(dnc) = attrs.delta_neutral_contract.as_deref() {
+        if dnc.con_id != 0 {
+            fields.push((6150, dnc.con_id.to_string()));
+        }
+        fields.push((6148, format!("{:.6}", dnc.delta)));
+        fields.push((6149, format!("{:.6}", dnc.price)));
+    }
     if let Some(dn) = attrs.delta_neutral.as_deref() {
         fields.push((6290, dn.order_type.clone()));
         if dn.aux_price != 0 {
