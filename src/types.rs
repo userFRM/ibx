@@ -691,9 +691,10 @@ pub enum OrderKind {
     Adaptive { price: Price, priority: AdaptivePriority },
     /// Generic algo limit. Tags: 847=strategy, 5957 + 5958/5960 per parameter.
     Algo { price: Price, algo: AlgoParams },
-    /// Margin preview. Tag 6091=1; the order is tracked under `ORD_WHAT_IF` so
-    /// the response is recognised, and never becomes a live order.
-    WhatIf { price: Price },
+    /// Margin preview of an order of type `ord_type` (the wire character, tag
+    /// 40). Tag 6091=1; the order is tracked under `ORD_WHAT_IF` so the
+    /// response is recognised, and never becomes a live order.
+    WhatIf { price: Price, ord_type: u8 },
 }
 
 /// A scale order's ladder: how much to show, how far apart, and how the price
@@ -906,7 +907,7 @@ impl OrderRequest {
                 } => { s(price); s(pegged_change_amount); s(ref_change_amount); s(starting_price); }
                 OrderKind::Adaptive { price, .. }
                 | OrderKind::Algo { price, .. }
-                | OrderKind::WhatIf { price } => s(price),
+                | OrderKind::WhatIf { price, .. } => s(price),
                 OrderKind::AdjustableStop {
                     stop_price, trigger_price, adjusted_stop_price, adjusted_stop_limit_price,
                     adjusted_trailing_amount, adjustable_trailing_unit, ..

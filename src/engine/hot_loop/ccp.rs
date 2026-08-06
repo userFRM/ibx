@@ -1134,7 +1134,15 @@ impl CcpState {
                     shared.orders.push_what_if(response);
                     emit(event_tx, Event::WhatIf(response));
                 }
-            return;
+            // A preview the venue refuses has no margin figures to state, so it
+            // arrives shaped exactly like the not-ready ack — every field "n/a"
+            // — and says why on 58 instead. Returning here on that shape threw
+            // the reason away and left the caller waiting out a preview that
+            // was never coming. A refusal falls through and is reported like
+            // any other.
+            if parsed.get(&39).map(|s| s.as_str()) != Some("8") {
+                return;
+            }
         }
 
         let ord_status = parsed.get(&39).map(|s| s.as_str()).unwrap_or("");

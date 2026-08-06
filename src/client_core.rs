@@ -2174,7 +2174,13 @@ impl ClientCore {
         // What-if orders
         if order.what_if {
             let price = (order.lmt_price * PRICE_SCALE_F) as i64;
-            return Ok(ControlCommand::Order(ex(OrderKind::WhatIf { price })));
+            // A preview states the type of the order being previewed. Sending
+            // every preview as a limit made a market-only security answer
+            // "The order type Limit is invalid for this combination of
+            // exchange and security type" — the venue was refusing an order
+            // the caller never asked for.
+            let ord_type = match order.ord_type_byte() { 0 => b'2', byte => byte };
+            return Ok(ControlCommand::Order(ex(OrderKind::WhatIf { price, ord_type })));
         }
 
         // Adjustable stop: a base STP that converts to another order type when

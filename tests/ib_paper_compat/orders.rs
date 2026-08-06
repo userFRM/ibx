@@ -1138,7 +1138,7 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
         order_id, instrument: inst_id, side: Side::Buy, qty: 100,
-        kind: OrderKind::WhatIf { price: 1_00_000_000 },
+        kind: OrderKind::WhatIf { price: 1_00_000_000, ord_type: b'2' },
         tif: b'0', attrs: OrderAttrs::default(),
     })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();

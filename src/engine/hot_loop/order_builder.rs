@@ -840,7 +840,7 @@ fn send_order_ex(
         K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', price, 0),
         // Tracked under the what-if marker so the response is recognised as a
         // preview; it never becomes a live order.
-        K::WhatIf { price } => (crate::types::ORD_WHAT_IF, price, 0),
+        K::WhatIf { price, .. } => (crate::types::ORD_WHAT_IF, price, 0),
     };
     context.insert_order(crate::types::Order::new(
         order_id,
@@ -1032,9 +1032,13 @@ fn send_order_ex(
             // for a value that is merely the wrong one, so the six algo types
             // were refused identically whether the field was absent or wrong.
         }
-        K::WhatIf { price } => {
-            fields.push((40, "2".to_string()));
-            fields.push((44, format_price(price).to_string()));
+        K::WhatIf { price, ord_type } => {
+            fields.push((40, (ord_type as char).to_string()));
+            // A market preview has no price to state, and stating one is how a
+            // market-only security came to be refused as a limit.
+            if ord_type != b'1' {
+                fields.push((44, format_price(price).to_string()));
+            }
         }
     }
 
@@ -2507,7 +2511,7 @@ mod tests {
     #[test]
     fn what_if_wire_carries_the_attributes_and_keeps_its_preview_flag() {
         let msg = send_kind_for_test(
-            crate::types::OrderKind::WhatIf { price: 100 * crate::types::PRICE_SCALE },
+            crate::types::OrderKind::WhatIf { price: 100 * crate::types::PRICE_SCALE, ord_type: b'2' },
             b'1',
             bracket_child_attrs(),
         );
@@ -2521,6 +2525,22 @@ mod tests {
             msg.find("15=").unwrap() < msg.find("6091=").unwrap(),
             "the preview flag keeps its position after the contract block: {msg}"
         );
+        assert_eq!(tag("40=").as_deref(), Some("2"), "a limit preview: {msg}");
+    }
+
+    #[test]
+    fn a_market_preview_states_market_and_no_price() {
+        // Previewing every order as a limit is refused outright by a security
+        // that only trades at market.
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::WhatIf { price: 0, ord_type: b'1' },
+            b'1',
+            bracket_child_attrs(),
+        );
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("40=").as_deref(), Some("1"), "a market preview: {msg}");
+        assert_eq!(tag("44=").as_deref(), None, "a market order states no price: {msg}");
+        assert_eq!(tag("6091=").as_deref(), Some("1"), "still a preview: {msg}");
     }
 
     fn bracket_child_attrs() -> crate::types::OrderAttrs {
