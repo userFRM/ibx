@@ -1433,6 +1433,12 @@ pub struct MidnightSeed {
     /// parseable quantity: the position exists but its overnight size is
     /// unknown, which is not the same as having opened it today (ibx#296).
     pub qty_midnight: Option<i64>,
+    /// What the venue states the position was worth at midnight. `None` where
+    /// the row did not state it, which is when the day's change has to be
+    /// sized against a previous close the client finds for itself.
+    pub cost_midnight: Option<f64>,
+    /// Quantity traded since midnight, as the venue states it.
+    pub qty_traded: Option<f64>,
     pub money_traded: f64,            // net cash from today's fills (signed)
     pub realized_pnl: f64,           // realized P&L since midnight
 }

@@ -514,6 +514,7 @@ impl CcpState {
                             // P&L midnight seed — store for client-side daily P&L computation
                             handle_pnl_response(msg, shared);
                         }
+                        "152" => handle_pnl_prices(msg, shared),
                         "186" => {
                             if let Some(matches) = crate::control::contracts::parse_matching_symbols_response(msg) {
                                 // A 186 frame is the real answer only when it
@@ -2602,50 +2603,104 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
     shared.portfolio.set_account(context.account());
 }
 
-/// Handle 6040=143 P&L midnight seed response.
-/// Repeating group: 146={count} × (6008=conId, 6064=qtyMidnight, 6822=moneyTraded, 6099=realizedPnl).
-/// These are midnight seeds for client-side daily P&L computation — NOT live P&L values.
+/// Handle 6040=143, the venue's daily P&L seeds.
+/// Repeating group: 146={count} × (6008=conId, 6064=qtyMidnight, 8223=qtyTraded,
+/// 8233=costMidnight, 6822=moneyTraded, 6099=realizedPnl), then 8058 combo
+/// buckets repeating the same five fields under an 8020 label. Both counts are
+/// hints and the scan delimits itself on the tags, so neither is read.
+/// Only the realized figure is stated outright; the rest are what a daily
+/// figure is computed from. Values are taken as sent, unscaled.
 fn handle_pnl_response(msg: &[u8], shared: &SharedState) {
     let text = match std::str::from_utf8(msg) {
         Ok(t) => t,
         Err(_) => return,
     };
-    let mut seeds = Vec::new();
-    let mut con_id: i64 = 0;
-    let mut qty_midnight: Option<i64> = None;
-    let mut money_traded: f64 = 0.0;
-    let mut realized_pnl: f64 = 0.0;
-    let mut count = 0;
+    let mut seeds: Vec<MidnightSeed> = Vec::new();
+    // The entry the scan is currently filling. `None` between entries and for
+    // the duration of a combo bucket, so figures that belong to neither a
+    // contract nor this client land nowhere rather than on the last contract.
+    let mut current: Option<MidnightSeed> = None;
+    let mut request_id = String::new();
+    let mut reference_id = String::new();
     for part in text.split('\x01') {
-        if let Some(v) = part.strip_prefix("6008=") {
-            if count > 0 && con_id != 0 {
-                seeds.push(MidnightSeed { con_id, qty_midnight, money_traded, realized_pnl });
+        if let Some(v) = part.strip_prefix("58=") {
+            // The body states its own status here. A body that has something to
+            // say went wrong, so nothing in it is a figure and the whole thing
+            // is abandoned rather than half-read.
+            if !v.is_empty() {
+                log::warn!("P&L seeds not usable: {v}");
+                return;
             }
-            con_id = v.parse().unwrap_or(0);
-            qty_midnight = None;
-            money_traded = 0.0;
-            realized_pnl = 0.0;
-            count += 1;
-        } else if let Some(v) = part.strip_prefix("6064=") {
-            // Same rule as the position feed above: a quantity that is absent
-            // or unparseable is not a flat. Reading it as zero here makes the
-            // day's P&L look as though the position were opened intraday. The
-            // row is still kept — dropping it says the same thing, because a
-            // position with no seed row *is* the intraday case, and it would
-            // discard the cash and realized figures the row does carry.
-            qty_midnight = v.parse::<f64>().ok().filter(|q| q.is_finite()).map(|q| q as i64);
-        } else if let Some(v) = part.strip_prefix("6822=") {
-            // moneyTradedSinceMidnight: signed net cash, SELL positive / BUY
-            // negative. Stored with the wire sign; poll_pnl adds it (ib-agent#163).
-            money_traded = v.parse().unwrap_or(0.0);
-        } else if let Some(v) = part.strip_prefix("6099=") {
-            realized_pnl = v.parse().unwrap_or(0.0);
+        } else if let Some(v) = part.strip_prefix("6529=") {
+            request_id = v.to_string();
+        } else if let Some(v) = part.strip_prefix("8292=") {
+            reference_id = v.to_string();
+        } else if let Some(v) = part.strip_prefix("6008=") {
+            seeds.extend(current.take());
+            current = v.parse::<i64>().ok().filter(|&id| id != 0)
+                .map(|con_id| MidnightSeed { con_id, ..Default::default() });
+        } else if part.starts_with("8020=") {
+            // A combo bucket states the same five figures against a label
+            // instead of a contract id. Nothing downstream is keyed by a label,
+            // so the entry in hand is closed and the bucket's figures are read
+            // past rather than folded into the contract that came before it.
+            seeds.extend(current.take());
+        } else if let Some(seed) = current.as_mut() {
+            if let Some(v) = part.strip_prefix("6064=") {
+                // Same rule as the position feed above: a quantity that is absent
+                // or unparseable is not a flat. Reading it as zero here makes the
+                // day's P&L look as though the position were opened intraday. The
+                // row is still kept — dropping it says the same thing, because a
+                // position with no seed row *is* the intraday case, and it would
+                // discard the cash and realized figures the row does carry.
+                seed.qty_midnight = v.parse::<f64>().ok().filter(|q| q.is_finite()).map(|q| q as i64);
+            } else if let Some(v) = part.strip_prefix("8223=") {
+                seed.qty_traded = v.parse::<f64>().ok().filter(|q| q.is_finite());
+            } else if let Some(v) = part.strip_prefix("8233=") {
+                // What the venue says the position was worth at midnight, which
+                // is the figure the day's change is measured from.
+                seed.cost_midnight = v.parse::<f64>().ok().filter(|c| c.is_finite());
+            } else if let Some(v) = part.strip_prefix("6822=") {
+                // moneyTradedSinceMidnight: signed net cash, SELL positive / BUY
+                // negative. Stored with the wire sign; poll_pnl adds it (ib-agent#163).
+                seed.money_traded = v.parse().unwrap_or(0.0);
+            } else if let Some(v) = part.strip_prefix("6099=") {
+                seed.realized_pnl = v.parse().unwrap_or(0.0);
+            }
         }
     }
-    if count > 0 && con_id != 0 {
-        seeds.push(MidnightSeed { con_id, qty_midnight, money_traded, realized_pnl });
+    seeds.extend(current);
+    // The venue answers against the reference it was given and falls back to
+    // its own request id when it has none.
+    let key = if reference_id.is_empty() { request_id } else { reference_id };
+    shared.portfolio.set_midnight_seeds(key, seeds);
+}
+
+/// Handle 6040=152, the venue's price table: 146={count} with a list of
+/// contract ids in 6008 paired positionally with a list of prices in 8057.
+/// The price is stored as text and read where it is used, so one that does not
+/// parse costs its own contract and not the table.
+fn handle_pnl_prices(msg: &[u8], shared: &SharedState) {
+    let text = match std::str::from_utf8(msg) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    // Both lists are collected in wire order and paired by position, so an
+    // unreadable contract id holds its place instead of shifting every price
+    // after it onto the wrong contract.
+    let mut con_ids: Vec<Option<i64>> = Vec::new();
+    let mut prices: Vec<&str> = Vec::new();
+    for part in text.split('\x01') {
+        if let Some(v) = part.strip_prefix("6008=") {
+            con_ids.push(v.parse::<i64>().ok().filter(|&id| id != 0));
+        } else if let Some(v) = part.strip_prefix("8057=") {
+            prices.push(v);
+        }
     }
-    shared.portfolio.set_midnight_seeds(seeds);
+    let table = con_ids.into_iter().zip(prices)
+        .filter_map(|(con_id, price)| Some((con_id?, price.to_string())))
+        .collect();
+    shared.portfolio.set_venue_prices(table);
 }
 
 /// Handle 6040=75 position + market price feed.
@@ -3379,6 +3434,96 @@ mod tests {
         assert_eq!(silent.qty_midnight, None, "absent is unknown, not flat");
         assert_eq!(silent.money_traded, -10.0, "the figures it did state survive");
         assert_eq!(silent.realized_pnl, 2.5);
+    }
+
+    /// The venue states what each position was worth at midnight and what has
+    /// been traded against it since. Those are the figures the day's change is
+    /// measured from, so they have to arrive intact rather than be recomputed.
+    ///
+    /// A combo bucket restates the same five fields against a label. Nothing
+    /// here is keyed by a label, so a bucket's figures must land nowhere at
+    /// all instead of on whichever contract happened to come before it.
+    #[test]
+    fn the_venue_states_what_a_position_was_worth_at_midnight() {
+        let shared = SharedState::new();
+        let body = [
+            "146=2",
+            "6008=756733", "6064=100", "8223=25", "8233=44000.5", "6822=-1250.0", "6099=7.5",
+            "6008=265598", "6064=-3", "8223=0", "8233=-1200.0", "6822=0", "6099=0",
+            "8058=1",
+            "8020=SPY 26JUN CALENDAR", "6064=9", "8233=999999.0", "6822=888888.0", "6099=777777.0",
+        ].join("\x01");
+        handle_pnl_response(body.as_bytes(), &shared);
+
+        let seeds = shared.portfolio.midnight_seeds();
+        assert_eq!(seeds.len(), 2, "the combo bucket is not a contract");
+
+        let long = seeds.iter().find(|s| s.con_id == 756733).expect("first contract");
+        assert_eq!(long.qty_midnight, Some(100));
+        assert_eq!(long.qty_traded, Some(25.0));
+        assert_eq!(long.cost_midnight, Some(44000.5), "taken as sent, unscaled");
+        assert_eq!(long.money_traded, -1250.0);
+        assert_eq!(long.realized_pnl, 7.5);
+
+        let short = seeds.iter().find(|s| s.con_id == 265598).expect("second contract");
+        assert_eq!(short.qty_midnight, Some(-3));
+        assert_eq!(short.cost_midnight, Some(-1200.0), "a short is worth a negative amount");
+        assert_eq!(
+            short.realized_pnl, 0.0,
+            "the combo bucket's figures did not fall through onto the last contract",
+        );
+    }
+
+    /// The body says whether it is an answer. One that reports a problem is
+    /// reporting that instead of stating figures, so nothing in it is read.
+    #[test]
+    fn a_pnl_body_that_reports_a_problem_states_no_seeds() {
+        let shared = SharedState::new();
+        let body = [
+            "58=No security definition has been found",
+            "6008=756733", "6064=100", "8233=44000.5", "6099=7.5",
+        ].join("\x01");
+        handle_pnl_response(body.as_bytes(), &shared);
+        assert!(shared.portfolio.midnight_seeds().is_empty(), "a problem is not a figure");
+    }
+
+    /// The venue answers against the reference it was handed and falls back to
+    /// its own request id only when it has none.
+    #[test]
+    fn the_reference_id_names_the_request_the_seeds_answer() {
+        let shared = SharedState::new();
+        let both = ["6529=PLR.2", "8292=PLR.1", "6008=756733", "6064=1"].join("\x01");
+        handle_pnl_response(both.as_bytes(), &shared);
+        assert_eq!(shared.portfolio.pnl_request_key(), "PLR.1");
+
+        let neither = ["6529=PLR.2", "8292=", "6008=756733", "6064=1"].join("\x01");
+        handle_pnl_response(neither.as_bytes(), &shared);
+        assert_eq!(shared.portfolio.pnl_request_key(), "PLR.2");
+    }
+
+    /// The price table is two lists paired by position. An unreadable contract
+    /// id has to hold its place, because dropping it slides every price after
+    /// it onto the wrong contract.
+    #[test]
+    fn the_price_table_pairs_each_contract_with_its_own_price() {
+        let shared = SharedState::new();
+        let body = [
+            "146=3",
+            "6008=756733", "6008=not-a-contract", "6008=265598",
+            "8057=612.34", "8057=9.99", "8057=1.005",
+        ].join("\x01");
+        handle_pnl_prices(body.as_bytes(), &shared);
+
+        assert_eq!(shared.portfolio.venue_price(756733).as_deref(), Some("612.34"));
+        assert_eq!(
+            shared.portfolio.venue_price(265598).as_deref(), Some("1.005"),
+            "the third price belongs to the third contract",
+        );
+
+        // A later table restates what it names and leaves the rest standing.
+        handle_pnl_prices(["6008=756733", "8057=615.00"].join("\x01").as_bytes(), &shared);
+        assert_eq!(shared.portfolio.venue_price(756733).as_deref(), Some("615.00"));
+        assert_eq!(shared.portfolio.venue_price(265598).as_deref(), Some("1.005"));
     }
 
     /// One lookup describes one contract. The venues answer separately and
