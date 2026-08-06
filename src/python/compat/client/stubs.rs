@@ -15,7 +15,7 @@ impl EClient {
         under_price: f64, implied_vol_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = (req_id, contract, option_price, under_price, implied_vol_options);
-        log::warn!("calculate_implied_volatility: not yet implemented in engine");
+        unserviceable(self, req_id, "calculate_implied_volatility");
         Ok(())
     }
 
@@ -25,7 +25,7 @@ impl EClient {
         under_price: f64, opt_prc_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = (req_id, contract, volatility, under_price, opt_prc_options);
-        log::warn!("calculate_option_price: not yet implemented in engine");
+        unserviceable(self, req_id, "calculate_option_price");
         Ok(())
     }
 
@@ -45,7 +45,7 @@ impl EClient {
         exercise_quantity: i32, account: &str, _override: i32,
     ) -> PyResult<()> {
         let _ = (req_id, contract, exercise_action, exercise_quantity, account, _override);
-        log::warn!("exercise_options: not yet implemented in engine");
+        unserviceable(self, req_id, "exercise_options");
         Ok(())
     }
 
@@ -61,7 +61,7 @@ impl EClient {
         underlying_con_id: i64,
     ) -> PyResult<()> {
         let _ = (req_id, underlying_symbol, fut_fop_exchange, underlying_sec_type, underlying_con_id);
-        log::warn!("req_sec_def_opt_params: not yet implemented in engine");
+        unserviceable(self, req_id, "req_sec_def_opt_params");
         Ok(())
     }
 
@@ -232,5 +232,19 @@ impl EClient {
         let _ = (req_id, wsh_event_data);
         log::warn!("req_wsh_event_data: not yet implemented — needs FIX capture");
         Ok(())
+    }
+}
+
+/// A request this client cannot serve is answered, not ignored. The caller is
+/// waiting on a callback that will never come otherwise, and silence looks
+/// exactly like a slow gateway. Code 321 is what the venue answers a request
+/// it will not act on.
+fn unserviceable(client: &EClient, req_id: i64, call: &str) {
+    if let Ok(shared) = client.shared_state() {
+        shared.reference.push_historical_error(
+            req_id.max(0) as u32,
+            321,
+            format!("{call} is not served by this client"),
+        );
     }
 }
