@@ -1208,6 +1208,14 @@ pub enum ControlCommand {
     CancelHeadTimestamp { req_id: u32 },
     /// Search for matching symbols via auth connection.
     FetchMatchingSymbols { req_id: u32, pattern: String },
+    /// Request the option chain of an underlying via auth connection.
+    FetchOptionParams {
+        req_id: u32,
+        symbol: String,
+        fut_fop_exchange: String,
+        underlying_sec_type: String,
+        underlying_con_id: i64,
+    },
     /// Request available exchanges for market depth.
     FetchMktDepthExchanges,
     /// Request scanner parameter XML via historical data connection.

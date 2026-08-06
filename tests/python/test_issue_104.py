@@ -3,8 +3,8 @@
 Subscribe to option market data with genericTickList for greeks,
 verify tickOptionComputation callbacks fire with IV, delta, gamma, etc.
 
-Note: reqSecDefOptParams is not yet implemented (stub). This test uses
-hardcoded ATM option conIds from wire capture.
+Note: this test names its options directly rather than discovering them,
+so it exercises the greek ticks and nothing else.
 
 Run: pytest tests/python/test_issue_104.py -v -s
 """
@@ -149,9 +149,8 @@ class TestOptionsGreeks:
         strike = round(price / 5) * 5
         print(f"  AAPL underlying: {price}, ATM strike: {strike}")
 
-        # Request contract details to find the option conId
-        # Since reqSecDefOptParams is a stub, we'll request option market data
-        # with a constructed contract — the engine will qualify it
+        # Request option market data with a constructed contract — the engine
+        # will qualify it.
         call = Contract()
         call.symbol = "AAPL"
         call.sec_type = "OPT"

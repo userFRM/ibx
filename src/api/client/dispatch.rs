@@ -339,6 +339,17 @@ impl EClient {
             wrapper.symbol_samples(req_id as i64, &descriptions);
         }
 
+        // Option chain → security_definition_option_parameter + _end
+        for (req_id, underlying_con_id, scopes) in self.shared.reference.drain_option_params() {
+            for scope in &scopes {
+                wrapper.security_definition_option_parameter(
+                    req_id as i64, &scope.exchange, underlying_con_id, &scope.trading_class,
+                    &scope.multiplier, &scope.expirations, &scope.strikes,
+                );
+            }
+            wrapper.security_definition_option_parameter_end(req_id as i64);
+        }
+
         // Scanner params
         for xml in self.shared.reference.drain_scanner_params() {
             wrapper.scanner_parameters(&xml);

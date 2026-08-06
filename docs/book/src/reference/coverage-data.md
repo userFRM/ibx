@@ -12,8 +12,8 @@ Canonical IB API methods vs ibx implementation status.
 
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
-| **EClient methods** | 77 | 63 impl, 8 stub | 63 impl, 14 stub |
-| **EWrapper callbacks** | 81 | 66 impl, 3 stub | 70 impl, 11 stub |
+| **EClient methods** | 77 | 64 impl, 8 stub | 64 impl, 13 stub |
+| **EWrapper callbacks** | 81 | 68 impl, 1 stub | 72 impl, 9 stub |
 
 ## EClient Methods
 
@@ -84,7 +84,7 @@ Canonical IB API methods vs ibx implementation status.
 |  | `calculate_option_price` | `calculateOptionPrice` | - | STUB |
 |  | `cancel_calculate_option_price` | `cancelCalculateOptionPrice` | - | STUB |
 |  | `exercise_options` | `exerciseOptions` | - | STUB |
-|  | `req_sec_def_opt_params` | `reqSecDefOptParams` | - | STUB |
+|  | `req_sec_def_opt_params` | `reqSecDefOptParams` | Y | Y |
 | Reference | `req_soft_dollar_tiers` | `reqSoftDollarTiers` | Y | Y |
 |  | `req_family_codes` | `reqFamilyCodes` | Y | Y |
 |  | `req_user_info` | `reqUserInfo` | Y | Y |
@@ -169,8 +169,8 @@ Canonical IB API methods vs ibx implementation status.
 | Completed Orders | `completed_order` | Y | Y |
 |  | `completed_orders_end` | Y | Y |
 | Options | `tick_option_computation` | Y | Y |
-|  | `security_definition_option_parameter` | STUB | STUB |
-|  | `security_definition_option_parameter_end` | STUB | STUB |
+|  | `security_definition_option_parameter` | Y | Y |
+|  | `security_definition_option_parameter_end` | Y | Y |
 | Reference | `smart_components` | Y | Y |
 |  | `soft_dollar_tiers` | Y | Y |
 |  | `family_codes` | Y | Y |
