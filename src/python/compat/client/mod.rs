@@ -59,6 +59,10 @@ pub struct EClient {
     /// Sender for test-injected events (test-only).
     #[doc(hidden)]
     pub(crate) _test_event_tx: Mutex<Option<std::sync::mpsc::SyncSender<Event>>>,
+    /// Holds the control channel's receiving end for a test-connected client.
+    /// Dropping it closed the channel, so a client that reported itself
+    /// connected failed every request that sends one.
+    pub(crate) _test_control_rx: Mutex<Option<std::sync::mpsc::Receiver<ControlCommand>>>,
     /// Shared subscription tracking and dispatch preparation.
     pub(crate) core: ClientCore,
 }
@@ -132,6 +136,7 @@ impl EClient {
             connected: AtomicBool::new(false),
             event_rx: Mutex::new(None),
             _test_event_tx: Mutex::new(None),
+            _test_control_rx: Mutex::new(None),
             core: ClientCore::new(),
         }
     }

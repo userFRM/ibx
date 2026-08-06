@@ -320,6 +320,7 @@ def test_ibapi_pattern():
 def test_pnl_subscribe_cancel():
     wrapper = EWrapper()
     client = EClient(wrapper)
+    client._test_connect()
     client.req_pnl(1, "DU12345")
     client.cancel_pnl(1)
 

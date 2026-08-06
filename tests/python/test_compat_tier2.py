@@ -102,6 +102,7 @@ def test_req_news_providers_fires_callback():
             calls.append(providers)
     w = W()
     c = EClient(w)
+    c._test_connect()
     c.req_news_providers()
     assert len(calls) == 1
 
@@ -114,6 +115,7 @@ def test_req_news_providers_returns_list():
             result.append(type(providers).__name__)
     w = W()
     c = EClient(w)
+    c._test_connect()
     c.req_news_providers()
     assert result[0] == "list"
 
@@ -432,8 +434,9 @@ def test_full_ibapi_app_pattern_with_tier2():
             self.events.append(("managed_accounts", accounts_list))
 
     app = App()
+    app.client._test_connect()
 
-    # These should work without connection
+    # The point of this pattern is that the tier's calls work through it.
     app.client.req_news_providers()
     app.client.req_managed_accts()
     app.client.req_news_bulletins()
@@ -452,7 +455,7 @@ def test_full_ibapi_app_pattern_with_tier2():
 
     # Verify callbacks fired
     assert ("news_providers",) in app.events
-    assert ("managed_accounts", "") in app.events
+    assert ("managed_accounts", "TEST123") in app.events
 
 
 def test_full_scanner_sequence():
@@ -504,6 +507,7 @@ def test_full_news_sequence():
             pass
 
     app = App()
+    app.client._test_connect()
     app.client.req_news_providers()
     assert app.providers is not None
     assert isinstance(app.providers, list)
