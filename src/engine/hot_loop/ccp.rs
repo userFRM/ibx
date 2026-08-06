@@ -2312,18 +2312,15 @@ impl CcpState {
         shared: &SharedState,
     ) {
         let symbol = symbol.to_uppercase();
-        // Which derivative to enumerate follows from the underlying: an option
-        // on a future is a future option, and a caller who names a futures
-        // exchange is asking for those too. An underlying whose type the caller
-        // left blank says nothing about the derivative, so nothing is claimed.
-        let derivative = match (underlying_sec_type, fut_fop_exchange.is_empty()) {
-            ("", true) => "",
-            ("FUT", _) | (_, false) => "FOP",
-            _ => "OPT",
-        };
-        // A future option whose underlying is not itself a future names that
+        // The request names the UNDERLYING's own type, not the derivative being
+        // enumerated. Naming the derivative is answered "Unknown contract":
+        // there is no option contract by that symbol, only a stock that has
+        // options on it. A caller who states nothing claims nothing.
+        let underlying = if underlying_sec_type.is_empty() { "STK" } else { underlying_sec_type };
+        // A futures option whose underlying is not itself a future names that
         // underlying on a tag of its own.
-        let con_id_tag = if derivative == "FOP" && underlying_sec_type != "FUT" { 6457 } else { 6346 };
+        let futures_option = !fut_fop_exchange.is_empty() && underlying != "FUT";
+        let con_id_tag = if futures_option { 6457 } else { 6346 };
         let Some(conn) = ccp_conn.as_mut() else {
             log::warn!("Option chain request req_id={req_id} symbol={symbol} not sent: no CCP transport");
             shared.reference.push_option_params(req_id, underlying_con_id, Vec::new());
@@ -2337,9 +2334,7 @@ impl CcpState {
             (6040, "138"),
             (55, &symbol),
         ];
-        if !derivative.is_empty() {
-            fields.push((310, derivative));
-        }
+        fields.push((310, underlying));
         fields.push((con_id_tag, &con_id_str));
         fields.push((6320, "1"));
         fields.push((6994, "1"));
@@ -4297,7 +4292,9 @@ mod tests {
         assert_eq!(names, ["6040", "55", "310", "6346", "6320", "6994"], "an equity chain: {fields:?}");
         assert_eq!(fields[0].1, "138");
         assert_eq!(fields[1].1, "AAPL", "the symbol is stated upper cased");
-        assert_eq!(fields[2].1, "OPT");
+        // The underlying's own type. Naming the derivative here is answered
+        // "Unknown contract": there is no option contract by that symbol.
+        assert_eq!(fields[2].1, "STK");
         assert_eq!(fields[3].1, "265598");
         assert_eq!(ccp.pending_option_params.len(), 1, "and the request awaits its reply");
 
@@ -4305,14 +4302,14 @@ mod tests {
         let fields = sent(&mut peer, &mut buf);
         let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
         assert_eq!(names, ["6040", "55", "310", "6346", "6320", "6994", "6995"], "a futures chain: {fields:?}");
-        assert_eq!(fields[2].1, "FOP", "options on a future are future options");
+        assert_eq!(fields[2].1, "FUT", "a future names itself, not its options");
         assert_eq!(fields[6].1, "CME", "and the venue rides only for a future");
 
         ccp.send_option_params_request(9, "SPX", "CME", "IND", 416904, &mut conn, &mut hb, &shared);
         let fields = sent(&mut peer, &mut buf);
         let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
         assert_eq!(names, ["6040", "55", "310", "6457", "6320", "6994"], "a futures chain on an index: {fields:?}");
-        assert_eq!(fields[2].1, "FOP");
+        assert_eq!(fields[2].1, "IND");
     }
 
     /// A caller is waiting for the end of a request that never reached the
