@@ -975,6 +975,11 @@ pub struct PortfolioState {
     positions: [AtomicU64; MAX_INSTRUMENTS],
     /// Midnight seeds from 6040=143 for client-side daily P&L computation.
     midnight_seeds: Mutex<HashMap<i64, MidnightSeed>>,
+    /// Correlation id the venue stamped on the seeds it last sent.
+    pnl_request_key: Mutex<String>,
+    /// Prices the venue states per contract (6040=152), kept as it wrote them
+    /// so a price that does not read as a number cannot displace the rest.
+    venue_prices: Mutex<HashMap<i64, String>>,
 }
 
 impl PortfolioState {
@@ -986,6 +991,8 @@ impl PortfolioState {
             position_infos: Mutex::new(HashMap::new()),
             positions: std::array::from_fn(|_| AtomicU64::new(0)),
             midnight_seeds: Mutex::new(HashMap::new()),
+            pnl_request_key: Mutex::new(String::new()),
+            venue_prices: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1070,18 +1077,36 @@ impl PortfolioState {
         self.positions[id as usize].store(pos.to_bits(), Ordering::Relaxed);
     }
 
-    /// Store midnight seeds from 6040=143 P&L response.
-    #[doc(hidden)] pub fn set_midnight_seeds(&self, seeds: Vec<MidnightSeed>) {
+    /// Store midnight seeds from 6040=143 P&L response, under the correlation
+    /// id the body was stamped with.
+    #[doc(hidden)] pub fn set_midnight_seeds(&self, request_key: String, seeds: Vec<MidnightSeed>) {
         let mut map = self.midnight_seeds.lock().unwrap();
         map.clear();
         for s in seeds {
             map.insert(s.con_id, s);
         }
+        *self.pnl_request_key.lock().unwrap() = request_key;
     }
 
     /// Read midnight seeds for client-side P&L computation.
     pub fn midnight_seeds(&self) -> Vec<MidnightSeed> {
         self.midnight_seeds.lock().unwrap().values().copied().collect()
+    }
+
+    /// The correlation id carried by the seeds now held.
+    pub fn pnl_request_key(&self) -> String {
+        self.pnl_request_key.lock().unwrap().clone()
+    }
+
+    /// Store the prices the venue states per contract (6040=152). A later table
+    /// updates the contracts it names and leaves the others as they stood.
+    #[doc(hidden)] pub fn set_venue_prices(&self, prices: HashMap<i64, String>) {
+        self.venue_prices.lock().unwrap().extend(prices);
+    }
+
+    /// The price the venue states for a contract, as text.
+    pub fn venue_price(&self, con_id: i64) -> Option<String> {
+        self.venue_prices.lock().unwrap().get(&con_id).cloned()
     }
 }
 
