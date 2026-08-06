@@ -987,6 +987,51 @@ def _collect_py_wrapper() -> set[str]:
     return {m["name"] for m in parse_py_wrapper(PY_WRAPPER)}
 
 
+LIVE_SUITE = ROOT / "tests" / "ib_paper_compat"
+
+
+def _read_all(files) -> str:
+    return "\n".join(f.read_text(errors="ignore") for f in files)
+
+
+def _evidence_index() -> tuple[str, str]:
+    """What the live session exercises, and what the offline suites exercise.
+
+    Test code only. Scanning the library too would credit every call with its
+    own definition, which is evidence of nothing.
+    """
+    # Both suites that need a real session: one drives the engine, the other
+    # the client surface itself.
+    live_files = list(LIVE_SUITE.rglob("*.rs")) + [ROOT / "tests" / "rust_api_gt.rs"]
+    live = _read_all(f for f in live_files if f.exists())
+    offline_files = [
+        f for f in (ROOT / "tests").rglob("*.rs")
+        if "ib_paper_compat" not in f.parts and f.stem != "rust_api_gt"
+    ]
+    offline_files += [
+        f for f in (ROOT / "src").rglob("*.rs")
+        if f.stem in ("tests", "test_helpers")
+    ]
+    return live, _read_all(offline_files)
+
+
+def _evidence(name: str, live: str, offline: str, stub_names: set[str]) -> str:
+    """How a call's status was established. Derived, never asserted.
+
+    A call is credited to the live session only when the suite that runs
+    against a real account names it, and to the offline suites only when a
+    test names it. Nothing here is hand-maintained, so nothing here can go
+    quietly out of date.
+    """
+    if name in stub_names:
+        return "States why it cannot be served"
+    if name in live:
+        return "Live session"
+    if name in offline:
+        return "Offline suites"
+    return "Not exercised"
+
+
 def _status_icon(name: str, impl_set: set[str], stub_names: set[str]) -> str:
     if name in impl_set and name not in stub_names:
         return "Y"
@@ -1031,6 +1076,11 @@ def generate_coverage_md(ver: str) -> str:
         "- **STUB** = Accepts call but not wired to server (logs warning or no-op)",
         "- **-** = Not present",
         "",
+        "The evidence column says how each status was established, and is",
+        "derived rather than asserted: a call is credited to the live session",
+        "only when the suite that runs against a real account names it, and to",
+        "the offline suites only when a test names it.",
+        "",
     ]
 
     # Summary
@@ -1057,15 +1107,17 @@ def generate_coverage_md(ver: str) -> str:
     # EClient table
     out.append("## EClient Methods")
     out.append("")
-    out.append("| Category | IB API Method | C++ Name | Rust | Python |")
-    out.append("|----------|---------------|----------|:----:|:------:|")
+    live, offline = _evidence_index()
+    out.append("| Category | IB API Method | C++ Name | Rust | Python | Evidence |")
+    out.append("|----------|---------------|----------|:----:|:------:|----------|")
     current_cat = ""
     for cat, name, cpp_name in IBAPI_ECLIENT:
         display_cat = cat if cat != current_cat else ""
         current_cat = cat
         r = _status_icon(name, rust_methods, STUB_METHODS)
         p = _status_icon(name, py_methods, STUB_METHODS)
-        out.append(f"| {display_cat} | `{name}` | `{cpp_name}` | {r} | {p} |")
+        e = _evidence(name, live, offline, STUB_METHODS)
+        out.append(f"| {display_cat} | `{name}` | `{cpp_name}` | {r} | {p} | {e} |")
     out.append("")
 
     # EWrapper table

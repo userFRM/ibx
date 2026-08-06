@@ -8,6 +8,11 @@ Canonical IB API methods vs ibx implementation status.
 - **STUB** = Accepts call but not wired to server (logs warning or no-op)
 - **-** = Not present
 
+The evidence column says how each status was established, and is
+derived rather than asserted: a call is credited to the live session
+only when the suite that runs against a real account names it, and to
+the offline suites only when a test names it.
+
 ## Summary
 
 | | IB API | Rust | Python |
@@ -17,85 +22,85 @@ Canonical IB API methods vs ibx implementation status.
 
 ## EClient Methods
 
-| Category | IB API Method | C++ Name | Rust | Python |
-|----------|---------------|----------|:----:|:------:|
-| Connection | `connect` | `eConnect` | Y | Y |
-|  | `disconnect` | `eDisconnect` | Y | Y |
-|  | `is_connected` | `isConnected` | Y | Y |
-|  | `set_server_log_level` | `setServerLogLevel` | Y | Y |
-|  | `req_current_time` | `reqCurrentTime` | Y | Y |
-| Market Data | `req_mkt_data` | `reqMktData` | Y | Y |
-|  | `cancel_mkt_data` | `cancelMktData` | Y | Y |
-|  | `req_market_data_type` | `reqMarketDataType` | Y | Y |
-|  | `req_tick_by_tick_data` | `reqTickByTickData` | Y | Y |
-|  | `cancel_tick_by_tick_data` | `cancelTickByTickData` | Y | Y |
-|  | `req_mkt_depth` | `reqMktDepth` | Y | Y |
-|  | `cancel_mkt_depth` | `cancelMktDepth` | Y | Y |
-|  | `req_mkt_depth_exchanges` | `reqMktDepthExchanges` | Y | Y |
-|  | `req_smart_components` | `reqSmartComponents` | Y | Y |
-|  | `req_real_time_bars` | `reqRealTimeBars` | Y | Y |
-|  | `cancel_real_time_bars` | `cancelRealTimeBars` | Y | Y |
-| Historical Data | `req_historical_data` | `reqHistoricalData` | Y | Y |
-|  | `cancel_historical_data` | `cancelHistoricalData` | Y | Y |
-|  | `req_head_time_stamp` | `reqHeadTimeStamp` | Y | Y |
-|  | `cancel_head_time_stamp` | `cancelHeadTimestamp` | Y | Y |
-|  | `req_historical_ticks` | `reqHistoricalTicks` | Y | Y |
-|  | `req_histogram_data` | `reqHistogramData` | Y | Y |
-|  | `cancel_histogram_data` | `cancelHistogramData` | Y | Y |
-|  | `req_historical_schedule` | `reqHistoricalSchedule` | Y | Y |
-| Orders | `place_order` | `placeOrder` | Y | Y |
-|  | `cancel_order` | `cancelOrder` | Y | Y |
-|  | `req_open_orders` | `reqOpenOrders` | Y | Y |
-|  | `req_all_open_orders` | `reqAllOpenOrders` | Y | Y |
-|  | `req_auto_open_orders` | `reqAutoOpenOrders` | Y | Y |
-|  | `req_ids` | `reqIds` | Y | Y |
-|  | `req_global_cancel` | `reqGlobalCancel` | Y | Y |
-|  | `req_completed_orders` | `reqCompletedOrders` | Y | Y |
-| Executions | `req_executions` | `reqExecutions` | Y | Y |
-| Account | `req_account_updates` | `reqAccountUpdates` | Y | Y |
-|  | `req_account_summary` | `reqAccountSummary` | Y | Y |
-|  | `cancel_account_summary` | `cancelAccountSummary` | Y | Y |
-|  | `req_positions` | `reqPositions` | Y | Y |
-|  | `cancel_positions` | `cancelPositions` | Y | Y |
-|  | `req_pnl` | `reqPnL` | Y | Y |
-|  | `cancel_pnl` | `cancelPnL` | Y | Y |
-|  | `req_pnl_single` | `reqPnLSingle` | Y | Y |
-|  | `cancel_pnl_single` | `cancelPnLSingle` | Y | Y |
-|  | `req_managed_accts` | `reqManagedAccts` | Y | Y |
-|  | `req_account_updates_multi` | `reqAccountUpdatesMulti` | Y | Y |
-|  | `cancel_account_updates_multi` | `cancelAccountUpdatesMulti` | Y | Y |
-|  | `req_positions_multi` | `reqPositionsMulti` | Y | Y |
-|  | `cancel_positions_multi` | `cancelPositionsMulti` | Y | Y |
-| Contract | `req_contract_details` | `reqContractDetails` | Y | Y |
-|  | `req_matching_symbols` | `reqMatchingSymbols` | Y | Y |
-|  | `req_market_rule` | `reqMarketRule` | Y | Y |
-| Scanner | `req_scanner_parameters` | `reqScannerParameters` | Y | Y |
-|  | `req_scanner_subscription` | `reqScannerSubscription` | Y | Y |
-|  | `cancel_scanner_subscription` | `cancelScannerSubscription` | Y | Y |
-| News | `req_news_providers` | `reqNewsProviders` | Y | Y |
-|  | `req_news_article` | `reqNewsArticle` | Y | Y |
-|  | `req_historical_news` | `reqHistoricalNews` | Y | Y |
-|  | `req_news_bulletins` | `reqNewsBulletins` | Y | Y |
-|  | `cancel_news_bulletins` | `cancelNewsBulletins` | Y | Y |
-| Fundamental | `req_fundamental_data` | `reqFundamentalData` | Y | Y |
-|  | `cancel_fundamental_data` | `cancelFundamentalData` | Y | Y |
-| Options | `calculate_implied_volatility` | `calculateImpliedVolatility` | - | STUB |
-|  | `cancel_calculate_implied_volatility` | `cancelCalculateImpliedVolatility` | - | STUB |
-|  | `calculate_option_price` | `calculateOptionPrice` | - | STUB |
-|  | `cancel_calculate_option_price` | `cancelCalculateOptionPrice` | - | STUB |
-|  | `exercise_options` | `exerciseOptions` | Y | Y |
-|  | `req_sec_def_opt_params` | `reqSecDefOptParams` | Y | Y |
-| Reference | `req_soft_dollar_tiers` | `reqSoftDollarTiers` | Y | Y |
-|  | `req_family_codes` | `reqFamilyCodes` | Y | Y |
-|  | `req_user_info` | `reqUserInfo` | Y | Y |
-| Financial Advisor | `request_fa` | `requestFA` | STUB | STUB |
-|  | `replace_fa` | `replaceFA` | STUB | STUB |
-| Display Groups | `query_display_groups` | `queryDisplayGroups` | STUB | STUB |
-|  | `subscribe_to_group_events` | `subscribeToGroupEvents` | STUB | STUB |
-|  | `unsubscribe_from_group_events` | `unsubscribeFromGroupEvents` | STUB | STUB |
-|  | `update_display_group` | `updateDisplayGroup` | STUB | STUB |
-| WSH | `req_wsh_meta_data` | `reqWshMetaData` | STUB | STUB |
-|  | `req_wsh_event_data` | `reqWshEventData` | STUB | STUB |
+| Category | IB API Method | C++ Name | Rust | Python | Evidence |
+|----------|---------------|----------|:----:|:------:|----------|
+| Connection | `connect` | `eConnect` | Y | Y | Live session |
+|  | `disconnect` | `eDisconnect` | Y | Y | Live session |
+|  | `is_connected` | `isConnected` | Y | Y | Live session |
+|  | `set_server_log_level` | `setServerLogLevel` | Y | Y | Not exercised |
+|  | `req_current_time` | `reqCurrentTime` | Y | Y | Live session |
+| Market Data | `req_mkt_data` | `reqMktData` | Y | Y | Live session |
+|  | `cancel_mkt_data` | `cancelMktData` | Y | Y | Live session |
+|  | `req_market_data_type` | `reqMarketDataType` | Y | Y | Not exercised |
+|  | `req_tick_by_tick_data` | `reqTickByTickData` | Y | Y | Offline suites |
+|  | `cancel_tick_by_tick_data` | `cancelTickByTickData` | Y | Y | Offline suites |
+|  | `req_mkt_depth` | `reqMktDepth` | Y | Y | Offline suites |
+|  | `cancel_mkt_depth` | `cancelMktDepth` | Y | Y | Offline suites |
+|  | `req_mkt_depth_exchanges` | `reqMktDepthExchanges` | Y | Y | Not exercised |
+|  | `req_smart_components` | `reqSmartComponents` | Y | Y | Live session |
+|  | `req_real_time_bars` | `reqRealTimeBars` | Y | Y | Offline suites |
+|  | `cancel_real_time_bars` | `cancelRealTimeBars` | Y | Y | Offline suites |
+| Historical Data | `req_historical_data` | `reqHistoricalData` | Y | Y | Live session |
+|  | `cancel_historical_data` | `cancelHistoricalData` | Y | Y | Live session |
+|  | `req_head_time_stamp` | `reqHeadTimeStamp` | Y | Y | Live session |
+|  | `cancel_head_time_stamp` | `cancelHeadTimestamp` | Y | Y | Offline suites |
+|  | `req_historical_ticks` | `reqHistoricalTicks` | Y | Y | Live session |
+|  | `req_histogram_data` | `reqHistogramData` | Y | Y | Live session |
+|  | `cancel_histogram_data` | `cancelHistogramData` | Y | Y | Live session |
+|  | `req_historical_schedule` | `reqHistoricalSchedule` | Y | Y | Live session |
+| Orders | `place_order` | `placeOrder` | Y | Y | Live session |
+|  | `cancel_order` | `cancelOrder` | Y | Y | Live session |
+|  | `req_open_orders` | `reqOpenOrders` | Y | Y | Offline suites |
+|  | `req_all_open_orders` | `reqAllOpenOrders` | Y | Y | Live session |
+|  | `req_auto_open_orders` | `reqAutoOpenOrders` | Y | Y | Not exercised |
+|  | `req_ids` | `reqIds` | Y | Y | Live session |
+|  | `req_global_cancel` | `reqGlobalCancel` | Y | Y | Live session |
+|  | `req_completed_orders` | `reqCompletedOrders` | Y | Y | Live session |
+| Executions | `req_executions` | `reqExecutions` | Y | Y | Offline suites |
+| Account | `req_account_updates` | `reqAccountUpdates` | Y | Y | Live session |
+|  | `req_account_summary` | `reqAccountSummary` | Y | Y | Live session |
+|  | `cancel_account_summary` | `cancelAccountSummary` | Y | Y | Live session |
+|  | `req_positions` | `reqPositions` | Y | Y | Live session |
+|  | `cancel_positions` | `cancelPositions` | Y | Y | Not exercised |
+|  | `req_pnl` | `reqPnL` | Y | Y | Live session |
+|  | `cancel_pnl` | `cancelPnL` | Y | Y | Live session |
+|  | `req_pnl_single` | `reqPnLSingle` | Y | Y | Live session |
+|  | `cancel_pnl_single` | `cancelPnLSingle` | Y | Y | Live session |
+|  | `req_managed_accts` | `reqManagedAccts` | Y | Y | Not exercised |
+|  | `req_account_updates_multi` | `reqAccountUpdatesMulti` | Y | Y | Not exercised |
+|  | `cancel_account_updates_multi` | `cancelAccountUpdatesMulti` | Y | Y | Not exercised |
+|  | `req_positions_multi` | `reqPositionsMulti` | Y | Y | Not exercised |
+|  | `cancel_positions_multi` | `cancelPositionsMulti` | Y | Y | Not exercised |
+| Contract | `req_contract_details` | `reqContractDetails` | Y | Y | Live session |
+|  | `req_matching_symbols` | `reqMatchingSymbols` | Y | Y | Live session |
+|  | `req_market_rule` | `reqMarketRule` | Y | Y | Not exercised |
+| Scanner | `req_scanner_parameters` | `reqScannerParameters` | Y | Y | Live session |
+|  | `req_scanner_subscription` | `reqScannerSubscription` | Y | Y | Live session |
+|  | `cancel_scanner_subscription` | `cancelScannerSubscription` | Y | Y | Live session |
+| News | `req_news_providers` | `reqNewsProviders` | Y | Y | Live session |
+|  | `req_news_article` | `reqNewsArticle` | Y | Y | Live session |
+|  | `req_historical_news` | `reqHistoricalNews` | Y | Y | Live session |
+|  | `req_news_bulletins` | `reqNewsBulletins` | Y | Y | Live session |
+|  | `cancel_news_bulletins` | `cancelNewsBulletins` | Y | Y | Live session |
+| Fundamental | `req_fundamental_data` | `reqFundamentalData` | Y | Y | Live session |
+|  | `cancel_fundamental_data` | `cancelFundamentalData` | Y | Y | Live session |
+| Options | `calculate_implied_volatility` | `calculateImpliedVolatility` | - | STUB | States why it cannot be served |
+|  | `cancel_calculate_implied_volatility` | `cancelCalculateImpliedVolatility` | - | STUB | States why it cannot be served |
+|  | `calculate_option_price` | `calculateOptionPrice` | - | STUB | States why it cannot be served |
+|  | `cancel_calculate_option_price` | `cancelCalculateOptionPrice` | - | STUB | States why it cannot be served |
+|  | `exercise_options` | `exerciseOptions` | Y | Y | Offline suites |
+|  | `req_sec_def_opt_params` | `reqSecDefOptParams` | Y | Y | Offline suites |
+| Reference | `req_soft_dollar_tiers` | `reqSoftDollarTiers` | Y | Y | Live session |
+|  | `req_family_codes` | `reqFamilyCodes` | Y | Y | Live session |
+|  | `req_user_info` | `reqUserInfo` | Y | Y | Live session |
+| Financial Advisor | `request_fa` | `requestFA` | STUB | STUB | States why it cannot be served |
+|  | `replace_fa` | `replaceFA` | STUB | STUB | States why it cannot be served |
+| Display Groups | `query_display_groups` | `queryDisplayGroups` | STUB | STUB | States why it cannot be served |
+|  | `subscribe_to_group_events` | `subscribeToGroupEvents` | STUB | STUB | States why it cannot be served |
+|  | `unsubscribe_from_group_events` | `unsubscribeFromGroupEvents` | STUB | STUB | States why it cannot be served |
+|  | `update_display_group` | `updateDisplayGroup` | STUB | STUB | States why it cannot be served |
+| WSH | `req_wsh_meta_data` | `reqWshMetaData` | STUB | STUB | States why it cannot be served |
+|  | `req_wsh_event_data` | `reqWshEventData` | STUB | STUB | States why it cannot be served |
 
 ## EWrapper Callbacks
 
