@@ -94,7 +94,7 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Bond | Implemented | Implemented | Implemented | W2 |
 | Warrant | Implemented | Implemented | Implemented | W2 |
 | Combination | Verified | Not applicable | Implemented | W2 |
-| Crypto and CFD | Implemented | Implemented | Blocked, the order is refused with no reason stated. The account's crypto onboarding is within its waiting period | W2 |
+| Crypto and CFD | Verified | Verified | Verified, crypto requires an immediate-or-cancel or minutes instruction | Available |
 | Commodity, fund, forward, bill | Implemented | Implemented | Absent | W2 |
 | Venues outside the United States | Verified | Verified | Verified | Available |
 
@@ -137,7 +137,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Met |
 | W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust | Met |
 | W2.10 | Tick by tick data | Available, or the transport requirement recorded | Open |
-| W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue | Open |
+| W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue | Met for crypto. Commodity, fund, forward and bill open |
 
 ### W3 Call contract and behaviour parity
 
