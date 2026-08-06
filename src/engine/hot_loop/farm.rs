@@ -87,6 +87,9 @@ pub(crate) struct FarmState {
     /// Primary depth subscription params for reconnect: (req_id, con_id, exchange, sec_type, num_rows, is_smart_depth).
     depth_resub_info: Vec<(u32, i64, String, String, i32, bool)>,
     md_resub_info: Vec<MdResubInfo>,
+    /// The option-model subscriptions and what they were taken out on, so one
+    /// can be withdrawn the same way it was asked for.
+    greeks_subs: Vec<(u32, i64, String)>,
     pub(crate) disconnected: bool,
     pub(crate) tick_buf: Vec<tick_decoder::RawTick>,
     pub(crate) farm_msg_buf: Vec<Vec<u8>>,
@@ -242,6 +245,7 @@ impl FarmState {
             depth_fanout_map: Vec::new(),
             depth_resub_info: Vec::new(),
             md_resub_info: Vec::new(),
+            greeks_subs: Vec::new(),
             disconnected: false,
             tick_buf: Vec::with_capacity(16),
             farm_msg_buf: Vec::with_capacity(32),
@@ -634,15 +638,20 @@ impl FarmState {
         }
         if let Some(id) = greeks_req_id {
             self.md_req_to_instrument.push((id, instrument));
+            // Recorded whether or not the farm is up: what was asked for is
+            // bookkeeping, and a cancel has to find it either way.
+            self.greeks_subs.push((id, con_id, sec_type.to_string()));
         }
 
         match self.instrument_md_reqs.iter_mut().find(|(id, _)| *id == instrument) {
             Some((_, reqs)) => {
                 reqs.push(bid_ask_id);
                 if realtime { reqs.push(last_id); }
+                if let Some(id) = greeks_req_id { reqs.push(id); }
             }
             None => {
-                let reqs = if realtime { vec![bid_ask_id, last_id] } else { vec![bid_ask_id] };
+                let mut reqs = if realtime { vec![bid_ask_id, last_id] } else { vec![bid_ask_id] };
+                if let Some(id) = greeks_req_id { reqs.push(id); }
                 self.instrument_md_reqs.push((instrument, reqs));
             }
         }
@@ -757,6 +766,19 @@ impl FarmState {
         // size, which reads as plausible rather than broken (ibx#289).
         self.md_req_to_instrument.retain(|(req_id, _)| !reqs.contains(req_id));
 
+        // Take the option-model records before the connection is checked. With
+        // the farm down there is nothing to send, and a record left behind
+        // would outlive the subscription it describes.
+        let mut withdrawn: Vec<(u32, i64, String)> = Vec::new();
+        self.greeks_subs.retain(|entry| {
+            if reqs.contains(&entry.0) {
+                withdrawn.push(entry.clone());
+                false
+            } else {
+                true
+            }
+        });
+
         let conn = match farm_conn.as_mut() {
             Some(c) => c,
             None => return,
@@ -764,6 +786,23 @@ impl FarmState {
 
         for req_id in reqs {
             let req_id_str = req_id.to_string();
+            // The option model is withdrawn the way it was asked for: the venue
+            // is told which model, on which contract, not merely which request.
+            if let Some(at) = withdrawn.iter().position(|(id, ..)| *id == req_id) {
+                let (_, con_id, sec_type) = withdrawn.remove(at);
+                let con_id_str = (con_id as u32).to_string();
+                let fix_sec_type = crate::control::contracts::sec_type_to_fix(&sec_type);
+                let _ = conn.send_fixcomp(&[
+                    (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
+                    (262, &req_id_str),
+                    (263, "2"),
+                    (6008, &con_id_str),
+                    (207, GREEKS_VENUE),
+                    (167, fix_sec_type),
+                    (264, GREEKS_REQUEST_TYPE),
+                ]);
+                continue;
+            }
             let _ = conn.send_fixcomp(&[
                 (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
                 (262, &req_id_str),
@@ -1977,5 +2016,46 @@ mod price_scaling_tests {
     fn an_invalid_option_model_states_nothing() {
         assert!(super::decode_greeks(&[0u8; 32]).is_none());
         assert!(super::decode_greeks(&[0xff, 0xff, 0xff, 0xfe]).is_none(), "too short to hold one");
+    }
+
+    /// A subscription that asks for the option model has to withdraw it too.
+    /// Left behind, the venue keeps sending a model for a contract the caller
+    /// stopped watching, and nothing holds a request id to stop it by.
+    #[test]
+    fn cancelling_an_option_withdraws_its_model() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let instrument = context.market
+            .try_register_contract(805711629, "AAPL", "OPT", "SMART", "20260821|220|C|100")
+            .unwrap();
+        let mut conn = None;
+        let mut hb = HeartbeatState::new();
+        farm.send_mktdata_subscribe(
+            805711629, "AAPL", "SMART", "OPT", "20260821", 220.0, "C", "100",
+            instrument, 0, &mut conn, &mut hb,
+        );
+        assert_eq!(farm.greeks_subs.len(), 1, "an option is worth modelling");
+        let reqs = &farm.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument).expect("its requests").1;
+        assert!(reqs.contains(&farm.greeks_subs[0].0), "and the model is one of them, so a cancel finds it");
+
+        farm.send_mktdata_unsubscribe(instrument, &mut conn, &mut hb);
+        assert!(farm.greeks_subs.is_empty(), "withdrawn with the rest");
+        assert!(farm.instrument_md_reqs.iter().all(|(id, _)| *id != instrument));
+    }
+
+    /// Anything without a volatility to imply is not asked to be modelled: the
+    /// venue answers such a request with nothing at all.
+    #[test]
+    fn a_stock_is_not_asked_for_an_option_model() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let instrument = context.market
+            .try_register_contract(756733, "SPY", "STK", "SMART", "").unwrap();
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "",
+            instrument, 0, &mut None, &mut HeartbeatState::new(),
+        );
+        assert!(farm.greeks_subs.is_empty());
     }
 }

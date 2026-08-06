@@ -1042,6 +1042,18 @@ fn pnl_single_dispatches_position_info() {
         avg_cost: 150 * PRICE_SCALE,
         ..Default::default()
     });
+    // The figure is the position valued at what it is worth now, so the
+    // callback needs a price and the slot that carries it. A holding alone
+    // prices nothing, and this asserted a callback the code has never had
+    // grounds to make.
+    client.seed_instrument(265598, 0);
+    shared.market.push_quote(0, &Quote {
+        bid: 160 * PRICE_SCALE,
+        ask: 161 * PRICE_SCALE,
+        last: 160 * PRICE_SCALE,
+        close: 155 * PRICE_SCALE,
+        ..Quote::default()
+    });
 
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
