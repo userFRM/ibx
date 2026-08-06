@@ -63,6 +63,7 @@ impl EClient {
         ClientCore::validate_supported_instructions(order)?;
         ClientCore::validate_combo_legs(&contract.sec_type, contract.combo_legs.len())?;
         ClientCore::validate_order_contract(
+            contract.con_id,
             &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
@@ -137,7 +138,7 @@ impl EClient {
             &contract.last_trade_date_or_contract_month, contract.strike,
             &contract.right, &contract.multiplier, &contract.currency,
         );
-        ClientCore::validate_order_contract(&contract.sec_type, &identity)?;
+        ClientCore::validate_order_contract(contract.con_id, &contract.sec_type, &identity)?;
 
         let oid = if req_id > 0 {
             req_id as u64

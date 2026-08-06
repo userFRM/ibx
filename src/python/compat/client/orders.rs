@@ -46,6 +46,7 @@ impl EClient {
         ClientCore::validate_supported_instructions(&api_order).map_err(PyRuntimeError::new_err)?;
         ClientCore::validate_combo_legs(&contract.sec_type, api_contract.combo_legs.len()).map_err(PyRuntimeError::new_err)?;
         ClientCore::validate_order_contract(
+            contract.con_id,
             &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
@@ -130,6 +131,7 @@ impl EClient {
             exercise_action, exercise_quantity, account, &self.account(),
         ).map_err(PyRuntimeError::new_err)?;
         ClientCore::validate_order_contract(
+            contract.con_id,
             &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
