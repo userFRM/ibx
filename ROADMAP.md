@@ -37,7 +37,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Available |
 | Contract definitions by identifier and symbol | Verified | Live phase | Available |
 | Contract definitions by ISIN or CUSIP | Verified | Live lookup by ISIN resolved the contract | Available |
-| Option chain discovery | Implemented | No live phase exists | W1 |
+| Option chain discovery | Implemented | Request, reply parsing and delivery are covered by tests. The venue has not answered a request yet | W1 |
 | Scanners | Verified | Live phase | Available |
 | News, providers, articles, historical, bulletins | Verified | Live phase | Available |
 | Fundamental data | Verified | Live phase | Available |
@@ -46,7 +46,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Positions and round trip tracking | Implemented | Live phase requires a fill it did not obtain | W2 |
 | P&L, per contract | Verified | Live phase | Available |
 | P&L, account level subscription | Verified | Live session, reported from the gateway's own account figures | Available |
-| Option exercise and lapse | Accepted, not served | | W1 |
+| Option exercise and lapse | Implemented | No position has been exercised yet | W1 |
 | Option analytics, implied volatility and price | Accepted, not served | | W1 |
 | Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription | W3 |
 | Financial advisor allocation | Absent | | W3 |
@@ -56,18 +56,16 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 
 | Measure | Count |
 | --- | --- |
-| Rust client calls | 93 |
-| Python client calls | 123 |
-| Callbacks | 125 |
-| Rust calls served | 89 |
+| Rust client calls | 94 |
+| Python client calls | 124 |
+| Callbacks | 127 |
+| Rust calls served | 90 |
 | Rust calls accepted, not served | 4 |
 
 ### Calls not served
 
 | Call | Surface | Status | Workstream |
 | --- | --- | --- | --- |
-| `exercise_options` | Python | Accepted, not served | W1 |
-| `exercise_options` | Rust | Absent | W1 |
 | `calculate_implied_volatility` | Python | Accepted, not served | W1 |
 | `calculate_implied_volatility` | Rust | Absent | W1 |
 | `calculate_option_price` | Python | Accepted, not served | W1 |
