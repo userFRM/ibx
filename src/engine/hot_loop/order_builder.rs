@@ -579,7 +579,16 @@ fn send_cancel(
     let clord_str =
         if *attempt == 0 { format!("C{order_id}") } else { format!("C{order_id}.{attempt}") };
     let now = chrono_free_timestamp();
-    let side = context.order(order_id).map(|o| fix_side(o.side));
+    let tracked = context.order(order_id).copied();
+    let side = tracked.map(|o| fix_side(o.side));
+    // A cancel names the order, and also states what it is cancelling: the
+    // quantity and the contract. Naming only the order left the venue to look
+    // both up.
+    let qty_str = tracked.map(|o| format_uint(o.qty as u64).to_string());
+    let con_id_str = tracked
+        .and_then(|o| context.market.con_id(o.instrument))
+        .filter(|c| *c != 0)
+        .map(|c| c.to_string());
     let mut fields = vec![
         (fix::TAG_MSG_TYPE, fix::MSG_ORDER_CANCEL),
         (fix::TAG_SENDING_TIME, &now),
@@ -591,8 +600,14 @@ fn send_cancel(
     // Stated when it is known rather than defaulted: the cancel is keyed by
     // OrigClOrdID, and a guessed side is a claim about someone's order that
     // nothing here can stand behind.
+    if let Some(qty) = qty_str.as_deref() {
+        fields.push((38, qty));
+    }
     if let Some(side) = side {
         fields.push((54, side));
+    }
+    if let Some(con_id) = con_id_str.as_deref() {
+        fields.push((6008, con_id));
     }
     conn.send_fix(&fields)
 }
@@ -1840,6 +1855,8 @@ mod tests {
             assert_eq!(tag("54=").as_deref(), Some("2"), "the side it carries: {msg}");
             assert_eq!(tag("1=").as_deref(), Some("DU1"), "the account: {msg}");
             assert_eq!(tag("6088=").as_deref(), Some("Socket"), "the originator: {msg}");
+            assert_eq!(tag("38=").as_deref(), Some("100"), "what it cancels: {msg}");
+            assert_eq!(tag("6008=").as_deref(), Some("756733"), "the contract it cancels: {msg}");
             assert_eq!(tag("60="), None, "no transact time is written in the order path: {msg}");
             names.push(tag("11=").expect("a cancel names itself"));
         }
