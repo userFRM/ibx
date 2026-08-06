@@ -37,7 +37,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Available |
 | Contract definitions by identifier and symbol | Verified | Live phase | Available |
 | Contract definitions by ISIN or CUSIP | Verified | Live lookup by ISIN resolved the contract | Available |
-| Option chain discovery | Blocked | Request, reply parsing and delivery are covered by tests. The venue answers a request carrying no parameters on the same connection, and answers a chain request in no shape at all | W1 |
+| Option chain discovery | Blocked | Request, reply parsing and delivery are covered by tests. The session answers other requests, including one whose reply is never sent unasked, and answers a chain request in no shape at all | W1 |
 | Scanners | Verified | Live phase | Available |
 | News, providers, articles, historical, bulletins | Verified | Live phase | Available |
 | Fundamental data | Verified | Live phase | Available |
