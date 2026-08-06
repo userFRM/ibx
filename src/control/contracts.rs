@@ -324,6 +324,12 @@ pub fn build_secdef_request_by_symbol(
 }
 
 /// Parse a SecurityDefinition response into a ContractDefinition.
+/// Whether a field with this tag appears in a record.
+fn contains_field(body: &[u8], field: &[u8]) -> bool {
+    use crate::protocol::fix::SOH;
+    body.split(|&b| b == SOH).any(|part| part.starts_with(field))
+}
+
 /// Every contract a security-definition reply describes.
 ///
 /// One reply can describe several. Asking for a symbol without saying which
@@ -334,12 +340,15 @@ pub fn build_secdef_request_by_symbol(
 ///
 /// Each contract begins at its symbol. What precedes the first symbol is the
 /// message header, and every record needs it, so it rides in front of each.
+/// The symbol tag is reused by the identifier block — `55=BBG` and `55=US` sit
+/// there — so a record counts only when it also states what the contract is
+/// and which contract it is.
 ///
-/// Not yet used on the live path: a reply also carries identifier fields that
-/// reuse the symbol tag — `55=BBG` and `55=US` sit in the security-id block —
-/// so the boundary needs to exclude those before this can replace the
-/// single-contract read. Until then `qualify_contract` refuses a description
-/// that could match more than one listing rather than resolve it silently.
+/// Not on the live path yet. The reply that carries two listings does not
+/// reach the point where this would be called: it is consumed by the handling
+/// that fans a by-symbol lookup out across venues, and untangling that is a
+/// change to the most central lookup in the client. Until then
+/// `qualify_contract` refuses a description that could match more than one.
 pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
     use crate::protocol::fix::SOH;
     const SYMBOL_FIELD: &[u8] = b"\x0155=";
@@ -362,9 +371,17 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
     let mut out = Vec::with_capacity(starts.len());
     for (i, &start) in starts.iter().enumerate() {
         let end = starts.get(i + 1).copied().unwrap_or(data.len());
-        let mut record = Vec::with_capacity(header.len() + (end - start) + 1);
+        let body = &data[start..end];
+        // The symbol tag is reused inside the identifier block — `55=BBG` and
+        // `55=US` sit there — so not every occurrence starts a contract. One
+        // that does states what the contract is and which contract it is.
+        let names_a_contract = contains_field(body, b"167=") && contains_field(body, b"6008=");
+        if !names_a_contract {
+            continue;
+        }
+        let mut record = Vec::with_capacity(header.len() + body.len() + 1);
         record.extend_from_slice(header);
-        record.extend_from_slice(&data[start..end]);
+        record.extend_from_slice(body);
         record.push(SOH);
         if let Some(def) = parse_secdef_response(&record) {
             out.push(def);
@@ -1928,6 +1945,25 @@ mod tests {
         assert_eq!(defs[0].currency, "USD");
         assert_eq!(defs[1].con_id, 237937002);
         assert_eq!(defs[1].currency, "AUD", "and neither borrowed the other's fields");
+
+        // The identifier block reuses the symbol tag without naming a
+        // contract, so it starts no record.
+        let with_ids = crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+            (TAG_SECURITY_REQ_ID, "9"),
+            (TAG_SYMBOL, "SPY"),
+            (TAG_SECURITY_TYPE, "CS"),
+            (TAG_IB_CON_ID, "756733"),
+            (TAG_CURRENCY, "USD"),
+            (454, "2"),
+            (TAG_SYMBOL, "BBG"),
+            (455, "BBG000BDTBL9"),
+            (TAG_SYMBOL, "US"),
+            (455, "US78462F1030"),
+        ], 1);
+        let defs = parse_secdef_responses(&with_ids);
+        assert_eq!(defs.len(), 1, "one contract and two identifiers: {defs:?}");
+        assert_eq!(defs[0].con_id, 756733);
 
         // One contract still reads as one.
         let single = crate::protocol::fix::fix_build(&[
