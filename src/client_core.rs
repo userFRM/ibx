@@ -22,6 +22,9 @@ use crate::types::*;
 
 /// The only market data type the engine delivers (1 = realtime, ibx#234).
 const MDT_REALTIME: i32 = 1;
+const MDT_FROZEN: i32 = 2;
+const MDT_DELAYED: i32 = 3;
+const MDT_DELAYED_FROZEN: i32 = 4;
 
 // ── Tick type constants matching ibapi ──
 
@@ -445,6 +448,10 @@ pub struct ClientCore {
     // Market data type callback tracking
     pub market_data_type: AtomicI32,
     pub mdt_sent: Mutex<HashSet<i64>>,
+    /// The market-data type each subscription was made under. A request that
+    /// names its own mode is not described by the type set for everything
+    /// else, and that request's callback has to say what it asked for.
+    mdt_by_req: Mutex<HashMap<i64, i32>>,
 
     // Historical data keepUpToDate: req_ids that have completed initial batch.
     // Subsequent bars for these req_ids dispatch as historical_data_update.
@@ -485,6 +492,7 @@ impl ClientCore {
             open_orders: Mutex::new(HashMap::new()),
             market_data_type: AtomicI32::new(1),
             mdt_sent: Mutex::new(HashSet::new()),
+            mdt_by_req: Mutex::new(HashMap::new()),
             hist_initial_complete: Mutex::new(HashSet::new()),
             news_providers: Mutex::new("BRFG*BRFUPDN".into()),
             news_instruments: Mutex::new(HashSet::new()),
@@ -512,6 +520,7 @@ impl ClientCore {
         self.open_orders.lock().unwrap().clear();
         self.market_data_type.store(1, Ordering::Relaxed);
         self.mdt_sent.lock().unwrap().clear();
+        self.mdt_by_req.lock().unwrap().clear();
         self.hist_initial_complete.lock().unwrap().clear();
         *self.news_providers.lock().unwrap() = "BRFG*BRFUPDN".into();
         self.news_instruments.lock().unwrap().clear();
@@ -686,6 +695,17 @@ impl ClientCore {
         let instrument_id = Self::recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
+        // What this request asked for, so its own callback says so rather than
+        // reporting the type set for everything else.
+        self.mdt_by_req.lock().unwrap().insert(
+            req_id,
+            match mode_9887 {
+                1 => MDT_DELAYED,
+                2 => MDT_FROZEN,
+                3 => MDT_DELAYED_FROZEN,
+                _ => self.market_data_type.load(Ordering::Relaxed),
+            },
+        );
         self.instrument_to_req.lock().unwrap().insert(instrument_id, req_id);
         if snapshot {
             self.snapshot_reqs.lock().unwrap().insert(req_id);
@@ -703,6 +723,7 @@ impl ClientCore {
             self.instrument_to_req.lock().unwrap().remove(&instrument);
             self.last_quotes.lock().unwrap().remove(&instrument);
             self.mdt_sent.lock().unwrap().remove(&req_id);
+            self.mdt_by_req.lock().unwrap().remove(&req_id);
             let needs_news = self.news_instruments.lock().unwrap().remove(&instrument);
             self.forget_instrument(instrument);
             (Some(instrument), needs_news)
@@ -835,19 +856,28 @@ impl ClientCore {
 
     // ── Market data type tracking ──
 
-    /// Store the requested market data type. NOT sent to the gateway — the
-    /// engine has no wire path for it, so subscriptions always deliver
-    /// realtime data (ibx#234). Requesting anything else warns loudly
-    /// instead of pretending.
+    /// Store the requested market data type.
+    ///
+    /// The caller names the type once; the wire names it per subscription, on
+    /// field 9887. Subscriptions made after this take the mode it implies, so
+    /// a client that asks for delayed data gets delayed data — it used to be
+    /// stored, warned about, and never sent (ibx#234).
     pub fn set_market_data_type(&self, mdt: i32) {
-        if mdt != MDT_REALTIME {
-            log::warn!(
-                "req_market_data_type({mdt}) is not supported: the type is not \
-                 sent to the gateway and subscriptions remain realtime; \
-                 delayed tick variants are never emitted (ibx#234)",
-            );
+        if !matches!(mdt, MDT_REALTIME | MDT_FROZEN | MDT_DELAYED | MDT_DELAYED_FROZEN) {
+            log::warn!("req_market_data_type({mdt}) names no known type; subscriptions stay realtime");
         }
         self.market_data_type.store(mdt, Ordering::Relaxed);
+    }
+
+    /// The per-subscription mode the requested type implies. Zero is realtime,
+    /// which is the shape a subscription has when nothing asked otherwise.
+    pub fn subscription_mode(&self) -> i32 {
+        match self.market_data_type.load(Ordering::Relaxed) {
+            MDT_DELAYED => 1,
+            MDT_FROZEN => 2,
+            MDT_DELAYED_FROZEN => 3,
+            _ => 0,
+        }
     }
 
     /// Check if the `market_data_type` callback should fire for this req_id.
@@ -857,7 +887,18 @@ impl ClientCore {
     /// confirmed a state that did not exist (ibx#234).
     pub fn check_mdt_needed(&self, req_id: i64, has_data: bool) -> Option<i32> {
         if has_data && self.mdt_sent.lock().unwrap().insert(req_id) {
-            Some(MDT_REALTIME)
+            // The type this subscription was made under. It used to always say
+            // realtime, because the requested type was never sent and saying
+            // anything else confirmed a state that did not exist. It is sent
+            // now, so this is what the data is.
+            Some(
+                self.mdt_by_req
+                    .lock()
+                    .unwrap()
+                    .get(&req_id)
+                    .copied()
+                    .unwrap_or_else(|| self.market_data_type.load(Ordering::Relaxed)),
+            )
         } else {
             None
         }
@@ -2195,6 +2236,28 @@ mod tests {
     use crate::types::SmartComponent;
     use crate::bridge::RichOrderInfo;
     use crate::api::types::OrderState as ApiOrderState;
+
+    /// The type a caller asks for has to reach the subscription, or asking for
+    /// delayed data got realtime-shaped subscriptions and no delayed ticks.
+    #[test]
+    fn the_requested_market_data_type_picks_the_subscription_mode() {
+        let core = ClientCore::new();
+        assert_eq!(core.subscription_mode(), 0, "realtime until asked otherwise");
+        for (requested, mode) in [
+            (MDT_DELAYED, 1),
+            (MDT_FROZEN, 2),
+            (MDT_DELAYED_FROZEN, 3),
+            (MDT_REALTIME, 0),
+        ] {
+            core.set_market_data_type(requested);
+            assert_eq!(core.subscription_mode(), mode, "type {requested}");
+            assert_eq!(
+                core.check_mdt_needed(requested as i64, true),
+                Some(requested),
+                "the callback names the type the data was asked for",
+            );
+        }
+    }
 
     // ── Rejected/Inactive snapshot admission (ibx#250) ──
 
