@@ -850,7 +850,8 @@ fn req_tick_by_tick_data_refuses_rather_than_going_silent() {
     let (client, rx, _shared) = test_client();
     let err = client.req_tick_by_tick_data(10, &spy(), "BidAsk", 0, false)
         .expect_err("the caller is told");
-    assert!(err.contains("not implemented"), "{err}");
+    assert!(err.contains("not served to this session"), "{err}");
+    assert!(err.contains("refused"), "and says what stands in the way: {err}");
     assert!(rx.try_recv().is_err(), "and nothing is sent that cannot be served");
 }
 

@@ -88,9 +88,17 @@ impl EClient {
         &self, _req_id: i64, _contract: &Contract, _tick_type: &str,
         _number_of_ticks: i32, _ignore_size: bool,
     ) -> Result<(), String> {
-        Err("tick-by-tick data is not implemented: it is carried by a service \
-             this client does not speak yet, and a subscription sent to the \
-             historical service is acknowledged but never delivers (ibx#404)".to_string())
+        // The feed rides a service of its own, and which services a session may
+        // reach is stated in a service list. This session is never sent one:
+        // the logon response carries no service list, and a request for it is
+        // answered "Request not supported". A subscription addressed to the
+        // historical service instead is acknowledged and then delivers
+        // nothing, which is the one outcome worth refusing outright (ibx#404).
+        Err("tick-by-tick data is not served to this session: the feed rides a \
+             service of its own, this session is sent no list of the services it \
+             may reach, and a request for that list is refused. A subscription \
+             addressed to the historical service is acknowledged and never \
+             delivers, so it is refused here rather than left waiting".to_string())
     }
 
 
