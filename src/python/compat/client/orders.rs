@@ -54,7 +54,7 @@ impl EClient {
         )
             .map_err(PyRuntimeError::new_err)?;
 
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
 
         let oid = if order_id > 0 {
             order_id as u64
@@ -112,7 +112,7 @@ impl EClient {
     /// Cancel an order.
     #[pyo3(signature = (order_id, manual_order_cancel_time=""))]
     fn cancel_order(&self, py: Python<'_>, order_id: i64, manual_order_cancel_time: &str) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: order_id as u64 }))?;
         let _ = manual_order_cancel_time;
         Ok(())
@@ -137,7 +137,7 @@ impl EClient {
 
     /// Cancel all orders globally.
     fn req_global_cancel(&self, py: Python<'_>) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let count = shared.market.instrument_count();
         for instrument in 0..count {

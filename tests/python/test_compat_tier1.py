@@ -8,6 +8,7 @@ req_matching_symbols, req_current_time, and new EWrapper callbacks.
 
 import time
 import pytest
+from conftest import NotConnectedProbe
 from ibx import (
     Contract, BarData, ContractDetails, ContractDescription,
     EWrapper, EClient, TickAttrib, TickAttribLast, TickAttribBidAsk,
@@ -272,67 +273,74 @@ def test_req_executions_with_filter():
 
 def test_req_historical_ticks_not_connected():
     """req_historical_ticks raises when not connected."""
-    client = EClient(EWrapper())
+    probe = NotConnectedProbe()
+    client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(Exception, match="Not connected"):
-        client.req_historical_ticks(1, contract, "20260311 09:30:00", "",
-                                     1000, "TRADES", 1, False)
+    client.req_historical_ticks(1, contract, "20260311 09:30:00", "",
+                                 1000, "TRADES", 1, False)
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 def test_req_historical_ticks_defaults_not_connected():
     """req_historical_ticks with defaults raises when not connected."""
-    client = EClient(EWrapper())
+    probe = NotConnectedProbe()
+    client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(Exception, match="Not connected"):
-        client.req_historical_ticks(1, contract)
+    client.req_historical_ticks(1, contract)
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 def test_req_historical_ticks_bid_ask_not_connected():
     """req_historical_ticks with BID_ASK raises when not connected."""
-    client = EClient(EWrapper())
+    probe = NotConnectedProbe()
+    client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(Exception, match="Not connected"):
-        client.req_historical_ticks(1, contract, what_to_show="BID_ASK")
+    client.req_historical_ticks(1, contract, what_to_show="BID_ASK")
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 # ═══════════════════════════════════════
 # req_real_time_bars / cancel_real_time_bars
 # ═══════════════════════════════════════
 
 def test_req_real_time_bars_not_connected():
     """req_real_time_bars raises when not connected."""
-    client = EClient(EWrapper())
+    probe = NotConnectedProbe()
+    client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(Exception, match="Not connected"):
-        client.req_real_time_bars(1, contract, 5, "TRADES", 0)
+    client.req_real_time_bars(1, contract, 5, "TRADES", 0)
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 def test_req_real_time_bars_defaults_not_connected():
     """req_real_time_bars with defaults raises when not connected."""
-    client = EClient(EWrapper())
+    probe = NotConnectedProbe()
+    client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(Exception, match="Not connected"):
-        client.req_real_time_bars(1, contract)
+    client.req_real_time_bars(1, contract)
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 def test_cancel_real_time_bars_not_connected():
     """cancel_real_time_bars raises when not connected."""
-    client = EClient(EWrapper())
-    with pytest.raises(Exception, match="Not connected"):
-        client.cancel_real_time_bars(1)
+    probe = NotConnectedProbe()
+    client = EClient(probe)
+    client.cancel_real_time_bars(1)
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 # ═══════════════════════════════════════
 # cancel_head_time_stamp
 # ═══════════════════════════════════════
 
 def test_cancel_head_time_stamp_not_connected():
     """cancel_head_time_stamp raises when not connected."""
-    client = EClient(EWrapper())
-    with pytest.raises(Exception, match="Not connected"):
-        client.cancel_head_time_stamp(1)
+    probe = NotConnectedProbe()
+    client = EClient(probe)
+    client.cancel_head_time_stamp(1)
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 # ═══════════════════════════════════════
 # req_sec_def_opt_params
 # ═══════════════════════════════════════
@@ -355,11 +363,12 @@ def test_req_sec_def_opt_params_defaults():
 
 def test_req_matching_symbols_not_connected():
     """req_matching_symbols raises when not connected."""
-    client = EClient(EWrapper())
-    with pytest.raises(Exception, match="Not connected"):
-        client.req_matching_symbols(1, "AAPL")
+    probe = NotConnectedProbe()
+    client = EClient(probe)
+    client.req_matching_symbols(1, "AAPL")
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 # ═══════════════════════════════════════
 # req_current_time
 # ═══════════════════════════════════════
@@ -603,16 +612,19 @@ def test_req_mkt_depth_exchanges_signature():
 
 def test_real_time_bars_options_list():
     """req_real_time_bars with options list raises when not connected."""
-    client = EClient(EWrapper())
+    probe = NotConnectedProbe()
+    client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(Exception, match="Not connected"):
-        client.req_real_time_bars(1, contract, 5, "TRADES", 1, [])
+    client.req_real_time_bars(1, contract, 5, "TRADES", 1, [])
 
 
+    assert probe.not_connected, "the call reports rather than raising"
 def test_historical_ticks_misc_options():
     """req_historical_ticks with misc_options raises when not connected."""
-    client = EClient(EWrapper())
+    probe = NotConnectedProbe()
+    client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(Exception, match="Not connected"):
-        client.req_historical_ticks(1, contract, "20260311 09:30:00", "",
-                                     1000, "TRADES", 1, False, [])
+    client.req_historical_ticks(1, contract, "20260311 09:30:00", "",
+                                 1000, "TRADES", 1, False, [])
+
+    assert probe.not_connected, "the call reports rather than raising"

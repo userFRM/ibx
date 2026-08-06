@@ -15,6 +15,7 @@ from ibx import (
     ExecutionCondition, VolumeCondition, PercentChangeCondition,
     ContractDescription,
 )
+from conftest import NotConnectedProbe
 
 
 # ── Helpers ──
@@ -891,28 +892,28 @@ class TestAccountDispatch:
 class TestNotConnected:
 
     def test_req_mkt_data_not_connected(self):
-        w = EWrapper()
+        w = NotConnectedProbe()
         c = EClient(w)
-        with pytest.raises(RuntimeError, match="Not connected"):
-            c.req_mkt_data(1, Contract(con_id=265598, symbol="AAPL"), "")
+        c.req_mkt_data(1, Contract(con_id=265598, symbol="AAPL"), "")
+        assert w.not_connected, "the call reports rather than raising"
 
     def test_place_order_not_connected(self):
-        w = EWrapper()
+        w = NotConnectedProbe()
         c = EClient(w)
-        with pytest.raises(RuntimeError, match="Not connected"):
-            c.place_order(1, Contract(), Order(action="BUY", total_quantity=100, order_type="MKT"))
+        c.place_order(1, Contract(), Order(action="BUY", total_quantity=100, order_type="MKT"))
+        assert w.not_connected, "the call reports rather than raising"
 
     def test_cancel_order_not_connected(self):
-        w = EWrapper()
+        w = NotConnectedProbe()
         c = EClient(w)
-        with pytest.raises(RuntimeError, match="Not connected"):
-            c.cancel_order(1)
+        c.cancel_order(1)
+        assert w.not_connected, "the call reports rather than raising"
 
     def test_historical_data_not_connected(self):
-        w = EWrapper()
+        w = NotConnectedProbe()
         c = EClient(w)
-        with pytest.raises(RuntimeError, match="Not connected"):
-            c.req_historical_data(1, Contract(), "", "1 D", "1 hour", "TRADES", 1)
+        c.req_historical_data(1, Contract(), "", "1 D", "1 hour", "TRADES", 1)
+        assert w.not_connected, "the call reports rather than raising"
 
     def test_dispatch_not_connected(self):
         w = EWrapper()
@@ -921,6 +922,8 @@ class TestNotConnected:
             c._test_dispatch_once()
 
     def test_run_not_connected(self):
+        # run() is the event loop, not a request. It has no reqId to report
+        # against and still refuses outright.
         w = EWrapper()
         c = EClient(w)
         with pytest.raises(RuntimeError, match="Not connected"):
