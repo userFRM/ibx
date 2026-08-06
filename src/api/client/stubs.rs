@@ -41,12 +41,16 @@ impl EClient {
 
     /// Request FA data. Not yet implemented.
     pub fn request_fa(&self, _fa_data_type: i32) {
-        self.report_unserviceable(-1, "request_fa");
+        self.report_reason(-1, "request_fa is not wired. The request reaches the venue in the \
+             vendor's client, so it can be, but an advisor account is needed to exercise it \
+             and none is available to verify against");
     }
 
     /// Replace FA data. Not yet implemented.
     pub fn replace_fa(&self, req_id: i64, _fa_data_type: i32, _cxml: &str) {
-        self.report_unserviceable(req_id, "replace_fa");
+        self.report_reason(req_id, "replace_fa is not wired. The request reaches the venue in \
+             the vendor's client, so it can be, but an advisor account is needed to exercise \
+             it and none is available to verify against");
     }
 
     // ── Display Groups ──
@@ -126,12 +130,16 @@ impl EClient {
 
     /// Request WSH metadata. Not yet implemented.
     pub fn req_wsh_meta_data(&self, req_id: i64) {
-        self.report_unserviceable(req_id, "req_wsh_meta_data");
+        self.report_reason(req_id, "req_wsh_meta_data is not wired. The event calendar has a \
+             path to the venue, but it is a separately subscribed data product and this \
+             session has no subscription to exercise it against");
     }
 
     /// Request WSH event data. Not yet implemented.
     pub fn req_wsh_event_data(&self, req_id: i64) {
-        self.report_unserviceable(req_id, "req_wsh_event_data");
+        self.report_reason(req_id, "req_wsh_event_data is not wired. The event calendar has a \
+             path to the venue, but it is a separately subscribed data product and this \
+             session has no subscription to exercise it against");
     }
 
     /// A request this client cannot serve is answered, not ignored. A caller
@@ -139,10 +147,10 @@ impl EClient {
     /// a slow gateway, so it is told on the channel a venue uses to say it
     /// will not act on a request.
     fn report_unserviceable(&self, req_id: i64, call: &str) {
-        self.shared.reference.push_historical_error(
-            req_id.max(0) as u32,
-            321,
-            format!("{call} is not served by this client"),
-        );
+        self.report_reason(req_id, &format!("{call} is not served by this client"));
+    }
+
+    fn report_reason(&self, req_id: i64, reason: &str) {
+        self.shared.reference.push_historical_error(req_id.max(0) as u32, 321, reason.to_string());
     }
 }
