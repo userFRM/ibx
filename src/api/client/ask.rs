@@ -97,6 +97,32 @@ pub struct AccountValue {
     pub currency: String,
 }
 
+/// Where an order stands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrderReport {
+    pub order_id: i64,
+    /// The venue's own word for it: `Filled`, `Cancelled`, `Inactive`, and so on.
+    pub status: String,
+    pub filled: f64,
+    pub remaining: f64,
+    /// What it has paid on average, zero until something fills.
+    pub avg_price: f64,
+    /// Why the venue would not work it, where it said.
+    pub reason: Option<String>,
+}
+
+impl OrderReport {
+    /// Whether the venue has finished with this order, one way or another.
+    pub fn is_done(&self) -> bool {
+        matches!(self.status.as_str(), "Filled" | "Cancelled" | "ApiCancelled" | "Inactive")
+    }
+
+    /// Whether it filled in full.
+    pub fn is_filled(&self) -> bool {
+        self.status == "Filled" && self.remaining == 0.0
+    }
+}
+
 /// One question's answer as it accumulates.
 struct Pending<T> {
     rows: Vec<T>,
@@ -282,6 +308,86 @@ impl EClient {
         let rows = self.wait_for(&mut collector, &state, "the account summary");
         self.cancel_account_summary(req_id);
         rows
+    }
+
+    /// Wait for an order to reach a state the venue will not move it from.
+    ///
+    /// Placing an order says only that it was sent. What happened to it arrives
+    /// later, on a callback, spread across a status and possibly a refusal.
+    /// This waits for the venue to finish with it and reports where it landed —
+    /// including the refusal, which is the part a caller most needs and the
+    /// part most easily missed.
+    ///
+    /// A wait that runs out is not a failure of the order: it says only that
+    /// the venue had not finished, and the order is still working.
+    pub fn await_order(
+        &self, order_id: i64, timeout: Duration,
+    ) -> Result<OrderReport, String> {
+        struct Watch { order_id: i64, report: Arc<Mutex<Option<OrderReport>>>, done: Arc<Mutex<bool>> }
+        impl Wrapper for Watch {
+            fn order_status(
+                &mut self, order_id: i64, status: &str, filled: f64, remaining: f64,
+                avg_price: f64, _: i64, _: i64, _: f64, _: i64, _: &str, _: f64,
+            ) {
+                if order_id != self.order_id {
+                    return;
+                }
+                let mut r = self.report.lock().unwrap();
+                let reason = r.as_ref().and_then(|p| p.reason.clone());
+                let report = OrderReport {
+                    order_id, status: status.to_string(), filled, remaining,
+                    // A status arriving after a fill can state no average; the
+                    // one already reported is the better answer.
+                    avg_price: if avg_price > 0.0 {
+                        avg_price
+                    } else {
+                        r.as_ref().map_or(0.0, |p| p.avg_price)
+                    },
+                    reason,
+                };
+                if report.is_done() {
+                    *self.done.lock().unwrap() = true;
+                }
+                *r = Some(report);
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id != self.order_id || is_connection_notice(code) {
+                    return;
+                }
+                let mut r = self.report.lock().unwrap();
+                match r.as_mut() {
+                    Some(report) => report.reason = Some(message.to_string()),
+                    None => {
+                        *r = Some(OrderReport {
+                            order_id: req_id,
+                            status: String::new(),
+                            filled: 0.0,
+                            remaining: 0.0,
+                            avg_price: 0.0,
+                            reason: Some(message.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+        let report = Arc::new(Mutex::new(None));
+        let done = Arc::new(Mutex::new(false));
+        let mut watch = Watch {
+            order_id,
+            report: Arc::clone(&report),
+            done: Arc::clone(&done),
+        };
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            self.process_msgs(&mut watch);
+            if *done.lock().unwrap() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        report.lock().unwrap().clone().ok_or_else(|| {
+            format!("order {order_id} said nothing within {}s", timeout.as_secs())
+        })
     }
 
     /// Every contract matching the one described.
