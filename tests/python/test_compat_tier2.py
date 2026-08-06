@@ -228,6 +228,26 @@ def test_exercise_options_signature():
     assert hasattr(EClient, 'exercise_options')
 
 
+def test_exercise_options_refuses_an_action_it_cannot_serve():
+    """1 exercises and 2 lapses. The API names a third action, a hold, which
+    the venue does not take from a client of this kind."""
+    c, w = make_client()
+    c._test_connect()
+    contract = make_contract(con_id=265598, symbol="AAPL")
+    with pytest.raises(RuntimeError, match="exercise_action 3"):
+        c.exercise_options(1, contract, 3, 100, "TEST123", 0)
+
+
+def test_exercise_options_refuses_an_account_it_cannot_name():
+    """The account is not carried on the order. Every message states the
+    session account, so an exercise naming another one would be taken here."""
+    c, w = make_client()
+    c._test_connect()
+    contract = make_contract(con_id=265598, symbol="AAPL")
+    with pytest.raises(RuntimeError, match="DU12345"):
+        c.exercise_options(1, contract, 1, 100, "DU12345", 0)
+
+
 # ═══════════════════════════════════════════════════════════
 # News Bulletins
 # ═══════════════════════════════════════════════════════════
@@ -428,7 +448,6 @@ def test_full_ibapi_app_pattern_with_tier2():
     app.client.calculate_option_price(2, contract, 0.3, 150.0)
     app.client.cancel_calculate_implied_volatility(1)
     app.client.cancel_calculate_option_price(2)
-    app.client.exercise_options(3, contract, 1, 100, "DU12345", 0)
     # cancel_* are no-ops that work without connection
     app.client.cancel_account_updates_multi(10)
     app.client.cancel_positions_multi(11)
