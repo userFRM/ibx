@@ -14,6 +14,9 @@ use super::{Contract, EClient};
 /// client's own numbering.
 const MODEL_OPTION_COMPUTATION: i32 = 13;
 
+/// What the reference client reports when a contract cannot be named.
+const NO_SECURITY_DEFINITION: i64 = 200;
+
 impl EClient {
     // ── Message Processing ──
 
@@ -282,6 +285,13 @@ impl EClient {
                 comp.implied_vol, comp.delta, comp.opt_price, comp.pv_dividend,
                 comp.gamma, comp.vega, comp.theta, comp.und_price,
             );
+        }
+
+        // A subscription the venue could not be asked for, because it never
+        // named the contract. Reported on the request the caller holds.
+        for (instrument, reason) in self.shared.market.drain_subscription_failures() {
+            let req_id = self.core.req_id_for_instrument(instrument);
+            wrapper.error(req_id, NO_SECURITY_DEFINITION, &reason, "");
         }
 
         // News bulletins → update_news_bulletin (only when subscribed)

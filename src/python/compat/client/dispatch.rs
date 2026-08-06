@@ -198,6 +198,11 @@ impl EClient {
             self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty, update.remaining_qty);
         }
 
+        for (instrument, reason) in shared.market.drain_subscription_failures() {
+            let req_id = self.core.req_id_for_instrument(instrument);
+            call_wrapper!(self.wrapper, py, "error", (req_id, 200i64, reason, ""));
+        }
+
         for comp in shared.market.drain_option_computations() {
             let req_id = self.core.req_id_for_instrument(comp.instrument);
             call_wrapper!(self.wrapper, py, "tick_option_computation",
