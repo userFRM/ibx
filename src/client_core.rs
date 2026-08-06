@@ -1999,7 +1999,15 @@ impl ClientCore {
              or use the security type of the thing you mean to trade".to_string())
     }
 
-    pub fn validate_order_contract(sec_type: &str, identity: &str) -> Result<(), String> {
+    /// `con_id` names one contract on its own. Where the caller gave one,
+    /// nothing else has to be stated: the venue accepts an order carrying only
+    /// the id and the security type, and answers it with a margin preview.
+    /// The checks below exist to catch a contract that names a whole chain or
+    /// series, which a contract id never does.
+    pub fn validate_order_contract(con_id: i64, sec_type: &str, identity: &str) -> Result<(), String> {
+        if con_id != 0 {
+            return Ok(());
+        }
         // A currency pair is fully identified by what an order already carries:
         // symbol, currency, security type and destination. There is no expiry,
         // strike, right or multiplier to omit, so the silent mistrade this
@@ -3141,7 +3149,7 @@ mod contract_gate_tests {
     /// about which contract it meant.
     #[test]
     fn cash_is_admitted_and_the_underspecified_types_are_not() {
-        assert!(ClientCore::validate_order_contract("CASH", "").is_ok(), "an FX pair is fully named");
+        assert!(ClientCore::validate_order_contract(0, "CASH", "").is_ok(), "an FX pair is fully named");
 
         // A spread's legs are carried and not sent, so an order for one would
         // be an order for something else. Refused until they are encoded.
@@ -3193,17 +3201,17 @@ mod contract_gate_tests {
         assert!(ClientCore::validate_combo_legs("STK", 0).is_ok(), "an ordinary contract has none");
         assert!(ClientCore::validate_combo_legs("BAG", 2).is_ok(), "a combination states its legs");
         assert!(ClientCore::validate_combo_legs("BAG", 0).is_err(), "a combination with none is refused");
-        assert!(ClientCore::validate_order_contract("cash", "").is_ok(), "and the check is case-insensitive");
-        assert!(ClientCore::validate_order_contract("STK", "").is_ok());
-        assert!(ClientCore::validate_order_contract("", "").is_ok());
+        assert!(ClientCore::validate_order_contract(0, "cash", "").is_ok(), "and the check is case-insensitive");
+        assert!(ClientCore::validate_order_contract(0, "STK", "").is_ok());
+        assert!(ClientCore::validate_order_contract(0, "", "").is_ok());
 
         // One of a chain or one of a series has to say which one.
         for st in ["OPT", "FUT", "FOP", "WAR"] {
             assert!(
-                ClientCore::validate_order_contract(st, "20260619|230|C|100").is_ok(),
+                ClientCore::validate_order_contract(0, st, "20260619|230|C|100").is_ok(),
                 "{st} with an identity names one contract",
             );
-            let err = ClientCore::validate_order_contract(st, "")
+            let err = ClientCore::validate_order_contract(0, st, "")
                 .expect_err("and without one it names a whole chain");
             assert!(err.contains(st), "the refusal names the type: {err}");
         }
@@ -3213,14 +3221,14 @@ mod contract_gate_tests {
         // pair could not be ordered at all.
         for st in ["IND", "CFD", "CRYPTO", "BOND", "CMDTY", "FUND"] {
             assert!(
-                ClientCore::validate_order_contract(st, "").is_ok(),
+                ClientCore::validate_order_contract(0, st, "").is_ok(),
                 "{st} is named without an expiry or a strike",
             );
         }
         // A combination states its legs on the order, so it needs no identity
         // here. Stating none at all is refused by the leg check instead.
         for st in ["BAG", "COMBO"] {
-            assert!(ClientCore::validate_order_contract(st, "").is_ok(), "{st} names its legs");
+            assert!(ClientCore::validate_order_contract(0, st, "").is_ok(), "{st} names its legs");
             assert!(ClientCore::validate_combo_legs(st, 0).is_err(), "{st} with no legs");
             assert!(ClientCore::validate_combo_legs(st, 2).is_ok(), "{st} with legs");
         }

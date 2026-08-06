@@ -1691,11 +1691,18 @@ fn place_order_non_stk_contract_rejected() {
     // fill whichever one it picked (ibx#202).
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
-    let bare = Contract { con_id: 999001, symbol: "AAPL".into(), sec_type: "OPT".into(), ..Default::default() };
+    // No contract id: an id names one contract on its own and the venue takes
+    // an order carrying nothing else, so this is the case the guard is for.
+    let bare = Contract { symbol: "AAPL".into(), sec_type: "OPT".into(), ..Default::default() };
     let order = Order { action: "BUY".into(), total_quantity: 1.0, order_type: "MKT".into(), ..Default::default() };
     let err = client.place_order(1, &bare, &order).expect_err("a chain is not a contract");
     assert!(err.contains("OPT"), "the refusal names the type: {err}");
     assert!(rx.try_recv().is_err(), "and nothing reaches the engine");
+
+    // An id says which contract without any of it.
+    let by_id = Contract { con_id: 999001, sec_type: "OPT".into(), ..Default::default() };
+    let refusal = client.place_order(2, &by_id, &order).unwrap_err();
+    assert!(!refusal.contains("names a whole chain"), "an id is not a chain: {refusal}");
 
     // The named case is not asserted here: this fixture has no engine, so
     // registering an instrument blocks on a reply that never arrives. That an
