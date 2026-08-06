@@ -256,7 +256,7 @@ Jupyter notebooks adapted from [ib_async's examples](https://ib-api-reloaded.git
 
 ## Status
 
-[ROADMAP.md](ROADMAP.md) states what is proven against a live session, what is built but unproven, what is accepted and not yet served, and what is absent, along with the milestones and what has to be true before each is done.
+[ROADMAP.md](ROADMAP.md) carries the capability matrix, the API surface status per call, asset class coverage, and the exit criteria for each milestone. Status is assigned from evidence: verified requires a passing live session phase.
 
 ## License
 
