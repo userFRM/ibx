@@ -92,7 +92,7 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Equity | Verified | Verified | Verified | Available |
 | Equity option | Verified | Verified | Verified | Available |
 | Forex | Verified | Verified | Verified | Available |
-| Future | Verified | Verified | Blocked, venue reports an ambiguous contract | W2 |
+| Future | Verified | Verified | Verified | Available |
 | Futures option | Verified | Implemented | Implemented | W2 |
 | Index | Verified | Verified | Absent | W2 |
 | Bond | Implemented | Implemented | Absent | W2 |
@@ -130,14 +130,14 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 
 | ID | Requirement | Acceptance | Status |
 | --- | --- | --- | --- |
-| W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns | Open |
+| W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns | Met |
 | W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session | Open |
 | W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission | Open |
 | W2.4 | Combination orders | Live phase covering leg construction and acceptance | Open |
 | W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause | Met |
 | W2.6 | Account summary and account level P&L | Both observed end to end in a live phase | Met |
 | W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position | Open |
-| W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Met, ISIN. CUSIP open |
+| W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Met |
 | W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust | Met |
 | W2.10 | Tick by tick data | Available, or the transport requirement recorded | Open |
 | W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue | Open |
