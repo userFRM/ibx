@@ -99,12 +99,15 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Forex | Verified | Verified | Verified | Available |
 | Future | Verified | Verified | Verified | Available |
 | Futures option | Verified | Implemented | Implemented | W2 |
-| Index | Verified | Verified | Implemented | W2 |
-| Bond | Implemented | Implemented | Implemented | W2 |
-| Warrant | Implemented | Implemented | Implemented | W2 |
-| Combination | Verified | Not applicable | Implemented | W2 |
+| Index | Verified | Verified | Blocked, the venue supports no order on the contract type | None required |
+| Bond | Verified | Implemented | Verified, quantified in face value | Available |
+| Warrant | Verified | Implemented | Blocked, the venue supports no order of this kind on the exchange and security type | None required |
+| Combination | Verified | Not applicable | Verified | Available |
 | Crypto and CFD | Verified | Verified | Verified, crypto requires an immediate-or-cancel or minutes instruction | Available |
-| Commodity, fund, forward, bill | Implemented | Implemented | Absent | W2 |
+| Commodity | Verified | Implemented | Verified | Available |
+| Bill | Verified | Implemented | Verified | Available |
+| Fund | Verified | Implemented | Blocked, quantified in cash and then refused for residency, which is a property of the account | None required |
+| Forward | Implemented | Implemented | Absent, the session states no permission for the type | None required |
 | Venues outside the United States | Verified | Verified | Verified | Available |
 
 ## Release policy
