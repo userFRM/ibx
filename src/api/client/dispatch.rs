@@ -10,6 +10,10 @@ use crate::types::*;
 
 use super::{Contract, EClient};
 
+/// The tick type a model computation is reported under, matching the reference
+/// client's own numbering.
+const MODEL_OPTION_COMPUTATION: i32 = 13;
+
 impl EClient {
     // ── Message Processing ──
 
@@ -265,6 +269,18 @@ impl EClient {
             wrapper.tick_news(
                 req_id, news.timestamp as i64,
                 &news.provider_code, &news.article_id, &news.headline, "",
+            );
+        }
+
+        // The venue's option model → tick_option_computation. Tick type 13 is
+        // the model computation, and the attribute says the model is the
+        // venue's rather than a price-based reading.
+        for comp in self.shared.market.drain_option_computations() {
+            let req_id = self.core.req_id_for_instrument(comp.instrument);
+            wrapper.tick_option_computation(
+                req_id, MODEL_OPTION_COMPUTATION, 0,
+                comp.implied_vol, comp.delta, comp.opt_price, comp.pv_dividend,
+                comp.gamma, comp.vega, comp.theta, comp.und_price,
             );
         }
 

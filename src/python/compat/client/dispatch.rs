@@ -198,6 +198,13 @@ impl EClient {
             self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty, update.remaining_qty);
         }
 
+        for comp in shared.market.drain_option_computations() {
+            let req_id = self.core.req_id_for_instrument(comp.instrument);
+            call_wrapper!(self.wrapper, py, "tick_option_computation",
+                (req_id, 13i32, 0i32, comp.implied_vol, comp.delta, comp.opt_price,
+                 comp.pv_dividend, comp.gamma, comp.vega, comp.theta, comp.und_price));
+        }
+
         // Drain cancel rejects -> error
         let rejects = shared.orders.drain_cancel_rejects();
         for reject in rejects {
