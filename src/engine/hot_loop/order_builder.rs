@@ -996,6 +996,28 @@ fn send_order_ex(
         }
     }
 
+    // Lifecycle: whether the venue holds this order rather than working it,
+    // whether it may work overnight, when it cancels itself, and what it takes
+    // with it when it goes.
+    if attrs.deactivate {
+        fields.push((6521, "1".to_string()));
+    }
+    if attrs.include_overnight {
+        fields.push((8534, "1".to_string()));
+    }
+    if attrs.auto_cancel_parent {
+        fields.push((6965, "1".to_string()));
+    }
+    if attrs.min_trade_qty > 0 {
+        fields.push((8415, format_uint(attrs.min_trade_qty as u64).to_string()));
+    }
+    if attrs.block_order {
+        fields.push((9801, "1".to_string()));
+    }
+    if !attrs.auto_cancel_date.is_empty() {
+        fields.push((6596, attrs.auto_cancel_date.clone()));
+    }
+
     // Who the order is for, which the venue reads as a regulatory statement.
     if !attrs.rule80a.is_empty() {
         fields.push((47, attrs.rule80a.clone()));
