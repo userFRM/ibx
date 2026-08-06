@@ -1130,7 +1130,14 @@ impl CcpState {
         let exec_id = parsed.get(&17).map(|s| s.as_str()).unwrap_or("");
         let last_px = parsed.get(&31).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
         let last_shares = parsed.get(&32).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        let leaves_qty = parsed.get(&151).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        // Absent is not zero. Without 151 the caller was told nothing was left
+        // on an order that was still working; the terminal falls back to the
+        // order quantity less what has filled, and so does this.
+        let leaves_qty = parsed.get(&151).and_then(|s| s.parse::<i64>().ok()).unwrap_or_else(|| {
+            let ordered = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+            let done = parsed.get(&14).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+            ((ordered - done).max(0.0)) as i64
+        });
         // 14 CumQty and 6 AvgPx describe the order as a whole; 32 and 31
         // describe this print alone. The gateway sends all four on every
         // execution report.
@@ -1187,14 +1194,23 @@ impl CcpState {
             "6" => crate::types::OrderStatus::PendingCancel,
             "1" => crate::types::OrderStatus::PartiallyFilled,
             "2" => crate::types::OrderStatus::Filled,
-            "4" | "C" | "D" => crate::types::OrderStatus::Cancelled,
+            "4" | "C" => crate::types::OrderStatus::Cancelled,
+            // Not cancelled. The terminal groups D with pending-cancel and its
+            // own "is this terminal" test names only 2, 4, C and 8 — reading it
+            // as cancelled retired an order that was still working.
+            "D" => crate::types::OrderStatus::PendingCancel,
             "8" => crate::types::OrderStatus::Rejected,
             "I" => crate::types::OrderStatus::Inactive,
-            _ => {
-                log::warn!("Unknown order status 39={ord_status} for order {clord_id}");
-                return;
+            other => {
+                // A status this does not know is not a reason to drop the
+                // report: it may carry a fill, and returning here threw the
+                // fill away with it. Say so and carry on to the execution.
+                log::warn!("Unknown order status 39={other} for order {clord_id} — \
+                            the report is still read for its execution");
+                crate::types::OrderStatus::Uncertain
             }
         };
+
 
         // A replace is acknowledged as 39=5, and the gateway reaches it through
         // 39=6 first: captured live, a modify runs PendingCancel then Replaced.
@@ -1343,8 +1359,16 @@ impl CcpState {
                 // Tag 583 is the link id this engine sends the OCA group on, not
                 // a parent order. Hashing it produced a stable non-zero value
                 // shared by every order in a group, none of which has a parent,
-                // and nothing distinguished it from a real link. Nothing on
-                // this report carries a parent order id, so report none.
+                // and nothing distinguished it from a real link.
+                //
+                // 6107 is not the way to recover one either, though an order
+                // *sends* its parent there: the tag is message-scoped, and the
+                // vendor's own audit renderer names the inbound one
+                // ParentClientId. That is what the shared non-zero value above
+                // was — one client id echoed to every order in the account.
+                // Reading it back as a parent gives each of them a parent that
+                // does not exist. Nothing on this report carries a parent order
+                // id, so report none.
                 let parent_id: i64 = 0;
                 let update = crate::types::OrderUpdate {
                     order_id: clord_id,
@@ -4043,6 +4067,50 @@ mod tests {
         ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
         let updates = shared.orders.drain_order_updates();
         assert_eq!(updates[0].parent_id, 0, "6107 is a client id, not a parent order");
+    }
+
+    /// A live order was retired by this: `D` is not in the terminal's terminal
+    /// set, and reading it as cancelled told the caller an order was gone while
+    /// it was still working and still able to fill.
+    #[test]
+    fn a_pending_status_does_not_retire_the_order() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = exec_report_frame(&[(39, "D"), (150, "D"), (100, "ARCA"), (198, "ARCA:1")]);
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        let updates = shared.orders.drain_order_updates();
+        assert_eq!(updates[0].status, crate::types::OrderStatus::PendingCancel,
+            "D is pending, not cancelled");
+        assert_ne!(updates[0].status, crate::types::OrderStatus::Cancelled);
+    }
+
+    /// The fill was thrown away with the report: an unrecognised status returned
+    /// before anything read the execution, so a real fill on a status this did
+    /// not know about was silently lost.
+    #[test]
+    fn an_unknown_status_still_books_its_fill() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = exec_report_frame(&[
+            (39, "\u{7}"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
+            (32, "50"), (31, "412.25"), (14, "50"), (6, "412.25"), (38, "100"),
+        ]);
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        let fills = shared.orders.drain_fills();
+        assert_eq!(fills.len(), 1, "the fill survives a status this does not know");
+        assert_eq!(fills[0].qty, 50);
+    }
+
+    /// Absent is not zero. Without 151 the caller was told nothing was left on an
+    /// order that was still working, which reads as done.
+    #[test]
+    fn a_missing_leaves_qty_falls_back_to_what_is_unfilled() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = exec_report_frame(&[
+            (39, "1"), (150, "1"), (100, "ARCA"), (198, "ARCA:1"),
+            (38, "100"), (14, "30"), (32, "30"), (31, "412.25"), (6, "412.25"),
+        ]);
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        let updates = shared.orders.drain_order_updates();
+        assert_eq!(updates[0].remaining_qty, 70.0, "100 ordered less 30 filled, not 0");
     }
 
     /// The order id hash on tag 37 is a separate concern and must keep working.
