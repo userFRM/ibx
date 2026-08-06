@@ -1985,6 +1985,65 @@ impl ClientCore {
         ))
     }
 
+    /// What an exercise states, checked before the contract is registered so a
+    /// refused one reaches nothing. Returns the action and the quantity the
+    /// order carries.
+    ///
+    /// The documented API names a third action, a hold, which the venue does
+    /// not take from a client of this kind. It is refused here rather than sent
+    /// and rejected, because the caller who asked for it wants to know that the
+    /// position was left alone.
+    pub fn validate_exercise(
+        exercise_action: i32, exercise_quantity: i32,
+        account: &str, connected_account: &str,
+    ) -> Result<(u8, u32), String> {
+        let action = match exercise_action {
+            1 | 2 => exercise_action as u8,
+            other => {
+                return Err(format!(
+                    "exercise_action {other} is not served: 1 exercises, 2 lapses"
+                ));
+            }
+        };
+        if exercise_quantity <= 0 {
+            return Err(format!(
+                "exercise_quantity {exercise_quantity} is not a number of contracts"
+            ));
+        }
+        // Same reason an order's own account field is refused: no encoder reads
+        // it, every message carries tag 1 from the session account, so an
+        // exercise naming another one would take the position on this account
+        // and report the account it was asked for.
+        if !account.is_empty() && account != connected_account {
+            return Err(format!(
+                "account {account:?} is not carried on the order: the exercise \
+                 would be taken on the connected account {connected_account:?}"
+            ));
+        }
+        Ok((action, exercise_quantity as u32))
+    }
+
+    /// An exercise or a lapse, as the order the venue takes it for: the buy
+    /// side, no price, and the action on the attributes so the encoder every
+    /// other order goes through emits it.
+    ///
+    /// The override the documented signature takes is not here. It is a
+    /// validation bypass the venue's own front end applies while it builds the
+    /// order, so no tag carries it and there is nothing to send.
+    pub fn build_exercise_request(
+        order_id: OrderId, instrument: InstrumentId, action: u8, qty: u32,
+    ) -> OrderRequest {
+        OrderRequest::SubmitEx {
+            order_id,
+            instrument,
+            side: Side::Buy,
+            qty,
+            kind: OrderKind::Limit { price: 0 },
+            tif: b'0',
+            attrs: OrderAttrs { exercise_action: action, ..Default::default() },
+        }
+    }
+
     /// Build an `OrderRequest` from an API `Order`, handling all order types.
     /// This is the shared order-type match block used by both Rust and Python.
     /// A price the caller left alone is `f64::MAX`, which is not a price and

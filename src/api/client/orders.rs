@@ -74,6 +74,41 @@ impl EClient {
         Ok(())
     }
 
+    /// Exercise or lapse a long option position. Matches `exerciseOptions` in C++.
+    ///
+    /// `exercise_action` is 1 to exercise and 2 to lapse; anything else is
+    /// refused. `override_` is taken for signature compatibility and is not
+    /// sent: it is a validation bypass the venue's own front end applies before
+    /// it builds the order, so there is no tag for it on the wire.
+    pub fn exercise_options(
+        &self, req_id: i64, contract: &Contract, exercise_action: i32,
+        exercise_quantity: i32, account: &str, override_: bool,
+    ) -> Result<(), String> {
+        let _ = override_;
+        let (action, qty) = ClientCore::validate_exercise(
+            exercise_action, exercise_quantity, account, &self.account_id,
+        )?;
+        let identity = ClientCore::contract_identity(
+            &contract.last_trade_date_or_contract_month, contract.strike,
+            &contract.right, &contract.multiplier,
+        );
+        ClientCore::validate_order_contract(&contract.sec_type, &identity)?;
+
+        let oid = if req_id > 0 {
+            req_id as u64
+        } else {
+            self.next_order_id.fetch_add(1, Ordering::Relaxed)
+        };
+        let instrument = self.core.find_or_register_instrument(
+            &self.control_tx,
+            contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
+            &identity,
+        )?;
+        self.send(ControlCommand::Order(
+            ClientCore::build_exercise_request(oid, instrument, action, qty),
+        ))
+    }
+
     /// Cancel an order. Matches `cancelOrder` in C++.
     pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), String> {
         self.send(ControlCommand::Order(OrderRequest::Cancel {

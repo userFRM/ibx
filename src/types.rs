@@ -415,6 +415,10 @@ pub struct OrderAttrs {
     /// emits the gateway default 3 (ReduceOnFillNonBlock). Only emitted when
     /// an OCA group is present. See ibx#215.
     pub oca_type: u8,
+    /// Exercise or lapse the option this order names (tag 6809): 1 exercises,
+    /// 2 lapses, 0 is an ordinary order. There is no message of its own for an
+    /// exercise, so it is an order carrying the action.
+    pub exercise_action: u8,
 }
 
 /// A condition that must be met before an order activates.
