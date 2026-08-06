@@ -1051,6 +1051,11 @@ fn send_order_ex(
     // emit it, so it reaches the venue some other way there, but what this
     // client sends has to satisfy the venue rather than match the writer.
     fields.push((204, CUSTOMER.to_string()));
+    // Stated with no value on every order the venue's own client sends: the
+    // alert an order came from, and what that alert asked for. An order that
+    // came from no alert still says so.
+    fields.push((6211, String::new()));
+    fields.push((6238, String::new()));
     // MIDPX / SNAP* / PEG* require a directed exchange; everything else
     // routes per the instrument's registered routing (ibx#217).
     let destination = match kind {
