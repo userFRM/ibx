@@ -254,6 +254,10 @@ Jupyter notebooks adapted from [ib_async's examples](https://ib-api-reloaded.git
 - Python 3.11+ (for PyO3 bindings)
 - Interactive Brokers account (paper or live)
 
+## Status
+
+[ROADMAP.md](ROADMAP.md) states what is proven against a live session, what is built but unproven, what is accepted and not yet served, and what is absent, along with the milestones and what has to be true before each is done.
+
 ## License
 
 [AGPL-3.0](LICENSE)
