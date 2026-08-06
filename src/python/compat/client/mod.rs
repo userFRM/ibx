@@ -403,7 +403,7 @@ impl EClient {
         let sec_type = contract.sec_type.clone();
         let identity = crate::client_core::ClientCore::contract_identity(
             &contract.last_trade_date_or_contract_month, contract.strike,
-            &contract.right, &contract.multiplier,
+            &contract.right, &contract.multiplier, &contract.currency,
         );
         py.detach(|| self.core.find_or_register_instrument(&tx, con_id, &symbol, &exchange, &sec_type, &identity))
             .map_err(PyRuntimeError::new_err)
