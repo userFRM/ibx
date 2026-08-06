@@ -637,8 +637,11 @@ pub struct ComboLegSpec {
     pub exchange: String,
     /// Whether the leg opens or closes (tag 654).
     pub open_close: u8,
-    /// Short-sale slot for the leg (tag 6086).
+    /// Short-sale slot for the leg (tag 6086), where its shares are located
+    /// (tag 6216) and the exemption that applies (tag 1689).
     pub short_sale_slot: u8,
+    pub designated_location: String,
+    pub exempt_code: i32,
 }
 
 /// The hedge an order carries: what to trade against the position, and at what.
