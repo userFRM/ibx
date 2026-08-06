@@ -5,6 +5,10 @@ use std::time::{Duration, Instant};
 /// historical-request idle timeout: both are one round trip to the gateway.
 const MATCHING_SYMBOLS_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How long an option chain request waits for its reply. Also one round trip,
+/// for a reply that carries every class of an underlying at once.
+const OPTION_CHAIN_TIMEOUT: Duration = Duration::from_secs(60);
+
 use crate::bridge::{Event, RichOrderInfo, SharedState};
 use crate::api::types as api;
 use crate::engine::context::Context;
@@ -233,6 +237,11 @@ pub(crate) struct CcpState {
     /// which one is given up on. Recorded only for a request that actually went
     /// out, and expired so a stale head cannot absorb a later reply (ibx#369).
     pub(crate) pending_matching_symbols: Vec<(u32, Instant)>,
+    /// In-flight option chain requests: (req_id, symbol, underlying conId,
+    /// deadline). The request states no id of its own, so the symbol is what
+    /// ties a reply back to it, and the conId is held because the callback
+    /// names the underlying the caller asked about.
+    pub(crate) pending_option_params: Vec<(u32, String, i64, Instant)>,
     /// keepUpToDate historical queries routed through CCP: (query_id, req_id)
     pub(crate) pending_kut_historical: Vec<(String, u32)>,
     /// tickerId → req_id mapping for keepUpToDate 35=G bar updates
@@ -315,6 +324,7 @@ impl CcpState {
             hydrated_any: false,
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
+            pending_option_params: Vec::new(),
             pending_kut_historical: Vec::new(),
             kut_ticker_map: std::collections::HashMap::new(),
             kut_min_tick: std::collections::HashMap::new(),
@@ -547,6 +557,7 @@ impl CcpState {
                                 }
                             }
                         }
+                        "139" => self.handle_option_chain(msg, shared),
                         "102" => self.handle_exchange_list(msg, shared),
                         "107" => self.handle_schedule_reply(msg, shared, event_tx),
                         _ => {}
@@ -2278,6 +2289,110 @@ impl CcpState {
         });
     }
 
+    /// Ask for the option chain of an underlying.
+    ///
+    /// A request that cannot go out is answered with an empty chain rather than
+    /// left unanswered, because the caller is waiting on the end of a request
+    /// nothing on the wire will ever end.
+    pub(crate) fn send_option_params_request(
+        &mut self,
+        req_id: u32,
+        symbol: &str,
+        fut_fop_exchange: &str,
+        underlying_sec_type: &str,
+        underlying_con_id: i64,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+        shared: &SharedState,
+    ) {
+        let symbol = symbol.to_uppercase();
+        // Which derivative to enumerate follows from the underlying: an option
+        // on a future is a future option, and a caller who names a futures
+        // exchange is asking for those too. An underlying whose type the caller
+        // left blank says nothing about the derivative, so nothing is claimed.
+        let derivative = match (underlying_sec_type, fut_fop_exchange.is_empty()) {
+            ("", true) => "",
+            ("FUT", _) | (_, false) => "FOP",
+            _ => "OPT",
+        };
+        // A future option whose underlying is not itself a future names that
+        // underlying on a tag of its own.
+        let con_id_tag = if derivative == "FOP" && underlying_sec_type != "FUT" { 6457 } else { 6346 };
+        let Some(conn) = ccp_conn.as_mut() else {
+            log::warn!("Option chain request req_id={req_id} symbol={symbol} not sent: no CCP transport");
+            shared.reference.push_option_params(req_id, underlying_con_id, Vec::new());
+            return;
+        };
+        let con_id_str = underlying_con_id.to_string();
+        let ts = chrono_free_timestamp();
+        let mut fields: Vec<(u32, &str)> = vec![
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "138"),
+            (55, &symbol),
+        ];
+        if !derivative.is_empty() {
+            fields.push((310, derivative));
+        }
+        fields.push((con_id_tag, &con_id_str));
+        fields.push((6320, "1"));
+        fields.push((6994, "1"));
+        if underlying_sec_type == "FUT" {
+            fields.push((6995, fut_fop_exchange));
+        }
+        if let Err(e) = conn.send_fix(&fields) {
+            log::warn!("Option chain request req_id={req_id} symbol={symbol} not sent: {e}");
+            shared.reference.push_option_params(req_id, underlying_con_id, Vec::new());
+            return;
+        }
+        hb.last_ccp_sent = Instant::now();
+        log::info!("Sent option chain request: req_id={req_id} symbol={symbol} con_id={underlying_con_id}");
+        self.pending_option_params.push((req_id, symbol, underlying_con_id, Instant::now() + OPTION_CHAIN_TIMEOUT));
+    }
+
+    /// A chain reply names its underlying by symbol and echoes no request id,
+    /// so it answers the oldest request outstanding for that symbol.
+    fn handle_option_chain(&mut self, msg: &[u8], shared: &SharedState) {
+        let Some(scopes) = crate::control::contracts::parse_option_chain_response(msg) else { return };
+        // An underlying the venue lists nothing for still answers the request,
+        // and then the symbol tag is all there is to attribute it by.
+        let symbol = scopes.first().map(|s| s.symbol.clone())
+            .or_else(|| extract_tag_value(msg, b"55="))
+            .unwrap_or_default();
+        let Some(pos) = self.pending_option_params.iter()
+            .position(|(_, pending, _, _)| pending.eq_ignore_ascii_case(&symbol))
+        else {
+            log::warn!("Option chain reply for '{symbol}' matches no request");
+            return;
+        };
+        let (req_id, _, con_id, _) = self.pending_option_params.remove(pos);
+        log::info!("Option chain reply: req_id={req_id} symbol={symbol} scopes={}", scopes.len());
+        shared.reference.push_option_params(req_id, con_id, scopes);
+    }
+
+    /// Give up on chain requests the gateway never answered. The request is
+    /// ended so the caller stops waiting, and the entry goes with it so it
+    /// cannot absorb a later reply for the same underlying.
+    pub(crate) fn sweep_pending_option_params(&mut self, shared: &SharedState) {
+        if self.pending_option_params.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut expired: Vec<(u32, i64)> = Vec::new();
+        self.pending_option_params.retain(|(req_id, symbol, con_id, deadline)| {
+            if now >= *deadline {
+                log::warn!("Option chain request req_id={req_id} symbol={symbol} unanswered after {OPTION_CHAIN_TIMEOUT:?} — giving up");
+                expired.push((*req_id, *con_id));
+                false
+            } else {
+                true
+            }
+        });
+        for (req_id, con_id) in expired {
+            shared.reference.push_option_params(req_id, con_id, Vec::new());
+        }
+    }
+
     pub(crate) fn send_mkt_depth_exchanges_request(&mut self, _ccp_conn: &mut Option<Connection>, _hb: &mut HeartbeatState, shared: &SharedState) {
         // Depth exchanges are derived from the 6040=102 exchange list received during init.
         // No separate server request needed — just signal the shared state to deliver cached data.
@@ -3998,6 +4113,132 @@ mod tests {
         ccp.send_matching_symbols_request(8, "AAPL", &mut conn, &mut hb);
         assert_eq!(ccp.pending_matching_symbols.len(), 1, "a sent request is awaited");
         assert_eq!(ccp.pending_matching_symbols[0].0, 8);
+    }
+
+    /// The venue reads a chain request positionally, so the tags have to be
+    /// stated in the order it expects them and the underlying has to be named
+    /// on the tag that suits the derivative being asked for.
+    #[test]
+    fn a_chain_request_states_its_tags_in_order() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut ccp = CcpState::new();
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let mut buf = [0u8; 4096];
+        // The tags a caller cannot see are the session's own; the request
+        // itself starts at the sub-message type.
+        let sent = |peer: &mut std::net::TcpStream, buf: &mut [u8]| -> Vec<(String, String)> {
+            let n = peer.read(buf).unwrap();
+            String::from_utf8_lossy(&buf[..n])
+                .split('\u{1}')
+                .filter_map(|f| f.split_once('=').map(|(t, v)| (t.to_string(), v.to_string())))
+                .skip_while(|(t, _)| t != "6040")
+                .take_while(|(t, _)| t != "10")
+                .collect()
+        };
+
+        ccp.send_option_params_request(7, "aapl", "", "STK", 265598, &mut conn, &mut hb, &shared);
+        let fields = sent(&mut peer, &mut buf);
+        let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(names, ["6040", "55", "310", "6346", "6320", "6994"], "an equity chain: {fields:?}");
+        assert_eq!(fields[0].1, "138");
+        assert_eq!(fields[1].1, "AAPL", "the symbol is stated upper cased");
+        assert_eq!(fields[2].1, "OPT");
+        assert_eq!(fields[3].1, "265598");
+        assert_eq!(ccp.pending_option_params.len(), 1, "and the request awaits its reply");
+
+        ccp.send_option_params_request(8, "ES", "CME", "FUT", 495512563, &mut conn, &mut hb, &shared);
+        let fields = sent(&mut peer, &mut buf);
+        let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(names, ["6040", "55", "310", "6346", "6320", "6994", "6995"], "a futures chain: {fields:?}");
+        assert_eq!(fields[2].1, "FOP", "options on a future are future options");
+        assert_eq!(fields[6].1, "CME", "and the venue rides only for a future");
+
+        ccp.send_option_params_request(9, "SPX", "CME", "IND", 416904, &mut conn, &mut hb, &shared);
+        let fields = sent(&mut peer, &mut buf);
+        let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(names, ["6040", "55", "310", "6457", "6320", "6994"], "a futures chain on an index: {fields:?}");
+        assert_eq!(fields[2].1, "FOP");
+    }
+
+    /// A caller is waiting for the end of a request that never reached the
+    /// wire. Nothing on the socket will ever end it, so the client does.
+    #[test]
+    fn a_chain_request_that_could_not_be_sent_is_still_answered() {
+        let mut ccp = CcpState::new();
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let mut no_conn: Option<Connection> = None;
+
+        ccp.send_option_params_request(7, "AAPL", "", "STK", 265598, &mut no_conn, &mut hb, &shared);
+
+        assert!(ccp.pending_option_params.is_empty(), "nothing was sent, so nothing is awaited");
+        let answered = shared.reference.drain_option_params();
+        assert_eq!(answered.len(), 1, "the request still ends");
+        assert!(answered[0].2.is_empty(), "with nothing in the chain");
+    }
+
+    /// The reply states no request id, so the symbol it names is what ties it
+    /// back to the request, and the conId the caller asked under is what the
+    /// callback reports.
+    #[test]
+    fn a_chain_reply_answers_the_request_that_named_its_underlying() {
+        let mut ccp = CcpState::new();
+        let shared = SharedState::new();
+        ccp.pending_option_params.push((3, "SPY".into(), 756733, Instant::now() + OPTION_CHAIN_TIMEOUT));
+        ccp.pending_option_params.push((7, "AAPL".into(), 265598, Instant::now() + OPTION_CHAIN_TIMEOUT));
+        let msg = fix::fix_build(
+            &[
+                (fix::TAG_MSG_TYPE, "U"),
+                (6040, "139"),
+                (55, "AAPL"),
+                (6775, "20260116/20260320/EXPW=20260109"),
+                (6346, "265598"),
+                (100, "SMART"),
+                (6058, "AAPL"),
+                (231, "100"),
+                (6997, "140.0;145.0"),
+            ],
+            1,
+        );
+
+        ccp.handle_option_chain(&msg, &shared);
+
+        assert_eq!(ccp.pending_option_params.len(), 1, "only the request it answers is spent");
+        assert_eq!(ccp.pending_option_params[0].0, 3);
+        let answered = shared.reference.drain_option_params();
+        assert_eq!(answered.len(), 1);
+        let (req_id, con_id, scopes) = &answered[0];
+        assert_eq!(*req_id, 7);
+        assert_eq!(*con_id, 265598, "the underlying the caller asked about");
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].exchange, "SMART");
+        assert_eq!(scopes[0].trading_class, "AAPL");
+        assert_eq!(scopes[0].multiplier, "100");
+        assert_eq!(scopes[0].expirations, vec!["20260116", "20260320"]);
+        assert_eq!(scopes[0].strikes, vec![140.0, 145.0]);
+    }
+
+    /// An entry left in the queue would both hang its caller and stand ready
+    /// to absorb the answer to a later request for the same underlying.
+    #[test]
+    fn an_unanswered_chain_request_is_given_up_on() {
+        let mut ccp = CcpState::new();
+        let shared = SharedState::new();
+        ccp.pending_option_params.push((7, "AAPL".into(), 265598, Instant::now() - Duration::from_secs(1)));
+        ccp.pending_option_params.push((8, "SPY".into(), 756733, Instant::now() + OPTION_CHAIN_TIMEOUT));
+
+        ccp.sweep_pending_option_params(&shared);
+
+        assert_eq!(ccp.pending_option_params.len(), 1, "the expired one is dropped");
+        assert_eq!(ccp.pending_option_params[0].0, 8, "and the live one is kept");
+        let answered = shared.reference.drain_option_params();
+        assert_eq!(answered.len(), 1, "the caller of the expired one is told it is over");
+        assert_eq!(answered[0].0, 7);
     }
 
     /// Nothing expired an unanswered request, so it stayed queued for the life

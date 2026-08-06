@@ -341,7 +341,7 @@ KNOWN_DESCRIPTIONS: dict[str, str] = {
     "cancel_calculate_implied_volatility": "Cancel implied volatility calculation.",
     "cancel_calculate_option_price": "Cancel option price calculation.",
     "exercise_options": "Exercise or lapse a long option position.",
-    "req_sec_def_opt_params": "Request option chain parameters. Not yet implemented.",
+    "req_sec_def_opt_params": "Request the expirations and strikes an underlying's options list.",
     "cancel_mkt_data": "Cancel market data subscription.",
     "req_news_bulletins": "Subscribe to news bulletins.",
     "cancel_news_bulletins": "Cancel news bulletin subscription.",
@@ -999,7 +999,6 @@ def _status_icon(name: str, impl_set: set[str], stub_names: set[str]) -> str:
 STUB_METHODS = {
     "calculate_implied_volatility", "calculate_option_price",
     "cancel_calculate_implied_volatility", "cancel_calculate_option_price",
-    "req_sec_def_opt_params",
     "request_fa", "replace_fa",
     "query_display_groups", "subscribe_to_group_events",
     "unsubscribe_from_group_events", "update_display_group",
@@ -1011,7 +1010,6 @@ STUB_CALLBACKS = {
     "bond_contract_details", "delta_neutral_validation",
     "display_group_list", "display_group_updated",
     "wsh_meta_data", "wsh_event_data",
-    "security_definition_option_parameter", "security_definition_option_parameter_end",
     "order_bound",
 }
 

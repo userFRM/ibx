@@ -420,6 +420,20 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "symbol_samples", (req_id as i64, list.as_any()));
         }
 
+        // Drain option chains -> securityDefinitionOptionParameter + ...End
+        let option_params = shared.reference.drain_option_params();
+        for (req_id, underlying_con_id, scopes) in option_params {
+            for scope in &scopes {
+                let expirations = pyo3::types::PyList::new(py, &scope.expirations)?;
+                let strikes = pyo3::types::PyList::new(py, &scope.strikes)?;
+                call_wrapper!(self.wrapper, py, "security_definition_option_parameter",
+                    (req_id as i64, scope.exchange.as_str(), underlying_con_id,
+                     scope.trading_class.as_str(), scope.multiplier.as_str(),
+                     expirations.as_any(), strikes.as_any()));
+            }
+            call_wrapper!(self.wrapper, py, "security_definition_option_parameter_end", (req_id as i64,));
+        }
+
         // Drain depth exchanges -> mktDepthExchanges
         let depth_exchanges = shared.reference.drain_depth_exchanges();
         if !depth_exchanges.is_empty() {

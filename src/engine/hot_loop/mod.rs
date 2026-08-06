@@ -458,6 +458,7 @@ impl HotLoop {
             }
             self.ccp.sweep_recovery(&mut self.context, &self.shared, &self.event_tx);
             self.ccp.sweep_pending_matching_symbols();
+            self.ccp.sweep_pending_option_params(&self.shared);
             self.ccp.sweep_pending_schedule_pairs(&self.shared, &self.event_tx);
             self.ccp.sweep_scanner_enrichments(&self.shared);
             self.ccp.sweep_contract_details(&self.shared, &self.event_tx);
@@ -680,6 +681,12 @@ impl HotLoop {
                 }
                 ControlCommand::FetchMatchingSymbols { req_id, pattern } => {
                     self.ccp.send_matching_symbols_request(req_id, &pattern, &mut self.ccp_conn, &mut self.hb);
+                }
+                ControlCommand::FetchOptionParams { req_id, symbol, fut_fop_exchange, underlying_sec_type, underlying_con_id } => {
+                    self.ccp.send_option_params_request(
+                        req_id, &symbol, &fut_fop_exchange, &underlying_sec_type, underlying_con_id,
+                        &mut self.ccp_conn, &mut self.hb, &self.shared,
+                    );
                 }
                 ControlCommand::FetchMktDepthExchanges => {
                     self.ccp.send_mkt_depth_exchanges_request(&mut self.ccp_conn, &mut self.hb, &self.shared);
