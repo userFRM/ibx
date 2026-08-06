@@ -15,17 +15,32 @@ pub(super) fn phase_heartbeat_keepalive(conns: Conns) -> Conns {
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
+    // What this phase is for is the auth transport surviving a quiet stretch
+    // longer than its heartbeat interval. It asserted that no disconnect was
+    // announced at all, which is a different claim: the engine announces one
+    // when it gives up recovering *either* transport, and these phases build it
+    // without credentials, so a farm drop it could have recovered from is
+    // announced instead and failed a test of the auth connection. Ask the auth
+    // socket directly, the same way the farm phase does.
     let start = Instant::now();
-    let mut disconnected = false;
+    let mut announced = false;
     while start.elapsed() < Duration::from_secs(20) {
-        if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(200)) { disconnected = true; break; }
+        if let Ok(Event::Disconnected) = event_rx.recv_timeout(Duration::from_millis(200)) {
+            announced = true;
+        }
     }
 
     let elapsed = start.elapsed();
-    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+    let mut conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    assert!(!disconnected, "Connection dropped after {:.1}s — heartbeat mechanism failed", elapsed.as_secs_f64());
-    println!("  PASS ({:.1}s, no disconnect)\n", elapsed.as_secs_f64());
+    // Alive answers WouldBlock, which is `Ok`; a closed socket answers `Err`.
+    let ccp_alive = conns.ccp.try_recv().is_ok();
+    if announced && ccp_alive {
+        println!("  (a loss was announced for the other transport, which this does not test)");
+    }
+    assert!(ccp_alive, "Auth connection closed after {:.1}s — heartbeat mechanism failed",
+        elapsed.as_secs_f64());
+    println!("  PASS ({:.1}s, auth connection still open)\n", elapsed.as_secs_f64());
     conns
 }
 

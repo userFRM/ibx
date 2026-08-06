@@ -971,6 +971,12 @@ fn send_order_ex(
             }
             if leg.short_sale_slot != 0 {
                 fields.push((6086, leg.short_sale_slot.to_string()));
+                if !leg.designated_location.is_empty() {
+                    fields.push((6216, leg.designated_location.clone()));
+                }
+            }
+            if leg.exempt_code != -1 {
+                fields.push((1689, leg.exempt_code.to_string()));
             }
         }
     }
@@ -2443,10 +2449,12 @@ mod outside_rth_polarity_tests {
                 crate::types::ComboLegSpec {
                     con_id: 265598, ratio: 1, is_sell: false,
                     exchange: String::new(), open_close: 1, short_sale_slot: 0,
+                    designated_location: String::new(), exempt_code: -1,
                 },
                 crate::types::ComboLegSpec {
                     con_id: 272093, ratio: 2, is_sell: true,
                     exchange: "ARCA".into(), open_close: 0, short_sale_slot: 0,
+                    designated_location: String::new(), exempt_code: -1,
                 },
             ],
             ..Default::default()

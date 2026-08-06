@@ -1979,6 +1979,8 @@ impl ClientCore {
                 },
                 open_close: l.open_close.clamp(0, 255) as u8,
                 short_sale_slot: l.shorting_policy.clamp(0, 255) as u8,
+                designated_location: l.designated_location.clone(),
+                exempt_code: l.exempt_code,
             }
         }).collect();
         let ex = |kind: OrderKind| OrderRequest::SubmitEx {
