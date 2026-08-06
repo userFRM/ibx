@@ -656,6 +656,9 @@ const TRAIL_UNIT_PERCENT: u32 = 100;
 /// published sources, which are single characters.
 const IB_LOCAL_SYMBOL_SOURCE: &str = "101";
 
+/// What this client calls itself when a message asks who originated it.
+const ORIGINATOR: &str = "Socket";
+
 fn oca_type_str(oca_type: u8) -> &'static str {
     match oca_type {
         1 => "CancelOnFillWBlock",
@@ -1015,6 +1018,10 @@ fn send_order_ex(
     fields.push((60, now));
     fields.push((167, sec_type_str.clone()));
     push_contract_identity(&mut fields, context, instrument);
+    // Who placed the order. Every order states it, and a cancel and a market
+    // data subscription already did; a new order was the one message that left
+    // it out.
+    fields.push((6088, ORIGINATOR.to_string()));
     // MIDPX / SNAP* / PEG* require a directed exchange; everything else
     // routes per the instrument's registered routing (ibx#217).
     let destination = match kind {
