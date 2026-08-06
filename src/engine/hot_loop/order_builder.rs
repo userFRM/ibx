@@ -141,7 +141,6 @@ pub(crate) fn drain_and_send_orders(
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &parent_str),
                     (1, account_id),
-                    (21, "2"),
                     (55, &symbol),
                     (54, side_str),
                     (38, &qty_str),
@@ -153,7 +152,6 @@ pub(crate) fn drain_and_send_orders(
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
-                    (204, "0"),
                 ]);
 
                 // 2. Take-profit child: limit exit, linked to parent, in OCA group
@@ -173,7 +171,6 @@ pub(crate) fn drain_and_send_orders(
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &tp_str),
                     (1, account_id),
-                    (21, "2"),
                     (55, &symbol),
                     (54, exit_side_str),
                     (38, &qty_str),
@@ -185,7 +182,6 @@ pub(crate) fn drain_and_send_orders(
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
-                    (204, "0"),
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
@@ -204,7 +200,6 @@ pub(crate) fn drain_and_send_orders(
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &sl_str),
                     (1, account_id),
-                    (21, "2"),
                     (55, &symbol),
                     (54, exit_side_str),
                     (38, &qty_str),
@@ -216,7 +211,6 @@ pub(crate) fn drain_and_send_orders(
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
-                    (204, "0"),
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
@@ -239,7 +233,6 @@ pub(crate) fn drain_and_send_orders(
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &clord_str),
                     (1, account_id),
-                    (21, "2"),
                     (55, &symbol),
                     (54, side_str),
                     (38, &qty_str), // Decimal qty (e.g., "0.5")
@@ -251,7 +244,6 @@ pub(crate) fn drain_and_send_orders(
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
-                    (204, "0"),
                 ])
             }
             OrderRequest::Cancel { order_id } => {
@@ -659,6 +651,10 @@ const IB_LOCAL_SYMBOL_SOURCE: &str = "101";
 /// What this client calls itself when a message asks who originated it.
 const ORIGINATOR: &str = "Socket";
 
+/// Who the order is for. The venue requires it stated and this client places
+/// orders for the account that authenticated it.
+const CUSTOMER: &str = "0";
+
 fn oca_type_str(oca_type: u8) -> &'static str {
     match oca_type {
         1 => "CancelOnFillWBlock",
@@ -847,7 +843,6 @@ fn send_order_ex(
         (fix::TAG_SENDING_TIME, now.clone()),
         (11, format!("{order_id}.{ver}")),
         (1, account_id.to_string()),
-        (21, "2".to_string()),
         (55, symbol),
         (54, fix_side(side).to_string()),
         (38, format_uint(qty as u64).to_string()),
@@ -1022,6 +1017,11 @@ fn send_order_ex(
     // data subscription already did; a new order was the one message that left
     // it out.
     fields.push((6088, ORIGINATOR.to_string()));
+    // The venue refuses an order that does not state this: "Must specify
+    // Customer Or Firm flag". The reference client's order writer does not
+    // emit it, so it reaches the venue some other way there, but what this
+    // client sends has to satisfy the venue rather than match the writer.
+    fields.push((204, CUSTOMER.to_string()));
     // MIDPX / SNAP* / PEG* require a directed exchange; everything else
     // routes per the instrument's registered routing (ibx#217).
     let destination = match kind {
@@ -1048,7 +1048,6 @@ fn send_order_ex(
             .order_identity(instrument)
             .map_or_else(|| "USD".to_string(), |id| id.currency),
     ));
-    fields.push((204, "0".to_string()));
 
     push_order_attrs(&mut fields, attrs, &kind, exec_inst);
 
@@ -2433,8 +2432,8 @@ mod tests {
         assert_eq!(tag("5958=").as_deref(), Some("adaptivePriority"));
         assert_eq!(tag("5960=").as_deref(), Some("Urgent"));
         assert!(
-            msg.find("204=").unwrap() < msg.find("847=").unwrap(),
-            "the strategy tags keep their position after 204: {msg}"
+            msg.find("15=").unwrap() < msg.find("847=").unwrap(),
+            "the strategy tags keep their position after the contract block: {msg}"
         );
     }
 
@@ -2482,8 +2481,8 @@ mod tests {
         assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
         assert_eq!(tag("6091=").as_deref(), Some("1"), "what-if flag missing: {msg}");
         assert!(
-            msg.find("204=").unwrap() < msg.find("6091=").unwrap(),
-            "the preview flag keeps its position after 204: {msg}"
+            msg.find("15=").unwrap() < msg.find("6091=").unwrap(),
+            "the preview flag keeps its position after the contract block: {msg}"
         );
     }
 
@@ -3459,6 +3458,12 @@ mod outside_rth_polarity_tests {
             assert!(!sent.contains("|6058="), "{label} states no trading class: {sent}");
             assert!(sent.contains("|48=MESU7|"), "{label} names the contract: {sent}");
             assert!(sent.contains("|22=101|"), "{label} says what the identifier is: {sent}");
+            // An order that asked for neither states neither. A zero percent
+            // offset is a relative order and a zero exempt code is a short
+            // sale exemption, so a derived default put both on every order.
+            assert!(!sent.contains("|9822="), "{label} claims no percent offset: {sent}");
+            assert!(!sent.contains("|1688="), "{label} claims no exemption: {sent}");
+            assert!(!sent.contains("|21="), "{label} states no handling instruction: {sent}");
         }
     }
 }

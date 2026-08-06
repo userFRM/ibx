@@ -769,6 +769,20 @@ fn routing_table_probe() {
         (6066, "0"),
     ]).expect("send the routing table request");
 
+    // Ask for an option chain on the same connection, so a reply to either can
+    // be told apart from a connection that answers neither.
+    let now = ibx::gateway::chrono_free_timestamp();
+    ccp.send_fix(&[
+        (fix::TAG_MSG_TYPE, "U"),
+        (fix::TAG_SENDING_TIME, &now),
+        (6040, "138"),
+        (55, "SPY"),
+        (310, "OPT"),
+        (6346, "756733"),
+        (6320, "1"),
+        (6994, "1"),
+    ]).expect("send the chain request");
+
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut services = String::new();
     while Instant::now() < deadline && services.is_empty() {
