@@ -5,6 +5,9 @@ use crate::types::*;
 use super::{wire_req_id, Contract, EClient, TagValue};
 use crate::client_core::ClientCore;
 
+/// What this client reports when a market rule has not been seen.
+const MARKET_RULE_NOT_KNOWN: i64 = 321;
+
 impl EClient {
     // ── Historical Data ──
 
@@ -107,13 +110,27 @@ impl EClient {
         self.send(ControlCommand::CancelHeadTimestamp { req_id: wire_req_id(req_id)? })
     }
 
-    /// Request market rule by ID. Matches `reqMarketRule` in C++.
-    /// Looks up cached market rules delivered during connection init.
+    /// The price increments a market rule states. Matches `reqMarketRule` in C++.
+    ///
+    /// A rule is not asked for on its own: the venue sends the rules a contract
+    /// uses along with that contract's details. So this answers from what those
+    /// have already brought in, and says so when the rule is not among them
+    /// rather than returning in silence.
     pub fn req_market_rule(&self, market_rule_id: i32, wrapper: &mut impl crate::api::wrapper::Wrapper) {
-        if let Some(rule) = self.shared.reference.market_rule(market_rule_id) {
-            wrapper.market_rule(market_rule_id as i64, &rule.price_increments.iter()
+        match self.shared.reference.market_rule(market_rule_id) {
+            Some(rule) => wrapper.market_rule(market_rule_id as i64, &rule.price_increments.iter()
                 .map(|pi| crate::api::types::PriceIncrement { low_edge: pi.low_edge, increment: pi.increment })
-                .collect::<Vec<_>>());
+                .collect::<Vec<_>>()),
+            None => wrapper.error(
+                market_rule_id as i64,
+                MARKET_RULE_NOT_KNOWN,
+                &format!(
+                    "market rule {market_rule_id} has not been seen on this session. Rules \
+                     arrive with the details of a contract that uses them, so ask for such a \
+                     contract first"
+                ),
+                "",
+            ),
         }
     }
 

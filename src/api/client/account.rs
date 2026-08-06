@@ -111,8 +111,12 @@ impl EClient {
     }
 
     /// Request account updates for multiple accounts/models. Matches `reqAccountUpdatesMulti` in C++.
+    /// Account values for one account or model, answered on
+    /// `account_update_multi`. The reference client answers this request on
+    /// its own callbacks, not on the ones `req_account_updates` uses, and a
+    /// caller written against it implements those and hears nothing otherwise.
     pub fn req_account_updates_multi(
-        &self, _req_id: i64, _account: &str, _model_code: &str, _ledger_and_nlv: bool,
+        &self, req_id: i64, account: &str, model_code: &str, _ledger_and_nlv: bool,
         wrapper: &mut impl Wrapper,
     ) {
         let acct = self.shared.portfolio.account();
@@ -126,11 +130,12 @@ impl EClient {
             ("InitMarginReq", acct.init_margin_req as f64 / PRICE_SCALE_F),
             ("MaintMarginReq", acct.maint_margin_req as f64 / PRICE_SCALE_F),
         ];
+        let account = if account.is_empty() { self.account_id.as_str() } else { account };
         for (key, val) in fields {
             let val_str = format!("{val:.2}");
-            wrapper.update_account_value(key, &val_str, "USD", &self.account_id);
+            wrapper.account_update_multi(req_id, account, model_code, key, &val_str, "USD");
         }
-        wrapper.account_download_end(&self.account_id);
+        wrapper.account_update_multi_end(req_id);
     }
 
     /// Cancel multi-account updates. Matches `cancelAccountUpdatesMulti` in C++.
@@ -139,11 +144,19 @@ impl EClient {
     }
 
     /// Request positions for multiple accounts/models. Matches `reqPositionsMulti` in C++.
+    /// Holdings for one account or model, answered on `position_multi`.
     pub fn req_positions_multi(
-        &self, _req_id: i64, _account: &str, _model_code: &str,
+        &self, req_id: i64, account: &str, model_code: &str,
         wrapper: &mut impl Wrapper,
     ) {
-        self.req_positions(wrapper);
+        let held = self.positions().unwrap_or_default();
+        let account = if account.is_empty() { self.account_id.as_str() } else { account };
+        for row in held {
+            wrapper.position_multi(
+                req_id, account, model_code, &row.contract, row.position, row.avg_cost,
+            );
+        }
+        wrapper.position_multi_end(req_id);
     }
 
     /// Cancel multi-account positions. Matches `cancelPositionsMulti` in C++.
