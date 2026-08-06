@@ -74,7 +74,7 @@ fn a_locally_placed_child_reports_the_parent_it_was_given() {
 
     shared.orders.push_order_update(OrderUpdate {
         order_id: 9401, instrument: 0, status: OrderStatus::Submitted,
-        filled_qty: 0.0, remaining_qty: 1.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 1.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -89,11 +89,30 @@ fn a_locally_placed_child_reports_the_parent_it_was_given() {
     // An order this client never placed keeps the engine's answer.
     shared.orders.push_order_update(OrderUpdate {
         order_id: 9999, instrument: 0, status: OrderStatus::Submitted,
-        filled_qty: 0.0, remaining_qty: 1.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 1.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     let mut w2 = RecordingWrapper::default();
     client.process_msgs(&mut w2);
     assert_eq!(w2.parent_ids.last().copied(), Some(0), "no parent is invented");
+}
+
+/// A status arriving on the heels of a fill reported an average of zero, so
+/// the last thing a caller heard about a filled order was that it had filled
+/// at no price at all.
+#[test]
+fn a_status_states_what_the_order_paid() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.push_order_update(OrderUpdate {
+        order_id: 9403, instrument: 0, status: OrderStatus::Filled,
+        filled_qty: 100.0, remaining_qty: 0.0,
+        avg_price: 13 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2,
+        perm_id: 0, parent_id: 0, timestamp_ns: 0,
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    let status = w.events.iter().find(|e| e.starts_with("order_status:9403:"))
+        .expect("the status was dispatched");
+    assert!(status.ends_with(":13.5"), "the average the report stated: {status}");
 }
 
 /// A fill emits its own order_status from a different branch, so the parent
@@ -2822,15 +2841,15 @@ fn process_msgs_dispatches_order_updates() {
     let (client, _rx, shared) = test_client();
     shared.orders.push_order_update(OrderUpdate {
         order_id: 43, instrument: 0, status: OrderStatus::Submitted,
-        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 44, instrument: 0, status: OrderStatus::Cancelled,
-        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 45, instrument: 0, status: OrderStatus::Rejected,
-        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -2867,11 +2886,11 @@ fn process_msgs_then_open_orders_admits_inactive_excludes_rejected() {
 
     shared.orders.push_order_update(OrderUpdate {
         order_id: 82, instrument: 0, status: OrderStatus::Inactive,
-        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 83, instrument: 0, status: OrderStatus::Rejected,
-        filled_qty: 0.0, remaining_qty: 100.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 100.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3463,7 +3482,7 @@ fn process_msgs_drains_on_first_call_empty_on_second() {
     });
     shared.orders.push_order_update(OrderUpdate {
         order_id: 2, instrument: 0, status: OrderStatus::Submitted,
-        filled_qty: 0.0, remaining_qty: 1.0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        filled_qty: 0.0, remaining_qty: 1.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
     });
 
     let mut w = RecordingWrapper::default();

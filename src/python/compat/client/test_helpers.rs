@@ -134,7 +134,7 @@ impl EClient {
             _ => return Err(PyRuntimeError::new_err(format!("Invalid status: {status}"))),
         };
         shared.orders.push_order_update(OrderUpdate {
-            order_id, instrument, status: st, filled_qty, remaining_qty, perm_id: 0, parent_id: 0, timestamp_ns: 100,
+            order_id, instrument, status: st, filled_qty, remaining_qty, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 100,
         });
         Ok(())
     }

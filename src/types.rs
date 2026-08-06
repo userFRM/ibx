@@ -159,6 +159,9 @@ pub struct OrderUpdate {
     pub status: OrderStatus,
     pub filled_qty: f64,
     pub remaining_qty: f64,
+    /// What the order has paid on average so far, as the report states it.
+    /// Zero when nothing has filled.
+    pub avg_price: Price,
     pub perm_id: i64,
     pub parent_id: i64,
     pub timestamp_ns: u64,
