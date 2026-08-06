@@ -366,6 +366,12 @@ pub struct OrderAttrs {
     pub post_to_ats: u32,
     /// The legs, when this order is for a combination.
     pub combo_legs: Vec<ComboLegSpec>,
+    /// Where the contract is listed (tag 207), which is not where the order
+    /// routes.
+    pub primary_exchange: String,
+    /// The contract this order hedges against, and at what (tags 6150, 6148,
+    /// 6149). Stated on the contract rather than the order.
+    pub delta_neutral_contract: Option<Box<DeltaNeutralContractSpec>>,
     /// Trigger method for stop/MIT/LIT orders (IB tag 6115).
     /// 0=default, 1=double-bid-ask, 2=last, 3=double-last, 4=bid-ask,
     /// 7=last-or-bid-ask, 8=mid-point.
@@ -624,6 +630,14 @@ pub struct ScaleAttrs {
     pub auto_reset: bool,
     /// Vary the component sizes (tag 6795).
     pub random_percent: bool,
+}
+
+/// The contract an order hedges against: which one, its delta, and its price.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeltaNeutralContractSpec {
+    pub con_id: i64,
+    pub delta: f64,
+    pub price: f64,
 }
 
 /// One leg of a combination, as the order states it.

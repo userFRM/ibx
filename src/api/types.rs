@@ -490,6 +490,8 @@ impl Order {
             rule80a: self.rule80a.clone(),
             post_to_ats: if self.post_to_ats == i32::MAX { 0 } else { self.post_to_ats.max(0) as u32 },
             combo_legs: Vec::new(),
+            primary_exchange: String::new(),
+            delta_neutral_contract: None,
             // Valid trigger-method codes only (ibx#223): the raw `as u8`
             // cast wrapped the gateway's -1 (Unknown) to 255, and
             // out-of-range codes went to the wire verbatim. Anything
@@ -1162,6 +1164,7 @@ mod tests {
             scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
             exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
             combo_legs: _, rule80a: _, post_to_ats: _,
+            primary_exchange: _, delta_neutral_contract: _,
         } = Order::default().attrs();
 
         assert!(

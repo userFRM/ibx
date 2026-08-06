@@ -1952,7 +1952,7 @@ impl ClientCore {
         order: &ApiOrder,
         order_id: u64,
         instrument: InstrumentId,
-        legs: &[crate::api::types::ComboLeg],
+        contract: Option<&crate::api::types::Contract>,
     ) -> Result<ControlCommand, String> {
         let side = order.side()?;
         let qty = order.total_quantity as u32;
@@ -1967,7 +1967,8 @@ impl ClientCore {
 
         // The legs live on the contract, not the order, so they are attached
         // here rather than in `attrs()`.
-        let leg_specs: Vec<crate::types::ComboLegSpec> = legs.iter().map(|l| {
+        let leg_specs: Vec<crate::types::ComboLegSpec> =
+            contract.map(|c| c.combo_legs.as_slice()).unwrap_or(&[]).iter().map(|l| {
             crate::types::ComboLegSpec {
                 con_id: l.con_id,
                 ratio: l.ratio.max(0) as u32,
@@ -1987,7 +1988,21 @@ impl ClientCore {
             order_id, instrument, side, qty,
             kind,
             tif: order.tif_byte(),
-            attrs: crate::types::OrderAttrs { combo_legs: leg_specs.clone(), ..order.attrs() },
+            attrs: crate::types::OrderAttrs {
+                combo_legs: leg_specs.clone(),
+                // The listing exchange and the hedging contract are stated on
+                // the contract, not the order, so they are picked up here.
+                primary_exchange: contract
+                    .map(|c| c.primary_exchange.clone()).unwrap_or_default(),
+                delta_neutral_contract: contract
+                    .and_then(|c| c.delta_neutral_contract.as_ref())
+                    .map(|d| Box::new(crate::types::DeltaNeutralContractSpec {
+                        con_id: d.con_id,
+                        delta: d.delta,
+                        price: d.price,
+                    })),
+                ..order.attrs()
+            },
         };
 
         // Adaptive orders (special-cased before generic algo)
@@ -2766,7 +2781,7 @@ mod tests {
             ("what-if", ApiOrder { what_if: true, ..base.clone() }),
         ];
         for (label, order) in cases {
-            let cmd = ClientCore::build_order_request(&order, 7, 0, &[])
+            let cmd = ClientCore::build_order_request(&order, 7, 0, None)
                 .unwrap_or_else(|e| panic!("{label}: {e}"));
             let ControlCommand::Order(OrderRequest::SubmitEx { tif, attrs, .. }) = cmd else {
                 panic!("{label} must route through the shared extended submission");

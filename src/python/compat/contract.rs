@@ -2502,7 +2502,7 @@ mod tests {
         o.trail_stop_price = 99.0;
         o.oca_type = 2;
 
-        let cmd = ClientCore::build_order_request(&o.to_api(), 1, 0, &[]).unwrap();
+        let cmd = ClientCore::build_order_request(&o.to_api(), 1, 0, None).unwrap();
         let ControlCommand::Order(OrderRequest::SubmitEx {
             kind: OrderKind::TrailingStopLimit { lmt_offset, trail_stop_price, .. },
             attrs,
