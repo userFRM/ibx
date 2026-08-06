@@ -251,6 +251,7 @@ pub(crate) fn drain_and_send_orders(
                 new_order_id, order_id, price, qty, outside_rth, ord_type, tif, stop_price,
             } => {
                 let orig = context.order(order_id).copied();
+                let spec = context.submitted.get(&order_id).cloned();
                 // What the replace states. A zero field states nothing, so the
                 // resting order's value stays in force — which is what the
                 // encoder used to do for every field, so a caller changing the
@@ -358,6 +359,12 @@ pub(crate) fn drain_and_send_orders(
                 if new_order_id != order_id {
                     context.last_clord.insert(new_order_id, clord_str.clone());
                     context.modify_versions.insert(new_order_id, new_ver);
+                    // The replacement is the order now, and the next replace
+                    // restates from it. Without this the second modify of an
+                    // order dropped everything the first one preserved.
+                    if let Some(spec) = spec.clone() {
+                        context.submitted.insert(new_order_id, spec);
+                    }
                 }
 
                 let qty_str = format_uint(qty as u64);
@@ -424,6 +431,27 @@ pub(crate) fn drain_and_send_orders(
                     stop_str = format_price(new_stop);
                     fields.push((99, &stop_str));
                 }
+                // The gateway takes a replace as a full statement of the order,
+                // not a difference against the resting one. This stated the
+                // identity, the price and the quantity and stopped, so a
+                // replaced order came back without the algo, the all-or-none
+                // instruction, the good-till date or anything else it was
+                // placed with — accepted, acknowledged, and quietly a different
+                // order. What the submit said is restated here.
+                let mut attr_fields: Vec<(u32, String)> = Vec::new();
+                if let Some(spec) = spec.as_deref() {
+                    push_order_attrs(
+                        &mut attr_fields,
+                        &spec.attrs,
+                        &spec.kind,
+                        exec_inst_for(&spec.kind),
+                    );
+                    // Stated once. The lean message already names these, and the
+                    // gateway reads a repeated tag as a second statement of it.
+                    let stated: Vec<u32> = fields.iter().map(|(t, _)| *t).collect();
+                    attr_fields.retain(|(tag, _)| !stated.contains(tag));
+                }
+                fields.extend(attr_fields.iter().map(|(t, v)| (*t, v.as_str())));
                 conn.send_fix(&fields)
             }
         };
@@ -697,6 +725,13 @@ fn send_order_ex(
     context.insert_order(crate::types::Order::new(
         order_id, instrument, side, qty, track_price, ord_type_byte, tif, track_stop,
     ));
+    // Kept so a replace can restate it: the gateway takes a replace as a full
+    // statement of the order, so an attribute this submit made and the replace
+    // leaves out is an attribute the order loses.
+    context.submitted.insert(
+        order_id,
+        Box::new(crate::types::OrderSpec { kind: kind.clone(), attrs: attrs.clone() }),
+    );
 
     let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
     let symbol = context.market.symbol(instrument).to_string();
@@ -727,7 +762,7 @@ fn send_order_ex(
     // followed by "G" for all-or-none, and an order that had a character of its
     // own therefore lost its all-or-none entirely — silently, on every
     // trailing, relative, pegged and algo order.
-    let mut exec_inst = String::new();
+    let exec_inst = exec_inst_for(&kind);
     match kind {
         K::Market => fields.push((40, "1".to_string())),
         K::Limit { price } => {
@@ -757,7 +792,6 @@ fn send_order_ex(
             fields.push((40, "P".to_string()));
             fields.push((99, t.clone()));
             fields.push((211, t));
-            exec_inst.push('a');
         }
         K::TrailingStopLimit { lmt_offset, trail_amt, .. } => {
             // Per ib-agent#136 capture: TRAIL LIMIT uses OrdType=TSL, no
@@ -781,7 +815,6 @@ fn send_order_ex(
             fields.push((40, "P".to_string()));
             fields.push((99, pct_decimal.clone()));
             fields.push((211, pct_decimal));
-            exec_inst.push('a');
             fields.push((6268, TRAIL_UNIT_PERCENT.to_string()));
         }
         K::Moc => fields.push((40, "5".to_string())),
@@ -840,18 +873,15 @@ fn send_order_ex(
         }
         K::PegMkt { .. } => {
             fields.push((40, "E".to_string()));
-            exec_inst.push('P');
         }
         K::PegMid { .. } => {
             fields.push((40, "E".to_string()));
-            exec_inst.push('M');
         }
         K::Rel { offset } => {
             // Per ib-agent#138 capture: Relative shares OrdType=P and is
             // disambiguated by 18=R; peg offset on 211, no tag 44.
             fields.push((40, "P".to_string()));
             fields.push((211, format_price(offset).to_string()));
-            exec_inst.push('R');
         }
         K::Adaptive { price, .. } => {
             // Per ib-agent#136 capture: Adaptive needs 18=e (ExecInst = adaptive
@@ -860,7 +890,6 @@ fn send_order_ex(
             // after the attribute block, where the encoder this replaced put them.
             fields.push((40, "2".to_string()));
             fields.push((44, format_price(price).to_string()));
-            exec_inst.push('e');
         }
         K::Algo { price, .. } => {
             fields.push((40, "2".to_string()));
@@ -870,7 +899,6 @@ fn send_order_ex(
             // not with "Invalid value in field # 18" — which it also answers
             // for a value that is merely the wrong one, so the six algo types
             // were refused identically whether the field was absent or wrong.
-            exec_inst.push('e');
         }
         K::WhatIf { price } => {
             fields.push((40, "2".to_string()));
@@ -901,398 +929,430 @@ fn send_order_ex(
         .map_or_else(|| "USD".to_string(), |id| id.currency)));
     fields.push((204, "0".to_string()));
 
-    // Extended attributes — same tag order as the historical SubmitLimitEx
-    // block.
-    if attrs.display_size > 0 {
-        fields.push((111, format_uint(attrs.display_size as u64).to_string()));
-    }
-    if attrs.min_qty > 0 {
-        fields.push((110, format_uint(attrs.min_qty as u64).to_string()));
-    }
-    if attrs.outside_rth {
-        fields.push((6433, "1".to_string()));
-    }
-    if attrs.hidden {
-        fields.push((6135, "1".to_string()));
-    }
-    if attrs.good_after > 0 {
-        fields.push((168, unix_to_ib_datetime(attrs.good_after)));
-    }
-    // GTD expiry: date-only -> tag 432; time-precise -> tag 126 (UTC).
-    // Mutually exclusive — never both (gateway rejects both together).
-    if attrs.good_till_date_ymd > 0 {
-        fields.push((432, format!("{:08}", attrs.good_till_date_ymd)));
-    } else if attrs.good_till > 0 {
-        fields.push((126, unix_to_ib_utc_dash(attrs.good_till)));
-    }
-    let oca_str = if !attrs.oca_group_str.is_empty() {
-        attrs.oca_group_str.clone()
-    } else if attrs.oca_group > 0 {
-        format!("OCA_{}", attrs.oca_group)
-    } else {
-        String::new()
-    };
-    if !oca_str.is_empty() {
-        fields.push((583, oca_str));
-        fields.push((6209, oca_type_str(attrs.oca_type).to_string()));
-    }
-    if attrs.parent_id > 0 {
-        // Match parent ClOrdID format: "{order_id}.{ver}" — assume ver=0
-        // for initial submission.
-        fields.push((6107, format!("{}.0", attrs.parent_id)));
-    }
-    if attrs.discretionary_amt > 0 {
-        fields.push((9813, format_price(attrs.discretionary_amt).to_string()));
-    }
-    if attrs.sweep_to_fill {
-        fields.push((6102, "1".to_string()));
-    }
-    if attrs.all_or_none {
-        exec_inst.push('G');
-    }
-    if !exec_inst.is_empty() {
-        fields.push((18, exec_inst));
-    }
-    // Instructions the caller set that used to reach no encoder. Each changes
-    // what is traded, so each goes on the wire: a volatility order priced in
-    // volatility, an offset the venue works from, a discretion the floor is
-    // told about, the caller's own reference, and whether this opens a position
-    // or closes one.
-    if attrs.volatility > 0.0 {
-        fields.push((9816, format!("{:.6}", attrs.volatility)));
-    }
-    if attrs.volatility_type > 0 {
-        fields.push((6280, attrs.volatility_type.to_string()));
-    }
-    if attrs.percent_offset != f64::MAX {
-        fields.push((9822, format!("{:.6}", attrs.percent_offset)));
-    }
-    if attrs.not_held {
-        fields.push((6287, "1".to_string()));
-    }
-    if !attrs.order_ref.is_empty() {
-        fields.push((6010, attrs.order_ref.clone()));
-    }
-    if !attrs.open_close.is_empty() {
-        fields.push((77, attrs.open_close.clone()));
-    }
-    // The ladder. Sending the sizes and not the step, or the step and not the
-    // sizes, describes no ladder at all, so an order that names one names all
-    // of what it set.
-    // The hedge. An order that asked for one and did not say so left the
-    // position naked, which is the opposite of what it was for.
-    // A combination states its legs on the order itself. There is no repeating
-    // group for them and no standard leg tag: the count goes on 6079 and each
-    // leg's contract, ratio and side on 6080, 6081 and 6082, with its venue,
-    // position effect and short-sale slot after. The side is a flag, not the
-    // letter the rest of the message uses.
-    if !attrs.combo_legs.is_empty() {
-        fields.push((6079, format_uint(attrs.combo_legs.len() as u64).to_string()));
-        for leg in &attrs.combo_legs {
-            fields.push((6080, leg.con_id.to_string()));
-            fields.push((6081, format_uint(leg.ratio as u64).to_string()));
-            fields.push((6082, if leg.is_sell { "1" } else { "0" }.to_string()));
-            // Empty where the leg routes with the combination rather than on a
-            // venue of its own, which is what the terminal writes for SMART.
-            fields.push((616, leg.exchange.clone()));
-            if leg.open_close != 0 {
-                fields.push((654, leg.open_close.to_string()));
-            }
-            if leg.short_sale_slot != 0 {
-                fields.push((6086, leg.short_sale_slot.to_string()));
-                if !leg.designated_location.is_empty() {
-                    fields.push((6216, leg.designated_location.clone()));
-                }
-            }
-            if leg.exempt_code != -1 {
-                fields.push((1689, leg.exempt_code.to_string()));
-            }
-        }
-    }
-
-    // Where the order clears, which is not the account it trades in. This
-    // already read both of these back off the wire and sent neither.
-    if !attrs.clearing_account.is_empty() {
-        fields.push((440, attrs.clearing_account.clone()));
-    }
-    if !attrs.clearing_intent.is_empty() {
-        fields.push((6419, attrs.clearing_intent.clone()));
-    }
-
-    // Lifecycle: whether the venue holds this order rather than working it,
-    // whether it may work overnight, when it cancels itself, and what it takes
-    // with it when it goes.
-    if attrs.deactivate {
-        fields.push((6521, "1".to_string()));
-    }
-    if attrs.include_overnight {
-        fields.push((8534, "1".to_string()));
-    }
-    if attrs.auto_cancel_parent {
-        fields.push((6965, "1".to_string()));
-    }
-    if attrs.min_trade_qty > 0 {
-        fields.push((8415, format_uint(attrs.min_trade_qty as u64).to_string()));
-    }
-    if attrs.block_order {
-        fields.push((9801, "1".to_string()));
-    }
-    if !attrs.auto_cancel_date.is_empty() {
-        fields.push((6596, attrs.auto_cancel_date.clone()));
-    }
-
-    // Who the order is for, which the venue reads as a regulatory statement.
-    if !attrs.rule80a.is_empty() {
-        fields.push((47, attrs.rule80a.clone()));
-    }
-    if attrs.post_to_ats != 0 {
-        fields.push((8405, format_uint(attrs.post_to_ats as u64).to_string()));
-    }
-
-    // Short-sale handling. The location is stated only for the slot that has
-    // one, which is the rule the venue applies, and the exemption rides its own
-    // tag rather than the slot.
-    if attrs.short_sale_slot != 0 {
-        fields.push((6086, attrs.short_sale_slot.to_string()));
-        if attrs.short_sale_slot == 2 && !attrs.designated_location.is_empty() {
-            fields.push((5700, attrs.designated_location.clone()));
-        }
-    }
-    if attrs.exempt_code != -1 {
-        fields.push((1688, attrs.exempt_code.to_string()));
-    }
-    // Whether the shares have been located, which the terminal states as a
-    // plain yes or no beside the slot rather than leaving it to be inferred.
-    if attrs.short_sale_slot != 0 {
-        let located = matches!(attrs.designated_location.as_str(), "TMBR" | "IBKR");
-        fields.push((114, if located { "Y" } else { "N" }.to_string()));
-    }
-    // The hedge, as a number rather than the API's letter, with the parameter
-    // the chosen kind takes: a beta or a pair ratio. Delta and FX take none.
-    if attrs.hedge_type != 0 {
-        fields.push((6665, attrs.hedge_type.to_string()));
-        if attrs.hedge_beta != 0.0 {
-            fields.push((6703, format!("{:.6}", attrs.hedge_beta)));
-        }
-        if attrs.hedge_ratio != 0.0 {
-            fields.push((6666, format!("{:.6}", attrs.hedge_ratio)));
-        }
-    }
-    // Where the contract is listed, which is not where the order routes. The
-    // venue reads the two separately and this stated only the routing.
-    if !attrs.primary_exchange.is_empty() {
-        fields.push((207, attrs.primary_exchange.clone()));
-    }
-    // The contract the order hedges against: which one, its delta and its
-    // price. Stated on the contract rather than the order, so an order that
-    // named a hedging leg still said nothing about what to hedge with.
-    if let Some(dnc) = attrs.delta_neutral_contract.as_deref() {
-        if dnc.con_id != 0 {
-            fields.push((6150, dnc.con_id.to_string()));
-        }
-        fields.push((6148, format!("{:.6}", dnc.delta)));
-        fields.push((6149, format!("{:.6}", dnc.price)));
-    }
-    if let Some(dn) = attrs.delta_neutral.as_deref() {
-        fields.push((6290, dn.order_type.clone()));
-        if dn.aux_price != 0 {
-            fields.push((6291, format_price(dn.aux_price).to_string()));
-        }
-        if dn.con_id != 0 {
-            fields.push((6150, dn.con_id.to_string()));
-        }
-    }
-    if let Some(scale) = attrs.scale.as_deref() {
-        if scale.init_level_size > 0 {
-            fields.push((6403, format_uint(scale.init_level_size as u64).to_string()));
-        }
-        if scale.subs_level_size > 0 {
-            fields.push((6445, format_uint(scale.subs_level_size as u64).to_string()));
-        }
-        if scale.price_increment > 0 {
-            fields.push((6405, format_price(scale.price_increment).to_string()));
-        }
-        if scale.profit_offset > 0 {
-            fields.push((6446, format_price(scale.profit_offset).to_string()));
-        }
-        if scale.price_adjust_value != 0 {
-            fields.push((6527, format_price(scale.price_adjust_value).to_string()));
-        }
-        if scale.price_adjust_interval > 0 {
-            fields.push((6526, format_uint(scale.price_adjust_interval as u64).to_string()));
-        }
-        if scale.auto_reset {
-            fields.push((6461, "1".to_string()));
-        }
-        if scale.random_percent {
-            fields.push((6795, "1".to_string()));
-        }
-    }
-    if attrs.trigger_method > 0 {
-        fields.push((6115, attrs.trigger_method.to_string()));
-    }
-    if attrs.cash_qty > 0 {
-        // 152, not 5920. The vendor's attribute declares `super(152, …, 5920, …)`
-        // — the same shape as all-or-none's `super(18, …, 3570, …)`, where 18 is
-        // the tag this already sends and 3570 is a selector for its own screens.
-        // 5920 is that selector, and it is written by no encoder anywhere; 152
-        // is CashOrderQty. An order by cash amount was naming a field the venue
-        // does not read.
-        fields.push((152, format_price(attrs.cash_qty).to_string()));
-    }
-    // Condition tags. The vendor's audit renderer names the whole set:
-    // 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 cancel-on-condition,
-    // 6136 list size, 6137 conjunction, 6166 strike, 6168 expiry, 6169
-    // security type, 6220 multiplier, 6222 type, 6223 time, 6224 send-email,
-    // 6226 email text, 6227 TWS actions, 6241 inactive, 6245 percentage,
-    // 6246 execution pattern, 6263 volume, 6151 ignore-RTH, 8569 amount,
-    // 6947 a type discriminator (NOT a timezone).
-    //
-    // A time condition is still refused with every one of these read and the
-    // relevant ones sent, including the timezone, so what it wants is not in
-    // this list.
-    if !attrs.conditions.is_empty() {
-        let cond_strs = build_condition_strings(&attrs.conditions);
-        fields.push((6136, cond_strs[0].clone())); // first element is count
-        // 6128 cancels the order when its condition fails; 6151 lets the
-        // conditions ignore regular hours. The audit renderer names 6128
-        // "CondIgnoreRth" and 6151 "StockRefPrice" — both names belong to
-        // other messages. The order serializer writes these two, for these two
-        // flags, in this order. Swapping them to match the renderer was tried
-        // and was wrong.
-        if attrs.conditions_cancel_order {
-            fields.push((6128, "1".to_string()));
-        }
-        if attrs.conditions_ignore_rth {
-            fields.push((6151, "1".to_string()));
-        }
-        // Per-condition tags start at index 1, 11 strings per condition
-        for i in 0..attrs.conditions.len() {
-            let base = 1 + i * 11;
-            fields.push((6222, cond_strs[base].clone()));      // condType
-            // Every slot, including the ones this condition has no use for.
-            // The terminal writes only what applies, and following it here was
-            // tried: it did not make the time condition acceptable, and it
-            // broke the multi-condition order, which is refused for a missing
-            // volume field the moment the price condition alongside it stops
-            // stating an empty one. The gateway is reading these positionally.
-            fields.push((6137, cond_strs[base + 1].clone()));  // conjunction
-            fields.push((6126, cond_strs[base + 2].clone()));  // operator
-            fields.push((6123, cond_strs[base + 3].clone()));  // conId
-            fields.push((6124, cond_strs[base + 4].clone()));  // exchange
-            fields.push((6127, cond_strs[base + 5].clone()));  // triggerMethod
-            fields.push((6125, cond_strs[base + 6].clone()));  // price
-            fields.push((6223, cond_strs[base + 7].clone()));  // time
-            fields.push((6245, cond_strs[base + 8].clone()));  // percent
-            fields.push((6263, cond_strs[base + 9].clone()));  // volume
-            fields.push((6246, cond_strs[base + 10].clone())); // execution
-
-            // A time condition is still refused, and these were tried against a
-            // live session to see whether the shape was the reason: writing the
-            // condition's own fields first and the empty ones after, as the
-            // terminal does, and adding the empty 6947 it pads with. Neither
-            // changed the answer, and both are churn on a path that price,
-            // volume and multi-condition orders already go through, so the
-            // order here stays fixed
-        }
-    }
-
-    // Adjustable-stop tags last, keeping the position they held in the encoder
-    // this path replaced: after 204 and the attribute block, not in among the
-    // order-type tags. Values and conditions are unchanged; only the encoder
-    // they come from is new (ibx#240).
-    if let K::AdjustableStop {
-        trigger_price, adjusted_order_type, adjusted_stop_price,
-        adjusted_stop_limit_price, adjusted_trailing_amount, adjustable_trailing_unit, ..
-    } = &kind {
-        fields.push((6257, "1".to_string()));                     // has adjustable params
-        fields.push((6261, adjusted_order_type.fix_code().to_string()));
-        fields.push((6258, format_price(*trigger_price).to_string()));
-        fields.push((6259, format_price(*adjusted_stop_price).to_string()));
-        if *adjusted_stop_limit_price > 0 {
-            fields.push((6262, format_price(*adjusted_stop_limit_price).to_string()));
-        }
-        // Trailing amount + unit for a Trail/TrailLimit conversion
-        // (ib-agent#167, ibx#225).
-        if matches!(adjusted_order_type,
-            crate::types::AdjustedOrderType::Trail
-            | crate::types::AdjustedOrderType::TrailLimit)
-        {
-            fields.push((6260, format_price(*adjusted_trailing_amount).to_string()));
-            fields.push((6269, adjustable_trailing_unit.to_string()));
-        }
-    }
-
-    // The optional tags each type appends last, in the position the per-type
-    // encoders give them: after 204 and the attribute block, not in among the
-    // order-type tags. The values and the conditions are unchanged.
-    match &kind {
-        K::MidPrice { price_cap } if *price_cap > 0 => {
-            fields.push((44, format_price(*price_cap).to_string()));
-        }
-        // The offset is stated whether or not it is zero. Pegging at the price
-        // with no offset is an ordinary order, and omitting the tag for it had
-        // the gateway refuse the whole thing — seen against a paper account as
-        // "Invalid value in field # 44", which is what an absent offset leaves
-        // it looking for.
-        K::PegMkt { offset, price_cap } => {
-            fields.push((211, format_price(*offset).to_string()));
-            if *price_cap > 0 {
-                fields.push((44, format_price(*price_cap).to_string()));
-            }
-        }
-        K::PegMid { offset, price_cap } => {
-            fields.push((8403, "0.0".to_string())); // midOffsetAtWhole — differentiates PEGMID
-            fields.push((8404, "0.0".to_string())); // midOffsetAtHalf
-            fields.push((211, format_price(*offset).to_string()));
-            // The worst price the peg may reach, which IBKR documents as the
-            // limit-price field for these types. A zero cap is no cap, and zero
-            // is not a price, so it is left off rather than stated as one.
-            if *price_cap > 0 {
-                fields.push((44, format_price(*price_cap).to_string()));
-            }
-        }
-        // Optional initial stop trigger (ib-agent#173).
-        K::TrailingStop { trail_stop_price, .. }
-        | K::TrailingStopLimit { trail_stop_price, .. }
-        | K::TrailPct { trail_stop_price, .. } if *trail_stop_price > 0 => {
-            fields.push((6117, format_price(*trail_stop_price).to_string()));
-        }
-        _ => {}
-    }
-
-    // Strategy and preview tags last, in the position they held in the encoders
-    // this path replaced: after 204 and the attribute block (ibx#318).
-    match &kind {
-        K::Adaptive { priority, .. } => {
-            fields.push((847, "Adaptive".to_string()));
-            fields.push((5957, "1".to_string()));
-            fields.push((5958, "adaptivePriority".to_string()));
-            fields.push((5960, priority.as_str().to_string()));
-        }
-        K::Algo { algo, .. } => {
-            let (algo_name, param_strs) = build_algo_tags(algo);
-            fields.push((847, algo_name.to_string()));
-            // Tag 849 (maxPctVol) for the algos that use it.
-            if let AlgoParams::Vwap { max_pct_vol, .. }
-                | AlgoParams::ArrivalPx { max_pct_vol, .. }
-                | AlgoParams::ClosePx { max_pct_vol, .. } = algo
-            {
-                fields.push((849, format!("{max_pct_vol}")));
-            }
-            fields.push((5957, (param_strs.len() / 2).to_string()));
-            // Key/value pairs: 5958=key, 5960=value, repeated.
-            for pair in param_strs.chunks_exact(2) {
-                fields.push((5958, pair[0].clone()));
-                fields.push((5960, pair[1].clone()));
-            }
-        }
-        K::WhatIf { .. } => fields.push((6091, "1".to_string())),
-        _ => {}
-    }
+    push_order_attrs(&mut fields, attrs, &kind, exec_inst);
 
     let refs: Vec<(u32, &str)> = fields.iter().map(|(t, s)| (*t, s.as_str())).collect();
     conn.send_fix(&refs)
+}
+
+/// Everything an order states beyond its identity, contract and price, in the
+/// tag order the reference encoder uses. A replace restates all of it, so this
+/// is shared rather than spelled out twice.
+/// The instruction characters an order type contributes to tag 18. They were
+/// pushed from inside the type's own arm, which a replace does not run — so a
+/// replaced algo or pegged order lost the instruction that made it one.
+fn exec_inst_for(kind: &crate::types::OrderKind) -> String {
+    use crate::types::OrderKind as K;
+    match kind {
+        K::TrailingStop { .. } | K::TrailPct { .. } => "a",
+        K::PegMkt { .. } => "P",
+        K::PegMid { .. } => "M",
+        K::Rel { .. } => "R",
+        K::Adaptive { .. } | K::Algo { .. } => "e",
+        _ => "",
+    }
+    .to_string()
+}
+
+fn push_order_attrs(
+    fields: &mut Vec<(u32, String)>,
+    attrs: &crate::types::OrderAttrs,
+    kind: &crate::types::OrderKind,
+    // Composed from the order's own kind before this is reached: the pegged,
+    // relative, trailing and algo types each contribute a character, and the
+    // all-or-none instruction below joins them on one field.
+    mut exec_inst: String,
+) {
+    use crate::types::OrderKind as K;
+// Extended attributes — same tag order as the historical SubmitLimitEx
+// block.
+if attrs.display_size > 0 {
+    fields.push((111, format_uint(attrs.display_size as u64).to_string()));
+}
+if attrs.min_qty > 0 {
+    fields.push((110, format_uint(attrs.min_qty as u64).to_string()));
+}
+if attrs.outside_rth {
+    fields.push((6433, "1".to_string()));
+}
+if attrs.hidden {
+    fields.push((6135, "1".to_string()));
+}
+if attrs.good_after > 0 {
+    fields.push((168, unix_to_ib_datetime(attrs.good_after)));
+}
+// GTD expiry: date-only -> tag 432; time-precise -> tag 126 (UTC).
+// Mutually exclusive — never both (gateway rejects both together).
+if attrs.good_till_date_ymd > 0 {
+    fields.push((432, format!("{:08}", attrs.good_till_date_ymd)));
+} else if attrs.good_till > 0 {
+    fields.push((126, unix_to_ib_utc_dash(attrs.good_till)));
+}
+let oca_str = if !attrs.oca_group_str.is_empty() {
+    attrs.oca_group_str.clone()
+} else if attrs.oca_group > 0 {
+    format!("OCA_{}", attrs.oca_group)
+} else {
+    String::new()
+};
+if !oca_str.is_empty() {
+    fields.push((583, oca_str));
+    fields.push((6209, oca_type_str(attrs.oca_type).to_string()));
+}
+if attrs.parent_id > 0 {
+    // Match parent ClOrdID format: "{order_id}.{ver}" — assume ver=0
+    // for initial submission.
+    fields.push((6107, format!("{}.0", attrs.parent_id)));
+}
+if attrs.discretionary_amt > 0 {
+    fields.push((9813, format_price(attrs.discretionary_amt).to_string()));
+}
+if attrs.sweep_to_fill {
+    fields.push((6102, "1".to_string()));
+}
+if attrs.all_or_none {
+    exec_inst.push('G');
+}
+if !exec_inst.is_empty() {
+    fields.push((18, exec_inst));
+}
+// Instructions the caller set that used to reach no encoder. Each changes
+// what is traded, so each goes on the wire: a volatility order priced in
+// volatility, an offset the venue works from, a discretion the floor is
+// told about, the caller's own reference, and whether this opens a position
+// or closes one.
+if attrs.volatility > 0.0 {
+    fields.push((9816, format!("{:.6}", attrs.volatility)));
+}
+if attrs.volatility_type > 0 {
+    fields.push((6280, attrs.volatility_type.to_string()));
+}
+if attrs.percent_offset != f64::MAX {
+    fields.push((9822, format!("{:.6}", attrs.percent_offset)));
+}
+if attrs.not_held {
+    fields.push((6287, "1".to_string()));
+}
+if !attrs.order_ref.is_empty() {
+    fields.push((6010, attrs.order_ref.clone()));
+}
+if !attrs.open_close.is_empty() {
+    fields.push((77, attrs.open_close.clone()));
+}
+// The ladder. Sending the sizes and not the step, or the step and not the
+// sizes, describes no ladder at all, so an order that names one names all
+// of what it set.
+// The hedge. An order that asked for one and did not say so left the
+// position naked, which is the opposite of what it was for.
+// A combination states its legs on the order itself. There is no repeating
+// group for them and no standard leg tag: the count goes on 6079 and each
+// leg's contract, ratio and side on 6080, 6081 and 6082, with its venue,
+// position effect and short-sale slot after. The side is a flag, not the
+// letter the rest of the message uses.
+if !attrs.combo_legs.is_empty() {
+    fields.push((6079, format_uint(attrs.combo_legs.len() as u64).to_string()));
+    for leg in &attrs.combo_legs {
+        fields.push((6080, leg.con_id.to_string()));
+        fields.push((6081, format_uint(leg.ratio as u64).to_string()));
+        fields.push((6082, if leg.is_sell { "1" } else { "0" }.to_string()));
+        // Empty where the leg routes with the combination rather than on a
+        // venue of its own, which is what the terminal writes for SMART.
+        fields.push((616, leg.exchange.clone()));
+        if leg.open_close != 0 {
+            fields.push((654, leg.open_close.to_string()));
+        }
+        if leg.short_sale_slot != 0 {
+            fields.push((6086, leg.short_sale_slot.to_string()));
+            if !leg.designated_location.is_empty() {
+                fields.push((6216, leg.designated_location.clone()));
+            }
+        }
+        if leg.exempt_code != -1 {
+            fields.push((1689, leg.exempt_code.to_string()));
+        }
+    }
+}
+
+// Where the order clears, which is not the account it trades in. This
+// already read both of these back off the wire and sent neither.
+if !attrs.clearing_account.is_empty() {
+    fields.push((440, attrs.clearing_account.clone()));
+}
+if !attrs.clearing_intent.is_empty() {
+    fields.push((6419, attrs.clearing_intent.clone()));
+}
+
+// Lifecycle: whether the venue holds this order rather than working it,
+// whether it may work overnight, when it cancels itself, and what it takes
+// with it when it goes.
+if attrs.deactivate {
+    fields.push((6521, "1".to_string()));
+}
+if attrs.include_overnight {
+    fields.push((8534, "1".to_string()));
+}
+if attrs.auto_cancel_parent {
+    fields.push((6965, "1".to_string()));
+}
+if attrs.min_trade_qty > 0 {
+    fields.push((8415, format_uint(attrs.min_trade_qty as u64).to_string()));
+}
+if attrs.block_order {
+    fields.push((9801, "1".to_string()));
+}
+if !attrs.auto_cancel_date.is_empty() {
+    fields.push((6596, attrs.auto_cancel_date.clone()));
+}
+
+// Who the order is for, which the venue reads as a regulatory statement.
+if !attrs.rule80a.is_empty() {
+    fields.push((47, attrs.rule80a.clone()));
+}
+if attrs.post_to_ats != 0 {
+    fields.push((8405, format_uint(attrs.post_to_ats as u64).to_string()));
+}
+
+// Short-sale handling. The location is stated only for the slot that has
+// one, which is the rule the venue applies, and the exemption rides its own
+// tag rather than the slot.
+if attrs.short_sale_slot != 0 {
+    fields.push((6086, attrs.short_sale_slot.to_string()));
+    if attrs.short_sale_slot == 2 && !attrs.designated_location.is_empty() {
+        fields.push((5700, attrs.designated_location.clone()));
+    }
+}
+if attrs.exempt_code != -1 {
+    fields.push((1688, attrs.exempt_code.to_string()));
+}
+// Whether the shares have been located, which the terminal states as a
+// plain yes or no beside the slot rather than leaving it to be inferred.
+if attrs.short_sale_slot != 0 {
+    let located = matches!(attrs.designated_location.as_str(), "TMBR" | "IBKR");
+    fields.push((114, if located { "Y" } else { "N" }.to_string()));
+}
+// The hedge, as a number rather than the API's letter, with the parameter
+// the chosen kind takes: a beta or a pair ratio. Delta and FX take none.
+if attrs.hedge_type != 0 {
+    fields.push((6665, attrs.hedge_type.to_string()));
+    if attrs.hedge_beta != 0.0 {
+        fields.push((6703, format!("{:.6}", attrs.hedge_beta)));
+    }
+    if attrs.hedge_ratio != 0.0 {
+        fields.push((6666, format!("{:.6}", attrs.hedge_ratio)));
+    }
+}
+// Where the contract is listed, which is not where the order routes. The
+// venue reads the two separately and this stated only the routing.
+if !attrs.primary_exchange.is_empty() {
+    fields.push((207, attrs.primary_exchange.clone()));
+}
+// The contract the order hedges against: which one, its delta and its
+// price. Stated on the contract rather than the order, so an order that
+// named a hedging leg still said nothing about what to hedge with.
+if let Some(dnc) = attrs.delta_neutral_contract.as_deref() {
+    if dnc.con_id != 0 {
+        fields.push((6150, dnc.con_id.to_string()));
+    }
+    fields.push((6148, format!("{:.6}", dnc.delta)));
+    fields.push((6149, format!("{:.6}", dnc.price)));
+}
+if let Some(dn) = attrs.delta_neutral.as_deref() {
+    fields.push((6290, dn.order_type.clone()));
+    if dn.aux_price != 0 {
+        fields.push((6291, format_price(dn.aux_price).to_string()));
+    }
+    if dn.con_id != 0 {
+        fields.push((6150, dn.con_id.to_string()));
+    }
+}
+if let Some(scale) = attrs.scale.as_deref() {
+    if scale.init_level_size > 0 {
+        fields.push((6403, format_uint(scale.init_level_size as u64).to_string()));
+    }
+    if scale.subs_level_size > 0 {
+        fields.push((6445, format_uint(scale.subs_level_size as u64).to_string()));
+    }
+    if scale.price_increment > 0 {
+        fields.push((6405, format_price(scale.price_increment).to_string()));
+    }
+    if scale.profit_offset > 0 {
+        fields.push((6446, format_price(scale.profit_offset).to_string()));
+    }
+    if scale.price_adjust_value != 0 {
+        fields.push((6527, format_price(scale.price_adjust_value).to_string()));
+    }
+    if scale.price_adjust_interval > 0 {
+        fields.push((6526, format_uint(scale.price_adjust_interval as u64).to_string()));
+    }
+    if scale.auto_reset {
+        fields.push((6461, "1".to_string()));
+    }
+    if scale.random_percent {
+        fields.push((6795, "1".to_string()));
+    }
+}
+if attrs.trigger_method > 0 {
+    fields.push((6115, attrs.trigger_method.to_string()));
+}
+if attrs.cash_qty > 0 {
+    // 152, not 5920. The vendor's attribute declares `super(152, …, 5920, …)`
+    // — the same shape as all-or-none's `super(18, …, 3570, …)`, where 18 is
+    // the tag this already sends and 3570 is a selector for its own screens.
+    // 5920 is that selector, and it is written by no encoder anywhere; 152
+    // is CashOrderQty. An order by cash amount was naming a field the venue
+    // does not read.
+    fields.push((152, format_price(attrs.cash_qty).to_string()));
+}
+// Condition tags. The vendor's audit renderer names the whole set:
+// 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 cancel-on-condition,
+// 6136 list size, 6137 conjunction, 6166 strike, 6168 expiry, 6169
+// security type, 6220 multiplier, 6222 type, 6223 time, 6224 send-email,
+// 6226 email text, 6227 TWS actions, 6241 inactive, 6245 percentage,
+// 6246 execution pattern, 6263 volume, 6151 ignore-RTH, 8569 amount,
+// 6947 a type discriminator (NOT a timezone).
+//
+// A time condition is still refused with every one of these read and the
+// relevant ones sent, including the timezone, so what it wants is not in
+// this list.
+if !attrs.conditions.is_empty() {
+    let cond_strs = build_condition_strings(&attrs.conditions);
+    fields.push((6136, cond_strs[0].clone())); // first element is count
+    // 6128 cancels the order when its condition fails; 6151 lets the
+    // conditions ignore regular hours. The audit renderer names 6128
+    // "CondIgnoreRth" and 6151 "StockRefPrice" — both names belong to
+    // other messages. The order serializer writes these two, for these two
+    // flags, in this order. Swapping them to match the renderer was tried
+    // and was wrong.
+    if attrs.conditions_cancel_order {
+        fields.push((6128, "1".to_string()));
+    }
+    if attrs.conditions_ignore_rth {
+        fields.push((6151, "1".to_string()));
+    }
+    // Per-condition tags start at index 1, 11 strings per condition
+    for i in 0..attrs.conditions.len() {
+        let base = 1 + i * 11;
+        fields.push((6222, cond_strs[base].clone()));      // condType
+        // Every slot, including the ones this condition has no use for.
+        // The terminal writes only what applies, and following it here was
+        // tried: it did not make the time condition acceptable, and it
+        // broke the multi-condition order, which is refused for a missing
+        // volume field the moment the price condition alongside it stops
+        // stating an empty one. The gateway is reading these positionally.
+        fields.push((6137, cond_strs[base + 1].clone()));  // conjunction
+        fields.push((6126, cond_strs[base + 2].clone()));  // operator
+        fields.push((6123, cond_strs[base + 3].clone()));  // conId
+        fields.push((6124, cond_strs[base + 4].clone()));  // exchange
+        fields.push((6127, cond_strs[base + 5].clone()));  // triggerMethod
+        fields.push((6125, cond_strs[base + 6].clone()));  // price
+        fields.push((6223, cond_strs[base + 7].clone()));  // time
+        fields.push((6245, cond_strs[base + 8].clone()));  // percent
+        fields.push((6263, cond_strs[base + 9].clone()));  // volume
+        fields.push((6246, cond_strs[base + 10].clone())); // execution
+
+        // A time condition is still refused, and these were tried against a
+        // live session to see whether the shape was the reason: writing the
+        // condition's own fields first and the empty ones after, as the
+        // terminal does, and adding the empty 6947 it pads with. Neither
+        // changed the answer, and both are churn on a path that price,
+        // volume and multi-condition orders already go through, so the
+        // order here stays fixed
+    }
+}
+
+// Adjustable-stop tags last, keeping the position they held in the encoder
+// this path replaced: after 204 and the attribute block, not in among the
+// order-type tags. Values and conditions are unchanged; only the encoder
+// they come from is new (ibx#240).
+if let K::AdjustableStop {
+    trigger_price, adjusted_order_type, adjusted_stop_price,
+    adjusted_stop_limit_price, adjusted_trailing_amount, adjustable_trailing_unit, ..
+} = &kind {
+    fields.push((6257, "1".to_string()));                     // has adjustable params
+    fields.push((6261, adjusted_order_type.fix_code().to_string()));
+    fields.push((6258, format_price(*trigger_price).to_string()));
+    fields.push((6259, format_price(*adjusted_stop_price).to_string()));
+    if *adjusted_stop_limit_price > 0 {
+        fields.push((6262, format_price(*adjusted_stop_limit_price).to_string()));
+    }
+    // Trailing amount + unit for a Trail/TrailLimit conversion
+    // (ib-agent#167, ibx#225).
+    if matches!(adjusted_order_type,
+        crate::types::AdjustedOrderType::Trail
+        | crate::types::AdjustedOrderType::TrailLimit)
+    {
+        fields.push((6260, format_price(*adjusted_trailing_amount).to_string()));
+        fields.push((6269, adjustable_trailing_unit.to_string()));
+    }
+}
+
+// The optional tags each type appends last, in the position the per-type
+// encoders give them: after 204 and the attribute block, not in among the
+// order-type tags. The values and the conditions are unchanged.
+match &kind {
+    K::MidPrice { price_cap } if *price_cap > 0 => {
+        fields.push((44, format_price(*price_cap).to_string()));
+    }
+    // The offset is stated whether or not it is zero. Pegging at the price
+    // with no offset is an ordinary order, and omitting the tag for it had
+    // the gateway refuse the whole thing — seen against a paper account as
+    // "Invalid value in field # 44", which is what an absent offset leaves
+    // it looking for.
+    K::PegMkt { offset, price_cap } => {
+        fields.push((211, format_price(*offset).to_string()));
+        if *price_cap > 0 {
+            fields.push((44, format_price(*price_cap).to_string()));
+        }
+    }
+    K::PegMid { offset, price_cap } => {
+        fields.push((8403, "0.0".to_string())); // midOffsetAtWhole — differentiates PEGMID
+        fields.push((8404, "0.0".to_string())); // midOffsetAtHalf
+        fields.push((211, format_price(*offset).to_string()));
+        // The worst price the peg may reach, which IBKR documents as the
+        // limit-price field for these types. A zero cap is no cap, and zero
+        // is not a price, so it is left off rather than stated as one.
+        if *price_cap > 0 {
+            fields.push((44, format_price(*price_cap).to_string()));
+        }
+    }
+    // Optional initial stop trigger (ib-agent#173).
+    K::TrailingStop { trail_stop_price, .. }
+    | K::TrailingStopLimit { trail_stop_price, .. }
+    | K::TrailPct { trail_stop_price, .. } if *trail_stop_price > 0 => {
+        fields.push((6117, format_price(*trail_stop_price).to_string()));
+    }
+    _ => {}
+}
+
+// Strategy and preview tags last, in the position they held in the encoders
+// this path replaced: after 204 and the attribute block (ibx#318).
+match &kind {
+    K::Adaptive { priority, .. } => {
+        fields.push((847, "Adaptive".to_string()));
+        fields.push((5957, "1".to_string()));
+        fields.push((5958, "adaptivePriority".to_string()));
+        fields.push((5960, priority.as_str().to_string()));
+    }
+    K::Algo { algo, .. } => {
+        let (algo_name, param_strs) = build_algo_tags(algo);
+        fields.push((847, algo_name.to_string()));
+        // Tag 849 (maxPctVol) for the algos that use it.
+        if let AlgoParams::Vwap { max_pct_vol, .. }
+            | AlgoParams::ArrivalPx { max_pct_vol, .. }
+            | AlgoParams::ClosePx { max_pct_vol, .. } = algo
+        {
+            fields.push((849, format!("{max_pct_vol}")));
+        }
+        fields.push((5957, (param_strs.len() / 2).to_string()));
+        // Key/value pairs: 5958=key, 5960=value, repeated.
+        for pair in param_strs.chunks_exact(2) {
+            fields.push((5958, pair[0].clone()));
+            fields.push((5960, pair[1].clone()));
+        }
+    }
+    K::WhatIf { .. } => fields.push((6091, "1".to_string())),
+    _ => {}
+}
 }
 
 fn build_algo_tags(algo: &AlgoParams) -> (&'static str, Vec<String>) {
@@ -1458,6 +1518,57 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A replace is a full statement of the order, so an attribute the submit
+    /// made survives it. This one came back without its all-or-none instruction
+    /// and was a different order to the one the caller had placed.
+    #[test]
+    fn a_replace_restates_the_attributes_the_order_was_placed_with() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+        let shared = std::sync::Arc::new(SharedState::new());
+
+        let attrs = crate::types::OrderAttrs { all_or_none: true, ..Default::default() };
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 42,
+            instrument,
+            side: Side::Buy,
+            qty: 100,
+            kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs,
+        });
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        let mut buf = [0u8; 8192];
+        let n = peer.read(&mut buf).unwrap();
+        let placed = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(placed.contains("\u{1}18=G\u{1}"), "the order was placed all-or-none: {placed}");
+
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            new_order_id: 43,
+            order_id: 42,
+            price: 151 * crate::types::PRICE_SCALE,
+            qty: 100,
+            outside_rth: false,
+            ord_type: 0,
+            tif: 0,
+            stop_price: 0,
+        });
+        drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+        assert_eq!(tag("18=").as_deref(), Some("G"), "it is still all-or-none: {msg}");
+        assert_eq!(msg.matches("\u{1}38=").count(), 1, "the quantity is stated once: {msg}");
+    }
 
     /// The five fields a cancel always names, and the one it never does. Two
     /// cancels of the same order must also name themselves differently, or the

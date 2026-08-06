@@ -53,6 +53,11 @@ pub struct Context {
     /// it appeared on the wire. Used as the OrigClOrdID on cancel/modify so that
     /// legacy orders recorded without a `.{ver}` suffix still match — see ibx#179.
     pub(crate) last_clord: HashMap<OrderId, String>,
+    /// What an order was submitted as. A replace restates an order in full, so
+    /// everything the submit stated has to still be here to be restated —
+    /// without it a replaced order silently lost its algo, its all-or-none
+    /// instruction and every other attribute it was placed with.
+    pub(crate) submitted: HashMap<OrderId, Box<crate::types::OrderSpec>>,
     /// How many cancels have been sent for an order. A cancel names itself on
     /// tag 11, and a retry that reuses the previous name is a duplicate the
     /// server is entitled to drop — which is exactly the case a retry exists
@@ -79,6 +84,7 @@ impl Context {
             pending_orders: OrderBuffer::new(),
             modify_versions: HashMap::new(),
             last_clord: HashMap::new(),
+            submitted: HashMap::new(),
             cancel_attempts: HashMap::new(),
             account: AccountState::default(),
             clock: Clock::new(),
@@ -1023,6 +1029,8 @@ impl Context {
         self.remove_order(order_id);
         self.modify_versions.remove(&order_id);
         self.last_clord.remove(&order_id);
+        self.submitted.remove(&order_id);
+        self.cancel_attempts.remove(&order_id);
     }
 
     /// Mark all live open orders as Uncertain (auth disconnect — status may have changed).

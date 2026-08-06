@@ -1220,14 +1220,31 @@ impl CcpState {
         // confirmed. It is a deliberate transition, which is what the forced
         // path is for; the ranks are left alone because a partially filled
         // order must still be able to reach PendingCancel.
-        let is_replace_ack = ord_status == "5";
+        // A report can carry the reason it restates the order, and two of those
+        // reasons are refusals: the gateway answers a revision it would not make
+        // and a cancel it would not make on the same message it answers a
+        // successful one. Read as an acknowledgement, a refused revision left
+        // the caller believing an order had been changed that had not been.
+        let restatement_reason = parsed.get(&378).map(|s| s.as_str()).unwrap_or("");
+        let revision_refused = matches!(restatement_reason, "102" | "103");
+        let is_replace_ack = ord_status == "5" && !revision_refused;
+        if revision_refused {
+            log::warn!(
+                "Order {clord_id}: the gateway refused the request (378={restatement_reason}) — \
+                 the order stands as it was",
+            );
+        }
         if is_replace_ack {
             context.set_order_status_forced(clord_id, status);
         }
 
         // The guard's verdict doubles as the change flag (ibx#212): a stale
         // frame the guard rejects must not surface as an order_status either.
-        let status_changed = is_replace_ack || context.update_order_status(clord_id, status);
+        // A refusal states no new status for the order — it says the request
+        // was not carried out, and the order goes on under the terms it already
+        // had. Any execution the report carries is still read below.
+        let status_changed = !revision_refused
+            && (is_replace_ack || context.update_order_status(clord_id, status));
 
         // The gateway marks a report that restates history: 97=Y is PossResend
         // and 43=Y is PossDupFlag. Neither was read anywhere, and the only
@@ -1238,6 +1255,13 @@ impl CcpState {
         // emitted a fill for something that happened before it started.
         let is_resend = ["Y", "y"].contains(&parsed.get(&97).map(|v| v.as_str()).unwrap_or(""))
             || ["Y", "y"].contains(&parsed.get(&43).map(|v| v.as_str()).unwrap_or(""));
+        // A report can also undo or restate an execution rather than announce a
+        // new one: a busted trade and a corrected one both arrive as executions,
+        // and adding their quantity booked a fill the account no longer has.
+        // The cumulative figure is the truth on those, which is the same
+        // arithmetic a replayed execution needs.
+        let trans_type = parsed.get(&20).map(|s| s.as_str()).unwrap_or("");
+        let is_resend = is_resend || matches!(trans_type, "1" | "2");
 
         // CumQty — the order's cumulative filled quantity as of this report.
         let report_cum_qty = parsed.get(&14)
@@ -4067,6 +4091,40 @@ mod tests {
         ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
         let updates = shared.orders.drain_order_updates();
         assert_eq!(updates[0].parent_id, 0, "6107 is a client id, not a parent order");
+    }
+
+    /// A refused revision arrives on the same message as an accepted one and
+    /// was read as the acceptance, so a modify the gateway would not make was
+    /// reported to the caller as made.
+    #[test]
+    fn a_refused_revision_is_not_an_acknowledgement() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = exec_report_frame(&[
+            (39, "5"), (150, "5"), (100, "ARCA"), (198, "ARCA:1"), (378, "102"),
+        ]);
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        let updates = shared.orders.drain_order_updates();
+        assert!(
+            !updates.iter().any(|u| u.status == crate::types::OrderStatus::Submitted),
+            "a refused revision does not put the order back to working: {updates:?}",
+        );
+    }
+
+    /// A busted trade arrives as an execution like any other. Adding its
+    /// quantity booked a fill the account no longer has.
+    #[test]
+    fn a_busted_execution_reconciles_rather_than_adds() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = exec_report_frame(&[
+            (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
+            (20, "1"), (32, "50"), (31, "412.25"), (14, "0"), (38, "100"),
+        ]);
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        let fills = shared.orders.drain_fills();
+        assert!(
+            fills.iter().all(|f| f.qty == 0),
+            "a bust does not add to what is filled: {fills:?}",
+        );
     }
 
     /// A live order was retired by this: `D` is not in the terminal's terminal
