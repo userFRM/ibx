@@ -52,16 +52,33 @@ impl EClient {
     // ── Display Groups ──
 
     /// Query display groups. Not yet implemented.
-    pub fn query_display_groups(&self, _req_id: i64) {}
+    /// The display groups on offer. Answered on `display_group_list`.
+    ///
+    /// A display group is a way for several callers on one session to agree on
+    /// a contract. The venue knows nothing about them, and never did: the
+    /// vendor's own client keeps them in its own state and serves them to its
+    /// callers from there, which is exactly what this does.
+    pub fn query_display_groups(&self, req_id: i64) {
+        self.core.query_display_groups(req_id);
+    }
 
-    /// Subscribe to display group events. Not yet implemented.
-    pub fn subscribe_to_group_events(&self, _req_id: i64, _group_id: i32) {}
+    /// Follow a display group. Answered on `display_group_updated`, at once
+    /// with what the group holds and again whenever it changes.
+    pub fn subscribe_to_group_events(&self, req_id: i64, group_id: i32) {
+        self.core.subscribe_to_group_events(req_id, group_id);
+    }
 
-    /// Unsubscribe from display group events. Not yet implemented.
-    pub fn unsubscribe_from_group_events(&self, _req_id: i64) {}
+    /// Stop following a display group.
+    pub fn unsubscribe_from_group_events(&self, req_id: i64) {
+        self.core.unsubscribe_from_group_events(req_id);
+    }
 
-    /// Update display group. Not yet implemented.
-    pub fn update_display_group(&self, _req_id: i64, _contract_info: &str) {}
+    /// Put a contract in the group this request follows, stated as
+    /// `conId@exchange`, or `none` to empty it. Every follower of that group is
+    /// told, including this one.
+    pub fn update_display_group(&self, req_id: i64, contract_info: &str) -> Result<(), String> {
+        self.core.update_display_group(req_id, contract_info)
+    }
 
     // ── Soft Dollar Tiers ──
 

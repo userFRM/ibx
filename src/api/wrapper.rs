@@ -135,6 +135,14 @@ pub trait Wrapper {
         let _ = (req_id, tick_type, tick_attrib, implied_vol, delta, opt_price,
                  pv_dividend, gamma, vega, theta, und_price);
     }
+    /// The display groups this client offers, `|`-separated.
+    fn display_group_list(&mut self, req_id: i64, groups: &str) {
+        let _ = (req_id, groups);
+    }
+    /// The contract a display group now holds, as `conId@exchange`, or `none`.
+    fn display_group_updated(&mut self, req_id: i64, contract_info: &str) {
+        let _ = (req_id, contract_info);
+    }
     fn security_definition_option_parameter(
         &mut self, req_id: i64, exchange: &str, underlying_con_id: i64,
         trading_class: &str, multiplier: &str, expirations: &[String], strikes: &[f64],
@@ -237,6 +245,12 @@ pub mod tests {
         }
         fn error(&mut self, req_id: i64, error_code: i64, error_string: &str, _: &str) {
             self.events.push(format!("error:{req_id}:{error_code}:{error_string}"));
+        }
+        fn display_group_list(&mut self, req_id: i64, groups: &str) {
+            self.events.push(format!("display_group_list:{req_id}:{groups}"));
+        }
+        fn display_group_updated(&mut self, req_id: i64, contract_info: &str) {
+            self.events.push(format!("display_group_updated:{req_id}:{contract_info}"));
         }
         fn tick_price(&mut self, req_id: i64, tick_type: i32, price: f64, _: &TickAttrib) {
             self.events.push(format!("tick_price:{req_id}:{tick_type}:{price}"));

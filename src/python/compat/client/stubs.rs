@@ -89,24 +89,24 @@ impl EClient {
 
     // ── Display Groups ──
 
-    fn query_display_groups(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        self.wrapper.call_method1(py, "display_group_list", (req_id, ""))?;
+    fn query_display_groups(&self, req_id: i64) -> PyResult<()> {
+        self.core.query_display_groups(req_id);
         Ok(())
     }
 
     fn subscribe_to_group_events(&self, req_id: i64, group_id: i32) -> PyResult<()> {
-        let _ = (req_id, group_id);
+        self.core.subscribe_to_group_events(req_id, group_id);
         Ok(())
     }
 
     fn unsubscribe_from_group_events(&self, req_id: i64) -> PyResult<()> {
-        let _ = req_id;
+        self.core.unsubscribe_from_group_events(req_id);
         Ok(())
     }
 
     fn update_display_group(&self, req_id: i64, contract_info: &str) -> PyResult<()> {
-        let _ = (req_id, contract_info);
-        Ok(())
+        self.core.update_display_group(req_id, contract_info)
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)
     }
 
     // ── Smart Components ──

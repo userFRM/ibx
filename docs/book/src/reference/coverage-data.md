@@ -17,8 +17,8 @@ the offline suites only when a test names it.
 
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
-| **EClient methods** | 77 | 65 impl, 8 stub | 65 impl, 12 stub |
-| **EWrapper callbacks** | 81 | 68 impl, 1 stub | 72 impl, 9 stub |
+| **EClient methods** | 77 | 69 impl, 4 stub | 69 impl, 8 stub |
+| **EWrapper callbacks** | 81 | 70 impl, 1 stub | 74 impl, 7 stub |
 
 ## EClient Methods
 
@@ -95,10 +95,10 @@ the offline suites only when a test names it.
 |  | `req_user_info` | `reqUserInfo` | Y | Y | Live session |
 | Financial Advisor | `request_fa` | `requestFA` | STUB | STUB | States why it cannot be served |
 |  | `replace_fa` | `replaceFA` | STUB | STUB | States why it cannot be served |
-| Display Groups | `query_display_groups` | `queryDisplayGroups` | STUB | STUB | States why it cannot be served |
-|  | `subscribe_to_group_events` | `subscribeToGroupEvents` | STUB | STUB | States why it cannot be served |
-|  | `unsubscribe_from_group_events` | `unsubscribeFromGroupEvents` | STUB | STUB | States why it cannot be served |
-|  | `update_display_group` | `updateDisplayGroup` | STUB | STUB | States why it cannot be served |
+| Display Groups | `query_display_groups` | `queryDisplayGroups` | Y | Y | Offline suites |
+|  | `subscribe_to_group_events` | `subscribeToGroupEvents` | Y | Y | Offline suites |
+|  | `unsubscribe_from_group_events` | `unsubscribeFromGroupEvents` | Y | Y | Offline suites |
+|  | `update_display_group` | `updateDisplayGroup` | Y | Y | Offline suites |
 | WSH | `req_wsh_meta_data` | `reqWshMetaData` | STUB | STUB | States why it cannot be served |
 |  | `req_wsh_event_data` | `reqWshEventData` | STUB | STUB | States why it cannot be served |
 
@@ -182,8 +182,8 @@ the offline suites only when a test names it.
 |  | `user_info` | Y | Y |
 | FA | `receive_fa` | - | STUB |
 |  | `replace_fa_end` | - | STUB |
-| Display Groups | `display_group_list` | - | STUB |
-|  | `display_group_updated` | - | STUB |
+| Display Groups | `display_group_list` | Y | Y |
+|  | `display_group_updated` | Y | Y |
 | Other | `delta_neutral_validation` | STUB | STUB |
 | WSH | `wsh_meta_data` | - | STUB |
 |  | `wsh_event_data` | - | STUB |

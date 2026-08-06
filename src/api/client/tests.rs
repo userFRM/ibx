@@ -4027,3 +4027,58 @@ fn the_second_factor_provider_reaches_the_gateway_config() {
     }).unwrap();
     assert!(called.load(std::sync::atomic::Ordering::SeqCst), "it is the caller's own provider");
 }
+
+
+/// A display group is how two callers on one session agree on a contract. The
+/// venue is not involved and never was, so the whole behaviour is this
+/// client's to reproduce: what the groups are, what each holds, and who is
+/// told when one changes.
+#[test]
+fn a_display_group_keeps_its_followers_in_step() {
+    let (client, _rx, _shared) = test_client();
+
+    client.query_display_groups(1);
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert_eq!(
+        w.events.iter().find(|e| e.starts_with("display_group_list:")).map(String::as_str),
+        Some("display_group_list:1:1|2|3|4|5|6|7"),
+        "the groups on offer: {:?}", w.events,
+    );
+
+    // Two callers follow the same group; a third follows another.
+    client.subscribe_to_group_events(10, 3);
+    client.subscribe_to_group_events(11, 3);
+    client.subscribe_to_group_events(12, 4);
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert_eq!(
+        w.events.iter().filter(|e| e.ends_with(":none")).count(), 3,
+        "each is told what its group holds now, not only what it changes to: {:?}", w.events,
+    );
+
+    // One of them puts a contract in it.
+    client.update_display_group(10, "756733@SMART").unwrap();
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    let told: Vec<&String> = w.events.iter()
+        .filter(|e| e.starts_with("display_group_updated:")).collect();
+    assert_eq!(told.len(), 2, "both followers of that group, and only those: {told:?}");
+    assert!(told.iter().all(|e| e.ends_with(":756733@SMART")), "{told:?}");
+    assert!(told.iter().any(|e| e.contains(":10:")), "including the one that changed it: {told:?}");
+    assert!(told.iter().any(|e| e.contains(":11:")), "{told:?}");
+
+    // A caller that follows nothing has no group to put a contract in.
+    let refusal = client.update_display_group(99, "1@SMART").unwrap_err();
+    assert!(refusal.contains("follows no display group"), "{refusal}");
+
+    // Once it stops following, it is no longer told.
+    client.unsubscribe_from_group_events(11);
+    client.update_display_group(10, "").unwrap();
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    let told: Vec<&String> = w.events.iter()
+        .filter(|e| e.starts_with("display_group_updated:")).collect();
+    assert_eq!(told.len(), 1, "only the one still following: {told:?}");
+    assert!(told[0].ends_with(":none"), "and an empty contract empties the group: {told:?}");
+}

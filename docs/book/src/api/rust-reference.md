@@ -1370,10 +1370,10 @@ pub fn replace_fa(&self, req_id: i64, _fa_data_type: i32, _cxml: &str)
 
 #### `query_display_groups`
 
-Query display groups. Not yet implemented.
+Query display groups. Not yet implemented. The display groups on offer. Answered on `display_group_list`. A display group is a way for several callers on one session to agree on a contract. The venue knows nothing about them, and never did: the vendor's own client keeps them in its own state and serves them to its callers from there, which is exactly what this does.
 
 ```rust
-pub fn query_display_groups(&self, _req_id: i64)
+pub fn query_display_groups(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |
@@ -1384,10 +1384,10 @@ pub fn query_display_groups(&self, _req_id: i64)
 
 #### `subscribe_to_group_events`
 
-Subscribe to display group events. Not yet implemented.
+Follow a display group. Answered on `display_group_updated`, at once with what the group holds and again whenever it changes.
 
 ```rust
-pub fn subscribe_to_group_events(&self, _req_id: i64, _group_id: i32)
+pub fn subscribe_to_group_events(&self, req_id: i64, group_id: i32)
 ```
 
 | Parameter | Type | Description |
@@ -1399,10 +1399,10 @@ pub fn subscribe_to_group_events(&self, _req_id: i64, _group_id: i32)
 
 #### `unsubscribe_from_group_events`
 
-Unsubscribe from display group events. Not yet implemented.
+Stop following a display group.
 
 ```rust
-pub fn unsubscribe_from_group_events(&self, _req_id: i64)
+pub fn unsubscribe_from_group_events(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |
@@ -1413,16 +1413,18 @@ pub fn unsubscribe_from_group_events(&self, _req_id: i64)
 
 #### `update_display_group`
 
-Update display group. Not yet implemented.
+Put a contract in the group this request follows, stated as `conId@exchange`, or `none` to empty it. Every follower of that group is told, including this one.
 
 ```rust
-pub fn update_display_group(&self, _req_id: i64, _contract_info: &str)
+pub fn update_display_group(&self, req_id: i64, contract_info: &str) -> Result<(), String>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `contract_info` | `&str` | Display group contract info string. |
+
+**Returns:** `Result<(), String>`
 
 ---
 
@@ -2125,6 +2127,28 @@ Option implied vol / greeks computation.
 | `vega` | `f64` | Option vega. |
 | `theta` | `f64` | Option theta. |
 | `und_price` | `f64` | Underlying price. |
+
+---
+
+#### `display_group_list`
+
+The display groups this client offers, `|`-separated.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `groups` | `&str` | FA group definitions. |
+
+---
+
+#### `display_group_updated`
+
+The contract a display group now holds, as `conId@exchange`, or `none`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `contract_info` | `&str` | Display group contract info string. |
 
 ---
 

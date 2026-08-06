@@ -410,12 +410,31 @@ pub struct TrackedOrder {
 ///
 /// Both Rust and Python EClient own a `ClientCore` and delegate state tracking
 /// and data preparation to it. Only the final callback invocation is language-specific.
+/// An answer owed to a caller about a display group.
+#[derive(Debug, Clone)]
+pub enum GroupEvent {
+    /// The groups on offer, `|`-separated.
+    List(i64, String),
+    /// What a group now holds.
+    Updated(i64, String),
+}
+
 pub struct ClientCore {
     // reqId <-> InstrumentId mapping
     pub req_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     pub instrument_to_req: Mutex<HashMap<InstrumentId, i64>>,
     // con_id → InstrumentId for find_or_register_instrument lookup
     pub con_id_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
+    /// What each display group currently holds. The venue knows nothing of
+    /// these: they are a way for several callers on one session to agree on a
+    /// contract, and the vendor's own client keeps them the same way, serving
+    /// them to its callers out of its own state.
+    display_groups: Mutex<HashMap<i32, String>>,
+    /// Which group each subscribing request follows.
+    group_subscriptions: Mutex<HashMap<i64, i32>>,
+    /// Group answers waiting to be delivered on the next dispatch, so a caller
+    /// hears them where it hears everything else.
+    pending_group_events: Mutex<Vec<GroupEvent>>,
     // Change detection for quote polling
     pub last_quotes: Mutex<HashMap<InstrumentId, [i64; 15]>>,
     // Snapshot req_ids — deliver first ticks then auto-cancel
@@ -477,6 +496,9 @@ impl ClientCore {
             req_to_instrument: Mutex::new(HashMap::new()),
             instrument_to_req: Mutex::new(HashMap::new()),
             con_id_to_instrument: Mutex::new(HashMap::new()),
+            display_groups: Mutex::new(HashMap::new()),
+            group_subscriptions: Mutex::new(HashMap::new()),
+            pending_group_events: Mutex::new(Vec::new()),
             last_quotes: Mutex::new(HashMap::new()),
             snapshot_reqs: Mutex::new(HashSet::new()),
             pnl_req_id: Mutex::new(None),
@@ -827,6 +849,68 @@ impl ClientCore {
     pub fn req_id_for_instrument(&self, instrument: InstrumentId) -> i64 {
         self.instrument_to_req.lock().unwrap()
             .get(&instrument).copied().unwrap_or(-1)
+    }
+
+    // ── Display groups ──
+
+    /// The groups this client offers. Seven, matching what the vendor's client
+    /// presents, numbered from one.
+    const DISPLAY_GROUPS: i32 = 7;
+
+    /// What a group holds when nothing has been put in it.
+    const NO_CONTRACT: &'static str = "none";
+
+    pub fn query_display_groups(&self, req_id: i64) {
+        let groups = (1..=Self::DISPLAY_GROUPS)
+            .map(|g| g.to_string())
+            .collect::<Vec<_>>()
+            .join("|");
+        self.pending_group_events.lock().unwrap().push(GroupEvent::List(req_id, groups));
+    }
+
+    /// Follow a group. The caller is told what the group holds now, not only
+    /// what it changes to, or a caller that subscribes to a settled group
+    /// hears nothing at all.
+    pub fn subscribe_to_group_events(&self, req_id: i64, group_id: i32) {
+        self.group_subscriptions.lock().unwrap().insert(req_id, group_id);
+        let held = self.display_groups.lock().unwrap()
+            .get(&group_id)
+            .cloned()
+            .unwrap_or_else(|| Self::NO_CONTRACT.to_string());
+        self.pending_group_events.lock().unwrap().push(GroupEvent::Updated(req_id, held));
+    }
+
+    pub fn unsubscribe_from_group_events(&self, req_id: i64) {
+        self.group_subscriptions.lock().unwrap().remove(&req_id);
+    }
+
+    /// Put a contract in the group the request follows, and tell everyone else
+    /// following it. The caller that made the change is told too, which is what
+    /// keeps two callers holding the same group in step.
+    pub fn update_display_group(&self, req_id: i64, contract_info: &str) -> Result<(), String> {
+        let subs = self.group_subscriptions.lock().unwrap();
+        let Some(&group_id) = subs.get(&req_id) else {
+            return Err(format!(
+                "request {req_id} follows no display group, so there is none to put a \
+                 contract in: subscribe to a group first"
+            ));
+        };
+        let followers: Vec<i64> = subs.iter()
+            .filter(|(_, g)| **g == group_id)
+            .map(|(r, _)| *r)
+            .collect();
+        drop(subs);
+        let value = if contract_info.is_empty() { Self::NO_CONTRACT } else { contract_info };
+        self.display_groups.lock().unwrap().insert(group_id, value.to_string());
+        let mut pending = self.pending_group_events.lock().unwrap();
+        for r in followers {
+            pending.push(GroupEvent::Updated(r, value.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn drain_group_events(&self) -> Vec<GroupEvent> {
+        self.pending_group_events.lock().unwrap().drain(..).collect()
     }
 
     // ── PnL subscription management ──
