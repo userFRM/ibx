@@ -52,6 +52,35 @@ jobs:
       - name: Test the Python bindings
         run: cargo test --lib --features python
 
+  python:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: astral-sh/setup-uv@v5
+
+      # The Rust job proves the bindings still agree with the engine. This
+      # proves the surface a Python caller actually touches, which nothing ran
+      # before: the suite had drifted to 23 failures without anyone seeing it.
+      #
+      # maturin has to build into the project environment. Left to pick its own
+      # interpreter it resolves one from uv's build cache and installs there,
+      # reporting success while the environment under test keeps the module it
+      # already had.
+      - name: Build the extension into the environment under test
+        run: |
+          uv venv
+          uv pip install maturin pytest
+          .venv/bin/maturin develop
+
+      - name: Test
+        run: .venv/bin/pytest tests/python -q
+
   clippy:
     name: clippy -D warnings
     runs-on: ubuntu-latest

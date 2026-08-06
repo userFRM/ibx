@@ -177,6 +177,7 @@ def test_req_market_data_type_delayed_frozen():
 def test_req_mkt_depth_signature():
     """req_mkt_depth accepts ibapi signature without raising."""
     client = EClient(EWrapper())
+    client._test_connect()
     contract = Contract(con_id=265598, symbol="AAPL")
     client.req_mkt_depth(1, contract, 5, False)
 
@@ -184,6 +185,7 @@ def test_req_mkt_depth_signature():
 def test_req_mkt_depth_defaults():
     """req_mkt_depth works with minimal args."""
     client = EClient(EWrapper())
+    client._test_connect()
     contract = Contract(con_id=265598, symbol="AAPL")
     client.req_mkt_depth(1, contract)
 
@@ -191,12 +193,14 @@ def test_req_mkt_depth_defaults():
 def test_cancel_mkt_depth_signature():
     """cancel_mkt_depth accepts ibapi signature."""
     client = EClient(EWrapper())
+    client._test_connect()
     client.cancel_mkt_depth(1)
 
 
 def test_cancel_mkt_depth_with_smart_depth():
     """cancel_mkt_depth accepts is_smart_depth kwarg."""
     client = EClient(EWrapper())
+    client._test_connect()
     client.cancel_mkt_depth(1, is_smart_depth=True)
 
 
@@ -208,6 +212,7 @@ def test_req_open_orders_empty():
     """req_open_orders delivers open_order_end when no orders exist."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect()
     client.req_open_orders()
     assert ("open_order_end",) in w.events
 
@@ -216,6 +221,7 @@ def test_req_open_orders_only_open_order_end():
     """With no prior orders, req_open_orders only fires open_order_end."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect()
     client.req_open_orders()
     # Should only have open_order_end, no order_status
     assert len([e for e in w.events if e[0] == "order_status"]) == 0
@@ -226,6 +232,7 @@ def test_req_all_open_orders_empty():
     """req_all_open_orders delivers open_order_end like req_open_orders."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect()
     client.req_all_open_orders()
     assert ("open_order_end",) in w.events
 
@@ -560,9 +567,9 @@ def test_full_ibapi_app_pattern_with_tier1():
             self.events.append(("symbol_samples", req_id))
 
     app = App()
-    assert app.client.is_connected() is False
+    app.client._test_connect()
 
-    # These should all work without connection
+    # The point of this pattern is that the tier's calls work through it.
     app.client.req_market_data_type(3)
     app.client.req_current_time()
     app.client.req_open_orders()
@@ -581,6 +588,7 @@ def test_full_ibapi_app_pattern_with_tier1():
 def test_mkt_depth_options_list():
     """req_mkt_depth accepts mkt_depth_options list like ibapi."""
     client = EClient(EWrapper())
+    client._test_connect()
     contract = Contract(con_id=265598, symbol="AAPL")
     client.req_mkt_depth(1, contract, 10, True, [])
 

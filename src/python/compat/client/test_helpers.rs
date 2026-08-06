@@ -22,7 +22,7 @@ impl EClient {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
         let shared = Arc::new(SharedState::new());
-        let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
         *self.shared.lock().unwrap() = Some(shared);
         *self.control_tx.lock().unwrap() = Some(tx);
@@ -30,9 +30,21 @@ impl EClient {
         *self.account_id.lock().unwrap() = Some(account_id);
         // Store event_tx so _test_push_disconnect_event can use it.
         *self._test_event_tx.lock().unwrap() = Some(event_tx);
+        // Kept alive: the receiving end used to drop here, which closed the
+        // channel and made every request that sends one fail on a client that
+        // reported itself connected.
+        *self._test_control_rx.lock().unwrap() = Some(rx);
         self.next_order_id.store(1000, Ordering::Relaxed);
         self.connected.store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// Say which slot a contract's prices arrive in. Worth stating separately
+    /// from the reqId mapping: what a position is worth is looked up by
+    /// contract, so without this a held position has no price and no P&L.
+    #[doc(hidden)]
+    fn _test_map_con_id(&self, con_id: i64, instrument: u32) {
+        self.core.con_id_to_instrument.lock().unwrap().insert(con_id, instrument);
     }
 
     /// Map a reqId to an instrument slot.
