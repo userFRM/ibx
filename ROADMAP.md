@@ -37,7 +37,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Available |
 | Contract definitions by identifier and symbol | Verified | Live phase | Available |
 | Contract definitions by ISIN or CUSIP | Verified | Live lookup by ISIN resolved the contract | Available |
-| Option chain discovery | Implemented | Request, reply parsing and delivery are covered by tests. The venue has not answered a request yet | W1 |
+| Option chain discovery | Blocked | Request, reply parsing and delivery are covered by tests. The venue answers a request carrying no parameters on the same connection, and answers a chain request in no shape at all | W1 |
 | Scanners | Verified | Live phase | Available |
 | News, providers, articles, historical, bulletins | Verified | Live phase | Available |
 | Fundamental data | Verified | Live phase | Available |
@@ -119,7 +119,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 
 | ID | Requirement | Acceptance | Status |
 | --- | --- | --- | --- |
-| W1.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks | Open |
+| W1.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks | Open, blocked on the venue answering the request |
 | W1.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed | Open |
 | W1.3 | Option analytics | Implied volatility and option price return values, or the calls are removed with the reason recorded | Open |
 
