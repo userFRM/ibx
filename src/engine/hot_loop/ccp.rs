@@ -1173,10 +1173,15 @@ impl CcpState {
         let commission = parsed.get(&12).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
 
         if ord_status == "8" {
-            log::warn!("ExecReport REJECTED: clord={} reason='{}' 103={}",
-                clord_id,
-                parsed.get(&58).map(|s| s.as_str()).unwrap_or("?"),
-                parsed.get(&103).map(|s| s.as_str()).unwrap_or("?"));
+            // The venue says why it refused an order, and that was written to a
+            // log where no caller could read it. A caller then saw only that
+            // the order was not working, with nothing to act on, which is the
+            // one thing the venue's own client never does.
+            let reason = stated_reason(parsed);
+            log::warn!("ExecReport REJECTED: clord={clord_id} reason='{reason}'");
+            if !reason.is_empty() {
+                shared.orders.push_order_inactive(clord_id, ORDER_INACTIVE_ERROR_CODE, reason);
+            }
         } else {
             log::info!("ExecReport: 39={} 150={} 11={} 58={} 103={}",
                 ord_status, exec_type, clord_id,
@@ -4942,7 +4947,7 @@ mod tests {
     }
 
     #[test]
-    fn ord_status_rejected_does_not_queue_an_inactive_reason() {
+    fn a_refused_order_tells_the_caller_why() {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let frame = exec_report_frame(&[
             (39, "8"), (150, "0"),
@@ -4953,11 +4958,16 @@ mod tests {
         // Rejected is terminal — the engine retires the order.
         assert!(context.order(42).is_none());
 
-        // The reason must not leak into the Inactive-only queue...
-        assert!(shared.orders.drain_order_inactive().is_empty());
+        // The venue said why. A caller that has to read a log to find out is a
+        // caller that cannot act on it, so the reason goes out on the channel a
+        // refusal is reported on.
+        let reported = shared.orders.drain_order_inactive();
+        assert_eq!(reported.len(), 1, "the refusal reaches the caller: {reported:?}");
+        assert_eq!(reported[0].0, 42);
+        assert!(reported[0].2.contains("No valid bid/ask"), "and says why: {reported:?}");
 
-        // ...it stays reachable through completed_status instead (unchanged
-        // by ibx#250 — this pins the pre-existing behavior the fix builds on).
+        // It stays on the order's own record too, which is where a caller that
+        // asks after the fact looks.
         let info = shared.orders.get_order_info(42).unwrap();
         assert_eq!(info.order_state.completed_status, "No valid bid/ask");
     }
