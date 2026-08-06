@@ -747,11 +747,13 @@ fn cross_session_recovery_phase_live() {
 /// accord, waits for the line to go quiet, then asks for things and counts
 /// what comes back.
 ///
-/// What it established: a request with no parameters at all is answered, so
-/// nothing about the framing or the transport of a user message is wrong. A
-/// chain request is not answered in any shape, with or without a request id,
-/// with either contract id tag, and with or without the derivative type. The
-/// difference is not in the message.
+/// What it established: nothing this client asks for on a user message is
+/// answered. A request carrying no parameters at all, sent three times with
+/// the line drained between each, drew no reply, while an idle window of the
+/// same length delivered the same messages anyway. What arrives is the
+/// session's own cadence rather than an answer, so a single reply after a
+/// single send says nothing. A chain request is likewise unanswered in every
+/// shape tried. The difference is not in any message.
 ///
 /// Run: cargo test --test ib_paper_compat routing_table_probe -- --ignored --nocapture
 #[test]
@@ -818,40 +820,24 @@ fn routing_table_probe() {
     // One message, no parameters, whose reply this session has already been
     // observed to receive. If nothing comes back, no user message this client
     // sends is being answered.
-    let now = ibx::gateway::chrono_free_timestamp();
-    ccp.send_fix(&[
-        (fix::TAG_MSG_TYPE, "U"),
-        (fix::TAG_SENDING_TIME, &now),
-        (6040, "80"),
-    ]).expect("send the algo catalogue request");
-
-    let after = tally(&mut ccp, 20);
-    println!("  after the request:  {after:?}");
-
-    // A chain request as the reference client builds it, then the same one
-    // naming itself. The venue answers a request that states no identifier
-    // for other kinds, so whether it wants one here is the question.
-    // Vary one thing at a time: which tag carries the contract id, whether the
-    // derivative type is stated, and whether an id is given at all.
-    let variants: [(&str, Vec<(u32, &str)>); 5] = [
-        ("6346", vec![(55, "SPY"), (310, "OPT"), (6346, "756733"), (6320, "1"), (6994, "1")]),
-        ("6457", vec![(55, "SPY"), (310, "OPT"), (6457, "756733"), (6320, "1"), (6994, "1")]),
-        ("no-310", vec![(55, "SPY"), (6346, "756733"), (6320, "1"), (6994, "1")]),
-        ("symbol-only", vec![(55, "SPY"), (310, "OPT"), (6320, "1"), (6994, "1")]),
-        ("bare", vec![(55, "SPY")]),
-    ];
-    for (label, body) in variants {
+    // Ask the same parameterless question three times, draining between each.
+    // One reply after one send cannot be told from the line's own cadence; a
+    // reply after each of three sends can.
+    for round in 1..=3 {
         let now = ibx::gateway::chrono_free_timestamp();
-        let mut fields: Vec<(u32, &str)> = vec![
+        ccp.send_fix(&[
             (fix::TAG_MSG_TYPE, "U"),
             (fix::TAG_SENDING_TIME, &now),
-            (6040, "138"),
-        ];
-        fields.extend(body);
-        ccp.send_fix(&fields).expect("send the chain request");
+            (6040, "80"),
+        ]).expect("send the algo catalogue request");
         let seen = tally(&mut ccp, 12);
-        println!("  chain {label}: {seen:?}");
+        println!("  ask {round}: {seen:?}");
     }
+
+    // And a stretch of the same length asking nothing at all, to measure what
+    // the line delivers on its own.
+    let idle = tally(&mut ccp, 12);
+    println!("  asking nothing: {idle:?}");
 
     drop(farm);
     drop(hmds);
