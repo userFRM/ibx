@@ -128,7 +128,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | ID | Requirement | Acceptance | Status |
 | --- | --- | --- | --- |
 | W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns | Met |
-| W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session | Open |
+| W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session, or the venue's refusal recorded | Met. A bond is accepted and returns margin. The venue refuses an index order for every account: orders are not supported for the contract type. It refuses a warrant order placed through an interface of this kind, on the exchange and security type combination |
 | W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission | Met |
 | W2.4 | Combination orders | Live phase covering leg construction and acceptance | Open |
 | W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause | Met |
@@ -137,7 +137,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Met |
 | W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust | Met |
 | W2.10 | Tick by tick data | Available, or the transport requirement recorded | Open |
-| W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue | Met for crypto. Commodity, fund, forward and bill open |
+| W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue | Met. Crypto, commodity and bill are accepted and return margin. The session states no forward permission at all. A fund is refused for residency, which is a property of the account |
 
 ### W3 Call contract and behaviour parity
 
