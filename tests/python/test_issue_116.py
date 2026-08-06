@@ -16,6 +16,7 @@ Run with: pytest tests/python/test_issue_116.py -v
 import os, threading, time
 import pytest
 from ibx import EClient, EWrapper, Contract, Order
+from conftest import NotConnectedProbe
 
 
 SPY_CON_ID = 756733
@@ -104,16 +105,16 @@ class TestUnconnectedClient:
     """place_order on an unconnected client must raise, not return None silently."""
 
     def test_place_order_raises_when_not_connected(self):
-        wrapper = Wrapper()
+        wrapper = NotConnectedProbe()
         client = EClient(wrapper)
-        # Not connected — place_order must raise RuntimeError
+        # Not connected: place_order reports on the error callback
         order = Order()
         order.action = "BUY"
         order.total_quantity = 1
         order.order_type = "LMT"
         order.lmt_price = 100.0
-        with pytest.raises(RuntimeError):
-            client.place_order(1, make_spy(), order)
+        client.place_order(1, make_spy(), order)
+        assert wrapper.not_connected, "the call reports rather than raising"
 
 
 # ═══════════════════════════════════════════════════════════════════

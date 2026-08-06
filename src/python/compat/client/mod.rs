@@ -19,6 +19,9 @@ use pyo3::prelude::*;
 use crate::auth::session::{CodeProvider, IbKeyChallenge, SecondFactor};
 use crate::bridge::{Event, SharedState};
 use crate::client_core::ClientCore;
+
+/// What the reference client reports for a request made before connecting.
+const NOT_CONNECTED_CODE: i64 = 504;
 use crate::gateway::{Gateway, GatewayConfig};
 use crate::types::*;
 use super::contract::Contract;
@@ -333,6 +336,29 @@ impl EClient {
 
 impl EClient {
     /// Clone the control channel sender, or return "Not connected".
+    /// The control channel, or nothing and the caller told why.
+    ///
+    /// A request issued before connecting is answered on the error callback
+    /// and the call returns normally, which is what the reference client does.
+    /// Raising instead made a caller written against that client take a
+    /// different path here than it takes there.
+    pub(crate) fn tx_or_report(&self, req_id: i64) -> Option<SyncSender<ControlCommand>> {
+        match self.control_tx.lock().unwrap().clone() {
+            Some(tx) => Some(tx),
+            None => {
+                Python::attach(|py| {
+                    let _ = self.wrapper.call_method(
+                        py,
+                        "error",
+                        (req_id, NOT_CONNECTED_CODE, "Not connected", ""),
+                        None,
+                    );
+                });
+                None
+            }
+        }
+    }
+
     pub(crate) fn tx(&self) -> PyResult<SyncSender<ControlCommand>> {
         self.control_tx.lock().unwrap().clone()
             .ok_or_else(|| PyRuntimeError::new_err("Not connected"))

@@ -31,7 +31,7 @@ impl EClient {
     #[pyo3(signature = (req_id, account, model_code=""))]
     fn req_pnl(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str) -> PyResult<()> {
         self.core.subscribe_pnl(req_id);
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let acct = if account.is_empty() { self.account() } else { account.to_string() };
         Self::send_control(py, &tx, ControlCommand::SubscribePnl { req_id, account: acct })?;
         let _ = model_code;
@@ -41,7 +41,7 @@ impl EClient {
     /// Cancel P&L subscription.
     fn cancel_pnl(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         self.core.unsubscribe_pnl(req_id);
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = Self::send_control(py, &tx, ControlCommand::CancelPnl { req_id });
         Ok(())
     }

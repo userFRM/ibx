@@ -41,12 +41,12 @@ impl EClient {
 
     /// Request FA data. Not yet implemented.
     pub fn request_fa(&self, _fa_data_type: i32) {
-        log::warn!("request_fa: not yet implemented — needs FIX capture");
+        self.report_unserviceable(-1, "request_fa");
     }
 
     /// Replace FA data. Not yet implemented.
-    pub fn replace_fa(&self, _req_id: i64, _fa_data_type: i32, _cxml: &str) {
-        log::warn!("replace_fa: not yet implemented — needs FIX capture");
+    pub fn replace_fa(&self, req_id: i64, _fa_data_type: i32, _cxml: &str) {
+        self.report_unserviceable(req_id, "replace_fa");
     }
 
     // ── Display Groups ──
@@ -108,12 +108,24 @@ impl EClient {
     // ── WSH ──
 
     /// Request WSH metadata. Not yet implemented.
-    pub fn req_wsh_meta_data(&self, _req_id: i64) {
-        log::warn!("req_wsh_meta_data: not yet implemented — needs FIX capture");
+    pub fn req_wsh_meta_data(&self, req_id: i64) {
+        self.report_unserviceable(req_id, "req_wsh_meta_data");
     }
 
     /// Request WSH event data. Not yet implemented.
-    pub fn req_wsh_event_data(&self, _req_id: i64) {
-        log::warn!("req_wsh_event_data: not yet implemented — needs FIX capture");
+    pub fn req_wsh_event_data(&self, req_id: i64) {
+        self.report_unserviceable(req_id, "req_wsh_event_data");
+    }
+
+    /// A request this client cannot serve is answered, not ignored. A caller
+    /// waiting on a callback that will never come cannot tell that apart from
+    /// a slow gateway, so it is told on the channel a venue uses to say it
+    /// will not act on a request.
+    fn report_unserviceable(&self, req_id: i64, call: &str) {
+        self.shared.reference.push_historical_error(
+            req_id.max(0) as u32,
+            321,
+            format!("{call} is not served by this client"),
+        );
     }
 }

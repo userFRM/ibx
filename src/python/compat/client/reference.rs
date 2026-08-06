@@ -26,7 +26,7 @@ impl EClient {
         keep_up_to_date: bool,
         chart_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = (format_date, chart_options);
         if !what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             ClientCore::validate_historical_args(bar_size_setting, what_to_show, keep_up_to_date)
@@ -62,7 +62,7 @@ impl EClient {
 
     /// Cancel historical data.
     fn cancel_historical_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::CancelHistorical { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }
@@ -78,7 +78,7 @@ impl EClient {
         use_rth: i32,
         format_date: i32,
     ) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchHeadTimestamp {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
@@ -91,14 +91,14 @@ impl EClient {
 
     /// Cancel head timestamp request.
     fn cancel_head_time_stamp(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::CancelHeadTimestamp { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }
 
     /// Request contract details.
     fn req_contract_details(&self, py: Python<'_>, req_id: i64, contract: &Contract) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchContractDetails {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
@@ -123,14 +123,14 @@ impl EClient {
 
     /// Request available exchanges for market depth.
     fn req_mkt_depth_exchanges(&self, py: Python<'_>) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchMktDepthExchanges)?;
         Ok(())
     }
 
     /// Search for matching symbols.
     fn req_matching_symbols(&self, py: Python<'_>, req_id: i64, pattern: &str) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchMatchingSymbols {
             req_id: wire_req_id(req_id)?,
             pattern: pattern.to_string(),
@@ -148,7 +148,7 @@ impl EClient {
         scanner_subscription_filter_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = scanner_subscription_options;
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Python::attach(|py| {
             let instrument = subscription.getattr(py, "instrument")
                 .and_then(|v| v.extract::<String>(py)).unwrap_or_else(|_| "STK".to_string());
@@ -167,14 +167,14 @@ impl EClient {
 
     /// Cancel scanner subscription.
     fn cancel_scanner_subscription(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::CancelScanner { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }
 
     /// Request scanner parameters XML.
     fn req_scanner_parameters(&self, py: Python<'_>) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchScannerParams)?;
         Ok(())
     }
@@ -190,7 +190,7 @@ impl EClient {
         news_article_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = news_article_options;
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchNewsArticle {
             req_id: wire_req_id(req_id)?,
             provider_code: provider_code.to_string(),
@@ -213,7 +213,7 @@ impl EClient {
         historical_news_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = historical_news_options;
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalNews {
             req_id: wire_req_id(req_id)?,
             con_id: con_id as u32,
@@ -236,7 +236,7 @@ impl EClient {
         fundamental_data_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = fundamental_data_options;
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchFundamentalData {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id as u32,
@@ -247,7 +247,7 @@ impl EClient {
 
     /// Cancel fundamental data.
     fn cancel_fundamental_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::CancelFundamentalData { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }
@@ -267,7 +267,7 @@ impl EClient {
         ignore_size: bool,
         misc_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = (ignore_size, misc_options);
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalTicks {
             req_id: wire_req_id(req_id)?,
@@ -305,7 +305,7 @@ impl EClient {
     /// Request histogram data.
     #[pyo3(signature = (req_id, contract, use_rth, time_period))]
     fn req_histogram_data(&self, py: Python<'_>, req_id: i64, contract: &Contract, use_rth: bool, time_period: &str) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchHistogramData {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id as u32,
@@ -317,7 +317,7 @@ impl EClient {
 
     /// Cancel histogram data.
     fn cancel_histogram_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::CancelHistogramData { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }
@@ -328,7 +328,7 @@ impl EClient {
         &self, py: Python<'_>, req_id: i64, contract: &Contract,
         end_date_time: &str, duration_str: &str, use_rth: bool,
     ) -> PyResult<()> {
-        let tx = self.tx()?;
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,

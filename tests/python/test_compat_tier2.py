@@ -16,6 +16,7 @@ Tests cover:
 
 import time
 import pytest
+from conftest import NotConnectedProbe
 from ibx import EClient, EWrapper, Contract
 
 
@@ -23,7 +24,7 @@ from ibx import EClient, EWrapper, Contract
 
 def make_client():
     """Create an unconnected EClient + EWrapper pair."""
-    w = EWrapper()
+    w = NotConnectedProbe()
     c = EClient(w)
     return c, w
 
@@ -51,11 +52,8 @@ class MockScannerSub:
 
 def test_req_scanner_subscription_not_connected():
     c, w = make_client()
-    try:
-        c.req_scanner_subscription(1, MockScannerSub())
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.req_scanner_subscription(1, MockScannerSub())
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_req_scanner_subscription_signature():
@@ -67,20 +65,14 @@ def test_req_scanner_subscription_signature():
 
 def test_cancel_scanner_subscription_not_connected():
     c, w = make_client()
-    try:
-        c.cancel_scanner_subscription(1)
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.cancel_scanner_subscription(1)
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_req_scanner_parameters_not_connected():
     c, w = make_client()
-    try:
-        c.req_scanner_parameters()
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.req_scanner_parameters()
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_req_scanner_subscription_with_options():
@@ -122,11 +114,8 @@ def test_req_news_providers_returns_list():
 
 def test_req_news_article_not_connected():
     c, w = make_client()
-    try:
-        c.req_news_article(1, "BRFG", "BRFG$12345")
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.req_news_article(1, "BRFG", "BRFG$12345")
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_req_news_article_signature():
@@ -142,11 +131,8 @@ def test_req_news_article_with_options():
 
 def test_req_historical_news_not_connected():
     c, w = make_client()
-    try:
-        c.req_historical_news(1, 265598, "BRFG", "2026-01-01", "2026-03-12", 10)
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.req_historical_news(1, 265598, "BRFG", "2026-01-01", "2026-03-12", 10)
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_req_historical_news_signature():
@@ -161,11 +147,8 @@ def test_req_historical_news_signature():
 def test_req_fundamental_data_not_connected():
     c, w = make_client()
     contract = make_contract(con_id=265598, symbol="AAPL")
-    try:
-        c.req_fundamental_data(1, contract, "ReportSnapshot")
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.req_fundamental_data(1, contract, "ReportSnapshot")
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_req_fundamental_data_signature():
@@ -175,11 +158,8 @@ def test_req_fundamental_data_signature():
 
 def test_cancel_fundamental_data_not_connected():
     c, w = make_client()
-    try:
-        c.cancel_fundamental_data(1)
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.cancel_fundamental_data(1)
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_req_fundamental_data_with_options():

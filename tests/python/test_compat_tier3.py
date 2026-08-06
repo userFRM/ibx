@@ -16,13 +16,14 @@ Tests cover:
 """
 
 from ibx import EClient, EWrapper, Contract
+from conftest import NotConnectedProbe
 
 
 # ── Helper fixtures ──
 
 def make_client():
     """Create an unconnected EClient + EWrapper pair."""
-    w = EWrapper()
+    w = NotConnectedProbe()
     c = EClient(w)
     return c, w
 
@@ -195,20 +196,14 @@ def test_req_family_codes_signature():
 def test_req_histogram_data_not_connected():
     c, w = make_client()
     con = make_contract(con_id=265598, symbol="AAPL", sec_type="STK", exchange="SMART")
-    try:
-        c.req_histogram_data(1, con, True, "1 week")
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.req_histogram_data(1, con, True, "1 week")
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_cancel_histogram_data_not_connected():
     c, w = make_client()
-    try:
-        c.cancel_histogram_data(1)
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.cancel_histogram_data(1)
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_histogram_data_signatures():
@@ -224,11 +219,8 @@ def test_histogram_data_signatures():
 def test_req_historical_schedule_not_connected():
     c, w = make_client()
     con = make_contract(con_id=756733, symbol="SPY", sec_type="STK", exchange="SMART")
-    try:
-        c.req_historical_data(1, con, "", "5 D", "1 day", "SCHEDULE", 1)
-        assert False, "Should raise"
-    except RuntimeError as e:
-        assert "Not connected" in str(e)
+    c.req_historical_data(1, con, "", "5 D", "1 day", "SCHEDULE", 1)
+    assert w.not_connected, "the call reports rather than raising"
 
 
 def test_req_historical_schedule_signature():
