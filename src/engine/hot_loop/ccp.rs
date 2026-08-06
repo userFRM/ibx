@@ -180,6 +180,9 @@ fn uncertain_update(
                         f64::MAX
                     }
                 },
+                // Nothing here states what it paid, and this update exists to
+                // say what is no longer known.
+                avg_price: 0,
                 perm_id: cached.as_ref().map(|c| c.order.perm_id).unwrap_or(0),
                 parent_id: cached.as_ref().map(|c| c.order.parent_id).unwrap_or(0),
                 timestamp_ns: 0,
@@ -1442,6 +1445,7 @@ impl CcpState {
                     status,
                     filled_qty: order.filled as f64,
                     remaining_qty: leaves_qty as f64,
+                    avg_price: (order_avg_px * PRICE_SCALE as f64) as Price,
                     perm_id,
                     parent_id,
                     timestamp_ns: context.now_ns(),

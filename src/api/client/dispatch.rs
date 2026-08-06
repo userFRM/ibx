@@ -127,9 +127,13 @@ impl EClient {
             // it did not place keeps the engine's answer of none.
             let parent_id = self.core.tracked_parent_id(update.order_id)
                 .unwrap_or(update.parent_id);
+            // What the order has paid, as the report that changed its status
+            // stated it. Reported as zero, a status arriving just after a fill
+            // told the caller the order had filled at no price at all.
+            let avg = update.avg_price as f64 / crate::types::PRICE_SCALE as f64;
             wrapper.order_status(
                 update.order_id as i64, status, update.filled_qty,
-                update.remaining_qty, 0.0, update.perm_id, parent_id, 0.0, 0, "", 0.0,
+                update.remaining_qty, avg, update.perm_id, parent_id, 0.0, 0, "", 0.0,
             );
             self.core.update_order_status(&self.shared, update.order_id, update.status, update.filled_qty, update.remaining_qty);
         }
