@@ -314,7 +314,12 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
     }).unwrap();
     let join = run_hot_loop(hot_loop);
 
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // A request in flight when the transport drops is answered by nobody. The
+    // engine rebuilds the connection underneath, but the question was asked on
+    // the old one, so a client that wants an answer asks again — once, since a
+    // connection that keeps dropping is a real fault and should read as one.
+    let mut reasked = false;
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut got_details = false;
     let mut got_end = false;
 
@@ -330,6 +335,16 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
             }
             Ok(Event::ContractDetailsEnd(req_id)) => {
                 if req_id == 1001 { got_end = true; }
+            }
+            Ok(Event::Disconnected) if !reasked => {
+                reasked = true;
+                std::thread::sleep(Duration::from_secs(3));
+                let _ = control_tx.send(ControlCommand::FetchContractDetails {
+                    req_id: 1001, con_id: 756733,
+                    symbol: String::new(), sec_type: String::new(),
+                    exchange: String::new(), currency: String::new(),
+                    filters: Default::default(),
+                });
             }
             _ => {}
         }
