@@ -680,6 +680,10 @@ pub struct ReferenceState {
     ccp_session_id: Mutex<String>,
     /// Logical-name → host URL map pushed by the gateway during logon.
     misc_urls: Mutex<HashMap<String, String>>,
+    /// Security type → the order types the venue permits for it, from logon tag 6652.
+    order_permissions: Mutex<HashMap<String, Vec<String>>>,
+    /// Feature tokens the venue enables for this account, from logon tag 6542.
+    enabled_features: Mutex<Vec<String>>,
 }
 
 impl ReferenceState {
@@ -711,6 +715,8 @@ impl ReferenceState {
             white_branding_id: Mutex::new(String::new()),
             ccp_session_id: Mutex::new(String::new()),
             misc_urls: Mutex::new(HashMap::new()),
+            order_permissions: Mutex::new(HashMap::new()),
+            enabled_features: Mutex::new(Vec::new()),
         }
     }
 
@@ -932,6 +938,36 @@ impl ReferenceState {
     /// Single lookup against the URL map. Returns `None` when missing.
     pub fn misc_url(&self, key: &str) -> Option<String> {
         self.misc_urls.lock().unwrap().get(key).cloned()
+    }
+
+    /// Security type → the order types the venue permits for it. Stated by the
+    /// venue at logon; empty until logon completes.
+    pub fn order_permissions(&self) -> HashMap<String, Vec<String>> {
+        self.order_permissions.lock().unwrap().clone()
+    }
+
+    /// The order types permitted for one security type, or `None` when the venue
+    /// does not permit the type at all. A combination is named `COMB`.
+    pub fn permitted_order_types(&self, sec_type: &str) -> Option<Vec<String>> {
+        let key = if matches!(sec_type, "BAG" | "COMBO") { "COMB" } else { sec_type };
+        self.order_permissions.lock().unwrap().get(key).cloned()
+    }
+
+    /// Feature tokens the venue enables for this account.
+    pub fn enabled_features(&self) -> Vec<String> {
+        self.enabled_features.lock().unwrap().clone()
+    }
+
+    pub fn feature_enabled(&self, token: &str) -> bool {
+        self.enabled_features.lock().unwrap().iter().any(|t| t == token)
+    }
+
+    #[doc(hidden)] pub fn set_order_permissions(&self, perms: HashMap<String, Vec<String>>) {
+        *self.order_permissions.lock().unwrap() = perms;
+    }
+
+    #[doc(hidden)] pub fn set_enabled_features(&self, features: Vec<String>) {
+        *self.enabled_features.lock().unwrap() = features;
     }
 
     #[doc(hidden)] pub fn set_smart_components(&self, components: Vec<crate::types::SmartComponent>) {

@@ -12,6 +12,50 @@ use super::{Contract, Order, TagValue, EClient};
 impl EClient {
     // ── Orders ──
 
+    /// Refuse a security type the venue does not permit this account to trade.
+    ///
+    /// The venue states its permissions at logon, keyed by security type, and it
+    /// refuses an order on an unpermitted type by returning it Inactive with no
+    /// text at all — so without this check the caller is told nothing. Silence
+    /// here is not permission: when the venue stated no permissions, there is
+    /// nothing to enforce and the order goes.
+    fn check_sec_type_permitted(&self, sec_type: &str) -> Result<(), String> {
+        if sec_type.is_empty() {
+            return Ok(());
+        }
+        let permitted = self.shared.reference.order_permissions();
+        if permitted.is_empty() {
+            return Ok(());
+        }
+        let ty = sec_type.to_ascii_uppercase();
+        if self.shared.reference.permitted_order_types(&ty).is_some() {
+            return Ok(());
+        }
+        let mut named: Vec<&str> = permitted.keys().map(String::as_str).collect();
+        named.sort_unstable();
+        Err(format!(
+            "the account is not permitted to trade {ty}. It is permitted: {}",
+            named.join(", ")
+        ))
+    }
+
+    /// Security type → the order types the venue permits for it, as stated at
+    /// logon. Empty until the session is up.
+    pub fn order_permissions(&self) -> std::collections::HashMap<String, Vec<String>> {
+        self.shared.reference.order_permissions()
+    }
+
+    /// The order types permitted for one security type, or `None` when the type
+    /// is not permitted at all. A combination is named `COMB`.
+    pub fn permitted_order_types(&self, sec_type: &str) -> Option<Vec<String>> {
+        self.shared.reference.permitted_order_types(&sec_type.to_ascii_uppercase())
+    }
+
+    /// Feature tokens the venue enables for this account, as stated at logon.
+    pub fn enabled_features(&self) -> Vec<String> {
+        self.shared.reference.enabled_features()
+    }
+
     /// Place an order. Matches `placeOrder` in C++.
     pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), String> {
         // Validate order params and contract before registering instrument (fail fast).
@@ -25,6 +69,7 @@ impl EClient {
                 &contract.right, &contract.multiplier, &contract.currency,
             ),
         )?;
+        self.check_sec_type_permitted(&contract.sec_type)?;
 
         let oid = if order_id > 0 {
             order_id as u64

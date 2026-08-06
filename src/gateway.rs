@@ -26,6 +26,22 @@ use crate::protocol::fixcomp;
 use crate::protocol::ns;
 use crate::types::ControlCommand;
 
+/// Split the venue's per-security-type order permissions, logon tag 6652.
+///
+/// `SECTYPE:ORDTYPE,ORDTYPE;SECTYPE:...`. A security type named with no order
+/// types after it is still permitted, so an absent list is an empty one and
+/// never a missing key.
+fn parse_order_permissions(raw: &str) -> std::collections::HashMap<String, Vec<String>> {
+    raw.split(';')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (sec_type, types) = entry.split_once(':').unwrap_or((entry, ""));
+            let types = types.split(',').filter(|t| !t.is_empty()).map(str::to_string).collect();
+            (sec_type.to_string(), types)
+        })
+        .collect()
+}
+
 /// Parse the `PRIV_LAB_MISC_URLS` blob (FIX tag 6321) into a `{key: value}` map.
 ///
 /// Wire format: pipe-delimited `k=v|k=v|…`, with `%7C` escaping a literal `|`
@@ -491,6 +507,10 @@ pub struct Gateway {
     pub raw_family_codes: String,
     /// Raw news provider data from CCP logon tag 6830.
     pub raw_news_providers: String,
+    /// Raw per-security-type order permissions from CCP logon tag 6652.
+    pub raw_order_permissions: String,
+    /// Raw enabled-feature token list from CCP logon tag 6542.
+    pub raw_enabled_features: String,
     /// White branding ID from CCP logon (empty for standard accounts).
     pub white_branding_id: String,
     /// Logical-name → host URL map pushed by the gateway during logon. Empty when no
@@ -1644,6 +1664,8 @@ impl Gateway {
         let mut raw_soft_dollar_tiers = String::new();
         let mut raw_family_codes = String::new();
         let mut raw_news_providers = String::new();
+        let mut raw_order_permissions = String::new();
+        let mut raw_enabled_features = String::new();
         let mut white_branding_id = String::new();
         let mut raw_misc_urls = String::new();
         // Per ib-agent#128: the auth-logon ACK tells us which farms this
@@ -1749,6 +1771,10 @@ impl Gateway {
                 && raw_family_codes.is_empty() { raw_family_codes = v.clone(); }
             if let Some(v) = fields.get(&6830)
                 && raw_news_providers.is_empty() { raw_news_providers = v.clone(); }
+            if let Some(v) = fields.get(&6652)
+                && raw_order_permissions.is_empty() { raw_order_permissions = v.clone(); }
+            if let Some(v) = fields.get(&6542)
+                && raw_enabled_features.is_empty() { raw_enabled_features = v.clone(); }
             if let Some(v) = fields.get(&6571)
                 && white_branding_id.is_empty() { white_branding_id = v.clone(); }
             // Tag 6321: PRIV_LAB_MISC_URLS — try parsed fields first, then raw byte search.
@@ -2076,6 +2102,8 @@ impl Gateway {
             raw_soft_dollar_tiers,
             raw_family_codes,
             raw_news_providers,
+            raw_order_permissions,
+            raw_enabled_features,
             white_branding_id,
             misc_urls: parse_misc_urls(&raw_misc_urls),
             ccp_sign_key,
@@ -2185,6 +2213,22 @@ impl Gateway {
             }).collect()
         };
         shared.reference.set_family_codes(codes);
+
+        // Order permissions: "SECTYPE:ORDTYPE,ORDTYPE;SECTYPE:..." from logon tag
+        // 6652. A security type named with no order types after it is still
+        // permitted, so an absent list is an empty one, never a missing key.
+        let perms = parse_order_permissions(&self.raw_order_permissions);
+        if !perms.is_empty() {
+            let mut named: Vec<&str> = perms.keys().map(String::as_str).collect();
+            named.sort_unstable();
+            log::info!("Order permissions: {}", named.join(" "));
+        }
+        shared.reference.set_order_permissions(perms);
+
+        // Enabled features: a plain comma-separated token list, logon tag 6542.
+        shared.reference.set_enabled_features(
+            self.raw_enabled_features.split(',').filter(|t| !t.is_empty()).map(str::to_string).collect(),
+        );
 
         // White branding ID (empty for standard accounts).
         shared.reference.set_white_branding_id(self.white_branding_id.clone());
@@ -2844,5 +2888,17 @@ mod tests {
             ("cdc3.ibllc.com".to_string(), "usfarm".to_string()),
             "an updated host wins when the server stated no route",
         );
+    }
+
+    #[test]
+    fn the_venue_names_what_it_permits() {
+        // A live logon reply, abridged. SLB names one order type; a type named
+        // with nothing after it is still permitted.
+        let perms = parse_order_permissions("STK:LMT,MKT,STP;SLB:LMT;NEWS");
+        assert_eq!(perms["STK"], ["LMT", "MKT", "STP"]);
+        assert_eq!(perms["SLB"], ["LMT"]);
+        assert!(perms["NEWS"].is_empty(), "named with no order types, still permitted");
+        assert!(!perms.contains_key("FWD"), "a type the venue never named is not permitted");
+        assert!(parse_order_permissions("").is_empty(), "a session that stated nothing");
     }
 }
