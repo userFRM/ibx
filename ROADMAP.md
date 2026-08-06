@@ -50,7 +50,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Option analytics, implied volatility and price | Accepted, not served | | W1 |
 | Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription | W3 |
 | Financial advisor allocation | Absent | | W3 |
-| Tick by tick data | Absent | Transport not offered at login | W2 |
+| Tick by tick data | Absent | Served by a separate transport whose availability the venue grants; not yet observed as granted to this account | W2 |
 
 ## API surface
 
@@ -94,11 +94,12 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Forex | Verified | Verified | Verified | Available |
 | Future | Verified | Verified | Verified | Available |
 | Futures option | Verified | Implemented | Implemented | W2 |
-| Index | Verified | Verified | Absent | W2 |
-| Bond | Implemented | Implemented | Absent | W2 |
-| Warrant | Implemented | Implemented | Absent | W2 |
+| Index | Verified | Verified | Implemented | W2 |
+| Bond | Implemented | Implemented | Implemented | W2 |
+| Warrant | Implemented | Implemented | Implemented | W2 |
 | Combination | Verified | Not applicable | Implemented | W2 |
-| Crypto, CFD, commodity, fund, forward, bill | Implemented | Implemented | Absent | W2 |
+| Crypto and CFD | Implemented | Implemented | Implemented | W2 |
+| Commodity, fund, forward, bill | Implemented | Implemented | Absent | W2 |
 | Venues outside the United States | Verified | Verified | Blocked, orders return inactive with no stated reason | W2 |
 
 ## Release policy
