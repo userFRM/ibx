@@ -996,6 +996,14 @@ fn send_order_ex(
         }
     }
 
+    // Who the order is for, which the venue reads as a regulatory statement.
+    if !attrs.rule80a.is_empty() {
+        fields.push((47, attrs.rule80a.clone()));
+    }
+    if attrs.post_to_ats != 0 {
+        fields.push((8405, format_uint(attrs.post_to_ats as u64).to_string()));
+    }
+
     // Short-sale handling. The location is stated only for the slot that has
     // one, which is the rule the venue applies, and the exemption rides its own
     // tag rather than the slot.
@@ -1007,6 +1015,12 @@ fn send_order_ex(
     }
     if attrs.exempt_code != -1 {
         fields.push((1688, attrs.exempt_code.to_string()));
+    }
+    // Whether the shares have been located, which the terminal states as a
+    // plain yes or no beside the slot rather than leaving it to be inferred.
+    if attrs.short_sale_slot != 0 {
+        let located = matches!(attrs.designated_location.as_str(), "TMBR" | "IBKR");
+        fields.push((114, if located { "Y" } else { "N" }.to_string()));
     }
     // The hedge, as a number rather than the API's letter, with the parameter
     // the chosen kind takes: a beta or a pair ratio. Delta and FX take none.
