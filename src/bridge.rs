@@ -16,7 +16,7 @@ use std::sync::{Condvar, Mutex};
 
 use std::collections::HashMap;
 use crate::control::historical::{HistoricalResponse, HeadTimestampResponse};
-use crate::control::contracts::{ContractDefinition, SymbolMatch};
+use crate::control::contracts::{ContractDefinition, OptionChainScope, SymbolMatch};
 use crate::control::scanner::ScannerResult;
 use crate::control::news::NewsHeadline;
 use crate::control::histogram::HistogramEntry;
@@ -650,6 +650,10 @@ pub struct ReferenceState {
     contract_details: Mutex<Vec<(u32, ContractDefinition)>>,
     contract_details_end: Mutex<Vec<u32>>,
     matching_symbols: Mutex<Vec<(u32, Vec<SymbolMatch>)>>,
+    /// A whole option chain answer: the underlying's conId, and one entry per
+    /// scope the venue listed. The list is what the dispatcher reports before
+    /// ending the request, so an empty one still ends it.
+    option_params: Mutex<Vec<(u32, i64, Vec<OptionChainScope>)>>,
     scanner_params: Mutex<Vec<String>>,
     scanner_data: Mutex<Vec<(u32, ScannerResult)>>,
     historical_news: Mutex<Vec<(u32, Vec<NewsHeadline>, bool)>>,
@@ -686,6 +690,7 @@ impl ReferenceState {
             contract_details: Mutex::new(Vec::with_capacity(16)),
             contract_details_end: Mutex::new(Vec::with_capacity(8)),
             matching_symbols: Mutex::new(Vec::with_capacity(8)),
+            option_params: Mutex::new(Vec::with_capacity(4)),
             scanner_params: Mutex::new(Vec::new()),
             scanner_data: Mutex::new(Vec::with_capacity(8)),
             historical_news: Mutex::new(Vec::with_capacity(8)),
@@ -727,6 +732,10 @@ impl ReferenceState {
 
     pub fn drain_matching_symbols(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
         self.matching_symbols.lock().unwrap().drain(..).collect()
+    }
+
+    pub fn drain_option_params(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
+        self.option_params.lock().unwrap().drain(..).collect()
     }
 
     pub fn drain_scanner_params(&self) -> Vec<String> {
@@ -800,6 +809,10 @@ impl ReferenceState {
 
     #[doc(hidden)] pub fn push_matching_symbols(&self, req_id: u32, matches: Vec<SymbolMatch>) {
         self.matching_symbols.lock().unwrap().push((req_id, matches));
+    }
+
+    #[doc(hidden)] pub fn push_option_params(&self, req_id: u32, underlying_con_id: i64, scopes: Vec<OptionChainScope>) {
+        self.option_params.lock().unwrap().push((req_id, underlying_con_id, scopes));
     }
 
     #[doc(hidden)] pub fn push_scanner_params(&self, xml: String) {

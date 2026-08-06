@@ -647,4 +647,53 @@ w = W()",
             assert_eq!(missing, None);
         });
     }
+
+    /// The chain callback takes seven arguments in an order nothing on this
+    /// side of the boundary checks, and a caller reads the strikes it is
+    /// handed by position.
+    #[test]
+    fn an_option_chain_crosses_the_boundary_in_the_order_a_caller_reads_it() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared, w) = wired_client(py);
+
+            client.call_method1(py, "req_sec_def_opt_params", (9i64, "AAPL", "", "STK", 265598i64)).unwrap();
+            match rx.try_recv().expect("the request must reach the engine") {
+                ControlCommand::FetchOptionParams { req_id, symbol, underlying_con_id, .. } => {
+                    assert_eq!((req_id, symbol.as_str(), underlying_con_id), (9, "AAPL", 265598));
+                }
+                other => panic!("expected a chain request, got {other:?}"),
+            }
+
+            shared.reference.push_option_params(9, 265598, vec![
+                crate::control::contracts::OptionChainScope {
+                    symbol: "AAPL".into(), exchange: "SMART".into(), trading_class: "AAPL".into(),
+                    multiplier: "100".into(), expirations: vec!["20260116".into(), "20260320".into()],
+                    strikes: vec![140.0, 145.0],
+                },
+            ]);
+            client.call_method0(py, "_test_dispatch_once").unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let call = py.eval(
+                c"[c for c in w.calls if c[0] == 'security_definition_option_parameter'][0]",
+                Some(&g), None,
+            ).unwrap();
+            let arg = |n: usize| call.get_item(n).unwrap();
+            assert_eq!(arg(1).extract::<i64>().unwrap(), 9);
+            assert_eq!(arg(2).extract::<String>().unwrap(), "SMART");
+            assert_eq!(arg(3).extract::<i64>().unwrap(), 265598);
+            assert_eq!(arg(4).extract::<String>().unwrap(), "AAPL");
+            assert_eq!(arg(5).extract::<String>().unwrap(), "100");
+            assert_eq!(arg(6).extract::<Vec<String>>().unwrap(), ["20260116", "20260320"]);
+            assert_eq!(arg(7).extract::<Vec<f64>>().unwrap(), [140.0, 145.0]);
+
+            let ended: usize = py.eval(
+                c"len([c for c in w.calls if c[0] == 'security_definition_option_parameter_end'])",
+                Some(&g), None,
+            ).unwrap().extract().unwrap();
+            assert_eq!(ended, 1, "the request ends once");
+        });
+    }
 }

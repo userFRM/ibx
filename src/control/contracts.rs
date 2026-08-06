@@ -3,6 +3,7 @@
 //! Key tag mappings: STK→CS (SecurityType), SMART→BEST (Exchange).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::protocol::fix::{self, TAG_MSG_TYPE};
 
@@ -622,15 +623,11 @@ pub struct ContractSchedule {
     pub liquid_hours: Vec<ScheduleSession>,
 }
 
-/// Parse a schedule response into trading/liquid hours.
-///
-/// Uses sequential tag parsing since sessions are a repeating group.
-pub fn parse_schedule_response(data: &[u8]) -> Option<ContractSchedule> {
-    use crate::protocol::fix::SOH;
-
-    // Sequential parse: collect all tag-value pairs in order
+/// Tag/value pairs in the order the message states them. Repeating groups are
+/// told apart by where a tag sits, which a keyed parse cannot express.
+fn tag_sequence(data: &[u8]) -> Vec<(u32, String)> {
     let mut tags: Vec<(u32, String)> = Vec::new();
-    for part in data.split(|&b| b == SOH) {
+    for part in data.split(|&b| b == fix::SOH) {
         if part.is_empty() { continue; }
         let text = String::from_utf8_lossy(part);
         if let Some((tag_str, val)) = text.split_once('=')
@@ -638,6 +635,14 @@ pub fn parse_schedule_response(data: &[u8]) -> Option<ContractSchedule> {
                 tags.push((tag, val.to_string()));
             }
     }
+    tags
+}
+
+/// Parse a schedule response into trading/liquid hours.
+///
+/// Uses sequential tag parsing since sessions are a repeating group.
+pub fn parse_schedule_response(data: &[u8]) -> Option<ContractSchedule> {
+    let tags = tag_sequence(data);
 
     // Verify this is a schedule response
     let msg_type = tags.iter().find(|(t, _)| *t == fix::TAG_MSG_TYPE)?.1.as_str();
@@ -865,17 +870,7 @@ pub fn build_matching_symbols_request(pattern: &str, req_id: &str, seq: u32) -> 
 ///
 /// Uses sequential tag parsing since matches are a repeating group.
 pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> {
-    use crate::protocol::fix::SOH;
-
-    let mut tags: Vec<(u32, String)> = Vec::new();
-    for part in data.split(|&b| b == SOH) {
-        if part.is_empty() { continue; }
-        let text = String::from_utf8_lossy(part);
-        if let Some((tag_str, val)) = text.split_once('=')
-            && let Ok(tag) = tag_str.parse::<u32>() {
-                tags.push((tag, val.to_string()));
-            }
-    }
+    let tags = tag_sequence(data);
 
     // Verify this is a matching symbols response
     let msg_type = tags.iter().find(|(t, _)| *t == fix::TAG_MSG_TYPE)?.1.as_str();
@@ -940,6 +935,130 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
         && m.con_id > 0 { matches.push(m); }
 
     Some(matches)
+}
+
+// ─── Option chain parameters ───
+
+/// The strikes a scope lists, as one delimited value.
+const TAG_CHAIN_STRIKES: u32 = 6997;
+/// The tags a record states its expirations on. Regular and non-regular
+/// expirations are both expirations of the chain that was asked for, so all
+/// four are read into the one list.
+const TAG_CHAIN_EXPIRATIONS: [u32; 4] = [6775, 6777, 6778, 6971];
+/// Opens a keyed bucket inside an expiration value. What comes before the
+/// first one is the chain itself.
+const EXPIRATION_BUCKET_MARKER: &str = "/EXP";
+
+/// Reported once per process rather than once per value: a shape this does not
+/// recognise repeats on every record of the reply.
+static EXPIRATION_FORM_REPORTED: AtomicBool = AtomicBool::new(false);
+
+/// One (exchange, trading class, multiplier) scope of an option chain: the
+/// strikes listed under it, and the expirations of the record it belongs to.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OptionChainScope {
+    pub symbol: String,
+    pub exchange: String,
+    pub trading_class: String,
+    pub multiplier: String,
+    pub expirations: Vec<String>,
+    pub strikes: Vec<f64>,
+}
+
+/// Parse an option chain reply.
+///
+/// The venue answers a chain request with one record per underlying, delimited
+/// by the symbol tag, and each record names every scope it lists strikes under.
+/// The expirations belong to the record rather than to one of its scopes, so
+/// they are stamped onto all of them once the record is complete.
+pub fn parse_option_chain_response(data: &[u8]) -> Option<Vec<OptionChainScope>> {
+    let tags = tag_sequence(data);
+
+    let msg_type = tags.iter().find(|(t, _)| *t == TAG_MSG_TYPE)?.1.as_str();
+    if msg_type != "U" { return None; }
+    let sub_protocol = tags.iter().find(|(t, _)| *t == TAG_SUB_PROTOCOL)?.1.as_str();
+    if sub_protocol != "139" { return None; }
+
+    let starts: Vec<usize> = tags.iter().enumerate()
+        .filter(|(_, (tag, _))| *tag == TAG_SYMBOL)
+        .map(|(i, _)| i)
+        .collect();
+    let mut scopes = Vec::new();
+    for (n, &start) in starts.iter().enumerate() {
+        let end = starts.get(n + 1).copied().unwrap_or(tags.len());
+        parse_chain_record(&tags[start].1, &tags[start..end], &mut scopes);
+    }
+    Some(scopes)
+}
+
+/// One record of a chain reply. A scope states only what it changes, so the
+/// keys carry forward until the record names them again, and a strike list
+/// closes the scope it was stated under.
+fn parse_chain_record(symbol: &str, tags: &[(u32, String)], out: &mut Vec<OptionChainScope>) {
+    let first = out.len();
+    let mut scope = OptionChainScope { symbol: symbol.to_string(), ..Default::default() };
+    let mut expirations = Vec::new();
+
+    for (tag, val) in tags {
+        match *tag {
+            TAG_EXCHANGE => scope.exchange = val.clone(),
+            TAG_IB_TRADING_CLASS => scope.trading_class = val.clone(),
+            TAG_MULTIPLIER => scope.multiplier = val.clone(),
+            TAG_CHAIN_STRIKES => {
+                let strikes = val.split(';').filter_map(|s| s.trim().parse().ok()).collect();
+                out.push(OptionChainScope { strikes, ..scope.clone() });
+            }
+            tag if TAG_CHAIN_EXPIRATIONS.contains(&tag) => collect_expirations(val, &mut expirations),
+            _ => {}
+        }
+    }
+
+    // A record that listed no strikes still states expirations, and those are
+    // half of what was asked for. They are reported under the keys the record
+    // did name rather than dropped.
+    if out.len() == first && !expirations.is_empty() {
+        out.push(scope);
+    }
+    for scope in &mut out[first..] {
+        scope.expirations = expirations.clone();
+    }
+}
+
+/// Expirations ride as a compound value: the chain itself, then buckets under
+/// keys of their own. Everything before the first bucket is the chain, and its
+/// dates are separated by the character the bucket marker opens with. A value
+/// holding no date in that shape is read as a plain list instead, so an
+/// encoding this has not met is reported rather than dropped.
+fn collect_expirations(value: &str, out: &mut Vec<String>) {
+    let chain = value.split(EXPIRATION_BUCKET_MARKER).next().unwrap_or_default();
+    let mut found = false;
+    for entry in chain.split('/').filter(|e| is_expiration(e)) {
+        push_unique(out, entry);
+        found = true;
+    }
+    if found || value.is_empty() {
+        return;
+    }
+    if !EXPIRATION_FORM_REPORTED.swap(true, Ordering::Relaxed) {
+        log::warn!("Option chain expirations in an unrecognised form ('{value}') — read as a plain list");
+    }
+    for entry in value.split(['/', ',', ';', ' ']).filter(|e| is_expiration(e)) {
+        push_unique(out, entry);
+    }
+}
+
+/// A date the venue states as YYYYMM or YYYYMMDD. Anything else in a compound
+/// value is structure rather than an expiration.
+fn is_expiration(entry: &str) -> bool {
+    matches!(entry.len(), 6 | 8) && entry.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The same expiration is stated on more than one tag of a record, and a caller
+/// asked for the dates a class trades on, not for how often each was named.
+fn push_unique(out: &mut Vec<String>, entry: &str) {
+    if !out.iter().any(|e| e == entry) {
+        out.push(entry.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -1387,6 +1506,94 @@ mod tests {
         assert_eq!(matches[0].derivative_types, vec!["OPT", "WAR"]);
         assert_eq!(matches[1].symbol, "APP");
         assert_eq!(matches[1].con_id, 481863646);
+    }
+
+    /// One reply, two underlyings, and two classes under the first of them.
+    /// A scope states only what it changes from the one before it, and the
+    /// expirations belong to the record rather than to either class.
+    #[test]
+    fn parse_option_chain_response_reads_every_scope_of_every_record() {
+        let msg = fix::fix_build(
+            &[
+                (TAG_MSG_TYPE, "U"),
+                (TAG_SUB_PROTOCOL, "139"),
+                (8371, "opaque"),
+                (6455, "2"),
+                // First underlying, listed on two venues.
+                (TAG_SYMBOL, "AAPL"),
+                (6775, "20260116/20260220/20260320/EXPW=20260109"),
+                (6777, "20260320"),
+                (6971, "20260109"),
+                (6346, "265598"),
+                (TAG_EXCHANGE, "SMART"),
+                (TAG_IB_TRADING_CLASS, "AAPL"),
+                (TAG_MULTIPLIER, "100"),
+                (6997, "140.0;145.0;150.0"),
+                (TAG_EXCHANGE, "CBOE"),
+                (TAG_IB_TRADING_CLASS, "AAPL1"),
+                (6997, "145.0;150.0"),
+                // Second underlying.
+                (TAG_SYMBOL, "SPX"),
+                (6778, "20260220"),
+                (TAG_EXCHANGE, "CBOE"),
+                (TAG_IB_TRADING_CLASS, "SPXW"),
+                (TAG_MULTIPLIER, "100"),
+                (6997, "5000.0;5100.0"),
+            ],
+            1,
+        );
+
+        let scopes = parse_option_chain_response(&msg).unwrap();
+
+        assert_eq!(scopes.len(), 3, "two classes on AAPL and one on SPX");
+        assert_eq!(scopes[0].symbol, "AAPL");
+        assert_eq!(scopes[0].exchange, "SMART");
+        assert_eq!(scopes[0].trading_class, "AAPL");
+        assert_eq!(scopes[0].multiplier, "100");
+        assert_eq!(scopes[0].strikes, vec![140.0, 145.0, 150.0]);
+        assert_eq!(
+            scopes[0].expirations,
+            vec!["20260116", "20260220", "20260320", "20260109"],
+            "the chain itself, without the keyed bucket, and each date once",
+        );
+        assert_eq!(scopes[1].exchange, "CBOE");
+        assert_eq!(scopes[1].trading_class, "AAPL1");
+        assert_eq!(scopes[1].multiplier, "100", "carried over from the class before it");
+        assert_eq!(scopes[1].strikes, vec![145.0, 150.0]);
+        assert_eq!(scopes[1].expirations, scopes[0].expirations, "both classes of one record");
+        assert_eq!(scopes[2].symbol, "SPX");
+        assert_eq!(scopes[2].trading_class, "SPXW");
+        assert_eq!(scopes[2].strikes, vec![5000.0, 5100.0]);
+        assert_eq!(scopes[2].expirations, vec!["20260220"], "and nothing of the record before it");
+    }
+
+    /// A value that does not hold a date in the compound shape is still read
+    /// for the dates it does hold, rather than answering with no expirations.
+    #[test]
+    fn parse_option_chain_expirations_fall_back_to_a_plain_list() {
+        let msg = fix::fix_build(
+            &[
+                (TAG_MSG_TYPE, "U"),
+                (TAG_SUB_PROTOCOL, "139"),
+                (TAG_SYMBOL, "AAPL"),
+                (6775, "20260116,20260220"),
+                (TAG_EXCHANGE, "SMART"),
+                (TAG_IB_TRADING_CLASS, "AAPL"),
+                (6997, "140.0"),
+            ],
+            1,
+        );
+
+        let scopes = parse_option_chain_response(&msg).unwrap();
+
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].expirations, vec!["20260116", "20260220"]);
+    }
+
+    #[test]
+    fn parse_option_chain_rejects_non_chain() {
+        let msg = fix::fix_build(&[(TAG_MSG_TYPE, "U"), (TAG_SUB_PROTOCOL, "186")], 1);
+        assert!(parse_option_chain_response(&msg).is_none());
     }
 
     // ibx#223: a closed day (neither hours flag set) must be represented,

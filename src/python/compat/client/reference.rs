@@ -138,6 +138,28 @@ impl EClient {
         Ok(())
     }
 
+    /// Request option chain parameters.
+    #[pyo3(signature = (req_id, underlying_symbol, fut_fop_exchange="", underlying_sec_type="STK", underlying_con_id=0))]
+    fn req_sec_def_opt_params(
+        &self,
+        py: Python<'_>,
+        req_id: i64,
+        underlying_symbol: &str,
+        fut_fop_exchange: &str,
+        underlying_sec_type: &str,
+        underlying_con_id: i64,
+    ) -> PyResult<()> {
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        Self::send_control(py, &tx, ControlCommand::FetchOptionParams {
+            req_id: wire_req_id(req_id)?,
+            symbol: underlying_symbol.to_string(),
+            fut_fop_exchange: fut_fop_exchange.to_string(),
+            underlying_sec_type: underlying_sec_type.to_string(),
+            underlying_con_id,
+        })?;
+        Ok(())
+    }
+
     /// Request scanner subscription.
     #[pyo3(signature = (req_id, subscription, scanner_subscription_options=Vec::new(), scanner_subscription_filter_options=Vec::new()))]
     fn req_scanner_subscription(

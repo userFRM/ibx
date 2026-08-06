@@ -37,7 +37,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Available |
 | Contract definitions by identifier and symbol | Verified | Live phase | Available |
 | Contract definitions by ISIN or CUSIP | Verified | Live lookup by ISIN resolved the contract | Available |
-| Option chain discovery | Absent | Definition query returns one contract by design | W1 |
+| Option chain discovery | Implemented | No live phase exists | W1 |
 | Scanners | Verified | Live phase | Available |
 | News, providers, articles, historical, bulletins | Verified | Live phase | Available |
 | Fundamental data | Verified | Live phase | Available |
@@ -56,18 +56,16 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 
 | Measure | Count |
 | --- | --- |
-| Rust client calls | 92 |
+| Rust client calls | 93 |
 | Python client calls | 123 |
 | Callbacks | 125 |
-| Rust calls served | 88 |
+| Rust calls served | 89 |
 | Rust calls accepted, not served | 4 |
 
 ### Calls not served
 
 | Call | Surface | Status | Workstream |
 | --- | --- | --- | --- |
-| `req_sec_def_opt_params` | Python | Accepted, not served | W1 |
-| `req_sec_def_opt_params` | Rust | Absent | W1 |
 | `exercise_options` | Python | Accepted, not served | W1 |
 | `exercise_options` | Rust | Absent | W1 |
 | `calculate_implied_volatility` | Python | Accepted, not served | W1 |

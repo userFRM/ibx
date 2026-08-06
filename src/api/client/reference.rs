@@ -85,6 +85,23 @@ impl EClient {
         })
     }
 
+    /// Request option chain parameters. Matches `reqSecDefOptParams` in C++.
+    ///
+    /// `fut_fop_exchange` names the venue for a futures option chain and is
+    /// empty for an equity or index one.
+    pub fn req_sec_def_opt_params(
+        &self, req_id: i64, underlying_symbol: &str, fut_fop_exchange: &str,
+        underlying_sec_type: &str, underlying_con_id: i64,
+    ) -> Result<(), String> {
+        self.send(ControlCommand::FetchOptionParams {
+            req_id: wire_req_id(req_id)?,
+            symbol: underlying_symbol.into(),
+            fut_fop_exchange: fut_fop_exchange.into(),
+            underlying_sec_type: underlying_sec_type.into(),
+            underlying_con_id,
+        })
+    }
+
     /// Cancel head timestamp request. Matches `cancelHeadTimestamp` in C++.
     pub fn cancel_head_time_stamp(&self, req_id: i64) -> Result<(), String> {
         self.send(ControlCommand::CancelHeadTimestamp { req_id: wire_req_id(req_id)? })
