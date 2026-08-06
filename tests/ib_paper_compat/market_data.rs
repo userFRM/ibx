@@ -249,15 +249,54 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
         })
         .unwrap();
 
-    std::thread::sleep(Duration::from_secs(4));
-    let depth_updates = shared.market.drain_depth_updates();
+    // Wait for the book rather than for the clock. A flat four second sleep
+    // reported no depth on a book that does deliver, because the first rows
+    // had not arrived yet.
+    let mut depth_updates = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        depth_updates.extend(shared.market.drain_depth_updates());
+        if !depth_updates.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     control_tx
         .send(ControlCommand::UnsubscribeDepth { req_id })
         .unwrap();
 
+    // Aggregated depth is entitled separately from a venue's own book, so a
+    // silent aggregated subscription is retried directly before concluding
+    // anything about the client.
+    if depth_updates.is_empty() {
+        let direct_id = req_id + 1;
+        control_tx
+            .send(ControlCommand::SubscribeDepth {
+                req_id: direct_id,
+                con_id: 756733,
+                exchange: "SMART".into(),
+                sec_type: "STK".into(),
+                num_rows: 5,
+                is_smart_depth: false,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            depth_updates.extend(shared.market.drain_depth_updates());
+            if !depth_updates.is_empty() {
+                println!("  (aggregated depth was silent, the venue's own book delivers)");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        control_tx
+            .send(ControlCommand::UnsubscribeDepth { req_id: direct_id })
+            .unwrap();
+    }
+
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     if depth_updates.is_empty() {
-        println!("  SKIP: No depth updates observed in 4s (market conditions / entitlement)\n");
+        println!("  SKIP: No depth updates on either subscription\n");
     } else {
         println!("  PASS ({} depth updates)\n", depth_updates.len());
     }
