@@ -280,7 +280,7 @@ impl EClient {
         let mut collector = Values { req_id, state: Arc::clone(&state) };
         self.req_account_summary(req_id, "All", tags);
         let rows = self.wait_for(&mut collector, &state, "the account summary");
-        let _ = self.cancel_account_summary(req_id);
+        self.cancel_account_summary(req_id);
         rows
     }
 
