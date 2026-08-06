@@ -1088,6 +1088,9 @@ if !attrs.clearing_intent.is_empty() {
 if attrs.deactivate {
     fields.push((6521, "1".to_string()));
 }
+if attrs.deactivate_on_disconnect {
+    fields.push((6661, "1".to_string()));
+}
 if attrs.include_overnight {
     fields.push((8534, "1".to_string()));
 }

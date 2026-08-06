@@ -373,6 +373,9 @@ pub struct OrderAttrs {
     pub post_to_ats: u32,
     /// Built but not sent: the venue holds it until it is activated (tag 6521).
     pub deactivate: bool,
+    /// Stand the order down if this client's connection goes (tag 6661). What
+    /// a headless client wants when nothing is left watching the order.
+    pub deactivate_on_disconnect: bool,
     /// Let this order work the overnight session too (tag 8534).
     pub include_overnight: bool,
     /// Cancel this order's parent when it is cancelled (tag 6965).

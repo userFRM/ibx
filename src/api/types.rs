@@ -120,6 +120,8 @@ pub struct Order {
     pub continuous_update: bool,
     pub customer_account: String,
     pub deactivate: bool,
+    /// Stand the order down if the connection goes (tag 6661).
+    pub deactivate_on_disconnect: bool,
     pub delta: f64,
     pub delta_neutral_aux_price: f64,
     pub delta_neutral_clearing_account: String,
@@ -279,6 +281,7 @@ impl Default for Order {
             continuous_update: false,
             customer_account: String::new(),
             deactivate: false,
+            deactivate_on_disconnect: false,
             delta: f64::MAX,
             delta_neutral_aux_price: f64::MAX,
             delta_neutral_clearing_account: String::new(),
@@ -488,6 +491,7 @@ impl Order {
                 self.hedge_param.parse().unwrap_or(0.0)
             } else { 0.0 },
             deactivate: self.deactivate,
+            deactivate_on_disconnect: self.deactivate_on_disconnect,
             include_overnight: self.include_overnight,
             auto_cancel_parent: self.auto_cancel_parent,
             min_trade_qty: if self.min_trade_qty == i32::MAX { 0 } else { self.min_trade_qty.max(0) as u32 },
@@ -605,6 +609,7 @@ impl Order {
             || !self.rule80a.is_empty()
             || self.post_to_ats != i32::MAX
             || self.deactivate
+            || self.deactivate_on_disconnect
             || self.include_overnight
             || self.auto_cancel_parent
             || self.min_trade_qty != i32::MAX
@@ -1166,6 +1171,7 @@ mod tests {
             ("rule80a", |o| o.rule80a = "I".into()),
             ("post_to_ats", |o| o.post_to_ats = 30),
             ("deactivate", |o| o.deactivate = true),
+            ("deactivate_on_disconnect", |o| o.deactivate_on_disconnect = true),
             ("include_overnight", |o| o.include_overnight = true),
             ("auto_cancel_parent", |o| o.auto_cancel_parent = true),
             ("min_trade_qty", |o| o.min_trade_qty = 50),
@@ -1188,6 +1194,7 @@ mod tests {
             scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
             exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
             combo_legs: _, rule80a: _, post_to_ats: _, deactivate: _,
+            deactivate_on_disconnect: _,
             include_overnight: _, auto_cancel_parent: _, min_trade_qty: _,
             block_order: _, auto_cancel_date: _, clearing_account: _, clearing_intent: _,
             primary_exchange: _, delta_neutral_contract: _,
