@@ -7,7 +7,15 @@ use super::super::contract::{Contract, NewsProviderPy, SmartComponentPy, SoftDol
 
 #[pymethods]
 impl EClient {
-    // ── Options Calculations (stubs) ──
+    // ── Option calculations ──
+    //
+    // A volatility inverted from a price, and a price implied by a volatility.
+    // This protocol carries no request for either: nothing it sends takes a
+    // caller-supplied option price or volatility for the venue to work back
+    // from. The calls are kept because a caller written against the reference
+    // client calls them, and a call that reports why it cannot be served is
+    // worth more than a missing attribute; they are not kept because they
+    // might start working.
 
     #[pyo3(signature = (req_id, contract, option_price, under_price, implied_vol_options=Vec::new()))]
     fn calculate_implied_volatility(

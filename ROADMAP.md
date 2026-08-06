@@ -121,7 +121,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | --- | --- | --- | --- |
 | W1.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks | Met |
 | W1.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed | Open |
-| W1.3 | Option analytics | Implied volatility and option price return values, or the calls are removed with the reason recorded | Open |
+| W1.3 | Option analytics | Implied volatility and option price return values, or the reason they cannot be recorded | Met. This protocol carries no request that takes a caller-supplied option price or volatility for the venue to work back from, so neither can be served. Both calls are kept and report that, because a caller written against the reference client calls them |
 
 ### W2 Asset class and instrumentation coverage
 
