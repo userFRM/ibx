@@ -42,10 +42,10 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | News, providers, articles, historical, bulletins | Verified | Live phase | Available |
 | Fundamental data | Verified | Live phase | Available |
 | Account values | Verified | Live phase | Available |
-| Account summary | Implemented | Live phase did not observe it | W2 |
+| Account summary | Verified | Live session, rows and completion observed | Available |
 | Positions and round trip tracking | Implemented | Live phase requires a fill it did not obtain | W2 |
 | P&L, per contract | Verified | Live phase | Available |
-| P&L, account level subscription | Implemented | Live phase did not observe it | W2 |
+| P&L, account level subscription | Verified | Live session, reported from the gateway's own account figures | Available |
 | Option exercise and lapse | Accepted, not served | | W1 |
 | Option analytics, implied volatility and price | Accepted, not served | | W1 |
 | Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription | W3 |
@@ -135,7 +135,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission | Open |
 | W2.4 | Combination orders | Live phase covering leg construction and acceptance | Open |
 | W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause | Met |
-| W2.6 | Account summary and account level P&L | Both observed end to end in a live phase | Open |
+| W2.6 | Account summary and account level P&L | Both observed end to end in a live phase | Met |
 | W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position | Open |
 | W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Met, ISIN. CUSIP open |
 | W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust | Open |
