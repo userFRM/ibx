@@ -16,41 +16,41 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 
 ## Capability matrix
 
-| Capability | Status | Evidence | Target |
+| Capability | Status | Evidence | Workstream |
 | --- | --- | --- | --- |
-| Session establishment and login | Verified | Live phase | Shipped |
-| Reconnect and subscription rebuild | Verified | Live phase | Shipped |
-| Second factor approval | Implemented | Live logins only. Paper logins do not present the factor | 1.0 |
-| Order submission, 23 order types | Verified | Live phase | Shipped |
-| Order modification | Verified | Live phase | Shipped |
-| Order cancellation, single, by permId, global | Verified | Live phase | Shipped |
-| Bracket and OCA linkage | Verified | Live phase | Shipped |
-| Execution reports and fills | Verified | Live phase | Shipped |
-| Replayed executions on reconnect | Verified | Live phase | Shipped |
-| Trade bust and correction handling | Implemented | No bust occurred during testing | 0.9 |
-| Order conditions, price, volume, percent, execution | Verified | Live phase | Shipped |
-| Order conditions, standalone time | Blocked | Venue rejects the condition | Unscheduled |
-| Combination orders | Implemented | No live phase exists | 0.9 |
-| Market data, top of book | Verified | Live phase | Shipped |
-| Market data, frozen and delayed | Verified | Live measurement | Shipped |
-| Market depth | Implemented | No depth updates observed. Entitlement unconfirmed | 0.9 |
-| Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Shipped |
-| Contract definitions by identifier and symbol | Verified | Live phase | Shipped |
-| Contract definitions by ISIN or CUSIP | Implemented | Identifiers carried on the request. Unconfirmed live | 0.9 |
-| Option chain discovery | Absent | Definition query returns one contract by design | 0.8 |
-| Scanners | Verified | Live phase | Shipped |
-| News, providers, articles, historical, bulletins | Verified | Live phase | Shipped |
-| Fundamental data | Verified | Live phase | Shipped |
-| Account values | Verified | Live phase | Shipped |
-| Account summary | Implemented | Live phase did not observe it | 0.9 |
-| Positions and round trip tracking | Implemented | Live phase requires a fill it did not obtain | 0.9 |
-| P&L, per contract | Verified | Live phase | Shipped |
-| P&L, account level subscription | Implemented | Live phase did not observe it | 0.9 |
-| Option exercise and lapse | Accepted, not served | | 0.8 |
-| Option analytics, implied volatility and price | Accepted, not served | | 0.8 |
-| Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription | 1.0 |
-| Financial advisor allocation | Absent | | 1.0 |
-| Tick by tick data | Absent | Transport not offered at login | 0.9 |
+| Session establishment and login | Verified | Live phase | Available |
+| Reconnect and subscription rebuild | Verified | Live phase | Available |
+| Second factor approval | Implemented | Live logins only. Paper logins do not present the factor | W3 |
+| Order submission, 23 order types | Verified | Live phase | Available |
+| Order modification | Verified | Live phase | Available |
+| Order cancellation, single, by permId, global | Verified | Live phase | Available |
+| Bracket and OCA linkage | Verified | Live phase | Available |
+| Execution reports and fills | Verified | Live phase | Available |
+| Replayed executions on reconnect | Verified | Live phase | Available |
+| Trade bust and correction handling | Implemented | No bust occurred during testing | W2 |
+| Order conditions, price, volume, percent, execution | Verified | Live phase | Available |
+| Order conditions, standalone time | Blocked | Venue rejects the condition. The vendor client is refused the same condition, so the behaviour matches | None required |
+| Combination orders | Implemented | No live phase exists | W2 |
+| Market data, top of book | Verified | Live phase | Available |
+| Market data, frozen and delayed | Verified | Live measurement | Available |
+| Market depth | Implemented | No depth updates observed. Entitlement unconfirmed | W2 |
+| Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Available |
+| Contract definitions by identifier and symbol | Verified | Live phase | Available |
+| Contract definitions by ISIN or CUSIP | Implemented | Identifiers carried on the request. Unconfirmed live | W2 |
+| Option chain discovery | Absent | Definition query returns one contract by design | W1 |
+| Scanners | Verified | Live phase | Available |
+| News, providers, articles, historical, bulletins | Verified | Live phase | Available |
+| Fundamental data | Verified | Live phase | Available |
+| Account values | Verified | Live phase | Available |
+| Account summary | Implemented | Live phase did not observe it | W2 |
+| Positions and round trip tracking | Implemented | Live phase requires a fill it did not obtain | W2 |
+| P&L, per contract | Verified | Live phase | Available |
+| P&L, account level subscription | Implemented | Live phase did not observe it | W2 |
+| Option exercise and lapse | Accepted, not served | | W1 |
+| Option analytics, implied volatility and price | Accepted, not served | | W1 |
+| Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription | W3 |
+| Financial advisor allocation | Absent | | W3 |
+| Tick by tick data | Absent | Transport not offered at login | W2 |
 
 ## API surface
 
@@ -64,93 +64,94 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 
 ### Calls not served
 
-| Call | Surface | Status | Target |
+| Call | Surface | Status | Workstream |
 | --- | --- | --- | --- |
-| `req_sec_def_opt_params` | Python | Accepted, not served | 0.8 |
-| `req_sec_def_opt_params` | Rust | Absent | 0.8 |
-| `exercise_options` | Python | Accepted, not served | 0.8 |
-| `exercise_options` | Rust | Absent | 0.8 |
-| `calculate_implied_volatility` | Python | Accepted, not served | 0.8 |
-| `calculate_implied_volatility` | Rust | Absent | 0.8 |
-| `calculate_option_price` | Python | Accepted, not served | 0.8 |
-| `calculate_option_price` | Rust | Absent | 0.8 |
-| `cancel_calculate_implied_volatility` | Rust | Absent | 0.8 |
-| `cancel_calculate_option_price` | Rust, Python | Absent in Rust, accepted and not served in Python | 0.8 |
-| `req_wsh_meta_data` | Rust, Python | Accepted, not served | 1.0 |
-| `req_wsh_event_data` | Rust, Python | Accepted, not served | 1.0 |
-| `cancel_wsh_meta_data` | Rust | Absent | 1.0 |
-| `cancel_wsh_event_data` | Rust | Absent | 1.0 |
-| `request_fa` | Rust, Python | Accepted, not served | 1.0 |
-| `replace_fa` | Rust, Python | Accepted, not served | 1.0 |
+| `req_sec_def_opt_params` | Python | Accepted, not served | W1 |
+| `req_sec_def_opt_params` | Rust | Absent | W1 |
+| `exercise_options` | Python | Accepted, not served | W1 |
+| `exercise_options` | Rust | Absent | W1 |
+| `calculate_implied_volatility` | Python | Accepted, not served | W1 |
+| `calculate_implied_volatility` | Rust | Absent | W1 |
+| `calculate_option_price` | Python | Accepted, not served | W1 |
+| `calculate_option_price` | Rust | Absent | W1 |
+| `cancel_calculate_implied_volatility` | Rust | Absent | W1 |
+| `cancel_calculate_option_price` | Rust, Python | Absent in Rust, accepted and not served in Python | W1 |
+| `req_wsh_meta_data` | Rust, Python | Accepted, not served | W3 |
+| `req_wsh_event_data` | Rust, Python | Accepted, not served | W3 |
+| `cancel_wsh_meta_data` | Rust | Absent | W3 |
+| `cancel_wsh_event_data` | Rust | Absent | W3 |
+| `request_fa` | Rust, Python | Accepted, not served | W3 |
+| `replace_fa` | Rust, Python | Accepted, not served | W3 |
 
 ## Asset classes
 
 The contract layer names 24 security types. Coverage is stated per path.
 
-| Class | Definition | Market data | Orders | Target |
+| Class | Definition | Market data | Orders | Workstream |
 | --- | --- | --- | --- | --- |
-| Equity | Verified | Verified | Verified | Shipped |
-| Equity option | Verified | Verified | Verified | Shipped |
-| Forex | Verified | Verified | Verified | Shipped |
-| Future | Verified | Verified | Blocked, venue reports an ambiguous contract | 0.9 |
-| Futures option | Verified | Implemented | Implemented | 0.9 |
-| Index | Verified | Verified | Absent | 0.9 |
-| Bond | Implemented | Implemented | Absent | 0.9 |
-| Warrant | Implemented | Implemented | Absent | 0.9 |
-| Combination | Verified | Not applicable | Implemented | 0.9 |
-| Crypto, CFD, commodity, fund, forward, bill | Implemented | Implemented | Absent | Unscheduled |
-| Venues outside the United States | Verified | Verified | Blocked, orders return inactive with no stated reason | 0.9 |
+| Equity | Verified | Verified | Verified | Available |
+| Equity option | Verified | Verified | Verified | Available |
+| Forex | Verified | Verified | Verified | Available |
+| Future | Verified | Verified | Blocked, venue reports an ambiguous contract | W2 |
+| Futures option | Verified | Implemented | Implemented | W2 |
+| Index | Verified | Verified | Absent | W2 |
+| Bond | Implemented | Implemented | Absent | W2 |
+| Warrant | Implemented | Implemented | Absent | W2 |
+| Combination | Verified | Not applicable | Implemented | W2 |
+| Crypto, CFD, commodity, fund, forward, bill | Implemented | Implemented | Absent | W2 |
+| Venues outside the United States | Verified | Verified | Blocked, orders return inactive with no stated reason | W2 |
 
-## Releases
+## Release policy
 
-Current release: 0.7.1. Milestones are release versions under semantic versioning.
+One release: **1.0.0**. There are no incremental feature releases before it.
 
-| Release | Meaning | API compatibility |
-| --- | --- | --- |
-| 0.7.x | Current. The paths in the capability matrix marked Verified are usable | Breaking changes may occur in a minor release |
-| 0.8 | Option surface complete | Breaking changes may occur |
-| 0.9 | Asset class and instrumentation coverage complete | Breaking changes may occur |
-| 1.0 | Every call has defined behaviour and published status | Breaking changes require a major release |
+1.0.0 ships when every documented client call is served and the behaviour matches the vendor client, so that an existing integration can be repointed at this client without changing its code. Partial coverage is not released.
 
-A capability marked Shipped in the Target column is available in 0.7.x.
+| Item | Position |
+| --- | --- |
+| Current code | 0.7.x, development. Tagged for traceability, not offered as a supported release |
+| 1.0.0 | First supported release. Requires every criterion in the workstreams below |
+| Coverage bar for 1.0.0 | Every call served, or removed with the reason recorded. No call accepted and left unanswered |
+| Compatibility from 1.0.0 | Breaking changes require a major version |
 
-## Milestones
+## Workstreams
 
-Exit criteria, not dates. A milestone closes when every criterion is met and demonstrated.
+Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when every criterion is demonstrated.
 
-### 0.8 Option surface
-
-| ID | Requirement | Acceptance |
-| --- | --- | --- |
-| 0.8.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks |
-| 0.8.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed |
-| 0.8.3 | Option analytics | Implied volatility and option price return values, or the calls are removed with the reason recorded |
-
-### 0.9 Asset class and instrumentation completeness
+### W1 Option surface
 
 | ID | Requirement | Acceptance |
 | --- | --- | --- |
-| 0.9.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns |
-| 0.9.2 | Index, bond and warrant orders | Order accepted for each class against a live session |
-| 0.9.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission |
-| 0.9.4 | Combination orders | Live phase covering leg construction and acceptance |
-| 0.9.5 | Market depth | Depth updates observed, or entitlement recorded as the cause |
-| 0.9.6 | Account summary and account level P&L | Both observed end to end in a live phase |
-| 0.9.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position |
-| 0.9.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session |
-| 0.9.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust |
-| 0.9.10 | Tick by tick data | Available, or the transport requirement recorded |
+| W1.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks |
+| W1.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed |
+| W1.3 | Option analytics | Implied volatility and option price return values, or the calls are removed with the reason recorded |
 
-### 1.0 Contract stability
+### W2 Asset class and instrumentation coverage
 
 | ID | Requirement | Acceptance |
 | --- | --- | --- |
-| 1.0.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot |
-| 1.0.2 | Pre connection behaviour | Behaviour of a call issued before connection is defined, documented, and identical across the Rust and Python surfaces |
-| 1.0.3 | Financial advisor allocation | Allocation groups and methods carried, or the surface removed |
-| 1.0.4 | Event data | Wall Street Horizon calls served, or the surface removed |
-| 1.0.5 | Compatibility statement | Every call published with its status and the evidence establishing it |
-| 1.0.6 | Second factor | Approval path covered by an automated live check |
+| W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns |
+| W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session |
+| W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission |
+| W2.4 | Combination orders | Live phase covering leg construction and acceptance |
+| W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause |
+| W2.6 | Account summary and account level P&L | Both observed end to end in a live phase |
+| W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position |
+| W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session |
+| W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust |
+| W2.10 | Tick by tick data | Available, or the transport requirement recorded |
+| W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue |
+
+### W3 Call contract and behaviour parity
+
+| ID | Requirement | Acceptance |
+| --- | --- | --- |
+| W3.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot |
+| W3.2 | Pre connection behaviour | Behaviour of a call issued before connection is defined, documented, and identical across the Rust and Python surfaces |
+| W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the surface removed |
+| W3.4 | Event data | Wall Street Horizon calls served, or the surface removed |
+| W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it |
+| W3.6 | Second factor | Approval path covered by an automated live check |
 
 ## Excluded surface
 
@@ -158,7 +159,7 @@ Exit criteria, not dates. A milestone closes when every criterion is met and dem
 | --- | --- |
 | Display groups and screen linkage | Client application state, not venue state |
 | Order staging without transmission | Client application state. A venue side hold until activation is carried |
-| Financial advisor profile screens | Client application state. Allocation on an order is in scope, see 1.0.3 |
+| Financial advisor profile screens | Client application state. Allocation on an order is in scope, see W3.3 |
 
 ## Verification
 
