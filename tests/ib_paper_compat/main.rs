@@ -788,6 +788,13 @@ fn routing_table_probe() {
             };
             for msg in messages {
                 let tags = fix::fix_parse(&msg);
+                // Every user message carries its own subtype, and the reply to
+                // this request is a subtype of its own rather than an echo of
+                // the one asked for. Report what arrives either way, so a reply
+                // that is not the table can be told from no reply at all.
+                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("U") {
+                    println!("  inbound U subtype={:?}", tags.get(&6040));
+                }
                 if let Some(list) = tags.get(&6572) {
                     services = list.clone();
                 }

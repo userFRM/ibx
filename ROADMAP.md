@@ -98,7 +98,7 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Bond | Implemented | Implemented | Implemented | W2 |
 | Warrant | Implemented | Implemented | Implemented | W2 |
 | Combination | Verified | Not applicable | Implemented | W2 |
-| Crypto and CFD | Implemented | Implemented | Implemented | W2 |
+| Crypto and CFD | Implemented | Implemented | Blocked, the order is refused with no reason stated | W2 |
 | Commodity, fund, forward, bill | Implemented | Implemented | Absent | W2 |
 | Venues outside the United States | Verified | Verified | Blocked, orders return inactive with no stated reason | W2 |
 
