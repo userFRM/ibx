@@ -1,109 +1,158 @@
 # Roadmap
 
-ibx is a Rust client that speaks to Interactive Brokers directly. There is no Java runtime, no desktop application, and no local gateway process to supervise. This document states what works today, what does not, and what has to be true before each milestone is called done.
+Scope: a Rust client that connects to Interactive Brokers directly, with Python bindings. No Java runtime, no desktop application, no local gateway process.
 
-Everything below is either measured against the code in this repository or observed against a live paper session. Where something is unverified, it says so. Nothing here is aspirational unless it appears under a milestone that has not shipped.
+Status is assigned from evidence. `Verified` requires a passing live session phase. No status is assigned from intent.
 
-## How to read the status column
+## Status definitions
 
-**Proven** means the path is implemented, covered by tests, and has passed against a live session.
+| Status | Definition |
+| --- | --- |
+| Verified | Implemented, unit tested, and passed against a live session |
+| Implemented | Implemented and unit tested. No live session has confirmed it |
+| Blocked | Implemented. The venue refuses the request and the cause is stated |
+| Accepted, not served | Call exists with the expected signature, returns normally, and reports through the error callback that it cannot be served |
+| Absent | No such call |
 
-**Implemented** means the path is built and covered by tests, but no live session has confirmed it. It is not a claim that it works against the venue.
+## Capability matrix
 
-**Partial** means the path is implemented and usable, but a stated part of it is missing or unproven.
+| Capability | Status | Evidence | Target |
+| --- | --- | --- | --- |
+| Session establishment and login | Verified | Live phase | Shipped |
+| Reconnect and subscription rebuild | Verified | Live phase | Shipped |
+| Second factor approval | Implemented | Live logins only. Paper logins do not present the factor | 1.0 |
+| Order submission, 23 order types | Verified | Live phase | Shipped |
+| Order modification | Verified | Live phase | Shipped |
+| Order cancellation, single, by permId, global | Verified | Live phase | Shipped |
+| Bracket and OCA linkage | Verified | Live phase | Shipped |
+| Execution reports and fills | Verified | Live phase | Shipped |
+| Replayed executions on reconnect | Verified | Live phase | Shipped |
+| Trade bust and correction handling | Implemented | No bust occurred during testing | 0.9 |
+| Order conditions, price, volume, percent, execution | Verified | Live phase | Shipped |
+| Order conditions, standalone time | Blocked | Venue rejects the condition | Unscheduled |
+| Combination orders | Implemented | No live phase exists | 0.9 |
+| Market data, top of book | Verified | Live phase | Shipped |
+| Market data, frozen and delayed | Verified | Live measurement | Shipped |
+| Market depth | Implemented | No depth updates observed. Entitlement unconfirmed | 0.9 |
+| Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Shipped |
+| Contract definitions by identifier and symbol | Verified | Live phase | Shipped |
+| Contract definitions by ISIN or CUSIP | Implemented | Identifiers carried on the request. Unconfirmed live | 0.9 |
+| Option chain discovery | Absent | Definition query returns one contract by design | 0.8 |
+| Scanners | Verified | Live phase | Shipped |
+| News, providers, articles, historical, bulletins | Verified | Live phase | Shipped |
+| Fundamental data | Verified | Live phase | Shipped |
+| Account values | Verified | Live phase | Shipped |
+| Account summary | Implemented | Live phase did not observe it | 0.9 |
+| Positions and round trip tracking | Implemented | Live phase requires a fill it did not obtain | 0.9 |
+| P&L, per contract | Verified | Live phase | Shipped |
+| P&L, account level subscription | Implemented | Live phase did not observe it | 0.9 |
+| Option exercise and lapse | Accepted, not served | | 0.8 |
+| Option analytics, implied volatility and price | Accepted, not served | | 0.8 |
+| Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription | 1.0 |
+| Financial advisor allocation | Absent | | 1.0 |
+| Tick by tick data | Absent | Transport not offered at login | 0.9 |
 
-**Accepted, not served** means the call exists with the expected signature and returns cleanly, and reports through the error callback that it cannot be served. It does not silently do nothing.
+## API surface
 
-**Absent** means there is no such call.
+| Measure | Count |
+| --- | --- |
+| Rust client calls | 92 |
+| Python client calls | 123 |
+| Callbacks | 125 |
+| Rust calls served | 88 |
+| Rust calls accepted, not served | 4 |
 
-## Where the client stands today
+### Calls not served
 
-| Area | Status | Notes |
-| --- | --- | --- |
-| Connection, login, reconnect | Proven | Recovery across a dropped session is exercised live, including rebuilding subscriptions |
-| Order placement | Proven | 23 order kinds, from market and limit through trailing, pegged, relative, snap, adaptive and algo |
-| Order modification | Proven | A replace restates the order in full, so attributes survive it |
-| Order cancellation | Proven | Individual, by permId, and global |
-| Bracket and OCA orders | Proven | Parent and children linked on submission |
-| Execution reports and fills | Proven | Includes replayed executions on reconnect. Busted and corrected trades are handled but have not been observed live, because none occurred |
-| Account values | Proven | The account summary request has not been observed end to end |
-| Market data, top of book | Proven | Including the frozen and delayed variants |
-| Historical data | Proven | Bars, ticks, head timestamp, and schedules |
-| Contract definitions | Proven | By identifier and by symbol |
-| Scanners | Proven | Parameters and subscriptions |
-| News | Proven | Providers, articles, historical news, and bulletins |
-| Fundamental data | Proven | |
-| Second factor approval | Implemented | Exercised for live logins. A paper login does not present the factor, so the paper suite does not reach it |
-| Order conditions | Partial | Price, volume, percent and execution conditions are proven. A standalone time condition is refused by the venue, not by this client |
-| Combination orders | Implemented | Legs carried with ratio, side, venue and position effect. No live coverage yet |
-| Positions and round trip tracking | Implemented | The live phase depends on a fill and has not yet had one to observe |
-| Market depth | Implemented | No depth updates observed live, which may be an entitlement on the account used |
-| P&L subscription | Partial | Per contract P&L is proven. The account level subscription has not yet been observed end to end |
-| Contract lookup by ISIN or CUSIP | Implemented | The identifiers are carried on the request. No live confirmation yet |
-| Option chains | Absent | See below |
-| Option exercise and lapse | Accepted, not served | |
-| Server side option analytics | Accepted, not served | Implied volatility and option price |
-| Wall Street Horizon event data | Accepted, not served | Requires a separate data subscription |
-| Financial advisor allocation | Absent | Allocation groups and methods are not carried |
-| Tick by tick data | Absent | The transport is not offered to this client at login |
+| Call | Surface | Status | Target |
+| --- | --- | --- | --- |
+| `req_sec_def_opt_params` | Python | Accepted, not served | 0.8 |
+| `req_sec_def_opt_params` | Rust | Absent | 0.8 |
+| `exercise_options` | Python | Accepted, not served | 0.8 |
+| `exercise_options` | Rust | Absent | 0.8 |
+| `calculate_implied_volatility` | Python | Accepted, not served | 0.8 |
+| `calculate_implied_volatility` | Rust | Absent | 0.8 |
+| `calculate_option_price` | Python | Accepted, not served | 0.8 |
+| `calculate_option_price` | Rust | Absent | 0.8 |
+| `cancel_calculate_implied_volatility` | Rust | Absent | 0.8 |
+| `cancel_calculate_option_price` | Rust, Python | Absent in Rust, accepted and not served in Python | 0.8 |
+| `req_wsh_meta_data` | Rust, Python | Accepted, not served | 1.0 |
+| `req_wsh_event_data` | Rust, Python | Accepted, not served | 1.0 |
+| `cancel_wsh_meta_data` | Rust | Absent | 1.0 |
+| `cancel_wsh_event_data` | Rust | Absent | 1.0 |
+| `request_fa` | Rust, Python | Accepted, not served | 1.0 |
+| `replace_fa` | Rust, Python | Accepted, not served | 1.0 |
 
-### Asset classes
+## Asset classes
 
-The contract layer names 24 security types, including equities, options, futures, futures options, forex, indices, bonds, warrants, funds, CFDs, commodities, crypto and combinations.
+The contract layer names 24 security types. Coverage is stated per path.
 
-Order paths are proven live for equities, equity options and forex. Futures orders are refused by the venue as an ambiguous contract, and the cause has not been isolated. Index, bond and warrant order paths have no coverage yet.
-
-A status of proven means a live phase passed against a paper session. A phase that skips because the market gave it nothing to observe, such as a position test waiting on a fill, leaves the path implemented rather than proven.
-
-Instruments outside the United States resolve and stream correctly. Orders on them return an inactive state with no stated reason, which is consistent with the account lacking trading permission for those venues rather than with a defect in this client. Confirming that needs an account with those permissions enabled.
-
-### What is measured
-
-1126 tests cover the engine and the client surface. A further 308 cover the Python bindings. Every push runs both, along with lint, documentation, and builds for Linux, macOS and Windows.
-
-The client surface is 92 methods in Rust and 123 in Python, against 125 callbacks.
-
-Test count is not coverage. The figure above says what is checked, not what fraction of the venue's behaviour is reached.
+| Class | Definition | Market data | Orders | Target |
+| --- | --- | --- | --- | --- |
+| Equity | Verified | Verified | Verified | Shipped |
+| Equity option | Verified | Verified | Verified | Shipped |
+| Forex | Verified | Verified | Verified | Shipped |
+| Future | Verified | Verified | Blocked, venue reports an ambiguous contract | 0.9 |
+| Futures option | Verified | Implemented | Implemented | 0.9 |
+| Index | Verified | Verified | Absent | 0.9 |
+| Bond | Implemented | Implemented | Absent | 0.9 |
+| Warrant | Implemented | Implemented | Absent | 0.9 |
+| Combination | Verified | Not applicable | Implemented | 0.9 |
+| Crypto, CFD, commodity, fund, forward, bill | Implemented | Implemented | Absent | Unscheduled |
+| Venues outside the United States | Verified | Verified | Blocked, orders return inactive with no stated reason | 0.9 |
 
 ## Milestones
 
-### 0.8 Close the accepted but unserved calls
+Exit criteria, not dates. A milestone closes when every criterion is met and demonstrated.
 
-Option chains are the gap that matters most, because without them an option strategy cannot discover its own strikes and expirations. The definition query answers with a single contract by design, so the chain has to come from elsewhere. Until that is settled the call reports that it cannot be served rather than answering with part of a chain.
+### 0.8 Option surface
 
-Exit criteria:
+| ID | Requirement | Acceptance |
+| --- | --- | --- |
+| 0.8.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks |
+| 0.8.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed |
+| 0.8.3 | Option analytics | Implied volatility and option price return values, or the calls are removed with the reason recorded |
 
-- Option chain discovery returns every expiration and strike a venue lists, for a named underlying
-- Option exercise and lapse reach the venue
-- Server side implied volatility and option price return values, or are documented as out of scope with the reason stated
+### 0.9 Asset class and instrumentation completeness
 
-### 0.9 Asset class completeness
+| ID | Requirement | Acceptance |
+| --- | --- | --- |
+| 0.9.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns |
+| 0.9.2 | Index, bond and warrant orders | Order accepted for each class against a live session |
+| 0.9.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission |
+| 0.9.4 | Combination orders | Live phase covering leg construction and acceptance |
+| 0.9.5 | Market depth | Depth updates observed, or entitlement recorded as the cause |
+| 0.9.6 | Account summary and account level P&L | Both observed end to end in a live phase |
+| 0.9.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position |
+| 0.9.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session |
+| 0.9.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust |
+| 0.9.10 | Tick by tick data | Available, or the transport requirement recorded |
 
-Exit criteria:
+### 1.0 Contract stability
 
-- Futures orders accepted, with the ambiguity resolved and a regression test that would catch its return
-- Index, bond and warrant orders proven against a live session
-- Combination orders, market depth and account level P&L proven against a live session
-- One venue outside the United States proven end to end for orders, not only for data
-- Tick by tick data available, or documented as unavailable to this client with the reason stated
+| ID | Requirement | Acceptance |
+| --- | --- | --- |
+| 1.0.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot |
+| 1.0.2 | Pre connection behaviour | Behaviour of a call issued before connection is defined, documented, and identical across the Rust and Python surfaces |
+| 1.0.3 | Financial advisor allocation | Allocation groups and methods carried, or the surface removed |
+| 1.0.4 | Event data | Wall Street Horizon calls served, or the surface removed |
+| 1.0.5 | Compatibility statement | Every call published with its status and the evidence establishing it |
+| 1.0.6 | Second factor | Approval path covered by an automated live check |
 
-### 1.0 Behaviour a caller can rely on
+## Excluded surface
 
-Exit criteria:
+| Surface | Reason |
+| --- | --- |
+| Display groups and screen linkage | Client application state, not venue state |
+| Order staging without transmission | Client application state. A venue side hold until activation is carried |
+| Financial advisor profile screens | Client application state. Allocation on an order is in scope, see 1.0.3 |
 
-- Every call either serves its request or reports through the error callback why it cannot. No call accepts a request and goes quiet
-- The behaviour of a call before connection is settled and documented, and matches across the Rust and Python surfaces
-- Financial advisor allocation carried, or declared a non goal
-- A published compatibility statement listing every call, its status, and how that status was established
+## Verification
 
-## Non goals
+| Method | What it establishes |
+| --- | --- |
+| Unit tests, 1126 engine and client, 308 Python bindings | The call encodes and decodes as specified |
+| Live session phases against a paper account | The venue accepts the request and returns what is expected |
+| Continuous integration on every push | Tests, lint, documentation, and builds for Linux, macOS and Windows |
 
-This is not a graphical application and will not become one. Features that exist to serve a screen, such as display groups, screen linkage and blotter state, are out of scope.
-
-This is not a hosted service. It connects on behalf of the process that embeds it.
-
-Order staging that exists only inside a desktop application, such as building an order without transmitting it, is out of scope. Where the venue itself holds an order until activation, that is carried, because the venue is the one holding it.
-
-## Reporting a gap
-
-If a call behaves differently from the venue's own client, that is a defect worth reporting, and the report is most useful when it states the call, what was expected, and what happened.
+Test count is not coverage. It states what is checked, not what fraction of venue behaviour is reached.
