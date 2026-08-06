@@ -1218,7 +1218,13 @@ fn push_order_attrs(
         for leg in &attrs.combo_legs {
             fields.push((6080, leg.con_id.to_string()));
             fields.push((6081, format_uint(leg.ratio as u64).to_string()));
-            fields.push((6082, if leg.is_sell { "1" } else { "0" }.to_string()));
+            // 1 buys the leg and 0 sells it, which is the opposite way round
+            // from every other side field on the message. Sent the other way,
+            // a long call spread priced at a debit came back "Guaranteed-to-Lose
+            // combination orders are not allowed" — the venue had been given
+            // the short spread — and reversing it previewed the long spread at
+            // the margin a long spread carries.
+            fields.push((6082, if leg.is_sell { "0" } else { "1" }.to_string()));
             // Empty where the leg routes with the combination rather than on a
             // venue of its own, which is what the terminal writes for SMART.
             fields.push((616, leg.exchange.clone()));
@@ -3392,6 +3398,10 @@ mod outside_rth_polarity_tests {
         assert!(f.contains(&"6080=265598") && f.contains(&"6080=272093"), "each contract: {msg}");
         assert!(f.contains(&"6081=1") && f.contains(&"6081=2"), "each ratio: {msg}");
         assert!(f.contains(&"6082=0") && f.contains(&"6082=1"), "each side, as a flag: {msg}");
+        // The buying leg comes first, and it is the one carrying 1.
+        let sides: Vec<&&str> = f.iter().filter(|t| t.starts_with("6082=")).collect();
+        assert_eq!(*sides[0], "6082=1", "a bought leg: {msg}");
+        assert_eq!(*sides[1], "6082=0", "a sold leg: {msg}");
         assert!(
             f.contains(&"616=") && f.contains(&"616=ARCA"),
             "a venue only where the leg has its own: {msg}"
