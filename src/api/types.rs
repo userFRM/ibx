@@ -487,6 +487,12 @@ impl Order {
             hedge_ratio: if self.hedge_type.eq_ignore_ascii_case("P") {
                 self.hedge_param.parse().unwrap_or(0.0)
             } else { 0.0 },
+            deactivate: self.deactivate,
+            include_overnight: self.include_overnight,
+            auto_cancel_parent: self.auto_cancel_parent,
+            min_trade_qty: if self.min_trade_qty == i32::MAX { 0 } else { self.min_trade_qty.max(0) as u32 },
+            block_order: self.block_order,
+            auto_cancel_date: self.auto_cancel_date.clone(),
             rule80a: self.rule80a.clone(),
             post_to_ats: if self.post_to_ats == i32::MAX { 0 } else { self.post_to_ats.max(0) as u32 },
             combo_legs: Vec::new(),
@@ -596,6 +602,12 @@ impl Order {
             || !self.hedge_type.is_empty()
             || !self.rule80a.is_empty()
             || self.post_to_ats != i32::MAX
+            || self.deactivate
+            || self.include_overnight
+            || self.auto_cancel_parent
+            || self.min_trade_qty != i32::MAX
+            || self.block_order
+            || !self.auto_cancel_date.is_empty()
     }
 }
 
@@ -1149,6 +1161,12 @@ mod tests {
             ("hedge_type", |o| o.hedge_type = "B".into()),
             ("rule80a", |o| o.rule80a = "I".into()),
             ("post_to_ats", |o| o.post_to_ats = 30),
+            ("deactivate", |o| o.deactivate = true),
+            ("include_overnight", |o| o.include_overnight = true),
+            ("auto_cancel_parent", |o| o.auto_cancel_parent = true),
+            ("min_trade_qty", |o| o.min_trade_qty = 50),
+            ("block_order", |o| o.block_order = true),
+            ("auto_cancel_date", |o| o.auto_cancel_date = "20261231".into()),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1163,7 +1181,9 @@ mod tests {
             volatility: _, volatility_type: _, percent_offset: _, not_held: _, order_ref: _, open_close: _,
             scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
             exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
-            combo_legs: _, rule80a: _, post_to_ats: _,
+            combo_legs: _, rule80a: _, post_to_ats: _, deactivate: _,
+            include_overnight: _, auto_cancel_parent: _, min_trade_qty: _,
+            block_order: _, auto_cancel_date: _,
             primary_exchange: _, delta_neutral_contract: _,
         } = Order::default().attrs();
 

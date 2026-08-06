@@ -364,6 +364,18 @@ pub struct OrderAttrs {
     /// Seconds an order rests on the alternative venue before routing on
     /// (tag 8405). Zero means the caller set none.
     pub post_to_ats: u32,
+    /// Built but not sent: the venue holds it until it is activated (tag 6521).
+    pub deactivate: bool,
+    /// Let this order work the overnight session too (tag 8534).
+    pub include_overnight: bool,
+    /// Cancel this order's parent when it is cancelled (tag 6965).
+    pub auto_cancel_parent: bool,
+    /// Smallest quantity worth filling (tag 8415). Zero means none.
+    pub min_trade_qty: u32,
+    /// A block order, which the venue handles apart from the book (tag 9801).
+    pub block_order: bool,
+    /// The date the venue cancels this order by itself (tag 6596).
+    pub auto_cancel_date: String,
     /// The legs, when this order is for a combination.
     pub combo_legs: Vec<ComboLegSpec>,
     /// Where the contract is listed (tag 207), which is not where the order
