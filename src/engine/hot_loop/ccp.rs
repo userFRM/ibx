@@ -666,6 +666,42 @@ impl CcpState {
             "UP" => handle_position_update(&parsed, context, shared, event_tx),
             "d" => {
                 let response_req_id = crate::control::contracts::secdef_response_req_id(msg);
+                // A reply can describe several contracts: a symbol asked for
+                // without a currency is answered with every listing that
+                // carries it. Read as one contract it keeps whichever came
+                // last, and the venue fan-out then follows that one, so the
+                // rest are lost before anything can see them. Deliver them all
+                // here; the row the path below delivers is deduplicated
+                // against these by contract id.
+                {
+                    let all = crate::control::contracts::parse_secdef_responses(msg);
+                    if all.len() > 1
+                        && let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())
+                        && rid < 0xF000_0000
+                    {
+                        for def in all.into_iter().filter(|d| d.con_id != 0) {
+                            shared.reference.cache_contract(def.con_id as i64, api::Contract {
+                                con_id: def.con_id as i64,
+                                symbol: def.symbol.clone(),
+                                sec_type: def.sec_type.to_api_str().to_string(),
+                                exchange: def.exchange.clone(),
+                                currency: def.currency.clone(),
+                                local_symbol: def.local_symbol.clone(),
+                                primary_exchange: def.primary_exchange.clone(),
+                                trading_class: def.trading_class.clone(),
+                                ..Default::default()
+                            });
+                            if self.details_delivered.entry(rid).or_default().insert(def.con_id as i64) {
+                                let for_event = clone_for_event(event_tx, &def);
+                                shared.reference.push_contract_details(rid, def);
+                                if let Some(details) = for_event {
+                                    emit(event_tx, Event::ContractDetails { req_id: rid, details: Box::new(details) });
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let fanout_idx = response_req_id.as_ref().and_then(|rid| {
                     self.pending_fanout.iter().position(|p| {
                         p.fanout_req_ids.iter().any(|id| id == rid)
