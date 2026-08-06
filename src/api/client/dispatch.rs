@@ -287,6 +287,17 @@ impl EClient {
             );
         }
 
+        for event in self.core.drain_group_events() {
+            match event {
+                crate::client_core::GroupEvent::List(req_id, groups) => {
+                    wrapper.display_group_list(req_id, &groups);
+                }
+                crate::client_core::GroupEvent::Updated(req_id, info) => {
+                    wrapper.display_group_updated(req_id, &info);
+                }
+            }
+        }
+
         // A subscription the venue could not be asked for, because it never
         // named the contract. Reported on the request the caller holds.
         for (instrument, reason) in self.shared.market.drain_subscription_failures() {

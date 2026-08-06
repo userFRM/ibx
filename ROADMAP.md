@@ -57,10 +57,10 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Measure | Count |
 | --- | --- |
 | Canonical calls | 77 |
-| Served, Rust | 65 |
-| Served, Python | 65 |
-| Accepted and not served, Rust | 8 |
-| Accepted and not served, Python | 12 |
+| Served, Rust | 69 |
+| Served, Python | 69 |
+| Accepted and not served, Rust | 4 |
+| Accepted and not served, Python | 8 |
 | Canonical callbacks | 81 |
 
 Counted from the source by `scripts/gen_api_docs.py`, which CI re-runs and
@@ -81,10 +81,6 @@ coverage matrix, which CI checks against the source.
 | `cancel_calculate_option_price` | - | STUB |
 | `request_fa` | STUB | STUB |
 | `replace_fa` | STUB | STUB |
-| `query_display_groups` | STUB | STUB |
-| `subscribe_to_group_events` | STUB | STUB |
-| `unsubscribe_from_group_events` | STUB | STUB |
-| `update_display_group` | STUB | STUB |
 | `req_wsh_meta_data` | STUB | STUB |
 | `req_wsh_event_data` | STUB | STUB |
 
@@ -155,7 +151,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 
 | ID | Requirement | Acceptance | Status |
 | --- | --- | --- | --- |
-| W3.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot | Met |
+| W3.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot | Met. The display-group calls were the exception: they accepted and did nothing at all, and are served now |
 | W3.2 | Pre connection behaviour | A request issued before connection is reported on the error callback with code 504 on the Python surface, matching the reference client, and returns a typed error on the Rust surface | Met |
 | W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the surface removed | Open |
 | W3.4 | Event data | Wall Street Horizon calls served, or the surface removed | Open |

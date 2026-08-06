@@ -1045,15 +1045,12 @@ STUB_METHODS = {
     "calculate_implied_volatility", "calculate_option_price",
     "cancel_calculate_implied_volatility", "cancel_calculate_option_price",
     "request_fa", "replace_fa",
-    "query_display_groups", "subscribe_to_group_events",
-    "unsubscribe_from_group_events", "update_display_group",
     "req_wsh_meta_data", "req_wsh_event_data",
 }
 
 STUB_CALLBACKS = {
     "receive_fa", "replace_fa_end",
     "bond_contract_details", "delta_neutral_validation",
-    "display_group_list", "display_group_updated",
     "wsh_meta_data", "wsh_event_data",
     "order_bound",
 }
