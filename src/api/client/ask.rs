@@ -79,6 +79,24 @@ pub struct OptionChain {
     pub strikes: Vec<f64>,
 }
 
+/// A holding, as the account states it.
+#[derive(Debug, Clone)]
+pub struct PositionRow {
+    pub account: String,
+    pub contract: Contract,
+    pub position: f64,
+    pub avg_cost: f64,
+}
+
+/// One value the account states about itself.
+#[derive(Debug, Clone)]
+pub struct AccountValue {
+    pub account: String,
+    pub tag: String,
+    pub value: String,
+    pub currency: String,
+}
+
 /// One question's answer as it accumulates.
 struct Pending<T> {
     rows: Vec<T>,
@@ -205,6 +223,65 @@ impl EClient {
             req_id, &underlying.symbol, "", &underlying.sec_type, underlying.con_id,
         )?;
         self.wait_for(&mut collector, &state, &format!("the option chain on {}", underlying.symbol))
+    }
+
+    /// Every holding in the account.
+    pub fn positions(&self) -> Result<Vec<PositionRow>, String> {
+        struct Held { state: Arc<Mutex<Pending<PositionRow>>> }
+        impl Wrapper for Held {
+            fn position(&mut self, account: &str, contract: &Contract, position: f64, avg_cost: f64) {
+                self.state.lock().unwrap().rows.push(PositionRow {
+                    account: account.to_string(),
+                    contract: contract.clone(),
+                    position,
+                    avg_cost,
+                });
+            }
+            fn position_end(&mut self) {
+                self.state.lock().unwrap().done = true;
+            }
+        }
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Held { state: Arc::clone(&state) };
+        self.req_positions(&mut collector);
+        self.wait_for(&mut collector, &state, "the account's holdings")
+    }
+
+    /// The account values named by `tags`, as `req_account_summary` asks for
+    /// them. `tags` is a comma-separated list, or `All`.
+    pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, String> {
+        struct Values { req_id: i64, state: Arc<Mutex<Pending<AccountValue>>> }
+        impl Wrapper for Values {
+            fn account_summary(&mut self, req_id: i64, account: &str, tag: &str, value: &str, currency: &str) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().rows.push(AccountValue {
+                        account: account.to_string(),
+                        tag: tag.to_string(),
+                        value: value.to_string(),
+                        currency: currency.to_string(),
+                    });
+                }
+            }
+            fn account_summary_end(&mut self, req_id: i64) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Values { req_id, state: Arc::clone(&state) };
+        self.req_account_summary(req_id, "All", tags);
+        let rows = self.wait_for(&mut collector, &state, "the account summary");
+        let _ = self.cancel_account_summary(req_id);
+        rows
     }
 
     /// Every contract matching the one described.
