@@ -101,6 +101,19 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Crypto, CFD, commodity, fund, forward, bill | Implemented | Implemented | Absent | Unscheduled |
 | Venues outside the United States | Verified | Verified | Blocked, orders return inactive with no stated reason | 0.9 |
 
+## Releases
+
+Current release: 0.7.1. Milestones are release versions under semantic versioning.
+
+| Release | Meaning | API compatibility |
+| --- | --- | --- |
+| 0.7.x | Current. The paths in the capability matrix marked Verified are usable | Breaking changes may occur in a minor release |
+| 0.8 | Option surface complete | Breaking changes may occur |
+| 0.9 | Asset class and instrumentation coverage complete | Breaking changes may occur |
+| 1.0 | Every call has defined behaviour and published status | Breaking changes require a major release |
+
+A capability marked Shipped in the Target column is available in 0.7.x.
+
 ## Milestones
 
 Exit criteria, not dates. A milestone closes when every criterion is met and demonstrated.
