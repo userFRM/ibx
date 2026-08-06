@@ -147,7 +147,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W3.2 | Pre connection behaviour | A request issued before connection is reported on the error callback with code 504 on the Python surface, matching the reference client, and returns a typed error on the Rust surface | Met |
 | W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the surface removed | Open |
 | W3.4 | Event data | Wall Street Horizon calls served, or the surface removed | Open |
-| W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it | Open |
+| W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it | Met. The coverage matrix carries, per call, how its status was established: exercised against a live session, exercised by the offline suites, stating why it cannot be served, or exercised by neither. Derived from the suites themselves, so it cannot go quietly out of date |
 | W3.6 | Second factor | Approval path covered by an automated live check | Open |
 
 ## Excluded surface
