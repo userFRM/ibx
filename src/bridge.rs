@@ -1097,6 +1097,34 @@ impl PortfolioState {
         }
     }
 
+    /// Apply a fill of this account's own to the holding it changes.
+    ///
+    /// The broker states holdings on a feed of its own and does not restate
+    /// them when an order of ours fills, so a holding read back during the
+    /// session was the one the session started with. The terminal keeps its
+    /// own count between statements and so does this.
+    ///
+    /// `delta` is signed by side and `price` is what the fill paid, both per
+    /// unit. Adding to a holding averages the new cost in; reducing one leaves
+    /// the basis where it was, because a sale realises a gain and does not
+    /// re-price what remains. A holding that closes carries no basis at all.
+    #[doc(hidden)] pub fn apply_fill(&self, con_id: i64, delta: f64, price: Price) {
+        if con_id == 0 || delta == 0.0 {
+            return;
+        }
+        let mut map = self.position_infos.lock().unwrap();
+        let row = map.entry(con_id).or_insert_with(|| PositionInfo { con_id, ..Default::default() });
+        let before = row.position;
+        let after = before + delta;
+        row.position = after;
+        if after == 0.0 {
+            row.avg_cost = 0;
+        } else if before == 0.0 || (before > 0.0) == (delta > 0.0) {
+            let cost = row.avg_cost as f64 * before + price as f64 * delta;
+            row.avg_cost = (cost / after) as Price;
+        }
+    }
+
     /// Update the per-position marks (from the account-updates portfolio message).
     /// Kept separate from set_position_info so the lean position feed, which has
     /// no marks, does not overwrite them (ib-agent#172).
@@ -1636,5 +1664,33 @@ mod tests {
         writer.join().unwrap();
         stop.store(true, Ordering::Relaxed);
         for r in readers { r.join().unwrap(); }
+    }
+
+    #[test]
+    fn a_fill_moves_the_holding_the_caller_reads() {
+        let p = PortfolioState::new();
+        // Opening.
+        p.apply_fill(7, 100.0, 10 * PRICE_SCALE);
+        let row = p.position_info(7).unwrap();
+        assert_eq!(row.position, 100.0);
+        assert_eq!(row.avg_cost, 10 * PRICE_SCALE);
+        // Adding averages the cost in.
+        p.apply_fill(7, 100.0, 20 * PRICE_SCALE);
+        let row = p.position_info(7).unwrap();
+        assert_eq!(row.position, 200.0);
+        assert_eq!(row.avg_cost, 15 * PRICE_SCALE, "the two fills average");
+        // Reducing realises a gain and leaves the basis alone.
+        p.apply_fill(7, -150.0, 30 * PRICE_SCALE);
+        let row = p.position_info(7).unwrap();
+        assert_eq!(row.position, 50.0);
+        assert_eq!(row.avg_cost, 15 * PRICE_SCALE, "a sale does not re-price what remains");
+        // Closing leaves no basis.
+        p.apply_fill(7, -50.0, 30 * PRICE_SCALE);
+        assert_eq!(p.position_info(7).unwrap().position, 0.0);
+        assert_eq!(p.position_info(7).unwrap().avg_cost, 0);
+        // A fill on a contract this session never saw still opens the holding.
+        p.apply_fill(9, -10.0, 5 * PRICE_SCALE);
+        assert_eq!(p.position_info(9).unwrap().position, -10.0, "a short opens too");
+        assert_eq!(p.position_info(9).unwrap().avg_cost, 5 * PRICE_SCALE);
     }
 }

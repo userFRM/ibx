@@ -133,7 +133,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W2.4 | Combination orders | Live phase covering leg construction and acceptance | Met. A two-leg vertical is ordered by its legs alone, with no lookup, and previews at the margin the position carries. Reversing the legs is refused, as it describes the opposite position |
 | W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause | Met |
 | W2.6 | Account summary and account level P&L | Both observed end to end in a live phase | Met |
-| W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position | Open |
+| W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position | Met. A market order fills and the holding read back afterwards moves by the quantity filled |
 | W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Met |
 | W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust | Met |
 | W2.10 | Tick by tick data | Available, or the transport requirement recorded | Open |

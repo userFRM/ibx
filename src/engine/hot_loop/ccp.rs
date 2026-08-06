@@ -1390,6 +1390,23 @@ impl CcpState {
                     // notify_fill inlined
                     shared.orders.push_fill(fill);
                     shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
+                    // The holding the caller reads is keyed by contract, and
+                    // the broker restates that feed on its own schedule — never
+                    // because an order of ours filled. Left to it, a position
+                    // read back after a fill was the one the session started
+                    // with.
+                    // The report names the contract it filled. An order placed
+                    // by symbol registers an instrument that knows no contract
+                    // id, so taking it from the instrument attributed nothing.
+                    let filled_con_id = parsed.get(&6008)
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .filter(|id| *id != 0)
+                        .or_else(|| context.market.con_id(instrument));
+                    if let Some(con_id) = filled_con_id {
+                        shared.portfolio.apply_fill(
+                            con_id, delta as f64, (last_px * PRICE_SCALE as f64) as Price,
+                        );
+                    }
                     emit(event_tx, Event::Fill(fill));
                 }
             }
