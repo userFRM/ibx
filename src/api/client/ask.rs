@@ -252,10 +252,12 @@ impl EClient {
     /// an order ends up on the wrong one.
     pub fn qualify_contract(&self, contract: &Contract) -> Result<Contract, String> {
         // A symbol without a currency names a listing in every currency it
-        // trades in. Asking for SPY that way answers with the dollar listing
-        // and the Australian dollar listing both, and taking one of them is
-        // how an order reaches the wrong exchange in the wrong currency. Say
-        // which one.
+        // trades in. Asking the venue for SPY is answered with the dollar
+        // listing and the Australian dollar listing together, in one message,
+        // and this client reads such a message as a single contract and keeps
+        // whichever came last — the Australian one. Until that is fixed the
+        // ambiguity cannot be seen from here, so the description is refused
+        // before it can resolve to the wrong side of the world.
         if contract.currency.is_empty() && contract.con_id == 0 {
             return Err(format!(
                 "{} {} names a listing in every currency it trades in: state the currency",
