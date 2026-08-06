@@ -1216,6 +1216,9 @@ pub enum ControlCommand {
     /// 1 = DELAYED, 2 = FROZEN, 3 = DELAYED_FROZEN (single 264=1 TOP + 9887=N).
     Subscribe {
         con_id: i64, symbol: String, exchange: String, sec_type: String,
+        /// Stated so a contract named by symbol resolves to one listing: the
+        /// same symbol on the same venue exists in more than one currency.
+        currency: String,
         last_trade_date: String, strike: f64, right: String, multiplier: String,
         mode_9887: i32,
         reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
@@ -1902,7 +1905,7 @@ mod tests {
 
     #[test]
     fn control_command_subscribe() {
-        let cmd = ControlCommand::Subscribe { con_id: 265598, symbol: "AAPL".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None };
+        let cmd = ControlCommand::Subscribe { con_id: 265598, symbol: "AAPL".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None };
         match cmd {
             ControlCommand::Subscribe { con_id, .. } => assert_eq!(con_id, 265598),
             _ => panic!("wrong variant"),
@@ -1932,7 +1935,7 @@ mod tests {
 
     #[test]
     fn control_command_clone() {
-        let cmd = ControlCommand::Subscribe { con_id: 42, symbol: "TEST".into(), exchange: String::new(), sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None };
+        let cmd = ControlCommand::Subscribe { con_id: 42, symbol: "TEST".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None };
         let cmd2 = cmd.clone();
         match cmd2 {
             ControlCommand::Subscribe { con_id, .. } => assert_eq!(con_id, 42),

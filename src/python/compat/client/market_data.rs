@@ -58,6 +58,7 @@ impl EClient {
         let symbol = contract.symbol.clone();
         let exchange = contract.exchange.clone();
         let sec_type = contract.sec_type.clone();
+        let currency = contract.currency.clone();
         let last_trade_date = contract.last_trade_date_or_contract_month.clone();
         let strike = contract.strike;
         let right = contract.right.clone();
@@ -65,7 +66,7 @@ impl EClient {
         let generic_tick_list = generic_tick_list.to_string();
         py.detach(|| self.core.register_mkt_data(
             &shared, &tx, req_id,
-            con_id, &symbol, &exchange, &sec_type,
+            con_id, &symbol, &exchange, &sec_type, &currency,
             &last_trade_date, strike, &right, &multiplier,
             snapshot, &generic_tick_list, mode_9887,
         )).map_err(PyRuntimeError::new_err)?;

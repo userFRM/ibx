@@ -1167,7 +1167,7 @@ fn snap_to_tick_phase_live() {
     // per-instrument tick size. Without it the snap is a no-op.
     control_tx.send(ControlCommand::Subscribe {
         con_id: 756733, symbol: "SPY".into(), exchange: String::new(),
-        sec_type: String::new(), last_trade_date: String::new(), strike: 0.0,
+        sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0,
         right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
     }).expect("send subscribe failed");
 
@@ -1360,7 +1360,7 @@ fn reclaim_and_symbol_search_phase_live() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::Subscribe {
             con_id: 756733, symbol: "SPY".into(), exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0,
             right: String::new(), multiplier: String::new(), mode_9887: 0,
             reply_tx: Some(tx),
         }).expect("send subscribe failed");

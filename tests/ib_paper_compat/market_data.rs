@@ -27,7 +27,7 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
             con_id: 265598,
             symbol: "AAPL".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -99,7 +99,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
             con_id: 265598,
             symbol: "AAPL".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     control_tx
@@ -107,7 +107,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
             con_id: 272093,
             symbol: "MSFT".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     control_tx
@@ -115,7 +115,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
             con_id: 756733,
             symbol: "SPY".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -196,7 +196,7 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
             con_id: 756733,
             symbol: "SPY".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -451,7 +451,7 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
             con_id: 756733,
             symbol: "SPY".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -606,7 +606,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
             con_id,
             symbol: "EUR".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -686,7 +686,7 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
             con_id: 12087792,
             symbol: "EUR".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -748,7 +748,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
             con_id: 12087792,
             symbol: "EUR".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -788,7 +788,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
             con_id: 12087792,
             symbol: "EUR".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join2 = run_hot_loop(hot_loop2);
@@ -842,7 +842,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
             con_id: 756733,
             symbol: "SPY".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     control_tx
@@ -850,7 +850,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
             con_id: 265598,
             symbol: "AAPL".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     control_tx
@@ -858,7 +858,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
             con_id: 272093,
             symbol: "MSFT".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -1033,7 +1033,7 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
             con_id: 756733,
             symbol: "SPY".into(),
             exchange: String::new(),
-            sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     control_tx
@@ -1159,7 +1159,7 @@ pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
                 con_id,
                 symbol: symbol.into(),
                 exchange: String::new(),
-                sec_type: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+                sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
             })
             .unwrap();
     }
