@@ -152,6 +152,7 @@ pub(crate) fn drain_and_send_orders(
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
+                    (204, CUSTOMER),
                 ]);
 
                 // 2. Take-profit child: limit exit, linked to parent, in OCA group
@@ -182,6 +183,7 @@ pub(crate) fn drain_and_send_orders(
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
+                    (204, CUSTOMER),
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
@@ -211,6 +213,7 @@ pub(crate) fn drain_and_send_orders(
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
+                    (204, CUSTOMER),
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
@@ -244,6 +247,7 @@ pub(crate) fn drain_and_send_orders(
                     (100, &destination),
                     (6210, &destination),
                     (15, "USD"),
+                    (204, CUSTOMER),
                 ])
             }
             OrderRequest::Cancel { order_id } => {
@@ -3481,6 +3485,7 @@ mod outside_rth_polarity_tests {
             assert!(!sent.contains("|9822="), "{label} claims no percent offset: {sent}");
             assert!(!sent.contains("|1688="), "{label} claims no exemption: {sent}");
             assert!(!sent.contains("|21="), "{label} states no handling instruction: {sent}");
+            assert!(sent.contains("|204=0|"), "{label} says who the order is for: {sent}");
         }
     }
 }
