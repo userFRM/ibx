@@ -417,6 +417,16 @@ pub(crate) fn drain_and_send_orders(
                 let symbol = orig
                     .map(|o| context.market.symbol(o.instrument).to_string())
                     .unwrap_or_default();
+                // A replace names the contract by the venue's own local symbol,
+                // which is the same string as the symbol for a stock and a
+                // different one for anything with an expiry or a strike. Naming
+                // the family there says nothing about which member is being
+                // replaced.
+                let local_symbol = orig
+                    .and_then(|o| context.market.order_identity(o.instrument))
+                    .map(|id| id.local_symbol)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| symbol.clone());
                 let (sec_type_str, _destination) = orig
                     .map(|o| context.market.order_routing(o.instrument))
                     .unwrap_or_else(|| ("STK".to_string(), "SMART".to_string()));
@@ -460,7 +470,7 @@ pub(crate) fn drain_and_send_orders(
                     (40, &ord_type_str),  // OrdType
                     (55, &symbol),        // Symbol
                     (167, &sec_type_str), // SecurityType
-                    (6035, &symbol),      // LocalSymbol echo
+                    (6035, &local_symbol), // the contract, not the family
                     (59, &tif_str),       // TIF — dropped below when unstated
                     (6008, &con_id_str),  // ConId
                     (6088, "Socket"),     // Connection type
@@ -1805,6 +1815,7 @@ mod tests {
         let msg = String::from_utf8_lossy(&buf[..n]).to_string();
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
         assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+        assert_eq!(tag("6035=").as_deref(), Some("SPY"), "it names the contract: {msg}");
         assert_eq!(tag("18=").as_deref(), Some("G"), "it is still all-or-none: {msg}");
         assert_eq!(msg.matches("\u{1}38=").count(), 1, "the quantity is stated once: {msg}");
     }
