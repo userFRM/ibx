@@ -136,7 +136,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position | Met. A market order fills and the holding read back afterwards moves by the quantity filled |
 | W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Met |
 | W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust | Met |
-| W2.10 | Tick by tick data | Available, or the transport requirement recorded | Open |
+| W2.10 | Tick by tick data | Available, or the transport requirement recorded | Met by record. The feed rides a service of its own; this session is sent no list of the services it may reach and a request for that list is refused. The call refuses with that reason rather than waiting on a subscription that is acknowledged and never delivers |
 | W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue | Met. Crypto, commodity and bill are accepted and return margin. The session states no forward permission at all. A fund is refused for residency, which is a property of the account |
 
 ### W3 Call contract and behaviour parity
