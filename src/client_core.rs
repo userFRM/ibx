@@ -1330,10 +1330,11 @@ impl ClientCore {
         map.iter().map(|(&iid, &req_id)| (iid, req_id)).collect()
     }
 
-    /// The price the venue states for a contract, read at the point of use.
-    /// Text that is not a usable price leaves the contract unpriced, rather
-    /// than valuing it at whatever the characters happened to come to.
-    fn stated_price(shared: &SharedState, con_id: i64) -> Option<Price> {
+    /// What the venue last marked a contract at, which is its price at
+    /// midnight rather than its price now. Read at the point of use; text that
+    /// is not a usable price leaves the contract unmarked, rather than valuing
+    /// it at whatever the characters happened to come to.
+    fn midnight_price(shared: &SharedState, con_id: i64) -> Option<Price> {
         let raw = shared.portfolio.venue_price(con_id)?;
         let price = raw.trim().parse::<f64>().ok().filter(|p| p.is_finite())?;
         Some((price * PRICE_SCALE_F) as Price).filter(|&p| p != 0)
@@ -1397,16 +1398,14 @@ impl ClientCore {
 
             let quote = con_id_map.get(&con_id).map(|&iid| shared.market.quote(iid));
             let prev_close = quote.map_or(0, |q| q.close);
-            // A contract with no live quote is what sends the whole account to
-            // the gateway's own figures. The venue states a price for it, so
-            // that price stands in and the position is valued after all.
-            let Some(price_now) = quote.map(|q| q.last).filter(|&p| p != 0)
-                .or_else(|| Self::stated_price(shared, con_id))
-            else {
+            let Some(price_now) = quote.map(|q| q.last).filter(|&p| p != 0) else {
                 continue;
             };
-            // A previous close is only needed where the venue did not say what
-            // the position was worth at midnight.
+            // What the position was worth at midnight. The venue states the
+            // mark it closed the contract at, and that is what the overnight
+            // leg is valued against; a previous close of our own is only used
+            // where the venue said nothing.
+            let prev_close = Self::midnight_price(shared, con_id).unwrap_or(prev_close);
             if seed.and_then(|s| s.cost_midnight).is_none() && prev_close == 0 && qty_midnight != 0 {
                 continue;
             }
@@ -1495,15 +1494,9 @@ impl ClientCore {
             let avg_cost = pi.avg_cost;
 
             let quote = con_id_map.get(&con_id).map(|&iid| shared.market.quote(iid));
-            // As in poll_pnl: the venue's price stands in for a contract this
-            // session never quoted, so the two callbacks value the same
-            // position from the same figures.
-            let Some(price_now) = quote.map(|q| q.last).filter(|&p| p != 0)
-                .or_else(|| Self::stated_price(shared, con_id))
-            else {
+            let Some(price_now) = quote.map(|q| q.last).filter(|&p| p != 0) else {
                 continue;
             };
-
             let seed = seeds.get(&con_id);
             // An unparseable overnight quantity leaves nothing to price the
             // day's change against. Unlike the whole-account total, that costs
@@ -1512,7 +1505,11 @@ impl ClientCore {
             // the callback would leave every one of them stale on the caller's
             // side rather than reporting one it cannot compute (ibx#296).
             let qty_midnight = seed.map_or(Some(0), |s| s.qty_midnight);
-            let prev_close = quote.map_or(0, |q| q.close);
+            // As in poll_pnl, the venue's own mark is what the overnight leg is
+            // valued against, so the two callbacks value the same position from
+            // the same figures.
+            let prev_close = Self::midnight_price(shared, con_id)
+                .unwrap_or_else(|| quote.map_or(0, |q| q.close));
             // What the venue says the position was worth at midnight, which the
             // client otherwise has to size from the overnight quantity and a
             // previous close it may not hold.
@@ -2844,31 +2841,24 @@ mod tests {
     /// it and states what it was worth at midnight, so the position is valued
     /// from those and the account total is the client's again.
     #[test]
-    fn a_contract_with_no_live_quote_is_priced_from_what_the_venue_states() {
+    fn the_overnight_leg_is_valued_at_the_mark_the_venue_states() {
         let core = ClientCore::new();
         let shared = SharedState::new();
         core.subscribe_pnl(31);
 
-        // Held overnight, no instrument mapping and no quote pushed.
-        shared.portfolio.set_position_info(PositionInfo {
-            con_id: 5001,
-            position: 10.0,
-            avg_cost: (100.00 * PRICE_SCALE_F) as i64,
-            symbol: "SPY".into(),
-            sec_type: "STK".into(),
-            currency: "USD".into(),
-            multiplier: String::new(),
-            ..Default::default()
-        });
+        // Quoted at 101.25 now, with no previous close of our own. The venue
+        // states the mark it closed the contract at, which is what the
+        // overnight leg is valued against.
+        seed_pnl_position(&core, &shared, 5001, 0, 10.0, 100.00, 101.25, 0.0);
         shared.portfolio.set_midnight_seeds("PLR.31".into(), vec![MidnightSeed {
             con_id: 5001,
             qty_midnight: Some(10),
-            cost_midnight: Some(1000.00),
+            cost_midnight: None,
             qty_traded: Some(0.0),
             money_traded: 0.0,
             realized_pnl: 2.50,
         }]);
-        shared.portfolio.set_venue_prices([(5001i64, "101.25".to_string())].into());
+        shared.portfolio.set_venue_prices([(5001i64, "100.00".to_string())].into());
 
         // Account-level figures that would be visible if the client fell back.
         shared.portfolio.set_account(&AccountState {
@@ -2879,7 +2869,7 @@ mod tests {
         });
 
         let update = core.poll_pnl(&shared).expect("callback must fire");
-        // 10 × 101.25 = 1012.50, against the 1000.00 the venue states for midnight.
+        // 10 × 101.25 now, against 10 × 100.00 the venue marked it at overnight.
         assert!((update.daily_pnl - 12.50).abs() < 1e-6, "daily={}", update.daily_pnl);
         assert!((update.unrealized_pnl - 12.50).abs() < 1e-6, "unreal={}", update.unrealized_pnl);
         assert!((update.realized_pnl - 2.50).abs() < 1e-6, "real={}", update.realized_pnl);
@@ -2913,41 +2903,32 @@ mod tests {
 
     /// The table is kept as the venue wrote it and read where it is used, so
     /// text that is not a price costs its own contract a valuation and nothing
-    /// else: the entry stays in the table and every other contract still prices.
+    /// else. The entry stays in the table exactly as it arrived.
     #[test]
-    fn a_price_that_does_not_read_as_a_number_costs_only_its_own_contract() {
+    fn a_mark_that_does_not_read_as_a_number_costs_only_its_own_contract() {
         let core = ClientCore::new();
         let shared = SharedState::new();
         core.subscribe_pnl(33);
 
-        for con_id in [6001i64, 6002, 6003] {
-            shared.portfolio.set_position_info(PositionInfo {
-                con_id,
-                position: 1.0,
-                avg_cost: (50.00 * PRICE_SCALE_F) as i64,
-                symbol: format!("SYM{con_id}"),
-                sec_type: "STK".into(),
-                currency: "USD".into(),
-                multiplier: String::new(),
-                ..Default::default()
-            });
+        for (i, con_id) in [6001i64, 6002, 6003].into_iter().enumerate() {
+            seed_pnl_position(&core, &shared, con_id, i as u32, 1.0, 50.00, 51.00, 0.0);
         }
         shared.portfolio.set_midnight_seeds("PLR.33".into(), vec![
             MidnightSeed {
-                con_id: 6001, qty_midnight: Some(1), cost_midnight: Some(50.00),
+                con_id: 6001, qty_midnight: Some(1), cost_midnight: None,
                 qty_traded: Some(0.0), money_traded: 0.0, realized_pnl: 2.00,
             },
             MidnightSeed {
-                con_id: 6002, qty_midnight: Some(1), cost_midnight: Some(50.00),
+                con_id: 6002, qty_midnight: Some(1), cost_midnight: None,
                 qty_traded: Some(0.0), money_traded: 0.0, realized_pnl: 3.00,
             },
             MidnightSeed {
-                con_id: 6003, qty_midnight: Some(1), cost_midnight: Some(50.00),
+                con_id: 6003, qty_midnight: Some(1), cost_midnight: None,
                 qty_traded: Some(0.0), money_traded: 0.0, realized_pnl: 4.00,
             },
         ]);
         shared.portfolio.set_venue_prices([
-            (6001i64, "51.00".to_string()),
+            (6001i64, "50.00".to_string()),
             (6002i64, "n/a".to_string()),
             // Nothing is worth nothing. A table that has yet to mark a contract
             // says so with a zero, and valuing the holding at it reports the
@@ -2956,10 +2937,11 @@ mod tests {
         ].into());
 
         let update = core.poll_pnl(&shared).expect("callback must fire");
+        // The one contract with a readable mark: 51.00 now against 50.00 then.
         assert!((update.daily_pnl - 1.00).abs() < 1e-6,
-            "the readable price still values its own contract, daily={}", update.daily_pnl);
+            "the readable mark still values its own contract, daily={}", update.daily_pnl);
         assert!((update.realized_pnl - 9.00).abs() < 1e-6,
-            "the other figures the unpriced contracts state still count, real={}", update.realized_pnl);
+            "what a contract has already realised counts whether or not it can be marked, real={}", update.realized_pnl);
         assert_eq!(
             shared.portfolio.venue_price(6002).as_deref(), Some("n/a"),
             "the table holds what the venue wrote; reading it is the caller's job",
