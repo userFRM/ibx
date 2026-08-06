@@ -743,6 +743,72 @@ fn cross_session_recovery_phase_live() {
     println!("\n  PASS — cross-session cancel works (ibx#191 PR A validated)\n");
 }
 
+/// Which services this session is routed to. The routing table names each
+/// service and the farm serving it, and a service with no farm cannot be
+/// reached however the request is shaped. Run this to find out whether a
+/// service is available to this account before implementing a path to it.
+///
+/// Run: cargo test --test ib_paper_compat routing_table_probe -- --ignored --nocapture
+#[test]
+#[ignore]
+fn routing_table_probe() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    let (gw, farm, mut ccp, hmds) = Gateway::connect(&config).expect("Gateway::connect failed");
+    drop(gw);
+
+    let now = ibx::gateway::chrono_free_timestamp();
+    ccp.send_fix(&[
+        (fix::TAG_MSG_TYPE, "U"),
+        (fix::TAG_SENDING_TIME, &now),
+        (6040, "78"),
+        (6556, "1"),
+        (6066, "0"),
+    ]).expect("send the routing table request");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut services = String::new();
+    while Instant::now() < deadline && services.is_empty() {
+        match ccp.try_recv() {
+            Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
+            Err(e) => { println!("  recv error: {e}"); break; }
+            Ok(_) => {}
+        }
+        for frame in ccp.extract_frames() {
+            let messages = match frame {
+                Frame::FixComp(raw) => {
+                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
+                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
+                }
+                Frame::Fix(raw) => vec![raw],
+                _ => continue,
+            };
+            for msg in messages {
+                let tags = fix::fix_parse(&msg);
+                if let Some(list) = tags.get(&6572) {
+                    services = list.clone();
+                }
+            }
+        }
+    }
+
+    drop(farm);
+    drop(hmds);
+    if services.is_empty() {
+        println!("  no service list in the reply");
+        return;
+    }
+    let mut named: Vec<&str> = services.split(';').filter(|s| !s.is_empty()).collect();
+    named.sort_unstable();
+    println!("  {} services routed:", named.len());
+    for entry in &named {
+        println!("    {entry}");
+    }
+}
+
 /// ibx#191 PR B focused live entry — validates `EClient::cancel_order_by_perm_id`.
 /// Places a resting LMT GTC, captures the broker-assigned `permId` from
 /// `order_status`-flavored OrderUpdate events, then cancels by permId (not by

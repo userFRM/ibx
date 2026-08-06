@@ -713,29 +713,31 @@ fn push_contract_identity(
         currency: _,
     } = id;
     let (sec_type, _) = context.market.order_routing(instrument);
-    // A future states its month, not its date. The order path writes the
-    // contract month and nothing else: it carries no MaturityDate at all, and
-    // an eight character date on the month tag named a contract the venue
-    // could not settle on. An option is tolerant of a full date there and is
-    // left exactly as it was, because it is accepted as it stands.
-    let is_future = matches!(sec_type.as_str(), "FUT" | "FWD");
-    if is_future {
+    // How an order names one contract rather than a family.
+    //
+    // A stock is named by its symbol and nothing else. Every other kind is
+    // named by the venue's own local symbol on SecurityID, under the source
+    // that says the identifier is the venue's own, and states no trading
+    // class: a class describes a family, which is what left a futures order
+    // ambiguous. Options are the exception here only because they are accepted
+    // as they stand and are left exactly as they were.
+    let names_itself_by_local_symbol =
+        matches!(sec_type.as_str(), "FUT" | "FWD" | "IND" | "BOND" | "CFD" | "CRYPTO" | "WAR");
+    // Which kinds state a maturity, and in what form. A future and a warrant
+    // state the contract month and carry no maturity date at all. An option
+    // states what it has always stated, because that is accepted.
+    let states_contract_month = matches!(sec_type.as_str(), "FUT" | "FWD" | "WAR");
+    if states_contract_month {
         let month: String = expiry.chars().take(6).collect();
         if month.len() == 6 {
             fields.push((200, month));
         }
-    } else if let Some(tag) = super::ccp::maturity_tag(&expiry) {
+    } else if !names_itself_by_local_symbol
+        && let Some(tag) = super::ccp::maturity_tag(&expiry)
+    {
         fields.push((tag, expiry));
     }
-    // What tells one contract in a family from another where the maturity does
-    // not.
-    //
-    // An order names the member by its own identifier rather than by its class:
-    // the local symbol goes on SecurityID under a source that says the
-    // identifier is the venue's own, and the trading class is not stated at all
-    // on an order. Naming the class and not the member is what left a futures
-    // order describing a family, which the venue called ambiguous.
-    if is_future {
+    if names_itself_by_local_symbol {
         if !local_symbol.is_empty() {
             fields.push((48, local_symbol));
             fields.push((22, IB_LOCAL_SYMBOL_SOURCE.to_string()));
@@ -1677,6 +1679,35 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A stock is named by its symbol. Everything else names one contract by
+    /// the venue's own identifier, which is what tells a member of a family
+    /// from the family itself.
+    #[test]
+    fn only_a_stock_leaves_the_contract_unnamed() {
+        for (sec_type, key, wants_id) in [
+            // expiry|strike|right|multiplier|tradingClass|localSymbol
+            ("STK", "|0|||XCLASS|XLOCAL", false),
+            ("IND", "|0|||XCLASS|XLOCAL", true),
+            ("CFD", "|0|||XCLASS|XLOCAL", true),
+            ("CRYPTO", "|0|||XCLASS|XLOCAL", true),
+        ] {
+            let mut context = Context::new();
+            let instrument = context
+                .market
+                .try_register_contract(1, "X", sec_type, "SMART", key)
+                .expect("register a contract");
+            context.set_symbol(instrument, "X".to_string());
+            let mut fields: Vec<(u32, String)> = Vec::new();
+            push_contract_identity(&mut fields, &context, instrument);
+            let named = fields.iter().any(|(t, _)| *t == 48);
+            assert_eq!(named, wants_id, "{sec_type} names the contract: {fields:?}");
+            assert!(
+                !(wants_id && fields.iter().any(|(t, _)| *t == 6058)),
+                "{sec_type} states no trading class: {fields:?}",
+            );
+        }
+    }
 
     /// A replace is a full statement of the order, so an attribute the submit
     /// made survives it. This one came back without its all-or-none instruction
@@ -3366,7 +3397,7 @@ mod outside_rth_polarity_tests {
             let mut context = Context::new();
             let instrument = context
                 .market
-                .try_register_contract(893091670, "MES", "FUT", "CME", "20270917|0||5")
+                .try_register_contract(893091670, "MES", "FUT", "CME", "20270917|0||5|MES|MESU7")
                 .expect("register a future");
             context.set_symbol(instrument, "MES".to_string());
             submit(&mut context, instrument, false);
@@ -3382,6 +3413,8 @@ mod outside_rth_polarity_tests {
             // The member, not the family: the local symbol under the source
             // that says the identifier is the venue's own.
             assert!(!sent.contains("|6058="), "{label} states no trading class: {sent}");
+            assert!(sent.contains("|48=MESU7|"), "{label} names the contract: {sent}");
+            assert!(sent.contains("|22=101|"), "{label} says what the identifier is: {sent}");
         }
     }
 }
