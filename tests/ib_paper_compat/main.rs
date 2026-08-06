@@ -743,10 +743,15 @@ fn cross_session_recovery_phase_live() {
     println!("\n  PASS — cross-session cancel works (ibx#191 PR A validated)\n");
 }
 
-/// Which services this session is routed to. The routing table names each
-/// service and the farm serving it, and a service with no farm cannot be
-/// reached however the request is shaped. Run this to find out whether a
-/// service is available to this account before implementing a path to it.
+/// What this session answers. Counts every user message it sends of its own
+/// accord, waits for the line to go quiet, then asks for things and counts
+/// what comes back.
+///
+/// What it established: a request with no parameters at all is answered, so
+/// nothing about the framing or the transport of a user message is wrong. A
+/// chain request is not answered in any shape, with or without a request id,
+/// with either contract id tag, and with or without the derivative type. The
+/// difference is not in the message.
 ///
 /// Run: cargo test --test ib_paper_compat routing_table_probe -- --ignored --nocapture
 #[test]
@@ -760,74 +765,96 @@ fn routing_table_probe() {
     let (gw, farm, mut ccp, hmds) = Gateway::connect(&config).expect("Gateway::connect failed");
     drop(gw);
 
-    let now = ibx::gateway::chrono_free_timestamp();
-    ccp.send_fix(&[
-        (fix::TAG_MSG_TYPE, "U"),
-        (fix::TAG_SENDING_TIME, &now),
-        (6040, "78"),
-        (6556, "1"),
-        (6066, "0"),
-    ]).expect("send the routing table request");
-
-    // Ask for an option chain on the same connection, so a reply to either can
-    // be told apart from a connection that answers neither.
-    let now = ibx::gateway::chrono_free_timestamp();
-    ccp.send_fix(&[
-        (fix::TAG_MSG_TYPE, "U"),
-        (fix::TAG_SENDING_TIME, &now),
-        (6040, "138"),
-        (55, "SPY"),
-        (310, "OPT"),
-        (6346, "756733"),
-        (6320, "1"),
-        (6994, "1"),
-    ]).expect("send the chain request");
-
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let mut services = String::new();
-    while Instant::now() < deadline && services.is_empty() {
-        match ccp.try_recv() {
-            Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
-            Err(e) => { println!("  recv error: {e}"); break; }
-            Ok(_) => {}
-        }
-        for frame in ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => {
-                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
-                let tags = fix::fix_parse(&msg);
-                // Every user message carries its own subtype, and the reply to
-                // this request is a subtype of its own rather than an echo of
-                // the one asked for. Report what arrives either way, so a reply
-                // that is not the table can be told from no reply at all.
-                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("U") {
-                    println!("  inbound U subtype={:?}", tags.get(&6040));
-                }
-                if let Some(list) = tags.get(&6572) {
-                    services = list.clone();
+    // Count every user message by its own subtype, so a reply can be told from
+    // silence and from traffic that was going to arrive anyway.
+    let mut tally = |ccp: &mut Connection, secs: u64| -> std::collections::BTreeMap<String, usize> {
+        let mut seen: std::collections::BTreeMap<String, usize> = Default::default();
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            match ccp.try_recv() {
+                Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
+                Err(_) => break,
+                Ok(_) => {}
+            }
+            for frame in ccp.extract_frames() {
+                let messages = match frame {
+                    Frame::FixComp(raw) => {
+                        let Some(unsigned) = ccp.unsign(&raw) else { continue };
+                        fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
+                    }
+                    Frame::Fix(raw) => vec![raw],
+                    _ => continue,
+                };
+                for msg in messages {
+                    let tags = fix::fix_parse(&msg);
+                    if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("U")
+                        && let Some(sub) = tags.get(&6040)
+                    {
+                        *seen.entry(sub.clone()).or_default() += 1;
+                    }
                 }
             }
         }
+        seen
+    };
+
+    // Drain what the session sends of its own accord, and keep draining until
+    // it has been quiet for a stretch. Counting against a line that is still
+    // delivering its opening burst cannot tell a reply from a straggler.
+    let mut settle: std::collections::BTreeMap<String, usize> = Default::default();
+    for round in 0..12 {
+        let batch = tally(&mut ccp, 5);
+        let quiet = batch.is_empty();
+        for (k, v) in batch {
+            *settle.entry(k).or_default() += v;
+        }
+        if quiet {
+            println!("  quiet after {} seconds", (round + 1) * 5);
+            break;
+        }
+    }
+    println!("  before the request: {settle:?}");
+
+    // One message, no parameters, whose reply this session has already been
+    // observed to receive. If nothing comes back, no user message this client
+    // sends is being answered.
+    let now = ibx::gateway::chrono_free_timestamp();
+    ccp.send_fix(&[
+        (fix::TAG_MSG_TYPE, "U"),
+        (fix::TAG_SENDING_TIME, &now),
+        (6040, "80"),
+    ]).expect("send the algo catalogue request");
+
+    let after = tally(&mut ccp, 20);
+    println!("  after the request:  {after:?}");
+
+    // A chain request as the reference client builds it, then the same one
+    // naming itself. The venue answers a request that states no identifier
+    // for other kinds, so whether it wants one here is the question.
+    // Vary one thing at a time: which tag carries the contract id, whether the
+    // derivative type is stated, and whether an id is given at all.
+    let variants: [(&str, Vec<(u32, &str)>); 5] = [
+        ("6346", vec![(55, "SPY"), (310, "OPT"), (6346, "756733"), (6320, "1"), (6994, "1")]),
+        ("6457", vec![(55, "SPY"), (310, "OPT"), (6457, "756733"), (6320, "1"), (6994, "1")]),
+        ("no-310", vec![(55, "SPY"), (6346, "756733"), (6320, "1"), (6994, "1")]),
+        ("symbol-only", vec![(55, "SPY"), (310, "OPT"), (6320, "1"), (6994, "1")]),
+        ("bare", vec![(55, "SPY")]),
+    ];
+    for (label, body) in variants {
+        let now = ibx::gateway::chrono_free_timestamp();
+        let mut fields: Vec<(u32, &str)> = vec![
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &now),
+            (6040, "138"),
+        ];
+        fields.extend(body);
+        ccp.send_fix(&fields).expect("send the chain request");
+        let seen = tally(&mut ccp, 12);
+        println!("  chain {label}: {seen:?}");
     }
 
     drop(farm);
     drop(hmds);
-    if services.is_empty() {
-        println!("  no service list in the reply");
-        return;
-    }
-    let mut named: Vec<&str> = services.split(';').filter(|s| !s.is_empty()).collect();
-    named.sort_unstable();
-    println!("  {} services routed:", named.len());
-    for entry in &named {
-        println!("    {entry}");
-    }
 }
 
 /// ibx#191 PR B focused live entry — validates `EClient::cancel_order_by_perm_id`.
