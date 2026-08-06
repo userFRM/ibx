@@ -301,7 +301,7 @@ pub struct OrderSpec {
     pub attrs: OrderAttrs,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct OrderAttrs {
     /// Show on book as this many shares (tag 111). 0 = not set (show full qty).
     pub display_size: u32,
@@ -419,6 +419,65 @@ pub struct OrderAttrs {
     /// 2 lapses, 0 is an ordinary order. There is no message of its own for an
     /// exercise, so it is an order carrying the action.
     pub exercise_action: u8,
+}
+
+impl Default for OrderAttrs {
+    /// Unset has to be a value no caller would state. A percent offset of
+    /// zero and an exempt code of zero are both real instructions, so
+    /// deriving these asserted a relative-order offset and a short-sale
+    /// exemption on every order that never asked for either.
+    fn default() -> Self {
+        Self {
+            display_size: Default::default(),
+            min_qty: Default::default(),
+            hidden: Default::default(),
+            outside_rth: Default::default(),
+            good_after: Default::default(),
+            good_till: Default::default(),
+            good_till_date_ymd: Default::default(),
+            oca_group: Default::default(),
+            oca_group_str: Default::default(),
+            parent_id: Default::default(),
+            discretionary_amt: Default::default(),
+            sweep_to_fill: Default::default(),
+            all_or_none: Default::default(),
+            volatility: Default::default(),
+            volatility_type: Default::default(),
+            percent_offset: f64::MAX,
+            not_held: Default::default(),
+            order_ref: Default::default(),
+            open_close: Default::default(),
+            scale: Default::default(),
+            delta_neutral: Default::default(),
+            short_sale_slot: Default::default(),
+            designated_location: Default::default(),
+            exempt_code: -1,
+            hedge_type: Default::default(),
+            hedge_beta: Default::default(),
+            hedge_ratio: Default::default(),
+            rule80a: Default::default(),
+            post_to_ats: Default::default(),
+            deactivate: Default::default(),
+            deactivate_on_disconnect: Default::default(),
+            include_overnight: Default::default(),
+            auto_cancel_parent: Default::default(),
+            min_trade_qty: Default::default(),
+            block_order: Default::default(),
+            auto_cancel_date: Default::default(),
+            clearing_account: Default::default(),
+            clearing_intent: Default::default(),
+            combo_legs: Default::default(),
+            primary_exchange: Default::default(),
+            delta_neutral_contract: Default::default(),
+            trigger_method: Default::default(),
+            cash_qty: Default::default(),
+            conditions: Default::default(),
+            conditions_cancel_order: Default::default(),
+            conditions_ignore_rth: Default::default(),
+            oca_type: Default::default(),
+            exercise_action: Default::default(),
+        }
+    }
 }
 
 /// A condition that must be met before an order activates.
