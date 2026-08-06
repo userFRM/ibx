@@ -49,7 +49,7 @@ impl EClient {
             &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
-                &contract.right, &contract.multiplier,
+                &contract.right, &contract.multiplier, &contract.currency,
             ),
         )
             .map_err(PyRuntimeError::new_err)?;
@@ -133,7 +133,7 @@ impl EClient {
             &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
-                &contract.right, &contract.multiplier,
+                &contract.right, &contract.multiplier, &contract.currency,
             ),
         ).map_err(PyRuntimeError::new_err)?;
 

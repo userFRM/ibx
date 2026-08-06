@@ -22,7 +22,7 @@ impl EClient {
             &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
-                &contract.right, &contract.multiplier,
+                &contract.right, &contract.multiplier, &contract.currency,
             ),
         )?;
 
@@ -37,7 +37,7 @@ impl EClient {
             contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
-                &contract.right, &contract.multiplier,
+                &contract.right, &contract.multiplier, &contract.currency,
             ),
         )?;
 
@@ -90,7 +90,7 @@ impl EClient {
         )?;
         let identity = ClientCore::contract_identity(
             &contract.last_trade_date_or_contract_month, contract.strike,
-            &contract.right, &contract.multiplier,
+            &contract.right, &contract.multiplier, &contract.currency,
         );
         ClientCore::validate_order_contract(&contract.sec_type, &identity)?;
 

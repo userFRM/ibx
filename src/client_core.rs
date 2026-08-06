@@ -580,12 +580,18 @@ impl ClientCore {
     /// and multiplier. Empty for anything those do not distinguish, which is
     /// every stock and every currency pair.
     pub fn contract_identity(
-        last_trade_date: &str, strike: f64, right: &str, multiplier: &str,
+        last_trade_date: &str, strike: f64, right: &str, multiplier: &str, currency: &str,
     ) -> String {
-        if last_trade_date.is_empty() && strike <= 0.0 && right.is_empty() {
+        let named_by_symbol = last_trade_date.is_empty() && strike <= 0.0 && right.is_empty();
+        // A holding priced in the account's own currency is named completely by
+        // its symbol. One priced in another is not: an order that says nothing
+        // about the currency is taken as an order in the default one, which is a
+        // different contract, and the venue answers it with nothing at all.
+        let stated_currency = !currency.is_empty() && !currency.eq_ignore_ascii_case("USD");
+        if named_by_symbol && !stated_currency {
             return String::new();
         }
-        format!("{last_trade_date}|{strike}|{right}|{multiplier}")
+        format!("{last_trade_date}|{strike}|{right}|{multiplier}|||{currency}")
     }
 
     /// Find instrument ID for a contract, registering if needed.
