@@ -294,6 +294,13 @@ impl AdaptivePriority {
 
 /// Optional attributes for extended order submissions.
 /// All fields default to "not set" (0/false).
+/// What an order was submitted as, kept so a replace can restate it in full.
+#[derive(Debug, Clone)]
+pub struct OrderSpec {
+    pub kind: OrderKind,
+    pub attrs: OrderAttrs,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct OrderAttrs {
     /// Show on book as this many shares (tag 111). 0 = not set (show full qty).
