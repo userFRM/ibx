@@ -260,9 +260,19 @@ words: *"invalid for this combination of exchange and security type"*.
 | Short sale | share |
 | Iceberg | share, every displayed quantity tried |
 
-What this client writes for each is checked on the bytes, so the encoding is
-established where no venue will exercise it. A caller sending one of these
-receives the venue's refusal, which is what the reference client receives.
+What this client writes for each is checked on the bytes, and matches what the
+counterpart client writes, field for field: the order type character, the
+execution instruction beside it, the time in force, the displayed quantity, the
+side and the locate flag. So a caller sending one of these receives the venue's
+refusal because the venue refuses it, not because it was asked wrongly.
+
+That distinction had to be earned. Two of these were recorded here as refusals
+and were not: an order asking to peg went out under a type the venue uses for
+something else, so it was refused under a name nobody had asked for. Asked the
+way the counterpart asks, the venue names it correctly. A refusal naming a type
+the caller did not request is a fault in the request, not an answer about the
+account — the pegged family works on this account, and two of its members are
+accepted.
 
 ### What a skipped phase is allowed to mean
 
