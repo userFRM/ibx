@@ -83,8 +83,13 @@ A user message carries what it is for on tag 6040.
 | `U` | User message |
 | `W` | Chart request |
 | `d` | Security definition |
+| `AL` | not named here |
+| `AP` | not named here |
+| `DO` | not named here |
+| `DP` | not named here |
 | `EB` | not named here |
 | `RL` | Account update |
+| `UL` | not named here |
 | `UM` | Account update |
 | `UP` | Position update |
 | `UT` | Account update |

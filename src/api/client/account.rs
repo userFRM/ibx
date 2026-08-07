@@ -194,6 +194,16 @@ impl EClient {
         self.shared.portfolio.positions_elsewhere()
     }
 
+    /// The account figures describing one of the sets of holdings the account
+    /// does not hold itself, as name and value.
+    ///
+    /// The venue states these the same way it states the account's own, and
+    /// mixing them in would overstate what the account is worth, so they are
+    /// kept where the holdings they describe are kept.
+    pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String)> {
+        self.shared.portfolio.values_elsewhere(held)
+    }
+
     /// Read account state snapshot.
     pub fn account(&self) -> AccountState {
         self.shared.portfolio.account()
