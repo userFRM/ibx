@@ -36,3 +36,4 @@
 # Reference
 
 - [Endpoint Coverage](./reference/coverage.md)
+- [Wire Coverage](./reference/wire-coverage.md)

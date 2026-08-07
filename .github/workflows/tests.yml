@@ -135,8 +135,9 @@ jobs:
       - name: Regenerate and compare
         run: |
           python scripts/gen_api_docs.py
+          python scripts/gen_wire_coverage.py
           git diff --exit-code docs/ || {
-            echo "::error::generated docs are stale — run scripts/gen_api_docs.py and commit the result"
+            echo "::error::generated docs are stale — run the scripts under scripts/ and commit the result"
             exit 1
           }
 
