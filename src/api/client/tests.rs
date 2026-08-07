@@ -659,13 +659,16 @@ fn is_connected_after_construction() {
     assert!(client.is_connected());
 }
 
+/// Disconnecting ends the session and then stops the engine, in that order. The
+/// venue is told the session is going while there is still a connection to tell
+/// it on; stopping the engine first would leave it to notice.
 #[test]
-fn disconnect_sends_shutdown_and_clears_connected() {
+fn disconnect_ends_the_session_then_stops_the_engine() {
     let (client, rx, _shared) = test_client();
     client.disconnect();
     assert!(!client.is_connected());
-    let cmd = rx.try_recv().unwrap();
-    assert!(matches!(cmd, ControlCommand::Shutdown));
+    assert!(matches!(rx.try_recv().unwrap(), ControlCommand::Logout));
+    assert!(matches!(rx.try_recv().unwrap(), ControlCommand::Shutdown));
 }
 
 #[test]

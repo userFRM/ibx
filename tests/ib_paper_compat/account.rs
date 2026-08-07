@@ -409,7 +409,21 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
         if let Some(info) = shared.orders.get_order_info(co.order_id) {
             let mut state = info.order_state;
             state.status = status_str.into();
-            wrapper.completed_order(&info.contract, &info.order, &state);
+            // What EClient::req_completed_orders does, and this loop did not:
+            // the contract on the order record is what the execution report
+            // stated, which is a subset of the definition. The definition is
+            // what the caller is given, so a field the report omits — the
+            // trading class among them — is filled from it at read time.
+            let mut contract = info.contract.clone();
+            if contract.con_id != 0
+                && let Some(def) = shared.reference.get_contract(contract.con_id)
+            {
+                if contract.exchange.is_empty() { contract.exchange = def.exchange; }
+                if contract.trading_class.is_empty() { contract.trading_class = def.trading_class; }
+                if contract.local_symbol.is_empty() { contract.local_symbol = def.local_symbol; }
+                if contract.primary_exchange.is_empty() { contract.primary_exchange = def.primary_exchange; }
+            }
+            wrapper.completed_order(&contract, &info.order, &state);
         } else {
             let c = api::Contract::default();
             let o = api::Order { order_id: co.order_id as i64, ..Default::default() };
@@ -870,23 +884,26 @@ pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
                     order_submitted = true;
                 }
             }
-            Ok(Event::Tick(_)) | Ok(_) => {
-                if !pnl_checked {
-                    let acct = shared.portfolio.account();
-                    // DailyPnL is populated from server messages.
-                    // At least net_liquidation should be set; PnL fields may be 0
-                    // if no positions exist, which is valid.
-                    if acct.net_liquidation > 0 {
-                        println!("  DailyPnL:      {:.2}", acct.daily_pnl as f64 / PRICE_SCALE as f64);
-                        println!("  UnrealizedPnL: {:.2}", acct.unrealized_pnl as f64 / PRICE_SCALE as f64);
-                        println!("  RealizedPnL:   {:.2}", acct.realized_pnl as f64 / PRICE_SCALE as f64);
-                        pnl_checked = true;
-                        // Cancel the probe order
-                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                    }
-                }
-            }
+            Ok(_) => {}
             Err(_) => {}
+        }
+
+        // Account values are pushed, not answered, so nothing says which event
+        // arrives first or whether any arrives at all. Reading them only inside
+        // a tick meant a phase that subscribes to no market data never looked:
+        // the figures were there and went unread, which is indistinguishable
+        // from the venue never sending them.
+        if !pnl_checked {
+            let acct = shared.portfolio.account();
+            // The profit and loss figures are legitimately zero for an account
+            // holding nothing. Net liquidation is what says the values arrived.
+            if acct.net_liquidation > 0 {
+                println!("  DailyPnL:      {:.2}", acct.daily_pnl as f64 / PRICE_SCALE as f64);
+                println!("  UnrealizedPnL: {:.2}", acct.unrealized_pnl as f64 / PRICE_SCALE as f64);
+                println!("  RealizedPnL:   {:.2}", acct.realized_pnl as f64 / PRICE_SCALE as f64);
+                pnl_checked = true;
+                control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+            }
         }
         if pnl_checked && order_submitted { break; }
     }

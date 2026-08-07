@@ -1719,12 +1719,24 @@ impl CcpState {
         {
             let account = parsed.get(&1).cloned().unwrap_or_default();
             let symbol = parsed.get(&55).cloned().unwrap_or_default();
-            let exchange = parsed.get(&207).cloned().unwrap_or_default();
+            // Where the order is working. The report states it on 207 when it
+            // says so at all, and on 6004 as the destination it was routed to;
+            // failing both, this client knows where it sent the order and says
+            // that. An empty exchange on a completed order is a contract a
+            // caller cannot re-place, and the reference client never returns one.
+            let exchange = parsed.get(&207).cloned()
+                .filter(|e| !e.is_empty())
+                .or_else(|| parsed.get(&6004).cloned().filter(|e| !e.is_empty()))
+                .or_else(|| {
+                    context.order(clord_id).copied()
+                        .map(|o| context.market.order_routing(o.instrument).1)
+                        .filter(|e| !e.is_empty())
+                })
+                .unwrap_or_default();
             let sec_type = parsed.get(&167).cloned().unwrap_or_default();
             let currency = parsed.get(&15).cloned().unwrap_or_default();
             let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
             let local_symbol = parsed.get(&6035).cloned().unwrap_or_default();
-            let _routing_exchange = parsed.get(&6004).cloned().unwrap_or_default();
             let perm_id: i64 = parsed.get(&37).map(|s| perm_id_from_fix_order_id(s)).unwrap_or(0);
             let total_qty: f64 = parsed.get(&38).and_then(|s| s.parse().ok()).unwrap_or(0.0);
             let ord_type_tag = parsed.get(&40).map(|s| s.as_str()).unwrap_or("");
@@ -1951,7 +1963,26 @@ impl CcpState {
             };
 
             if con_id != 0 {
-                shared.reference.cache_contract(con_id, contract.clone());
+                // An execution report states a subset of a definition: it names
+                // the contract, not its long name, its trading class or the
+                // venues it may trade on. Caching it whole replaced a definition
+                // already fetched with a poorer one, so a later reader of the
+                // cache got a contract that had lost fields it used to have.
+                // Fill, do not replace.
+                let merged = match shared.reference.get_contract(con_id) {
+                    Some(mut known) => {
+                        if !contract.symbol.is_empty() { known.symbol = contract.symbol.clone(); }
+                        if !contract.sec_type.is_empty() { known.sec_type = contract.sec_type.clone(); }
+                        if !contract.exchange.is_empty() { known.exchange = contract.exchange.clone(); }
+                        if !contract.currency.is_empty() { known.currency = contract.currency.clone(); }
+                        if !contract.local_symbol.is_empty() {
+                            known.local_symbol = contract.local_symbol.clone();
+                        }
+                        known
+                    }
+                    None => contract.clone(),
+                };
+                shared.reference.cache_contract(con_id, merged);
             }
 
             // A trade cancel (150=H) or trade correction (150=G) restates an

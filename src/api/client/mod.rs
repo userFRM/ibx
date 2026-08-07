@@ -399,6 +399,8 @@ impl EClient {
     /// Disconnect from IB.  Sends `Shutdown` to the hot loop, waits for the
     /// background thread to exit, and marks the client as disconnected.
     pub fn disconnect(&self) {
+        // The session is ending, so the venue is told before the engine stops.
+        let _ = self.control_tx.send(ControlCommand::Logout);
         let _ = self.control_tx.send(ControlCommand::Shutdown);
         if let Some(h) = self.thread.lock().unwrap().take() {
             let _ = h.join();

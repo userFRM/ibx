@@ -75,6 +75,8 @@ pub struct EClient {
 impl Drop for EClient {
     fn drop(&mut self) {
         if let Some(tx) = self.control_tx.lock().unwrap().as_ref() {
+            // Dropping the client ends the session, so the venue is told.
+            let _ = tx.send(ControlCommand::Logout);
             let _ = tx.send(ControlCommand::Shutdown);
         }
         if let Some(h) = self._thread.lock().unwrap().take() {
@@ -268,6 +270,8 @@ impl EClient {
     /// Disconnect from IB.
     fn disconnect(&self, py: Python<'_>) -> PyResult<()> {
         if let Some(tx) = self.control_tx.lock().unwrap().as_ref() {
+            // The session is ending, so the venue is told before the engine stops.
+            let _ = tx.send(ControlCommand::Logout);
             let _ = tx.send(ControlCommand::Shutdown);
         }
         if let Some(h) = self._thread.lock().unwrap().take() {
