@@ -89,7 +89,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
         // arrive, so no fill after no ticks is a market-data fault and no fill
         // after an order is an execution one. Reported as the same line, they
         // are indistinguishable in a log.
-        no_market(&format!(
+        no_market(&shared, &format!(
             "no buy fill (ticks seen {tick_count}, order {})",
             if phase >= 1 { "sent" } else { "never sent, waiting on quotes" },
         ));
@@ -304,6 +304,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     let mut sell_price = 0i64;
     let mut sell_comm = 0i64;
     let mut rejected_order: Option<u64> = None;
+    let mut uncertain = false;
 
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -320,6 +321,13 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
                     break;
                 }
             }
+            // The transport went away with the order on it. The client reports
+            // that rather than guessing, and it is not a market with nothing to
+            // trade — no fill follows an order the venue never confirmed.
+            Ok(Event::OrderUpdate(update)) if update.status == OrderStatus::Uncertain => {
+                uncertain = true;
+                break;
+            }
             Ok(Event::OrderUpdate(update))
                 if update.status == OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
             _ => {}
@@ -332,8 +340,21 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
         println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
+    if uncertain {
+        println!("  SKIP: the connection went away with the order on it, so its state is not known\n");
+        return conns;
+    }
+    // With no socket the engine holds an order for the reconnect rather than
+    // dropping it, which is right — but the reconnect needs the session, and in
+    // this suite the session belongs to the harness, not the engine. So the
+    // order is still waiting, correctly, and no fill can arrive. That is the
+    // connection, not the market.
+    if shared.take_connection_lost() {
+        println!("  SKIP: the trading connection was lost, so the order is still waiting to be sent\n");
+        return conns;
+    }
     if buy_price == 0 {
-        no_market("no fill");
+        no_market(&shared, "no fill");
         return conns;
     }
     let bp = buy_price as f64 / PRICE_SCALE as f64;
@@ -1147,7 +1168,7 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
     let shared_for_client = shared.clone();  // for EClient dispatcher validation
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
@@ -1222,7 +1243,7 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
         assert!(dispatcher_validated, "Dispatcher path (open_order + order_status) failed validation");
         println!("  PASS\n");
     } else {
-        no_market("commission was zero, so nothing was priced");
+        no_market(&shared, "commission was zero, so nothing was priced");
     }
     conns
 }
@@ -1450,7 +1471,7 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
     }
     println!("  Entry filled: {entry_filled}, TP active: {tp_active}, SL active: {sl_active}");
     if !entry_filled {
-        no_market("the entry order did not fill");
+        no_market(&shared, "the entry order did not fill");
         return conns;
     }
     assert!(tp_active, "Take-profit child was never activated after entry fill");
@@ -1532,7 +1553,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order { println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id)); return conns; }
-    if !buy_filled { no_market("no fill"); return conns; }
+    if !buy_filled { no_market(&shared, "no fill"); return conns; }
 
     println!("  Buy filled: {buy_filled}, Sell filled: {sell_filled}");
     if pnl_updated {
@@ -2076,7 +2097,7 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
         return conns;
     }
     if phase < 2 {
-        no_market("no fill arrived");
+        no_market(&shared, "no fill arrived");
         return conns;
     }
     // IB may silently ignore cancel on filled order (no CancelReject),

@@ -652,7 +652,7 @@ pub(super) fn phase_histogram_data(mut conns: Conns, gw: &Gateway, config: &Gate
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if entries.is_empty() {
-        session_owed("no histogram entries arrived");
+        session_owed(&shared, "no histogram entries arrived");
     } else {
         println!("  {} histogram entries", entries.len());
         if let Some(first) = entries.first() {
@@ -770,7 +770,7 @@ pub(super) fn phase_realtime_bars(mut conns: Conns, gw: &Gateway, config: &Gatew
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if bars.is_empty() {
-        no_market("no real-time bars arrived");
+        no_market(&shared, "no real-time bars arrived");
     } else {
         let bar = &bars[0];
         println!("  First bar: O={:.2} H={:.2} L={:.2} C={:.2} V={:.0}", bar.open, bar.high, bar.low, bar.close, bar.volume);

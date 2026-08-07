@@ -492,10 +492,15 @@ pub(super) fn phase_global_venues(conns: Conns) -> Conns {
 
     let Conns { farm, mut ccp, hmds, account_id } = conns;
 
+    let now = ibx::gateway::chrono_free_timestamp();
     for (i, (symbol, currency, _)) in VENUES.iter().enumerate() {
         let req_id = format!("GV{i}");
-        ccp.send_fixcomp(&[
+        ccp.send_fix(&[
             (fix::TAG_MSG_TYPE, "c"),
+            // Every request the venue answers states when it was sent. Without
+            // it these six were ignored in silence, which reads exactly like a
+            // venue that knows none of the contracts.
+            (fix::TAG_SENDING_TIME, &now),
             (contracts::TAG_SECURITY_REQ_ID, &req_id),
             (contracts::TAG_SECURITY_REQ_TYPE, "2"),
             (contracts::TAG_SYMBOL, symbol),
@@ -553,7 +558,12 @@ pub(super) fn phase_global_venues(conns: Conns) -> Conns {
         }).collect();
 
         if named.is_empty() {
-            lookup_returned_nothing(&format!("no definition came back for {symbol} on {exchange}"));
+            lookup_returned_nothing(&format!(
+                "no definition came back for {symbol} on {exchange}; what did answer: {:?}",
+                found.iter()
+                    .map(|d| (d.symbol.clone(), d.currency.clone(), d.primary_exchange.clone()))
+                    .collect::<Vec<_>>(),
+            ));
         }
 
         // The listing asked for is the one quoted in the currency asked for. A
