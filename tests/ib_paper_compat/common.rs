@@ -577,6 +577,16 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     "insufficient",             // margin, buying power
     "residency",
     "halted",
+    // The venue stating which order types and times in force it accepts for a
+    // security type on an exchange. This client does not pre-validate that — it
+    // lets the venue refuse — so the refusal is the design working, not a
+    // malformed order.
+    "invalid for this combination",
+    // A displayed quantity this venue will not take for this security. Tried
+    // live at 100, 200, 500 and 1000 shares displayed, every one a whole number
+    // of round lots and every one refused alike, so the value it wants is not a
+    // multiple of anything the client controls.
+    "display size",
 ];
 
 /// The reason a rejected order was rejected, for a phase that is about to skip.

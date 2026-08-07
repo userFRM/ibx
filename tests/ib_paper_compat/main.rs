@@ -197,7 +197,7 @@ fn compat_suite() {
 
     conns = contracts::phase_contract_details(conns);
     conns = contracts::phase_contract_details_by_symbol(conns);
-    contracts::phase_trading_hours(&mut conns);
+    conns = contracts::phase_trading_hours(conns);
     conns = contracts::phase_matching_symbols(conns);
     conns = historical::phase_historical_data(conns, &gw, &config);
     conns = historical::phase_historical_daily_bars(conns, &gw, &config);

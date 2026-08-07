@@ -2615,6 +2615,42 @@ mod tests {
         String::from_utf8_lossy(&buf[..n]).to_string()
     }
 
+    /// A fill-or-kill order states that time in force on the wire.
+    ///
+    /// This venue refuses the order for the security types the live suite can
+    /// reach — "the time-in-force FOK is invalid for this combination of
+    /// exchange and security type", on the default destination and on ISLAND
+    /// alike — so no live phase can show the encoding is right. What the venue
+    /// accepts is its own; what this client writes is not, and it is checked
+    /// here on the bytes.
+    #[test]
+    fn a_fill_or_kill_order_states_its_time_in_force() {
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'4',
+            crate::types::OrderAttrs::default(),
+        );
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("59=").as_deref(), Some("4"), "fill or kill on the wire: {msg}");
+    }
+
+    /// An iceberg states how much of it is shown.
+    ///
+    /// Refused live as well — "iceberg orders not supported for this
+    /// combination of exchange and security type" — and refused for every
+    /// displayed quantity tried, so the field never reaches a venue that would
+    /// act on it. It is still this client's job to write it.
+    #[test]
+    fn an_iceberg_order_states_the_quantity_it_shows() {
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'1',
+            crate::types::OrderAttrs { display_size: 100, ..Default::default() },
+        );
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("111=").as_deref(), Some("100"), "the displayed quantity: {msg}");
+    }
+
     /// ibx#240: the tags a bracket child cannot ship without. Asserted on the
     /// bytes `send_order_ex` puts on the wire, not on the request enum — the
     /// enum-level tests passed throughout the period the child shipped naked.

@@ -2,9 +2,6 @@
 
 use super::common::*;
 use ibx::control::contracts;
-use ibx::protocol::fix;
-use ibx::protocol::fixcomp;
-use ibx::protocol::connection::Frame;
 
 pub(super) fn phase_contract_details(conns: Conns) -> Conns {
     println!("--- Phase 12: Contract Details Lookup (SPY, conId=756733) ---");
@@ -141,64 +138,70 @@ pub(super) fn phase_contract_details_by_symbol(conns: Conns) -> Conns {
     conns
 }
 
-pub(super) fn phase_trading_hours(conns: &mut Conns) {
-    println!("--- Phase 80: Trading Hours (schedule subscription, AAPL) ---");
+/// A caller asks what hours a contract trades.
+///
+/// This used to subscribe to the contract on the market-data connection and
+/// watch the trading connection for a schedule to appear, which is a guess at a
+/// mechanism rather than the one the client uses: the schedule is asked for
+/// against the definition, and arrives paired with it. So the phase tested a
+/// path nothing else takes, found nothing, and skipped — while the hours were
+/// reaching callers correctly all along by the path they actually use.
+///
+/// What a caller can see is what is checked now: ask for the contract, and the
+/// hours, the liquid hours and the time zone are on the answer.
+pub(super) fn phase_trading_hours(conns: Conns) -> Conns {
+    println!("--- Phase 80: Trading Hours (AAPL) ---");
 
-    let now = ibx::gateway::chrono_free_timestamp();
-    if let Err(e) = conns.farm.send_fixcomp(&[
-        (fix::TAG_MSG_TYPE, "V"),
-        (fix::TAG_SENDING_TIME, &now),
-        (263, "1"), (146, "1"), (262, "sched_test"),
-        (6008, "265598"), (207, "BEST"), (167, "CS"),
-        (264, "442"), (6088, "Socket"), (9830, "1"), (9839, "1"),
-    ]) {
-        println!("  SKIP: farm subscribe failed: {e}\n");
-        return;
-    }
-    println!("  Subscribed AAPL on farm, listening on CCP for schedule");
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(event_tx), account_id.clone(),
+        conns.farm, conns.ccp, conns.hmds, None,
+    );
 
-    let mut schedule: Option<contracts::ContractSchedule> = None;
-    let deadline = Instant::now() + Duration::from_secs(15);
+    control_tx.send(ControlCommand::FetchContractDetails {
+        req_id: 8000, con_id: 265598,
+        symbol: String::new(), sec_type: String::new(),
+        exchange: String::new(), currency: String::new(),
+        filters: Default::default(),
+    }).unwrap();
+    let join = run_hot_loop(hot_loop);
 
-    while Instant::now() < deadline && schedule.is_none() {
-        if conns.farm.try_recv().is_ok() { conns.farm.extract_frames(); }
-        match conns.ccp.try_recv() {
-            Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
-            Err(e) => { println!("  CCP recv error: {e}"); break; }
-            Ok(_) => {}
+    let mut details: Option<contracts::ContractDefinition> = None;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline && details.is_none() {
+        if let Ok(Event::ContractDetails { req_id, details: d }) =
+            event_rx.recv_timeout(Duration::from_millis(100))
+            && req_id == 8000
+        {
+            details = Some(*d);
         }
-        for frame in conns.ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => { let Some(u) = conns.ccp.unsign(&raw) else { continue }; fixcomp::fixcomp_decompress(&u).unwrap_or_default() }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
-                if let Some(sched) = contracts::parse_schedule_response(&msg) {
-                    println!("  Schedule: tz={} trading={} liquid={}", sched.timezone, sched.trading_hours.len(), sched.liquid_hours.len());
-                    schedule = Some(sched);
-                }
-            }
-        }
     }
 
-    let now2 = ibx::gateway::chrono_free_timestamp();
-    let _ = conns.farm.send_fixcomp(&[
-        (fix::TAG_MSG_TYPE, "V"), (fix::TAG_SENDING_TIME, &now2),
-        (263, "2"), (146, "1"), (262, "sched_test"),
-        (6008, "265598"), (207, "BEST"), (167, "CS"),
-        (264, "442"), (6088, "Socket"), (9830, "1"), (9839, "1"),
-    ]);
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    if schedule.is_none() {
-        lookup_returned_nothing("no trading schedule came back");
-    }
-    let sched = schedule.unwrap();
-    assert!(!sched.timezone.is_empty());
-    assert!(!sched.trading_hours.is_empty());
-    assert!(!sched.liquid_hours.is_empty());
-    assert!(sched.liquid_hours.len() <= sched.trading_hours.len());
+    let Some(def) = details else {
+        lookup_returned_nothing("no definition came back for AAPL, so no schedule with it");
+    };
+
+    println!(
+        "  tz={:?} trading_hours={:?} liquid_hours={:?}",
+        def.time_zone_id,
+        def.trading_hours.as_deref().map(|h| h.len()),
+        def.liquid_hours.as_deref().map(|h| h.len()),
+    );
+
+    // A schedule states its own time zone: hours without one cannot be placed
+    // against a clock, which is the whole use a caller has for them.
+    let zone = def.time_zone_id.as_deref().unwrap_or_default();
+    assert!(!zone.is_empty(), "the schedule states no time zone");
+    let trading = def.trading_hours.as_deref().unwrap_or_default();
+    let liquid = def.liquid_hours.as_deref().unwrap_or_default();
+    assert!(!trading.is_empty(), "the schedule states no trading hours");
+    assert!(!liquid.is_empty(), "the schedule states no liquid hours");
     println!("  PASS\n");
+    conns
 }
 
 pub(super) fn phase_matching_symbols(conns: Conns) -> Conns {
