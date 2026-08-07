@@ -171,7 +171,7 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
         println!("  Disconnected event received");
         println!("  PASS\n");
     } else {
-        println!("  SKIP: No Disconnected event (hot loop may have exited before emitting)\n");
+        session_owed("the connection went away and no Disconnected event was delivered");
     }
     Conns { farm, ccp, hmds, account_id }
 }

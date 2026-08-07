@@ -652,7 +652,7 @@ pub(super) fn phase_histogram_data(mut conns: Conns, gw: &Gateway, config: &Gate
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if entries.is_empty() {
-        println!("  SKIP: No histogram data received\n");
+        session_owed("no histogram entries arrived");
     } else {
         println!("  {} histogram entries", entries.len());
         if let Some(first) = entries.first() {

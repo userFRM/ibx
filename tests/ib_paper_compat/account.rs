@@ -193,7 +193,7 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
         assert!(pos.abs() <= 1.0, "Position after round trip should be 0 (±1 for timing), got {pos}");
         println!("  PASS (position returned to {pos})\n");
     } else if phase == 2 {
-        println!("  SKIP: Fills completed but no PositionUpdate events\n");
+        session_owed("the orders filled and no position update followed");
     } else {
         println!("  SKIP: Only reached phase {phase} (buy may not have filled)\n");
     }
@@ -261,7 +261,7 @@ pub(super) fn phase_account_summary(conns: Conns) -> Conns {
     if has_account_data {
         println!("  PASS\n");
     } else {
-        println!("  SKIP: No account data received\n");
+        session_owed("no account data arrived");
     }
     conns
 }
@@ -906,7 +906,7 @@ pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
         // PnL fields populated (even if 0 — that's valid for no-position accounts)
         println!("  PASS\n");
     } else {
-        println!("  SKIP: Account data not received in time\n");
+        session_owed("no profit and loss figures arrived");
     }
     conns
 }
