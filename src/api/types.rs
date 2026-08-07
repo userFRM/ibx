@@ -471,6 +471,13 @@ impl Order {
             // it is not a volatility or an offset.
             volatility: if self.volatility == f64::MAX { 0.0 } else { self.volatility },
             volatility_type: self.volatility_type.clamp(0, 255) as u8,
+            // Stated by a caller and carried nowhere until now: an order that
+            // asked to be re-priced as the underlying moved, or to stay inside
+            // a band of underlying prices, was accepted and sent without either.
+            continuous_update: self.continuous_update,
+            reference_price_type: self.reference_price_type,
+            stock_range_lower: self.stock_range_lower,
+            stock_range_upper: self.stock_range_upper,
             percent_offset: self.percent_offset,
             not_held: self.not_held,
             order_ref: self.order_ref.clone(),
@@ -605,6 +612,10 @@ impl Order {
             || self.oca_type > 0
             || (self.volatility != f64::MAX && self.volatility > 0.0)
             || self.volatility_type > 0
+            || self.continuous_update
+            || self.reference_price_type > 0
+            || self.stock_range_lower != f64::MAX
+            || self.stock_range_upper != f64::MAX
             || self.percent_offset != f64::MAX
             || self.not_held
             || !self.order_ref.is_empty()
@@ -1188,6 +1199,10 @@ mod tests {
             ("auto_cancel_date", |o| o.auto_cancel_date = "20261231".into()),
             ("clearing_account", |o| o.clearing_account = "U123".into()),
             ("clearing_intent", |o| o.clearing_intent = "IB".into()),
+            ("continuous_update", |o| o.continuous_update = true),
+            ("reference_price_type", |o| o.reference_price_type = 2),
+            ("stock_range_lower", |o| o.stock_range_lower = 100.0),
+            ("stock_range_upper", |o| o.stock_range_upper = 200.0),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1199,7 +1214,9 @@ mod tests {
             oca_type: _, parent_id: _, discretionary_amt: _, sweep_to_fill: _,
             all_or_none: _, trigger_method: _, cash_qty: _, conditions: _,
             conditions_cancel_order: _, conditions_ignore_rth: _,
-            volatility: _, volatility_type: _, percent_offset: _, not_held: _, order_ref: _, open_close: _,
+            volatility: _, volatility_type: _, continuous_update: _, reference_price_type: _,
+            stock_range_lower: _, stock_range_upper: _,
+            percent_offset: _, not_held: _, order_ref: _, open_close: _,
             scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
             exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
             combo_legs: _, rule80a: _, post_to_ats: _, deactivate: _,
