@@ -161,6 +161,30 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it | Met. The coverage matrix carries, per call, how its status was established: exercised against a live session, exercised by the offline suites, stating why it cannot be served, or exercised by neither. Derived from the suites themselves, so it cannot go quietly out of date |
 | W3.6 | Second factor | Approval path covered by an automated live check, or the reason no such check can run recorded | Blocked. The paper session used for verification is never presented with a second factor, so the approval path cannot be exercised against it. The wire and the gate that waits on it are covered by fifteen tests |
 
+## Wires not implemented
+
+The vendor's client builds 132 distinct messages to the venue. Most serve its
+own windows and have no caller here. These are the ones that do not, taken from
+its own bytecode and checked against this client's dispatch tables, with what
+would settle each.
+
+A wire on this list is one this client neither sends nor reads. Each is named
+in the log the first time the venue uses it, so a session that meets one leaves
+a record rather than discarding it in silence.
+
+| Wire | What it carries | Why it is not implemented |
+| --- | --- | --- |
+| Out-of-band `AP` | Positions held away from this broker | Never sent to the account used for verification, so an implementation could not be exercised. Reported by name if it arrives |
+| Out-of-band `DO` | Holdings marked display-only | As above |
+| Out-of-band `DP` | A holding being withdrawn | As above. The vendor's own client treats an unrecognised out-of-band type as an error, so this list is what it would consider missing |
+| Out-of-band `AL`, `UL` | The account list, siblings of the `RL` this client reads | As above. Reading one of three is an accident of what this account sends, not a decision |
+| `6040` 192, 278 | The venue's own error channel | Never sent to this account. A session that provoked one would show it, and nothing here has |
+| `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
+| `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
+| `6040` 10020, 10021 | Contract adjustments, for splits and dividends | Not yet built. Historical prices are unadjusted without it |
+| `6040` 10011, 10031 | Cancelling a fundamentals or news subscription | Not yet built: the request is withdrawn here and the venue is not told, so it keeps sending |
+| `35=2` | Resending missed messages | The vendor's own client never sends it either: the class is registered and constructed nowhere. Implementing it would be work against a wire that never fires |
+
 ## Excluded surface
 
 | Surface | Reason |
