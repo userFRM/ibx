@@ -22,8 +22,8 @@ that did not run.
 
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
-| **EClient methods** | 77 | 69 impl, 4 stub | 69 impl, 8 stub |
-| **EWrapper callbacks** | 81 | 74 impl, 1 stub | 74 impl, 7 stub |
+| **EClient methods** | 77 | 69 impl, 8 stub | 69 impl, 8 stub |
+| **EWrapper callbacks** | 81 | 74 impl, 7 stub | 74 impl, 7 stub |
 
 ## EClient Methods
 
@@ -89,10 +89,10 @@ that did not run.
 |  | `cancel_news_bulletins` | `cancelNewsBulletins` | Y | Y | Live session |
 | Fundamental | `req_fundamental_data` | `reqFundamentalData` | Y | Y | Live session |
 |  | `cancel_fundamental_data` | `cancelFundamentalData` | Y | Y | Live session |
-| Options | `calculate_implied_volatility` | `calculateImpliedVolatility` | - | STUB | States why it cannot be served |
-|  | `cancel_calculate_implied_volatility` | `cancelCalculateImpliedVolatility` | - | STUB | States why it cannot be served |
-|  | `calculate_option_price` | `calculateOptionPrice` | - | STUB | States why it cannot be served |
-|  | `cancel_calculate_option_price` | `cancelCalculateOptionPrice` | - | STUB | States why it cannot be served |
+| Options | `calculate_implied_volatility` | `calculateImpliedVolatility` | STUB | STUB | States why it cannot be served |
+|  | `cancel_calculate_implied_volatility` | `cancelCalculateImpliedVolatility` | STUB | STUB | States why it cannot be served |
+|  | `calculate_option_price` | `calculateOptionPrice` | STUB | STUB | States why it cannot be served |
+|  | `cancel_calculate_option_price` | `cancelCalculateOptionPrice` | STUB | STUB | States why it cannot be served |
 |  | `exercise_options` | `exerciseOptions` | Y | Y | Offline suites |
 |  | `req_sec_def_opt_params` | `reqSecDefOptParams` | Y | Y | Offline suites |
 | Reference | `req_soft_dollar_tiers` | `reqSoftDollarTiers` | Y | Y | Live session |
@@ -127,7 +127,7 @@ that did not run.
 | Orders | `order_status` | Y | Y |
 |  | `open_order` | Y | Y |
 |  | `open_order_end` | Y | Y |
-|  | `order_bound` | - | STUB |
+|  | `order_bound` | STUB | STUB |
 | Executions | `exec_details` | Y | Y |
 |  | `exec_details_end` | Y | Y |
 |  | `commission_and_fees_report` | Y | Y |
@@ -147,7 +147,7 @@ that did not run.
 |  | `account_update_multi_end` | Y | Y |
 | Contract | `contract_details` | Y | Y |
 |  | `contract_details_end` | Y | Y |
-|  | `bond_contract_details` | - | STUB |
+|  | `bond_contract_details` | STUB | STUB |
 |  | `symbol_samples` | Y | Y |
 | Historical Data | `historical_data` | Y | Y |
 |  | `historical_data_end` | Y | Y |
@@ -185,10 +185,10 @@ that did not run.
 |  | `soft_dollar_tiers` | Y | Y |
 |  | `family_codes` | Y | Y |
 |  | `user_info` | Y | Y |
-| FA | `receive_fa` | - | STUB |
-|  | `replace_fa_end` | - | STUB |
+| FA | `receive_fa` | STUB | STUB |
+|  | `replace_fa_end` | STUB | STUB |
 | Display Groups | `display_group_list` | Y | Y |
 |  | `display_group_updated` | Y | Y |
 | Other | `delta_neutral_validation` | STUB | STUB |
-| WSH | `wsh_meta_data` | - | STUB |
-|  | `wsh_event_data` | - | STUB |
+| WSH | `wsh_meta_data` | STUB | STUB |
+|  | `wsh_event_data` | STUB | STUB |
