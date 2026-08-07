@@ -717,7 +717,7 @@ pub(super) fn phase_historical_schedule(mut conns: Conns, gw: &Gateway, config: 
         assert!(!sched.sessions.is_empty(), "Schedule should contain sessions");
         println!("  PASS\n");
     } else {
-        println!("  SKIP: No schedule data received\n");
+        lookup_returned_nothing("no trading schedule came back");
     }
     conns
 }
@@ -989,7 +989,7 @@ pub(super) fn phase_parallel_historical(mut conns: Conns, gw: &Gateway, config: 
     } else if count > 0 {
         println!("  PARTIAL: {count}/3 responses received\n");
     } else {
-        println!("  SKIP: No responses received\n");
+        historical_silence(&shared, "none of the three historical requests answered");
     }
     conns
 }
@@ -1277,7 +1277,7 @@ pub(super) fn phase_dst_boundary_historical(mut conns: Conns, gw: &Gateway, conf
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if bars.is_empty() {
-        println!("  SKIP: No bars received\n");
+        historical_silence(&shared, "no bars arrived");
         return conns;
     }
 
