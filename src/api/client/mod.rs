@@ -404,6 +404,17 @@ impl EClient {
 }
 
 impl EClient {
+    /// Everything the venue has sent this session that nothing here reads,
+    /// as the connection it arrived on and what it was.
+    ///
+    /// Empty is this client's claim that it reads everything this venue sends
+    /// it, and the only way to check that claim rather than take it. A message
+    /// deliberately not read — one carrying nothing a caller could use — is
+    /// not listed here; those are named in the source with the reason.
+    pub fn unread_wire(&self) -> Vec<(&'static str, String)> {
+        self.shared.market.unread_wire()
+    }
+
     /// Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
     pub fn ccp_session_id(&self) -> String {
         self.shared.reference.ccp_session_id()

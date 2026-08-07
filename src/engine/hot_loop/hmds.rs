@@ -619,6 +619,10 @@ impl HmdsState {
                 // ibx#183 follow-up: was a silent _ => {} arm — log unhandled
                 // msg_types so we can catch frames that bypass the W cascade
                 // entirely (e.g. completion sentinels delivered as a different type).
+                // Recorded as well as logged: a claim that this client reads
+                // everything the venue sends is only checkable if what it does
+                // not read is written down.
+                shared.market.note_unread_wire("historical", format!("type {other}"));
                 log::warn!("HMDS unhandled msg_type={:?} (msg_len={})", other, msg.len());
             }
         }

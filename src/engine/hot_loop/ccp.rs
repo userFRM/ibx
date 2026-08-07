@@ -708,10 +708,15 @@ impl CcpState {
                             if self.unread_subtypes.insert(other.to_string()) {
                                 match known_unread(other) {
                                     Some(why) => log::debug!("Subtype {other} is not read: {why}"),
-                                    None => log::info!(
+                                    None => {
+                                        shared.market.note_unread_wire(
+                                            "trading", format!("user message {other}"),
+                                        );
+                                        log::info!(
                                         "Unread user message: subtype {other}. Nothing here reads \
                                          it, so whatever it carries is being discarded"
-                                    ),
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -1080,6 +1085,7 @@ impl CcpState {
             // an error rather than as nothing.
             other => {
                 if self.unread_types.insert(other.to_string()) {
+                    shared.market.note_unread_wire("trading", format!("type {other}"));
                     log::info!(
                         "Unread message: type {other}, {} bytes. Nothing here reads it, so \
                          whatever it carries is being discarded",

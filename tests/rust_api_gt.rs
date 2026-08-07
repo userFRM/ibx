@@ -1564,3 +1564,61 @@ fn reference_and_account_calls_live() {
     drop(h);
     client.disconnect();
 }
+
+
+/// Everything the venue sends this session is read.
+///
+/// This client claims to replace the vendor's gateway. That is a claim about
+/// messages, and it is checkable: exercise every path a caller has, then ask
+/// what arrived that nothing read. Anything listed is a wire this client is
+/// discarding — which is how the option chain, the venue's own error channel,
+/// the algorithms it offers and the holdings held away were all found, each
+/// having arrived unread for as long as this client has existed.
+#[test]
+fn the_venue_sends_nothing_this_client_does_not_read() {
+    let _ = env_logger::try_init();
+    let Some(config) = get_config() else {
+        println!("Skipping: IB credentials not set");
+        return;
+    };
+    let client = EClient::connect(&config).expect("EClient::connect failed");
+    let mut w = RecWrapper::new();
+
+    // Everything a caller can ask for, so the venue has reason to send
+    // everything it would ever send.
+    let spy = spy();
+    client.req_mkt_data(1, &spy, "", false, false).unwrap();
+    let _ = client.req_mkt_depth(2, &spy, 5, false);
+    client.req_contract_details(3, &spy).unwrap();
+    client.req_positions(&mut w);
+    client.req_account_summary(4, "All", "NetLiquidation,BuyingPower");
+    client.req_open_orders(&mut w);
+    client.req_executions(5, &Default::default(), &mut w);
+    let _ = client.req_historical_data(6, &spy, "", "1 D", "1 hour", "TRADES", true, 1, false);
+    let _ = client.req_sec_def_opt_params(7, "SPY", "", "STK", 756733);
+    client.req_news_bulletins(true);
+
+    // An order through its whole life, which is when the venue says most.
+    let order_id = 70_000 + (std::process::id() as i64 % 9_000);
+    let resting = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 1.0, tif: "GTC".into(), outside_rth: true, ..Default::default()
+    };
+    let _ = client.place_order(order_id, &spy, &resting);
+    poll(&client, &mut w, Duration::from_secs(20));
+    let _ = client.place_order(order_id, &spy, &Order { lmt_price: 2.0, ..resting });
+    poll(&client, &mut w, Duration::from_secs(10));
+    let _ = client.cancel_order(order_id, "");
+    poll(&client, &mut w, Duration::from_secs(20));
+
+    let unread = client.unread_wire();
+    client.disconnect();
+
+    assert!(
+        unread.is_empty(),
+        "the venue sent {} kind(s) of message this client does not read: {unread:?}. \
+         Each is a wire being discarded — read it, or record in `known_unread` why it \
+         carries nothing a caller could use",
+        unread.len(),
+    );
+}
