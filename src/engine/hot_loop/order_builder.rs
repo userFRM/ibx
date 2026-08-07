@@ -407,6 +407,12 @@ pub(crate) fn drain_and_send_orders(
                     // order dropped everything the first one preserved.
                     if let Some(spec) = spec.clone() {
                         context.submitted.insert(new_order_id, spec);
+                        // The order answers to the new id from here. Left
+                        // behind, the old entry is retired by an id the caller
+                        // no longer uses, so it stays for the session.
+                        if new_order_id != order_id {
+                            context.submitted.remove(&order_id);
+                        }
                     }
                 }
 
