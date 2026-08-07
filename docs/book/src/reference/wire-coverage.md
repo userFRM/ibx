@@ -81,6 +81,7 @@ A user message carries what it is for on tag 6040.
 | `U` | User message |
 | `W` | Chart request |
 | `d` | Security definition |
+| `EB` | not named here |
 | `RL` | Account update |
 | `UM` | Account update |
 | `UP` | Position update |

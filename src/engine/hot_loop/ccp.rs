@@ -141,8 +141,10 @@ fn perm_id_from_fix_order_id(s: &str) -> i64 {
 fn known_unread(subtype: &str) -> Option<&'static str> {
     match subtype {
         "93" => Some(
-            "it acknowledges the account and position subscription this client sends, and \
-             carries nothing the subscription itself does not already deliver",
+            "it answers the account and position subscription this client sends, and carries \
+             the account, that request's own id and two flags — nothing the subscription does \
+             not deliver itself. Named in the vendor's own inventory as a dimension response, \
+             which is what it would carry on an account that had dimensions",
         ),
         "194" => Some(
             "it carries the order presets the vendor's own ticket fills its fields from. \
@@ -364,6 +366,8 @@ pub(crate) struct CcpState {
     /// User-message subtypes the venue has sent that nothing here reads, so
     /// each is named once rather than on every arrival.
     unread_subtypes: std::collections::HashSet<String>,
+    /// Message types the venue has sent that nothing here reads.
+    unread_types: std::collections::HashSet<String>,
     /// Market data subscriptions waiting on the lookup that will name their
     /// contract, keyed by that lookup's request id.
     pub(crate) pending_md_subscribe: Vec<(u32, PendingSubscribe, Instant)>,
@@ -433,6 +437,7 @@ impl CcpState {
             next_fanout_id: 1,
             next_internal_secdef_id: 0xF000_0000,
             unread_subtypes: std::collections::HashSet::new(),
+            unread_types: std::collections::HashSet::new(),
             pending_md_subscribe: Vec::new(),
             resolved_md_subscribe: Vec::new(),
             auto_fetched_conids: HashSet::new(),
@@ -749,6 +754,17 @@ impl CcpState {
                         }
                 }
             }
+            // The end of a batch the venue was sending. An account request is
+            // otherwise only known to be finished when its rows arrive, and an
+            // account holding nothing sends no rows — so a caller waiting on
+            // the download would wait for something that was already over.
+            "EB" => {
+                let ends = parsed.get(&6529).map(String::as_str).unwrap_or("");
+                if ends.starts_with("AR") {
+                    log::info!("Account request {ends} is complete");
+                    shared.portfolio.set_account_download_complete();
+                }
+            }
             "UT" | "UM" | "RL" => handle_account_update(msg, context, shared),
             "UP" => handle_position_update(&parsed, context, shared, event_tx),
             "d" => {
@@ -1014,8 +1030,18 @@ impl CcpState {
                     shared.reference.push_market_rules(rules);
                 }
             }
+            // A message type nothing here reads. Named once, like an unread
+            // user message: the out-of-band types carry position and account
+            // data, and the vendor's own client treats an unrecognised one as
+            // an error rather than as nothing.
             other => {
-                log::debug!("CCP unhandled 35={}: {} bytes", other, msg.len());
+                if self.unread_types.insert(other.to_string()) {
+                    log::info!(
+                        "Unread message: type {other}, {} bytes. Nothing here reads it, so \
+                         whatever it carries is being discarded",
+                        msg.len(),
+                    );
+                }
             }
         }
     }
@@ -6065,7 +6091,9 @@ mod tests {
     /// both discarded, but only one is a gap.
     #[test]
     fn a_message_not_read_on_purpose_is_told_apart_from_one_overlooked() {
-        assert!(super::known_unread("93").is_some(), "an acknowledgement carrying nothing new");
+        // 93 is excused on what it carries — the account, a request id and two
+        // flags — read off a live session, not on an assumption about it.
+        assert!(super::known_unread("93").is_some(), "an answer carrying nothing new");
         assert!(super::known_unread("194").is_some(), "defaults for a user interface");
         assert!(super::known_unread("81").is_none(), "the algorithms are read, not excused");
         assert!(super::known_unread("99999").is_none(), "and anything unexamined is a gap");
