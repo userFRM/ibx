@@ -797,6 +797,12 @@ impl CcpState {
                 }
             }
             "UT" | "UM" | "RL" => handle_account_update(msg, context, shared),
+            // The same figures, for the sets of holdings the account does not
+            // hold itself. Applied to the account's own they would overstate
+            // what it is worth, so they are kept where the holdings they
+            // describe are kept.
+            "AL" => handle_account_update_elsewhere(msg, shared, crate::types::HeldElsewhere::Away),
+            "UL" => handle_account_update_elsewhere(msg, shared, crate::types::HeldElsewhere::Aside),
             "UP" => handle_position_update(&parsed, context, shared, event_tx),
             // The venue keeps three sets of holdings and this client read one.
             // The others carry the same fields in the same tags — they differ
@@ -2929,6 +2935,33 @@ impl CcpState {
 }
 
 /// Handle account update messages (cross-cutting, called from CCP message processing).
+/// Account figures describing holdings the account does not hold itself.
+///
+/// Stated the same way as the account's own — a name and a value — and read
+/// the same way. What differs is only which set of holdings they describe, and
+/// mixing them into the account's own would overstate what it is worth.
+fn handle_account_update_elsewhere(
+    msg: &[u8],
+    shared: &SharedState,
+    held: crate::types::HeldElsewhere,
+) {
+    let Ok(text) = std::str::from_utf8(msg) else { return };
+    let mut name: Option<&str> = None;
+    let mut stated = 0usize;
+    for part in text.split('\x01') {
+        if let Some(v) = part.strip_prefix("8001=") {
+            name = Some(v);
+        } else if let Some(v) = part.strip_prefix("8004=")
+            && let Some(n) = name.take() {
+                shared.portfolio.set_value_elsewhere(held, n.to_string(), v.to_string());
+                stated += 1;
+            }
+    }
+    if stated > 0 {
+        log::info!("{stated} account figures for holdings {held:?}");
+    }
+}
+
 pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &SharedState) {
     let text = match std::str::from_utf8(msg) {
         Ok(t) => t,
@@ -6286,5 +6319,30 @@ mod tests {
             &std::collections::HashMap::new(), &shared, crate::types::HeldElsewhere::Away,
         );
         assert_eq!(shared.portfolio.positions_elsewhere().len(), 1);
+    }
+
+    /// The venue states figures for the sets of holdings the account does not
+    /// hold itself the same way it states the account's own. Applied to the
+    /// account's own they would overstate what it is worth.
+    #[test]
+    fn figures_for_other_holdings_stay_out_of_the_account() {
+        let (_ccp, context, shared) = u186_test_state();
+        let msg = b"8=FIX.4.1\x0135=U\x018001=NetLiquidation\x018004=12345.67\x018001=GrossPositionValue\x018004=999.00\x01";
+
+        super::handle_account_update_elsewhere(msg, &shared, crate::types::HeldElsewhere::Away);
+        let mut stated = shared.portfolio.values_elsewhere(crate::types::HeldElsewhere::Away);
+        stated.sort();
+        assert_eq!(stated, [
+            ("GrossPositionValue".to_string(), "999.00".to_string()),
+            ("NetLiquidation".to_string(), "12345.67".to_string()),
+        ]);
+        assert!(
+            shared.portfolio.values_elsewhere(crate::types::HeldElsewhere::Aside).is_empty(),
+            "one set's figures do not describe another",
+        );
+        assert_eq!(
+            context.account().net_liquidation, 0,
+            "and none of it is what the account itself is worth",
+        );
     }
 }

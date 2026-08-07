@@ -1088,6 +1088,9 @@ pub struct PortfolioState {
     /// apart from the account's own, which is what a caller asking for
     /// positions means.
     positions_elsewhere: Mutex<HashMap<i64, crate::types::PositionElsewhere>>,
+    /// Account figures for the holdings the account does not hold itself,
+    /// keyed by which set they describe and what they are called.
+    values_elsewhere: Mutex<HashMap<(crate::types::HeldElsewhere, String), String>>,
     positions: [AtomicU64; MAX_INSTRUMENTS],
     /// Midnight seeds from 6040=143 for client-side daily P&L computation.
     midnight_seeds: Mutex<HashMap<i64, MidnightSeed>>,
@@ -1106,6 +1109,7 @@ impl PortfolioState {
             account_download_complete: AtomicBool::new(false),
             position_infos: Mutex::new(HashMap::new()),
             positions_elsewhere: Mutex::new(HashMap::new()),
+            values_elsewhere: Mutex::new(HashMap::new()),
             positions: std::array::from_fn(|_| AtomicU64::new(0)),
             midnight_seeds: Mutex::new(HashMap::new()),
             pnl_request_key: Mutex::new(String::new()),
@@ -1128,6 +1132,22 @@ impl PortfolioState {
     /// than withdrawing it, so this replaces what it holds for that contract.
     #[doc(hidden)] pub fn set_position_elsewhere(&self, row: crate::types::PositionElsewhere) {
         self.positions_elsewhere.lock().unwrap().insert(row.con_id, row);
+    }
+
+    /// The account figures describing one of the sets of holdings the account
+    /// does not hold itself, as name and value.
+    pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String)> {
+        self.values_elsewhere.lock().unwrap()
+            .iter()
+            .filter(|((set, _), _)| *set == held)
+            .map(|((_, name), value)| (name.clone(), value.clone()))
+            .collect()
+    }
+
+    #[doc(hidden)] pub fn set_value_elsewhere(
+        &self, held: crate::types::HeldElsewhere, name: String, value: String,
+    ) {
+        self.values_elsewhere.lock().unwrap().insert((held, name), value);
     }
 
     pub fn position_infos(&self) -> Vec<PositionInfo> {

@@ -186,7 +186,7 @@ pub struct PositionElsewhere {
 }
 
 /// Which of the venue's other sets of holdings a row came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HeldElsewhere {
     /// Held away, at another broker.
     Away,

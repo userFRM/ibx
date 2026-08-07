@@ -189,7 +189,6 @@ does, it will say so rather than vanish.
 | Out-of-band `AP`, `DO`, `DP` | Holdings the broker does not hold itself: held away, shown but not held, and one set it reports apart without saying why | Read. They carry the same fields in the same tags as the account's own holdings, and are kept apart from them |
 
 
-| Out-of-band `AL`, `UL` | Account values for the held-away and pending sets, siblings of the `RL` this client reads | Not yet read. One handler serves all three in the vendor's client, split only by which set the values belong to |
 | `6040` 192, 278 | The venue's own error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
 | `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
