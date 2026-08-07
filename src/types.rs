@@ -233,8 +233,8 @@ pub const ORD_MIDPX: u8 = 2;     // FIX "MIDPX" — Mid-Price
 pub const ORD_SNAP_MKT: u8 = 3;  // FIX "SMKT" — Snap to Market
 pub const ORD_SNAP_MID: u8 = 4;  // FIX "SMID" — Snap to Midpoint
 pub const ORD_SNAP_PRI: u8 = 5;  // FIX "SREL" — Snap to Primary
-pub const ORD_PEG_MKT: u8 = 6;   // FIX "E" + ExecInst "P" — Pegged to Market
-pub const ORD_PEG_MID: u8 = 7;   // FIX "E" + ExecInst "M" — Pegged to Midpoint
+pub const ORD_PEG_MKT: u8 = 6;   // FIX "P" + ExecInst "P" — Pegged to Market
+pub const ORD_PEG_MID: u8 = 7;   // FIX "P" + ExecInst "M" — Pegged to Midpoint
 pub const ORD_PEG_BENCH: u8 = 8; // FIX "PB" — Pegged to Benchmark
 /// A time-in-force this client does not know. A recovery record with no tag 59
 /// states none, and the order was not placed by this session, so there is
@@ -254,7 +254,10 @@ pub fn ord_type_fix_str(t: u8) -> &'static str {
         ORD_SNAP_MKT => "SMKT",
         ORD_SNAP_MID => "SMID",
         ORD_SNAP_PRI => "SREL",
-        ORD_PEG_MKT | ORD_PEG_MID => "E",
+        // The venue names these back as PegToMkt and PegToMid under "P".
+        // Sent as "E" it named them something else entirely, so a caller asking
+        // for one had an order the venue read as another type.
+        ORD_PEG_MKT | ORD_PEG_MID => "P",
         ORD_PEG_BENCH => "PB",
         b'1' => "1", b'2' => "2", b'3' => "3", b'4' => "4", b'5' => "5",
         b'B' => "B", b'E' => "E", b'J' => "J", b'K' => "K",

@@ -1009,11 +1009,15 @@ fn send_order_ex(
             fields.push((6580, format_price(stock_ref_price).to_string()));
             fields.push((99, format_price(starting_price).to_string()));
         }
+        // The venue names these back as PegToMkt and PegToMid under "P", and
+        // named them something else entirely under "E" — so an order a caller
+        // asked to peg was read as another type. The offset rides 211, which
+        // the shared attrs block already writes for the pegged kinds.
         K::PegMkt { .. } => {
-            fields.push((40, "E".to_string()));
+            fields.push((40, "P".to_string()));
         }
         K::PegMid { .. } => {
-            fields.push((40, "E".to_string()));
+            fields.push((40, "P".to_string()));
         }
         K::Rel { offset } => {
             // Per ib-agent#138 capture: Relative shares OrdType=P and is
@@ -3219,10 +3223,16 @@ mod modify_wire_tests {
             });
             sent.push(drain(&mut context));
         }
-        assert!(sent[0].contains("|40=E|"), "pegged to market is OrdType E: {}", sent[0]);
-        assert!(sent[1].contains("|40=E|"), "pegged to midpoint is OrdType E: {}", sent[1]);
+        // Asked live, the venue names these back as PegToMkt and PegToMid under
+        // "P". Sent as "E" it named them something else entirely and refused
+        // them under that other name, so a caller asking to peg had an order
+        // the venue read as a different type — which is worse than a refusal.
+        assert!(sent[0].contains("|40=P|"), "pegged to market is OrdType P: {}", sent[0]);
+        assert!(sent[1].contains("|40=P|"), "pegged to midpoint is OrdType P: {}", sent[1]);
         assert!(sent[0].contains("|18=P|"), "pegged to market states its peg: {}", sent[0]);
         assert!(sent[1].contains("|18=M|"), "pegged to midpoint states its peg: {}", sent[1]);
+        // The offset is stated once. Written twice the venue read the second.
+        assert_eq!(sent[0].matches("|211=").count(), 1, "one offset: {}", sent[0]);
         assert_ne!(sent[0], sent[1], "the two pegs must not be the same message");
     }
 
