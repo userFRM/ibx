@@ -506,6 +506,7 @@ pub(crate) fn drain_and_send_orders(
                         &mut attr_fields,
                         &spec.attrs,
                         &spec.kind,
+                        orig.map(|o| o.side).unwrap_or(Side::Buy),
                         exec_inst_for(&spec.kind),
                     );
                     // Stated once. The lean message already names these, and the
@@ -1097,7 +1098,7 @@ fn send_order_ex(
             .map_or_else(|| "USD".to_string(), |id| id.currency),
     ));
 
-    push_order_attrs(&mut fields, attrs, &kind, exec_inst);
+    push_order_attrs(&mut fields, attrs, &kind, side, exec_inst);
 
     let refs: Vec<(u32, &str)> = fields.iter().map(|(t, s)| (*t, s.as_str())).collect();
     conn.send_fix(&refs)
@@ -1129,6 +1130,9 @@ fn push_order_attrs(
     fields: &mut Vec<(u32, String)>,
     attrs: &crate::types::OrderAttrs,
     kind: &crate::types::OrderKind,
+    // The side, because a short sale states where the stock comes from even
+    // when the caller names no slot.
+    side: Side,
     // Composed from the order's own kind before this is reached: the pegged,
     // relative, trailing and algo types each contribute a character, and the
     // all-or-none instruction below joins them on one field.
@@ -1301,20 +1305,22 @@ fn push_order_attrs(
     // Short-sale handling. The location is stated only for the slot that has
     // one, which is the rule the venue applies, and the exemption rides its own
     // tag rather than the slot.
-    if attrs.short_sale_slot != 0 {
-        fields.push((6086, attrs.short_sale_slot.to_string()));
+    // A short sale states where the stock comes from, and states it whatever the
+    // slot is. Both fields were written only for a slot the caller had named, so
+    // a plain short sale — the ordinary case, no slot stated — went out as a
+    // short with no allocation on it at all, which is not a short sale this
+    // venue will work. The location rides its own tag, and only for the slot
+    // that has one.
+    if matches!(side, Side::ShortSell) {
+        let located = matches!(attrs.designated_location.as_str(), "TMBR" | "IBKR");
+        fields.push((114, if located { "Y" } else { "N" }.to_string()));
         if attrs.short_sale_slot == 2 && !attrs.designated_location.is_empty() {
             fields.push((5700, attrs.designated_location.clone()));
         }
+        fields.push((6086, attrs.short_sale_slot.to_string()));
     }
     if attrs.exempt_code != -1 {
         fields.push((1688, attrs.exempt_code.to_string()));
-    }
-    // Whether the shares have been located, which the terminal states as a
-    // plain yes or no beside the slot rather than leaving it to be inferred.
-    if attrs.short_sale_slot != 0 {
-        let located = matches!(attrs.designated_location.as_str(), "TMBR" | "IBKR");
-        fields.push((114, if located { "Y" } else { "N" }.to_string()));
     }
     // The hedge, as a number rather than the API's letter, with the parameter
     // the chosen kind takes: a beta or a pair ratio. Delta and FX take none.
