@@ -490,6 +490,23 @@ fn peg_bench_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// An order on a contract quoted in sterling rather than dollars. Runs on its
+/// own because it needs London trading, which overlaps the New York session
+/// only in the morning there.
+/// Run: cargo test --test ib_paper_compat non_usd_order_phase_live -- --ignored --nocapture
+#[test]
+#[ignore]
+fn non_usd_order_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() { Some(c) => c, None => return };
+    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let mut conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    conns = multi_asset::phase_non_usd_order(conns);
+    conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// Forex and futures orders are both refused as unknown contracts. They ask
 /// the same question and are cheaper asked together.
 #[test]

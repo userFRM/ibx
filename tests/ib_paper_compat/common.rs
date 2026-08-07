@@ -480,6 +480,26 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
     false
 }
 
+/// Whether London is trading, in UTC.
+///
+/// [`market_session`] answers for New York, and a London order excused because
+/// New York has not opened is excused by the wrong clock — the whole point of
+/// the phase is the venue that is open. The window here is the part of the
+/// London session that holds in both British Summer Time and winter, so it is
+/// never wrong in the direction that grants an excuse.
+pub(super) fn london_is_trading() -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let days = now / 86_400;
+    // 1970-01-01 was a Thursday.
+    let weekday = (days + 4) % 7;
+    if weekday == 0 || weekday == 6 {
+        return false;
+    }
+    let minutes = (now % 86_400) / 60;
+    (8 * 60..15 * 60 + 30).contains(&minutes)
+}
+
 /// A historical request that came back with nothing.
 ///
 /// Historical data does not wait for an opening bell: the venue serves last
