@@ -149,8 +149,7 @@ pub(super) fn phase_trading_hours(conns: &mut Conns) {
     ]);
 
     if schedule.is_none() {
-        println!("  SKIP: No schedule received\n");
-        return;
+        lookup_returned_nothing("no trading schedule came back");
     }
     let sched = schedule.unwrap();
     assert!(!sched.timezone.is_empty());
@@ -284,8 +283,7 @@ pub(super) fn phase_matching_symbols_channel(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !got_matches {
-        println!("  SKIP: No matching symbols response received\n");
-        return conns;
+        lookup_returned_nothing("no matching-symbols answer came back");
     }
     assert!(match_count > 0, "Should have at least one match for 'AAPL'");
     println!("  PASS\n");
