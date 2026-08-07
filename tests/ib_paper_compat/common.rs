@@ -480,12 +480,6 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
     false
 }
 
-/// The gateway's stated reason for a rejected order, for the SKIP line.
-///
-/// `SKIP: Order rejected` on its own is unreadable: a venue refusing an order
-/// type outside its session and the client encoding one wrong print the same
-/// line. The reason (FIX tag 58 text plus the tag 103 code) is what separates
-/// them, and the engine records it on the order snapshot.
 /// Something the session had to deliver and did not, on a path the market does
 /// not gate: account values, a position after a fill, the notification that the
 /// connection went away. A session that is logged in delivers these at any hour,
@@ -511,22 +505,21 @@ pub(super) fn lookup_returned_nothing(what: &str) -> ! {
 
 /// A phase that needed the market to be trading and did not get it.
 ///
-/// Outside regular hours this is the truth and the phase skips. Inside them it
+/// Outside regular hours this is the truth and the phase skips. During them it
 /// is a defect: a market order on a liquid contract that never fills, or a
 /// subscription that never ticks, is this client's problem and must not read as
-/// a quiet afternoon. The run states which it is with `IBX_MARKET_IS_OPEN=1`,
-/// because the venue's schedule arrives as local times in a named zone and this
-/// tree does no timezone arithmetic — the operator knows, and says so, rather
-/// than the suite guessing from a clock.
+/// a quiet afternoon.
+///
+/// Which one it is comes from [`market_session`], the same holiday-aware clock
+/// the order phases already gate on, so one answer decides it everywhere.
 pub(super) fn no_market(what: &str) {
-    if std::env::var("IBX_MARKET_IS_OPEN").as_deref() == Ok("1") {
-        panic!(
-            "{what} — but this run was told the market is open, so this is not \
-             the market being quiet. Either the client failed to get what it \
-             asked for, or IBX_MARKET_IS_OPEN=1 is wrong."
-        );
-    }
-    println!("  SKIP: {what}\n");
+    let (session, _) = market_session();
+    assert!(
+        session != MarketSession::Regular,
+        "{what} — during regular hours, so this is not a quiet market. \
+         The client did not get what it asked for."
+    );
+    println!("  SKIP: {session:?} — {what}\n");
 }
 
 /// Reasons a rejection is about the market or the account rather than the
