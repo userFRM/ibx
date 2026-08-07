@@ -480,6 +480,25 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
     false
 }
 
+/// A historical request that came back with nothing.
+///
+/// Historical data does not wait for an opening bell: the venue serves last
+/// week's bars at midnight. So silence is either the venue declining and saying
+/// why — pacing, or a product this session is not entitled to — or this client
+/// asking wrongly. Only the first is a skip, and it quotes the venue's own code
+/// and words so the log says which request was refused and for what.
+pub(super) fn historical_silence(shared: &SharedState, what: &str) {
+    if let Some((_, code, message)) = shared.reference.drain_historical_errors().first() {
+        println!("  SKIP: {what} — the venue refused it, {code}: {message}\n");
+        return;
+    }
+    panic!(
+        "{what}, and the venue gave no reason. Historical data does not wait \
+         for a market to open, so this is the request or the reply being read \
+         wrong."
+    );
+}
+
 /// Something the session had to deliver and did not, on a path the market does
 /// not gate: account values, a position after a fill, the notification that the
 /// connection went away. A session that is logged in delivers these at any hour,
