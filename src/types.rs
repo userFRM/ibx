@@ -1429,6 +1429,11 @@ pub enum ControlCommand {
     FetchSoftDollarTiers { req_id: u32 },
     /// Request user info.
     FetchUserInfo { req_id: u32 },
+    /// End the session with the venue. Sent before [`ControlCommand::Shutdown`]
+    /// by a caller that is disconnecting. A caller that only stops the engine
+    /// and keeps its connections does not send it, because a logout ends the
+    /// session those connections belong to.
+    Logout,
     /// Graceful shutdown.
     Shutdown,
 }

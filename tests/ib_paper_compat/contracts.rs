@@ -25,17 +25,31 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
         exchange: String::new(), currency: String::new(),
         filters: Default::default(),
     }).unwrap();
+    // The same contract asked for by name. A definition asked for by id and one
+    // asked for by name are answered from the same record, so any field that
+    // arrives for one and not the other is this client's reading of the reply
+    // rather than the venue withholding it.
+    control_tx.send(ControlCommand::FetchContractDetails {
+        req_id: 1201, con_id: 0,
+        symbol: "SPY".to_string(), sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(), currency: "USD".to_string(),
+        filters: Default::default(),
+    }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     // Step 3: Wait for real server response via Event channel
     let mut contract: Option<contracts::ContractDefinition> = None;
+    let mut by_name: Option<contracts::ContractDefinition> = None;
     let deadline = Instant::now() + Duration::from_secs(15);
 
-    while Instant::now() < deadline && contract.is_none() {
-        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100))
-            && req_id == 1200 {
-                contract = Some(*details);
+    while Instant::now() < deadline && (contract.is_none() || by_name.is_none()) {
+        if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            match req_id {
+                1200 => contract = Some(*details),
+                1201 if details.con_id == 756733 => by_name = Some(*details),
+                _ => {}
             }
+        }
     }
 
     // Step 4: Verify SPECIFIC VALUES
@@ -44,7 +58,23 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
     assert_eq!(def.symbol, "SPY");
     assert_eq!(def.sec_type, contracts::SecurityType::Stock);
     assert_eq!(def.currency, "USD");
-    assert!(!def.long_name.is_empty(), "Long name should not be empty");
+    println!(
+        "  by id:   long_name={:?} class={:?} primary={:?} valid_exchanges={} min_tick={}",
+        def.long_name, def.trading_class, def.primary_exchange,
+        def.valid_exchanges.len(), def.min_tick,
+    );
+    match &by_name {
+        Some(n) => println!(
+            "  by name: long_name={:?} class={:?} primary={:?} valid_exchanges={} min_tick={}",
+            n.long_name, n.trading_class, n.primary_exchange,
+            n.valid_exchanges.len(), n.min_tick,
+        ),
+        None => println!("  by name: no answer"),
+    }
+    assert!(
+        !def.long_name.is_empty(),
+        "the definition carries no long name: {def:?}",
+    );
     assert!(!def.valid_exchanges.is_empty(), "Valid exchanges should not be empty");
     assert!(def.valid_exchanges.contains(&"SMART".to_string()), "SMART should be in valid exchanges");
     assert!(def.min_tick > 0.0, "Min tick should be positive");

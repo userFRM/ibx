@@ -845,6 +845,14 @@ impl HotLoop {
                     // Gateway-local data — handled synchronously in Python EClient.
                     // These variants exist for future CCP round-trip support.
                 }
+                ControlCommand::Logout => {
+                    // Tell the venue the session is going rather than leaving it
+                    // to notice. This ends the session, so it is not part of
+                    // stopping the loop: a caller that stops the engine and keeps
+                    // its connections — reusing them for the next piece of work —
+                    // must not have the session logged out from under it.
+                    self.ccp.send_logout(&mut self.ccp_conn, &mut self.hb);
+                }
                 ControlCommand::Shutdown => {
                     // Unsubscribe all active market data before stopping
                     let instruments: Vec<InstrumentId> = self.farm.instrument_md_reqs
@@ -868,10 +876,6 @@ impl HotLoop {
                     for instrument in news_instruments {
                         self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb);
                     }
-                    // Everything this session asked for has been withdrawn;
-                    // now tell the venue it is going, rather than leaving it to
-                    // notice.
-                    self.ccp.send_logout(&mut self.ccp_conn, &mut self.hb);
                     self.running = false;
                     self.shared.set_connection_lost();
                     emit(&self.event_tx, Event::Disconnected);

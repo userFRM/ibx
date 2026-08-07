@@ -130,13 +130,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for (_, d) in rows.iter().take(3) {
             println!(
-                "    con_id={:<10} currency={:<4} primary={:<8} class={:<8} min_tick={} tz={}",
+                "    con_id={:<10} currency={:<4} primary={:<8} class={:<8} min_tick={} tz={}\n      long_name={:?} valid_exchanges={:?}",
                 d.contract.con_id,
                 d.contract.currency,
                 d.contract.primary_exchange,
                 d.contract.trading_class,
                 d.min_tick,
                 d.time_zone_id.as_deref().unwrap_or("-"),
+                d.long_name,
+                d.valid_exchanges,
             );
         }
         if rows.len() > 3 {
