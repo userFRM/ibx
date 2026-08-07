@@ -244,6 +244,26 @@ vanish.
 
 Test count is not coverage. It states what is checked, not what fraction of venue behaviour is reached.
 
+### What the venue refuses this account
+
+Eleven order types and times in force are refused, and the refusal is the
+venue's, not this client's. Each was offered on more than one destination —
+the smart route, IBKRATS and a named exchange — and on more than one security
+type, a share and a future, and refused alike every time, in the venue's own
+words: *"invalid for this combination of exchange and security type"*.
+
+| refused | offered on |
+| --- | --- |
+| Fill or kill, auction | share and future, three destinations |
+| Market with protection, stop with protection | share and future |
+| Mid-price, pegged to market, pegged to midpoint | share, three destinations |
+| Short sale | share |
+| Iceberg | share, every displayed quantity tried |
+
+What this client writes for each is checked on the bytes, so the encoding is
+established where no venue will exercise it. A caller sending one of these
+receives the venue's refusal, which is what the reference client receives.
+
 ### What a skipped phase is allowed to mean
 
 A live phase may skip, because a venue is not always in a state to answer. It may not skip on silence alone, which is the same reason a test count that cannot be read is not a passing one: a client that asks wrongly and a venue that is closed look identical from the outside, and the closed venue is the reading that keeps a suite green.
