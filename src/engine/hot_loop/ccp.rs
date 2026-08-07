@@ -1444,10 +1444,21 @@ impl CcpState {
         let revision_refused = matches!(restatement_reason, "102" | "103");
         let is_replace_ack = ord_status == "5" && !revision_refused;
         if revision_refused {
+            // The order stands as it was, so it has no new status to report —
+            // but the caller asked for a change and has to learn it did not
+            // happen. Reported the way a refused order is, on the channel a
+            // caller already watches, rather than only to a log.
+            let reason = stated_reason(parsed);
             log::warn!(
                 "Order {clord_id}: the gateway refused the request (378={restatement_reason}) — \
-                 the order stands as it was",
+                 the order stands as it was: {reason}",
             );
+            let told = if reason.is_empty() {
+                "the venue refused the change and the order stands as it was".to_string()
+            } else {
+                reason
+            };
+            shared.orders.push_order_inactive(clord_id, ORDER_INACTIVE_ERROR_CODE, told);
         }
         if is_replace_ack {
             context.set_order_status_forced(clord_id, status);

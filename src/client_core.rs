@@ -2088,6 +2088,35 @@ impl ClientCore {
     /// the id and the security type, and answers it with a margin preview.
     /// The checks below exist to catch a contract that names a whole chain or
     /// series, which a contract id never does.
+    /// Refuse a security type the venue does not permit this account to trade.
+    ///
+    /// The venue states its permissions at logon and refuses an order on an
+    /// unpermitted type by returning it Inactive with no text at all, so
+    /// without this the caller is told nothing. Silence here is not
+    /// permission: a session that stated none has nothing to enforce.
+    ///
+    /// Shared, because a guard on one surface and not the other means the
+    /// caller it protects depends on which language they wrote in.
+    pub fn refuse_unpermitted_sec_type(
+        permitted: &std::collections::HashMap<String, Vec<String>>,
+        sec_type: &str,
+    ) -> Result<(), String> {
+        if sec_type.is_empty() || permitted.is_empty() {
+            return Ok(());
+        }
+        let ty = sec_type.to_ascii_uppercase();
+        let key = if matches!(ty.as_str(), "BAG" | "COMBO") { "COMB" } else { ty.as_str() };
+        if permitted.contains_key(key) {
+            return Ok(());
+        }
+        let mut named: Vec<&str> = permitted.keys().map(String::as_str).collect();
+        named.sort_unstable();
+        Err(format!(
+            "the account is not permitted to trade {ty}. It is permitted: {}",
+            named.join(", "),
+        ))
+    }
+
     pub fn validate_order_contract(con_id: i64, sec_type: &str, identity: &str) -> Result<(), String> {
         if con_id != 0 {
             return Ok(());

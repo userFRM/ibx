@@ -145,16 +145,35 @@ impl EClient {
 
     /// Request positions for multiple accounts/models. Matches `reqPositionsMulti` in C++.
     /// Holdings for one account or model, answered on `position_multi`.
+    ///
+    /// Answered from the holdings this session already has, rather than by
+    /// pumping for them: pumping here would drain every queued event into a
+    /// collector that reports holdings and discards the rest, so a caller
+    /// running its own loop would lose whatever had arrived since it last
+    /// pumped.
     pub fn req_positions_multi(
         &self, req_id: i64, account: &str, model_code: &str,
         wrapper: &mut impl Wrapper,
     ) {
-        let held = self.positions().unwrap_or_default();
+        let held: Vec<_> = self.shared.portfolio.position_infos()
+            .into_iter()
+            .filter(|pi| pi.position != 0.0)
+            .map(|pi| {
+                let contract = self.core.get_contract(pi.con_id, &self.shared)
+                    .unwrap_or_else(|| Contract {
+                        con_id: pi.con_id,
+                        symbol: pi.symbol.clone(),
+                        sec_type: pi.sec_type.clone(),
+                        currency: pi.currency.clone(),
+                        multiplier: pi.multiplier.clone(),
+                        ..Default::default()
+                    });
+                (contract, pi.position, pi.avg_cost as f64 / PRICE_SCALE_F)
+            })
+            .collect();
         let account = if account.is_empty() { self.account_id.as_str() } else { account };
-        for row in held {
-            wrapper.position_multi(
-                req_id, account, model_code, &row.contract, row.position, row.avg_cost,
-            );
+        for (contract, position, avg_cost) in held {
+            wrapper.position_multi(req_id, account, model_code, &contract, position, avg_cost);
         }
         wrapper.position_multi_end(req_id);
     }

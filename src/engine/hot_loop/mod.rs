@@ -542,13 +542,16 @@ impl HotLoop {
         for cmd in cmds {
             match cmd {
                 ControlCommand::Subscribe { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier, mode_9887, reply_tx } => {
-                    // What tells two conId-less contracts on one underlying apart. Absent for
-                    // anything that is not an option, which leaves the key empty.
-                    let option_key = if strike > 0.0 || !right.is_empty() || !last_trade_date.is_empty() {
-                        format!("{last_trade_date}|{strike}|{right}|{multiplier}")
-                    } else {
-                        String::new()
-                    };
+                    // What tells two conId-less contracts on one underlying apart.
+                    // Built by the same function an order uses, or the two
+                    // describe one contract differently: the slot a
+                    // subscription took would not be found again by an order,
+                    // which would take a second one — with no quote on it, and
+                    // stating the wrong currency because the slot it did take
+                    // never recorded one.
+                    let option_key = crate::client_core::ClientCore::contract_identity(
+                        &last_trade_date, strike, &right, &multiplier, &currency,
+                    );
                     // Registered without answering yet: a contract with no conId
                     // has no client-side identity, so whether this is a duplicate
                     // can only be settled here, against the slot the engine just

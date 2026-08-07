@@ -1040,6 +1040,64 @@ def req_historical_schedule(req_id, contract, end_date_time="", duration_str="1 
 
 ## Gateway-Local & Stubs
 
+#### `order_permissions`
+
+Security type → the order types the venue permits for it, as stated at logon. Empty until the session is up.
+
+```python
+def order_permissions()
+```
+
+---
+
+#### `permitted_order_types`
+
+The order types permitted for one security type, or `None` when the type is not permitted at all. A combination is named `COMB`.
+
+```python
+def permitted_order_types(sec_type)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `sec_type` | `str` |  |
+
+---
+
+#### `enabled_features`
+
+Feature tokens the venue enables for this account.
+
+```python
+def enabled_features()
+```
+
+---
+
+#### `algorithms`
+
+Which algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
+
+```python
+def algorithms()
+```
+
+---
+
+#### `algorithms_for`
+
+The algorithms offered for one security type, across every provider.
+
+```python
+def algorithms_for(sec_type)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `sec_type` | `str` |  |
+
+---
+
 #### `calculate_implied_volatility`
 
 Calculate option implied volatility. Not yet implemented.

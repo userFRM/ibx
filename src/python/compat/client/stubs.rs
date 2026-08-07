@@ -7,6 +7,37 @@ use super::super::contract::{Contract, NewsProviderPy, SmartComponentPy, SoftDol
 
 #[pymethods]
 impl EClient {
+    // ── What the venue permits ──
+
+    /// Security type → the order types the venue permits for it, as stated at
+    /// logon. Empty until the session is up.
+    fn order_permissions(&self) -> PyResult<std::collections::HashMap<String, Vec<String>>> {
+        Ok(self.shared_state().map(|s| s.reference.order_permissions()).unwrap_or_default())
+    }
+
+    /// The order types permitted for one security type, or `None` when the
+    /// type is not permitted at all. A combination is named `COMB`.
+    fn permitted_order_types(&self, sec_type: &str) -> PyResult<Option<Vec<String>>> {
+        Ok(self.shared_state()
+            .ok()
+            .and_then(|s| s.reference.permitted_order_types(&sec_type.to_ascii_uppercase())))
+    }
+
+    /// Feature tokens the venue enables for this account.
+    fn enabled_features(&self) -> PyResult<Vec<String>> {
+        Ok(self.shared_state().map(|s| s.reference.enabled_features()).unwrap_or_default())
+    }
+
+    /// Which algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
+    fn algorithms(&self) -> PyResult<std::collections::HashMap<String, Vec<String>>> {
+        Ok(self.shared_state().map(|s| s.reference.algorithms()).unwrap_or_default())
+    }
+
+    /// The algorithms offered for one security type, across every provider.
+    fn algorithms_for(&self, sec_type: &str) -> PyResult<Vec<String>> {
+        Ok(self.shared_state().map(|s| s.reference.algorithms_for(sec_type)).unwrap_or_default())
+    }
+
     // ── Option calculations ──
     //
     // A volatility inverted from a price, and a price implied by a volatility.

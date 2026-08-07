@@ -378,7 +378,7 @@ pub fn cancel_account_updates_multi(&self, _req_id: i64)
 
 #### `req_positions_multi`
 
-Request positions for multiple accounts/models. Holdings for one account or model, answered on `position_multi`.
+Request positions for multiple accounts/models. Holdings for one account or model, answered on `position_multi`. Answered from the holdings this session already has, rather than by pumping for them: pumping here would drain every queued event into a collector that reports holdings and discards the rest, so a caller running its own loop would lose whatever had arrived since it last pumped.
 
 ```rust
 pub fn req_positions_multi( &self, req_id: i64, account: &str, model_code: &str, wrapper: &mut impl Wrapper, )
