@@ -2615,6 +2615,28 @@ mod tests {
         String::from_utf8_lossy(&buf[..n]).to_string()
     }
 
+    /// A short sale states that side, distinctly from a plain sale.
+    ///
+    /// The venue refuses it — "sell short variant is not supported" — so no
+    /// live phase can show the side is written correctly, and a caller shorting
+    /// through this client depends on it being right the day a venue takes it.
+    #[test]
+    fn a_short_sale_states_its_own_side() {
+        use std::io::Read;
+        let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 7, 0, Side::ShortSell, 1,
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'1', &crate::types::OrderAttrs::default(),
+        ).unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("54=").as_deref(), Some("5"), "a short sale, not a sale: {msg}");
+    }
+
     /// A fill-or-kill order states that time in force on the wire.
     ///
     /// This venue refuses the order for the security types the live suite can
