@@ -2334,6 +2334,32 @@ impl CcpState {
         }
     }
 
+    /// Say goodbye before going.
+    ///
+    /// A session dropped without this is one the venue has to time out, and
+    /// this account permits only one at a time: the next connection then races
+    /// a session the venue still believes is live. The vendor's own client
+    /// sends it, and states why it is going.
+    pub(crate) fn send_logout(
+        &mut self,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        let Some(conn) = ccp_conn.as_mut() else { return };
+        let ts = chrono_free_timestamp();
+        let sent = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_LOGOUT),
+            (fix::TAG_SENDING_TIME, &ts),
+            // The vendor states a reason here; "S" is what it sends when the
+            // session is being shut down rather than lost.
+            (8372, "S"),
+        ]);
+        if sent.is_ok() {
+            hb.last_ccp_sent = Instant::now();
+            log::info!("Logout sent");
+        }
+    }
+
     pub(crate) fn send_news_unsubscribe(
         &mut self,
         instrument: InstrumentId,
