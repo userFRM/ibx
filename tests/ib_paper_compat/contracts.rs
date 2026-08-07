@@ -234,8 +234,7 @@ pub(super) fn phase_market_rule_id(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if contract.is_none() {
-        println!("  SKIP: No contract details received\n");
-        return conns;
+        lookup_returned_nothing("no contract details came back");
     }
     let def = contract.unwrap();
     println!("  market_rule_id={:?} min_tick={}", def.market_rule_id, def.min_tick);

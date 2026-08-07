@@ -575,13 +575,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
     let con_id = match forex_con_id {
         Some(id) => id,
         None => {
-            println!("  SKIP: No EUR.USD contract found\n");
-            return Conns {
-                farm: conns.farm,
-                ccp,
-                hmds: conns.hmds,
-                account_id: conns.account_id,
-            };
+            lookup_returned_nothing("no EUR.USD contract came back");
         }
     };
 

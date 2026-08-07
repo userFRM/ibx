@@ -486,6 +486,20 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
 /// type outside its session and the client encoding one wrong print the same
 /// line. The reason (FIX tag 58 text plus the tag 103 code) is what separates
 /// them, and the engine records it on the order snapshot.
+/// A lookup that had to answer and did not.
+///
+/// Contract definitions and their details are reference data: the venue answers
+/// for them when every market is shut, and this session is permissioned for the
+/// types the suite asks about. So an empty answer is this client asking wrongly
+/// or failing to read the reply, never the hour — and a phase that skips on it
+/// hides exactly the bug it exists to catch.
+pub(super) fn lookup_returned_nothing(what: &str) -> ! {
+    panic!(
+        "{what} — contract data does not depend on the market being open, so \
+         this is the request or the reply being read wrong."
+    );
+}
+
 /// A phase that needed the market to be trading and did not get it.
 ///
 /// Outside regular hours this is the truth and the phase skips. Inside them it
