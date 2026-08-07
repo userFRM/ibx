@@ -488,6 +488,23 @@ pub struct ReconnectAuth {
     pub trading_farm: String,
 }
 
+/// Keep the first value the venue sends for a field it sends once, and say so
+/// when it sends a second one that differs. Each of these carries its whole
+/// list in one field, so a second differing value would mean the list arrives
+/// in parts and keeping the first silently drops the rest — which looks
+/// identical to the venue having sent nothing more.
+fn keep_first(slot: &mut String, value: &str, field: &str) {
+    if slot.is_empty() {
+        *slot = value.to_string();
+    } else if slot != value {
+        log::warn!(
+            "Logon sent {field} a second time with different content ({} then {} bytes); \
+             keeping the first. This field is read as arriving whole.",
+            slot.len(), value.len(),
+        );
+    }
+}
+
 /// Record an account the venue named, in the order it named them, ignoring
 /// repeats. The venue names an account more than once across the logon ACK and
 /// the init burst, and a login holding several accounts names each of them.
@@ -1780,18 +1797,12 @@ impl Gateway {
                 }
 
             // Gateway-local init data from logon response
-            if let Some(v) = fields.get(&6560)
-                && raw_soft_dollar_tiers.is_empty() { raw_soft_dollar_tiers = v.clone(); }
-            if let Some(v) = fields.get(&6823)
-                && raw_family_codes.is_empty() { raw_family_codes = v.clone(); }
-            if let Some(v) = fields.get(&6830)
-                && raw_news_providers.is_empty() { raw_news_providers = v.clone(); }
-            if let Some(v) = fields.get(&6652)
-                && raw_order_permissions.is_empty() { raw_order_permissions = v.clone(); }
-            if let Some(v) = fields.get(&6542)
-                && raw_enabled_features.is_empty() { raw_enabled_features = v.clone(); }
-            if let Some(v) = fields.get(&6571)
-                && white_branding_id.is_empty() { white_branding_id = v.clone(); }
+            if let Some(v) = fields.get(&6560) { keep_first(&mut raw_soft_dollar_tiers, v, "6560"); }
+            if let Some(v) = fields.get(&6823) { keep_first(&mut raw_family_codes, v, "6823"); }
+            if let Some(v) = fields.get(&6830) { keep_first(&mut raw_news_providers, v, "6830"); }
+            if let Some(v) = fields.get(&6652) { keep_first(&mut raw_order_permissions, v, "6652"); }
+            if let Some(v) = fields.get(&6542) { keep_first(&mut raw_enabled_features, v, "6542"); }
+            if let Some(v) = fields.get(&6571) { keep_first(&mut white_branding_id, v, "6571"); }
             // Tag 6321: PRIV_LAB_MISC_URLS — try parsed fields first, then raw byte search.
             // Mirrors the 8035 defensive scan because the value can carry `|` separators
             // that confuse downstream parsers if a chunk is fragmented.
@@ -2932,5 +2943,32 @@ mod tests {
         assert!(perms["NEWS"].is_empty(), "named with no order types, still permitted");
         assert!(!perms.contains_key("FWD"), "a type the venue never named is not permitted");
         assert!(parse_order_permissions("").is_empty(), "a session that stated nothing");
+    }
+}
+
+#[cfg(test)]
+mod logon_field_tests {
+    use super::{keep_first, note_account};
+
+    /// A field the venue sends whole keeps its first value, and a repeat of the
+    /// same value is not a conflict.
+    #[test]
+    fn keep_first_keeps_the_first_value() {
+        let mut slot = String::new();
+        keep_first(&mut slot, "a;b", "6823");
+        keep_first(&mut slot, "a;b", "6823");
+        keep_first(&mut slot, "c;d", "6823");
+        assert_eq!(slot, "a;b");
+    }
+
+    /// Accounts keep the order the venue named them in, without repeats, and an
+    /// empty name is not an account.
+    #[test]
+    fn accounts_keep_their_order_without_repeats() {
+        let mut accounts = Vec::new();
+        for name in ["DU1", "DU2", "DU1", "", "DU3"] {
+            note_account(&mut accounts, name);
+        }
+        assert_eq!(accounts, vec!["DU1", "DU2", "DU3"]);
     }
 }
