@@ -183,6 +183,17 @@ impl EClient {
         // No-op: delivered immediately.
     }
 
+    /// Holdings the venue reports that this broker does not hold itself:
+    /// positions held away at another broker, and rows it marks as shown but
+    /// not held.
+    ///
+    /// Kept apart from `positions`, which answers what the account itself
+    /// holds. The reference client has no call for these — its own front end
+    /// shows them in a separate table — so this is the only way to reach them.
+    pub fn positions_elsewhere(&self) -> Vec<crate::types::PositionElsewhere> {
+        self.shared.portfolio.positions_elsewhere()
+    }
+
     /// Read account state snapshot.
     pub fn account(&self) -> AccountState {
         self.shared.portfolio.account()

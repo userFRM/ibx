@@ -167,6 +167,35 @@ pub struct OrderUpdate {
     pub timestamp_ns: u64,
 }
 
+/// A holding the venue reports that this broker does not hold itself.
+///
+/// The venue keeps three sets of holdings: its own, those held away at another
+/// broker, and rows it marks as shown but not held. Only the first is what a
+/// caller asking for positions means, so the others are kept here rather than
+/// added to them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PositionElsewhere {
+    pub con_id: i64,
+    pub symbol: String,
+    pub sec_type: String,
+    pub currency: String,
+    pub position: f64,
+    pub avg_cost: Price,
+    /// Where the venue says it sits.
+    pub held: HeldElsewhere,
+}
+
+/// Which of the venue's other sets of holdings a row came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldElsewhere {
+    /// Held away, at another broker.
+    Away,
+    /// Shown but not held.
+    DisplayOnly,
+    /// Reported apart from the account's own holdings, without saying why.
+    Aside,
+}
+
 /// What the venue makes of an option: its own model price, the greeks and the
 /// volatility that price implies.
 ///
