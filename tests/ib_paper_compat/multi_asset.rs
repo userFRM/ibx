@@ -466,3 +466,125 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     println!("  PASS\n");
     conns
 }
+
+/// The same instrument kind, resolved on venues outside the United States.
+///
+/// Every other phase names SMART, BEST, IDEALPRO, CME or NASDAQ, so the whole
+/// suite could pass while every non-US listing resolved to the wrong exchange
+/// or lost its currency. A definition is reference data, so this runs whether
+/// or not any of these markets is trading.
+///
+/// Hong Kong is deliberately absent: SMART answered that no definition exists
+/// and whether the exchange answers by name has not been established, so it is
+/// not asserted either way here.
+pub(super) fn phase_global_venues(conns: Conns) -> Conns {
+    println!("--- Global venues (definition, currency and exchange outside the US) ---");
+
+    // Symbol, currency, and the exchange the listing belongs to.
+    const VENUES: &[(&str, &str, &str)] = &[
+        ("VOD", "GBP", "LSE"),
+        ("SAP", "EUR", "IBIS"),
+        ("ASML", "EUR", "AEB"),
+        ("NESN", "CHF", "EBS"),
+        ("7203", "JPY", "TSEJ"),
+        ("BHP", "AUD", "ASX"),
+    ];
+
+    let Conns { farm, mut ccp, hmds, account_id } = conns;
+
+    for (i, (symbol, currency, _)) in VENUES.iter().enumerate() {
+        let req_id = format!("GV{i}");
+        ccp.send_fixcomp(&[
+            (fix::TAG_MSG_TYPE, "c"),
+            (contracts::TAG_SECURITY_REQ_ID, &req_id),
+            (contracts::TAG_SECURITY_REQ_TYPE, "2"),
+            (contracts::TAG_SYMBOL, symbol),
+            (contracts::TAG_SECURITY_TYPE, "CS"),
+            (contracts::TAG_EXCHANGE, "SMART"),
+            (contracts::TAG_CURRENCY, currency),
+            (contracts::TAG_IB_SOURCE, "Socket"),
+        ]).expect("failed to send a definition request");
+    }
+
+    let mut found: Vec<contracts::ContractDefinition> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(25);
+    // SMART can answer one symbol with several listings, so counting replies
+    // says nothing about how many symbols were answered. Wait on the symbols.
+    let answered = |found: &[contracts::ContractDefinition]| {
+        VENUES.iter().all(|(symbol, currency, _)| {
+            found.iter().any(|d| {
+                (d.symbol.eq_ignore_ascii_case(symbol)
+                    || d.local_symbol.eq_ignore_ascii_case(symbol))
+                    && d.currency == *currency
+            })
+        })
+    };
+
+    while Instant::now() < deadline && !answered(&found) {
+        match ccp.try_recv() {
+            Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
+            Err(e) => { println!("  CCP recv error: {e}"); break; }
+            Ok(_) => {}
+        }
+        for frame in ccp.extract_frames() {
+            let messages = match frame {
+                Frame::FixComp(raw) => {
+                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
+                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
+                }
+                Frame::Fix(raw) => vec![raw],
+                _ => continue,
+            };
+            for msg in messages {
+                let tags = fix::fix_parse(&msg);
+                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
+                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                    && !found.iter().any(|d| d.con_id == def.con_id)
+                {
+                    found.push(def);
+                }
+            }
+        }
+    }
+
+    for (symbol, currency, exchange) in VENUES {
+        let named: Vec<_> = found.iter().filter(|d| {
+            d.symbol.eq_ignore_ascii_case(symbol) || d.local_symbol.eq_ignore_ascii_case(symbol)
+        }).collect();
+
+        if named.is_empty() {
+            lookup_returned_nothing(&format!("no definition came back for {symbol} on {exchange}"));
+        }
+
+        // The listing asked for is the one quoted in the currency asked for. A
+        // reply in another currency is a different listing on another venue,
+        // and an order priced against it is priced in the wrong money.
+        let Some(def) = named.iter().find(|d| d.currency == *currency) else {
+            panic!(
+                "{symbol} was asked for in {currency} and came back only as {:?}",
+                named.iter().map(|d| (&d.currency, &d.primary_exchange)).collect::<Vec<_>>(),
+            );
+        };
+
+        println!(
+            "  {symbol}: con_id={} currency={} primary={} class={}",
+            def.con_id, def.currency, def.primary_exchange, def.trading_class,
+        );
+        assert!(
+            def.primary_exchange.eq_ignore_ascii_case(exchange)
+                || def.valid_exchanges.iter().any(|e| e.eq_ignore_ascii_case(exchange)),
+            "{symbol} belongs on {exchange}; this definition names {} and lists {:?}",
+            def.primary_exchange, def.valid_exchanges,
+        );
+        assert!(def.con_id != 0, "{symbol} resolved without an id");
+    }
+
+    println!("  PASS ({} venues, {} currencies)\n", VENUES.len(), {
+        let mut c: Vec<&str> = VENUES.iter().map(|(_, c, _)| *c).collect();
+        c.sort_unstable();
+        c.dedup();
+        c.len()
+    });
+
+    Conns { farm, ccp, hmds, account_id }
+}
