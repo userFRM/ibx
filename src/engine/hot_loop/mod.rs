@@ -770,9 +770,7 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelFundamentalData { req_id } => {
-                    if let Some(pos) = self.hmds.pending_fundamental.iter().position(|(_, rid)| *rid == req_id) {
-                        self.hmds.pending_fundamental.remove(pos);
-                    }
+                    self.hmds.send_fundamental_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
                 }
                 ControlCommand::FetchHistogramData { req_id, con_id, use_rth, period } => {
                     if self.hmds_conn.is_none() {

@@ -56,6 +56,7 @@ A user message carries what it is for on tag 6040.
 | `10003` |
 | `10004` |
 | `10010` |
+| `10011` |
 | `10030` |
 
 ## Handled

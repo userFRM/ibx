@@ -182,7 +182,7 @@ a record rather than discarding it in silence.
 | `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
 | `6040` 10020, 10021 | Contract adjustments, for splits and dividends | Not yet built. Historical prices are unadjusted without it |
-| `6040` 10011, 10031 | Cancelling a fundamentals or news subscription | Not yet built: the request is withdrawn here and the venue is not told, so it keeps sending |
+| `6040` 10031 | Cancelling a news subscription | Not yet built. Historical news is answered once, so there is nothing outstanding for a caller to withdraw |
 | `35=2` | Resending missed messages | The vendor's own client never sends it either: the class is registered and constructed nowhere. Implementing it would be work against a wire that never fires |
 
 ## Excluded surface

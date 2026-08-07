@@ -1209,6 +1209,38 @@ impl HmdsState {
         self.pending_fundamental.push((query_id, req_id));
     }
 
+    /// Tell the venue to stop serving a fundamentals request.
+    ///
+    /// Withdrawing it here alone left the venue serving a subscription nobody
+    /// was reading, for as long as the session lasted.
+    pub(crate) fn send_fundamental_cancel(
+        &mut self,
+        req_id: u32,
+        hmds_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        // Sent whether or not this client still has the request on its own
+        // list. That list is emptied by the first response the venue sends,
+        // which is not the same moment the venue stops serving it — so gating
+        // the withdrawal on it sent nothing in the case that actually leaks.
+        if let Some(pos) = self.pending_fundamental.iter().position(|(_, rid)| *rid == req_id) {
+            self.pending_fundamental.remove(pos);
+        }
+        let Some(conn) = hmds_conn.as_mut() else { return };
+        let xml = crate::control::fundamental::build_fundamental_cancel_xml(
+            crate::control::fundamental::FUNDAMENTALS_QUERY_ID,
+        );
+        let ts = chrono_free_timestamp();
+        let _ = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "10011"),
+            (6118, &xml),
+        ]);
+        hb.last_hmds_sent = Instant::now();
+        log::info!("Sent fundamental data cancel: req_id={req_id}");
+    }
+
     pub(crate) fn send_histogram_request(&mut self, req_id: u32, con_id: u32, use_rth: bool, period: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let req = crate::control::histogram::HistogramRequest {
             con_id,
