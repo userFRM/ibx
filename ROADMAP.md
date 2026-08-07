@@ -172,6 +172,18 @@ A wire on this list is one this client neither sends nor reads. Each is named
 in the log the first time the venue uses it, so a session that meets one leaves
 a record rather than discarding it in silence.
 
+The vendor dispatches 52 inbound user-message subtypes. Four are its own
+windows — a video feed, a product browser, cloud settings sync, a rebalancing
+tool — and have no meaning without them. The rest were triaged against its
+bytecode; the table below carries what remains.
+
+**What a live session actually sends.** A session that logs on, subscribes,
+asks for holdings and account values, then places, modifies and cancels an
+order, receives **nothing this client does not read**. Every subtype below is a
+wire the vendor's client can handle and this venue does not use for this
+account. Each is named in the log the first time it arrives, so the day one
+does, it will say so rather than vanish.
+
 | Wire | What it carries | Why it is not implemented |
 | --- | --- | --- |
 | Out-of-band `AP` | Positions held away from this broker | Never sent to the account used for verification, so an implementation could not be exercised. Reported by name if it arrives |
@@ -183,6 +195,15 @@ a record rather than discarding it in silence.
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
 | `6040` 10020, 10021 | Contract adjustments, for splits and dividends | Not yet built. Historical prices are unadjusted without it |
 | `6040` 10031 | Cancelling a news subscription | Not yet built. Historical news is answered once, so there is nothing outstanding for a caller to withdraw |
+| `6040` 110 | A live order's price and state, keyed by the order's own id | Not sent to this account: a full order lifecycle — placed, modified, cancelled — produced none. Order state arrives on execution reports here |
+| `6040` 7 | The price increments a contract trades in, pushed | Not sent to this account. The same rules arrive attached to a contract's details, which is where this client reads them |
+| `6040` 60, 146, 151, 208 | Execution and trade-report records, including per-leg fills on a combination | Not sent to this account. Fills arrive on execution reports here |
+| `6040` 200 | Execution history | Not sent to this account |
+| `6040` 109 | An advisor's allocation groups and profiles | Needs an advisor account |
+| `6040` 141, 154, 175 | Combination position state and leg definitions | Not sent to this account |
+| `6040` 145 | A session-level control message, sibling of the error channel | Not sent to this account |
+| `6040` 18 | The venue's own clock, for drift against ours | Not sent to this account |
+| `6040` 119, 148, 188, 212, 258 | Not established | Reaching real account and contract managers in the vendor's client, but what they carry could not be settled from its bytecode, and this account is sent none of them |
 | `35=2` | Resending missed messages | The vendor's own client never sends it either: the class is registered and constructed nowhere. Implementing it would be work against a wire that never fires |
 
 ## Excluded surface
