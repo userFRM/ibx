@@ -203,6 +203,38 @@ pub struct HistoricalResponse {
 }
 
 /// Build the XML query for a historical bar data request.
+/// The spelling of a duration unit this venue accepts.
+///
+/// It is not one case or the other: seconds and weeks are taken uppercase,
+/// days, months and years lowercase, and the wrong case is refused outright
+/// with "Invalid time length" rather than corrected. Measured against a live
+/// session, every unit, both cases: `S` and `W` are taken and `s`/`w` refused;
+/// `d`, `m`, `y` are taken and `D`/`M`/`Y` refused.
+///
+/// The duration had been lowercased whole, which is right for three of the five
+/// and silently breaks the other two: a caller asking for seconds or weeks was
+/// refused, while the same span asked for in days was served. Callers state the
+/// unit however the reference client documents it, so it is normalised here.
+pub fn normalize_duration(duration: &str) -> String {
+    let trimmed = duration.trim();
+    let Some(unit) = trimmed.chars().last() else {
+        return trimmed.to_string();
+    };
+    let spelled = match unit {
+        'S' | 's' => 'S',
+        'D' | 'd' => 'd',
+        'W' | 'w' => 'W',
+        'M' | 'm' => 'm',
+        'Y' | 'y' => 'y',
+        // Not a unit this venue names. Passed through, because refusing it here
+        // would hide the venue's own answer about what it accepts.
+        other => other,
+    };
+    let mut out: String = trimmed[..trimmed.len() - unit.len_utf8()].to_string();
+    out.push(spelled);
+    out
+}
+
 pub fn build_query_xml(req: &HistoricalRequest) -> String {
     let exchange = match req.exchange.as_str() {
         "SMART" => "BEST",
@@ -1264,5 +1296,35 @@ mod tests {
         // After 4-byte group reversal decoding, this is complex to hand-build.
         // Just verify None on empty payload.
         assert!(decode_bar_payload(&[], 0.01).is_none());
+    }
+}
+
+#[cfg(test)]
+mod duration_spelling_tests {
+    use super::normalize_duration;
+
+    /// The spelling each unit is taken in, measured against a live session in
+    /// both cases. Getting one wrong is refused outright — "Invalid time
+    /// length" — rather than corrected, so a caller asking for seconds or weeks
+    /// got nothing while the same span in days was served.
+    #[test]
+    fn each_unit_is_spelled_the_way_the_venue_takes_it() {
+        for (asked, sent) in [
+            ("3600 S", "3600 S"), ("3600 s", "3600 S"),
+            ("2 D", "2 d"), ("2 d", "2 d"),
+            ("2 W", "2 W"), ("2 w", "2 W"),
+            ("1 M", "1 m"), ("1 m", "1 m"),
+            ("1 Y", "1 y"), ("1 y", "1 y"),
+        ] {
+            assert_eq!(normalize_duration(asked), sent, "asked for {asked}");
+        }
+    }
+
+    /// A unit this venue does not name is the venue's to refuse, not this
+    /// client's to swallow.
+    #[test]
+    fn an_unknown_unit_reaches_the_venue_unchanged() {
+        assert_eq!(normalize_duration("5 Q"), "5 Q");
+        assert_eq!(normalize_duration(""), "");
     }
 }

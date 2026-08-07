@@ -844,7 +844,7 @@ impl HmdsState {
         hb: &mut HeartbeatState,
         shared: &SharedState,
     ) {
-        let duration = duration.to_lowercase();
+        let duration = crate::control::historical::normalize_duration(duration);
         let duration = duration.as_str();
         let end_date_time = if end_date_time.is_empty() {
             crate::gateway::chrono_free_timestamp().to_string()
@@ -926,7 +926,7 @@ impl HmdsState {
         shared: &SharedState,
     ) -> bool {
         // Reuse the same request builder but with keep_up_to_date=true
-        let duration = duration.to_lowercase();
+        let duration = crate::control::historical::normalize_duration(duration);
         let end_date_time = if end_date_time.is_empty() {
             crate::gateway::chrono_free_timestamp().to_string()
         } else {
@@ -1322,7 +1322,7 @@ impl HmdsState {
     pub(crate) fn send_schedule_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, end_date_time: &str, duration: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
-        let duration = duration.to_lowercase();
+        let duration = crate::control::historical::normalize_duration(duration);
         let end_date_time = if end_date_time.is_empty() {
             chrono_free_timestamp().to_string()
         } else {
