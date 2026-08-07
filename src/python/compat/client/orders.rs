@@ -54,6 +54,14 @@ impl EClient {
             ),
         )
             .map_err(PyRuntimeError::new_err)?;
+        // The same guard the Rust surface applies. Without it here, whether a
+        // caller is protected from an order the venue will refuse in silence
+        // depends on which language they wrote in.
+        if let Ok(shared) = self.shared_state() {
+            ClientCore::refuse_unpermitted_sec_type(
+                &shared.reference.order_permissions(), &contract.sec_type,
+            ).map_err(PyRuntimeError::new_err)?;
+        }
 
         let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
 

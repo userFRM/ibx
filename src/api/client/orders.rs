@@ -20,23 +20,9 @@ impl EClient {
     /// here is not permission: when the venue stated no permissions, there is
     /// nothing to enforce and the order goes.
     fn check_sec_type_permitted(&self, sec_type: &str) -> Result<(), String> {
-        if sec_type.is_empty() {
-            return Ok(());
-        }
-        let permitted = self.shared.reference.order_permissions();
-        if permitted.is_empty() {
-            return Ok(());
-        }
-        let ty = sec_type.to_ascii_uppercase();
-        if self.shared.reference.permitted_order_types(&ty).is_some() {
-            return Ok(());
-        }
-        let mut named: Vec<&str> = permitted.keys().map(String::as_str).collect();
-        named.sort_unstable();
-        Err(format!(
-            "the account is not permitted to trade {ty}. It is permitted: {}",
-            named.join(", ")
-        ))
+        ClientCore::refuse_unpermitted_sec_type(
+            &self.shared.reference.order_permissions(), sec_type,
+        )
     }
 
     /// Security type → the order types the venue permits for it, as stated at

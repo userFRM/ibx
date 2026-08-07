@@ -1186,6 +1186,12 @@ impl PortfolioState {
         } else if before == 0.0 || (before > 0.0) == (delta > 0.0) {
             let cost = row.avg_cost as f64 * before + price as f64 * delta;
             row.avg_cost = (cost / after) as Price;
+        } else if (before > 0.0) != (after > 0.0) {
+            // One fill that closed the holding and opened the opposite one.
+            // Keeping the old basis prices a short against what a long paid,
+            // and every profit and loss read afterwards is measured from the
+            // wrong side. What is held now was bought at this price.
+            row.avg_cost = price;
         }
     }
 
@@ -1752,6 +1758,14 @@ mod tests {
         p.apply_fill(7, -50.0, 30 * PRICE_SCALE);
         assert_eq!(p.position_info(7).unwrap().position, 0.0);
         assert_eq!(p.position_info(7).unwrap().avg_cost, 0);
+        // One fill that crosses through flat: what is held now was bought at
+        // this price, not at what the holding it replaced had paid.
+        p.apply_fill(8, 50.0, 10 * PRICE_SCALE);
+        p.apply_fill(8, -100.0, 30 * PRICE_SCALE);
+        let row = p.position_info(8).unwrap();
+        assert_eq!(row.position, -50.0, "long fifty, sold a hundred, short fifty");
+        assert_eq!(row.avg_cost, 30 * PRICE_SCALE, "priced at what the short was sold for");
+
         // A fill on a contract this session never saw still opens the holding.
         p.apply_fill(9, -10.0, 5 * PRICE_SCALE);
         assert_eq!(p.position_info(9).unwrap().position, -10.0, "a short opens too");
