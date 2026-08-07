@@ -44,6 +44,10 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
 
     while Instant::now() < deadline && (contract.is_none() || by_name.is_none()) {
         if let Ok(Event::ContractDetails { req_id, details }) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            println!(
+                "  <- details req_id={} con_id={} long_name={:?} valid_exchanges={}",
+                req_id, details.con_id, details.long_name, details.valid_exchanges.len(),
+            );
             match req_id {
                 1200 => contract = Some(*details),
                 1201 if details.con_id == 756733 => by_name = Some(*details),
@@ -63,14 +67,22 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
         def.long_name, def.trading_class, def.primary_exchange,
         def.valid_exchanges.len(), def.min_tick,
     );
-    match &by_name {
-        Some(n) => println!(
-            "  by name: long_name={:?} class={:?} primary={:?} valid_exchanges={} min_tick={}",
-            n.long_name, n.trading_class, n.primary_exchange,
-            n.valid_exchanges.len(), n.min_tick,
-        ),
-        None => println!("  by name: no answer"),
-    }
+    // A contract asked for by id and the same contract asked for by name are
+    // the same contract. They were not: one arrived whole and the other lost
+    // the fields the message states once, which is invisible unless the two are
+    // put side by side.
+    let named = by_name.as_ref().expect("the same contract asked for by name did not answer");
+    println!(
+        "  by name: long_name={:?} class={:?} primary={:?} valid_exchanges={} min_tick={}",
+        named.long_name, named.trading_class, named.primary_exchange,
+        named.valid_exchanges.len(), named.min_tick,
+    );
+    assert_eq!(def.long_name, named.long_name, "the same contract, two ways of asking");
+    assert_eq!(def.primary_exchange, named.primary_exchange, "the same contract, two ways of asking");
+    assert_eq!(
+        def.valid_exchanges.len(), named.valid_exchanges.len(),
+        "the same contract, two ways of asking",
+    );
     assert!(
         !def.long_name.is_empty(),
         "the definition carries no long name: {def:?}",

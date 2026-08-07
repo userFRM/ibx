@@ -381,6 +381,18 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
             out.push(def);
         }
     }
+    // Records that all name the same contract are one contract described once.
+    // The identifier block repeats the symbol tag and states a type and an id
+    // beside it, so a single definition can split in two, and a field the
+    // message states once — the long name, the venues it may trade on — then
+    // survives in whichever half it followed and is missing from the other.
+    // Read whole, it is all there.
+    if out.len() > 1 {
+        let first = out[0].con_id;
+        if out.iter().all(|d| d.con_id == first) {
+            return parse_secdef_response(data).into_iter().collect();
+        }
+    }
     out
 }
 
