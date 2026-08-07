@@ -161,6 +161,25 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it | Met. The coverage matrix carries, per call, how its status was established: exercised against a live session, exercised by the offline suites, stating why it cannot be served, or exercised by neither. Derived from the suites themselves, so it cannot go quietly out of date |
 | W3.6 | Second factor | Approval path covered by an automated live check, or the reason no such check can run recorded | Blocked. The paper session used for verification is never presented with a second factor, so the approval path cannot be exercised against it. The wire and the gate that waits on it are covered by fifteen tests |
 
+## Wire coverage
+
+A claim to replace the gateway is a claim about messages. This one is checked
+rather than asserted: every message the venue sends that nothing here reads is
+recorded, and a live test exercises everything a caller can ask for and then
+asks what arrived unread.
+
+| Measure | State |
+| --- | --- |
+| A live session's messages read | Every one. Verified with quotes, depth, holdings, account values, and an order through placing, modifying and cancelling |
+| Trading connection | Every type and subtype read, or recorded with why it carries nothing a caller could use |
+| Market data connection | Every type read. A venue refusing to show its book now reaches the caller that asked |
+| Historical connection | Records anything it does not read |
+| The venue's fourth connection | Not needed. It carries a topic-keyed message bus for news search, notifications and window layouts, and no contract or reference data |
+| Host redirection, before any session exists | Implemented. The venue can retarget this client to another host and it follows |
+
+The messages this client reads are published in the wire coverage reference,
+taken from its own dispatch tables.
+
 ## Wires not implemented
 
 The vendor's client builds 132 distinct messages to the venue. Most serve its
