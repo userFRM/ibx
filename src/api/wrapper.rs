@@ -160,6 +160,32 @@ pub trait Wrapper {
     fn display_group_updated(&mut self, req_id: i64, contract_info: &str) {
         let _ = (req_id, contract_info);
     }
+    /// A bond's contract details, answering `req_contract_details` for a bond.
+    /// The venue answers bonds on the same callback as everything else here,
+    /// so this exists for callers written against a client that separates them.
+    fn bond_contract_details(&mut self, req_id: i64, details: &ContractDetails) {
+        let _ = (req_id, details);
+    }
+    /// The permanent id an order was given, paired with the id this client used.
+    fn order_bound(&mut self, perm_id: i64, client_id: i64, order_id: i64) {
+        let _ = (perm_id, client_id, order_id);
+    }
+    /// An advisor's allocation groups, profiles or aliases, as XML.
+    fn receive_fa(&mut self, fa_data_type: i32, cxml: &str) {
+        let _ = (fa_data_type, cxml);
+    }
+    /// The end of a `replace_fa` exchange.
+    fn replace_fa_end(&mut self, req_id: i64, text: &str) {
+        let _ = (req_id, text);
+    }
+    /// What the event calendar can answer about, as JSON.
+    fn wsh_meta_data(&mut self, req_id: i64, data_json: &str) {
+        let _ = (req_id, data_json);
+    }
+    /// Calendar events, as JSON.
+    fn wsh_event_data(&mut self, req_id: i64, data_json: &str) {
+        let _ = (req_id, data_json);
+    }
     fn security_definition_option_parameter(
         &mut self, req_id: i64, exchange: &str, underlying_con_id: i64,
         trading_class: &str, multiplier: &str, expirations: &[String], strikes: &[f64],

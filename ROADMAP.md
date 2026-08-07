@@ -59,13 +59,16 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Canonical calls | 77 |
 | Served, Rust | 69 |
 | Served, Python | 69 |
-| Accepted and not served, Rust | 4 |
+| Accepted and not served, Rust | 8 |
 | Accepted and not served, Python | 8 |
 | Canonical callbacks | 81 |
+| Calls where the two surfaces differ | 0 |
+| Callbacks where the two surfaces differ | 0 |
 
 Counted from the source by `scripts/gen_api_docs.py`, which CI re-runs and
-compares. The per-call matrix, and how each call's status was established, is
-in the coverage reference.
+compares. The two surfaces carry the same calls and the same callbacks: a
+program written against either finds the same thing, and a call that cannot be
+served says so on both rather than being absent from one.
 
 ### Calls not served
 

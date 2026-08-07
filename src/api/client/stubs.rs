@@ -6,6 +6,12 @@ use crate::api::wrapper::Wrapper;
 
 use super::EClient;
 
+/// Why neither option calculation can be served here.
+const OPTION_CALCULATION_UNSERVED: &str =
+    "this protocol carries no request that takes a caller-supplied option price or \
+     volatility for the venue to work back from, so neither an implied volatility nor \
+     an option price can be asked of it";
+
 impl EClient {
     // ── Smart Components ──
 
@@ -52,6 +58,37 @@ impl EClient {
              the vendor's client, so it can be, but an advisor account is needed to exercise \
              it and none is available to verify against");
     }
+
+    // ── Option calculations ──
+    //
+    // A volatility inverted from a price, and a price implied by a volatility.
+    // This protocol carries no request for either: nothing it sends takes a
+    // caller-supplied option price or volatility for the venue to work back
+    // from. They exist so a caller written against the reference client finds
+    // the call and is told why it cannot be served, rather than finding
+    // nothing at all.
+
+    /// Not served. Reports why on the error callback.
+    pub fn calculate_implied_volatility(
+        &self, req_id: i64, _contract: &super::Contract,
+        _option_price: f64, _under_price: f64,
+    ) {
+        self.report_reason(req_id, OPTION_CALCULATION_UNSERVED);
+    }
+
+    /// Not served. Reports why on the error callback.
+    pub fn calculate_option_price(
+        &self, req_id: i64, _contract: &super::Contract,
+        _volatility: f64, _under_price: f64,
+    ) {
+        self.report_reason(req_id, OPTION_CALCULATION_UNSERVED);
+    }
+
+    /// Nothing was started, so there is nothing to stop.
+    pub fn cancel_calculate_implied_volatility(&self, _req_id: i64) {}
+
+    /// Nothing was started, so there is nothing to stop.
+    pub fn cancel_calculate_option_price(&self, _req_id: i64) {}
 
     // ── Display Groups ──
 

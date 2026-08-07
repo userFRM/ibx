@@ -1051,6 +1051,7 @@ STUB_METHODS = {
 STUB_CALLBACKS = {
     "receive_fa", "replace_fa_end",
     "bond_contract_details", "delta_neutral_validation",
+    "order_bound",
     "wsh_meta_data", "wsh_event_data",
     "order_bound",
 }

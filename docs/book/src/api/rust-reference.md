@@ -1368,6 +1368,68 @@ pub fn replace_fa(&self, req_id: i64, _fa_data_type: i32, _cxml: &str)
 
 ---
 
+#### `calculate_implied_volatility`
+
+Not served. Reports why on the error callback.
+
+```rust
+pub fn calculate_implied_volatility( &self, req_id: i64, _contract: &super::Contract, _option_price: f64, _under_price: f64, )
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `contract` | `&super::Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `option_price` | `f64` | Option market price. |
+| `under_price` | `f64` | Underlying asset price. |
+
+---
+
+#### `calculate_option_price`
+
+Not served. Reports why on the error callback.
+
+```rust
+pub fn calculate_option_price( &self, req_id: i64, _contract: &super::Contract, _volatility: f64, _under_price: f64, )
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `contract` | `&super::Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `volatility` | `f64` | Implied volatility. |
+| `under_price` | `f64` | Underlying asset price. |
+
+---
+
+#### `cancel_calculate_implied_volatility`
+
+Nothing was started, so there is nothing to stop.
+
+```rust
+pub fn cancel_calculate_implied_volatility(&self, _req_id: i64)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+
+---
+
+#### `cancel_calculate_option_price`
+
+Nothing was started, so there is nothing to stop.
+
+```rust
+pub fn cancel_calculate_option_price(&self, _req_id: i64)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+
+---
+
 #### `query_display_groups`
 
 Query display groups. Not yet implemented. The display groups on offer. Answered on `display_group_list`. A display group is a way for several callers on one session to agree on a contract. The venue knows nothing about them, and never did: the vendor's own client keeps them in its own state and serves them to its callers from there, which is exactly what this does.
@@ -2199,6 +2261,73 @@ The contract a display group now holds, as `conId@exchange`, or `none`.
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `contract_info` | `&str` | Display group contract info string. |
+
+---
+
+#### `bond_contract_details`
+
+A bond's contract details, answering `req_contract_details` for a bond. The venue answers bonds on the same callback as everything else here, so this exists for callers written against a client that separates them.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `details` | `&ContractDetails` | Contract details object. |
+
+---
+
+#### `order_bound`
+
+The permanent id an order was given, paired with the id this client used.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `perm_id` | `i64` | Permanent order ID assigned by the server. |
+| `client_id` | `i64` | Client ID (unused — single-client engine). |
+| `order_id` | `i64` | Order identifier. Must be unique per session. |
+
+---
+
+#### `receive_fa`
+
+An advisor's allocation groups, profiles or aliases, as XML.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `fa_data_type` | `i32` | FA data type (1=Groups, 2=Profiles, 3=Aliases). |
+| `cxml` | `&str` | FA XML configuration data. |
+
+---
+
+#### `replace_fa_end`
+
+The end of a `replace_fa` exchange.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `text` | `&str` | Informational text. |
+
+---
+
+#### `wsh_meta_data`
+
+What the event calendar can answer about, as JSON.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `data_json` | `&str` |  |
+
+---
+
+#### `wsh_event_data`
+
+Calendar events, as JSON.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `data_json` | `&str` |  |
 
 ---
 
