@@ -1322,10 +1322,19 @@ fn push_order_attrs(
     // The contract the order hedges against: which one, its delta and its
     // price. Stated on the contract rather than the order, so an order that
     // named a hedging leg still said nothing about what to hedge with.
+    // Which contract to hedge with is stated on the contract and again on the
+    // order, and a caller written against the reference client sets both. Sent
+    // twice the gateway reads it as a second statement of the same field, so
+    // it is stated once. The contract's own answer is preferred: it is where
+    // the hedging leg is named, and the order restates it.
+    let hedge_con_id = attrs.delta_neutral_contract.as_deref()
+        .map(|dnc| dnc.con_id)
+        .filter(|id| *id != 0)
+        .or_else(|| attrs.delta_neutral.as_deref().map(|dn| dn.con_id).filter(|id| *id != 0));
+    if let Some(con_id) = hedge_con_id {
+        fields.push((6150, con_id.to_string()));
+    }
     if let Some(dnc) = attrs.delta_neutral_contract.as_deref() {
-        if dnc.con_id != 0 {
-            fields.push((6150, dnc.con_id.to_string()));
-        }
         fields.push((6148, format!("{:.6}", dnc.delta)));
         fields.push((6149, format!("{:.6}", dnc.price)));
     }
@@ -1333,9 +1342,6 @@ fn push_order_attrs(
         fields.push((6290, dn.order_type.clone()));
         if dn.aux_price != 0 {
             fields.push((6291, format_price(dn.aux_price).to_string()));
-        }
-        if dn.con_id != 0 {
-            fields.push((6150, dn.con_id.to_string()));
         }
     }
     if let Some(scale) = attrs.scale.as_deref() {
@@ -2532,6 +2538,34 @@ mod tests {
             "the preview flag keeps its position after the contract block: {msg}"
         );
         assert_eq!(tag("40=").as_deref(), Some("2"), "a limit preview: {msg}");
+    }
+
+    /// A caller written against the reference client names the hedging
+    /// contract on the contract and again on the order. Sent twice, the
+    /// gateway reads the second as a correction of the first.
+    #[test]
+    fn the_hedging_contract_is_named_once() {
+        let attrs = crate::types::OrderAttrs {
+            delta_neutral_contract: Some(Box::new(crate::types::DeltaNeutralContractSpec {
+                con_id: 265598,
+                delta: 0.5,
+                price: 100.0,
+            })),
+            delta_neutral: Some(Box::new(crate::types::DeltaNeutralAttrs {
+                order_type: "MKT".into(),
+                aux_price: 0,
+                con_id: 265598,
+            })),
+            ..crate::types::OrderAttrs::default()
+        };
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'1',
+            attrs,
+        );
+        let stated = msg.split('\u{1}').filter(|f| f.starts_with("6150=")).count();
+        assert_eq!(stated, 1, "the hedging contract is named once: {msg}");
+        assert!(msg.contains("6150=265598"), "{msg}");
     }
 
     #[test]
