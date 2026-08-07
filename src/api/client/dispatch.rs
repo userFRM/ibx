@@ -17,6 +17,14 @@ const MODEL_OPTION_COMPUTATION: i32 = 13;
 /// What the reference client reports when a contract cannot be named.
 const NO_SECURITY_DEFINITION: i64 = 200;
 
+/// Reported against no request, the way the reference client reports anything
+/// it cannot attribute to one.
+const NO_REQUEST: i64 = -1;
+
+/// The venue said something went wrong and stated no code for it. This one
+/// says only that the venue is the one saying it.
+const VENUE_REPORTED: i64 = 321;
+
 impl EClient {
     // ── Message Processing ──
 
@@ -296,6 +304,12 @@ impl EClient {
                     wrapper.display_group_updated(req_id, &info);
                 }
             }
+        }
+
+        // What the venue said went wrong. It attributes these to no request,
+        // so neither does this.
+        for text in self.shared.market.drain_venue_errors() {
+            wrapper.error(NO_REQUEST, VENUE_REPORTED, &text, "");
         }
 
         // A subscription the venue could not be asked for, because it never

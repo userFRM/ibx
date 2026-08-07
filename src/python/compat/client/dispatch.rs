@@ -209,6 +209,10 @@ impl EClient {
             }
         }
 
+        for text in shared.market.drain_venue_errors() {
+            call_wrapper!(self.wrapper, py, "error", (-1i64, 321i64, text, ""));
+        }
+
         for (instrument, reason) in shared.market.drain_subscription_failures() {
             let req_id = self.core.req_id_for_instrument(instrument);
             call_wrapper!(self.wrapper, py, "error", (req_id, 200i64, reason, ""));

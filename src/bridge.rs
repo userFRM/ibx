@@ -291,6 +291,8 @@ pub struct MarketDataState {
     option_computations: Mutex<Vec<crate::types::OptionComputation>>,
     /// Subscriptions the venue was never able to be asked for, and why.
     subscription_failures: Mutex<Vec<(crate::types::InstrumentId, String)>>,
+    /// What the venue has said went wrong, in its own words.
+    venue_errors: Mutex<Vec<String>>,
 }
 
 impl MarketDataState {
@@ -306,6 +308,7 @@ impl MarketDataState {
             news_bulletins: Mutex::new(Vec::with_capacity(16)),
             option_computations: Mutex::new(Vec::with_capacity(16)),
             subscription_failures: Mutex::new(Vec::new()),
+            venue_errors: Mutex::new(Vec::new()),
         }
     }
 
@@ -361,6 +364,14 @@ impl MarketDataState {
 
     pub fn drain_option_computations(&self) -> Vec<crate::types::OptionComputation> {
         self.option_computations.lock().unwrap().drain(..).collect()
+    }
+
+    pub fn drain_venue_errors(&self) -> Vec<String> {
+        self.venue_errors.lock().unwrap().drain(..).collect()
+    }
+
+    #[doc(hidden)] pub fn push_venue_error(&self, text: String) {
+        self.venue_errors.lock().unwrap().push(text);
     }
 
     pub fn drain_subscription_failures(&self) -> Vec<(crate::types::InstrumentId, String)> {

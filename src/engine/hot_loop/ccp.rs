@@ -133,6 +133,32 @@ fn perm_id_from_fix_order_id(s: &str) -> i64 {
     (h >> 1) as i64
 }
 
+/// What the venue says went wrong.
+///
+/// It states the trouble as text and gives it no code and no severity. Nor,
+/// for all but a narrow family of requests, does it say which request failed:
+/// the vendor's own client shows these in a window and writes them to a log,
+/// with nothing to attribute them to. So this reports the text against no
+/// request, which is what it is, rather than guessing at an owner for it.
+fn handle_venue_error(parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
+    let text = parsed.get(&58).map(String::as_str).unwrap_or("");
+    if text.is_empty() {
+        // Nothing said. The vendor's client logs exactly this case and shows
+        // nothing, having nothing to show.
+        log::warn!("The venue reported trouble and stated nothing about it");
+        return;
+    }
+    // A code-like identifier travels separately from the text where it travels
+    // at all, so it is carried along rather than parsed into a number the
+    // venue never stated.
+    let told = match parsed.get(&149).map(String::as_str).filter(|id| !id.is_empty()) {
+        Some(id) => format!("{text} ({id})"),
+        None => text.to_string(),
+    };
+    log::warn!("The venue reported: {told}");
+    shared.market.push_venue_error(told);
+}
+
 /// Why a message this client receives is deliberately not read.
 ///
 /// Told apart from one nobody has looked at yet. Both are discarded, but only
@@ -662,6 +688,11 @@ impl CcpState {
                                 }
                             }
                         }
+                        // The venue's own error channel. Two subtypes, one
+                        // channel: which number it arrives under depends only
+                        // on a capability the session negotiated at logon, not
+                        // on the error.
+                        "192" | "278" => handle_venue_error(&parsed, shared),
                         "81" => handle_algorithms(&parsed, shared),
                         "210" => handle_account_config(&parsed, shared),
                         "139" => self.handle_option_chain(msg, shared),
@@ -6134,5 +6165,27 @@ mod tests {
         assert!(super::known_unread("194").is_some(), "defaults for a user interface");
         assert!(super::known_unread("81").is_none(), "the algorithms are read, not excused");
         assert!(super::known_unread("99999").is_none(), "and anything unexamined is a gap");
+    }
+
+    /// The venue states trouble as text, with no code and, for all but a
+    /// narrow family of requests, nothing saying which request it belongs to.
+    #[test]
+    fn what_the_venue_says_went_wrong_reaches_the_caller() {
+        let (_ccp, _context, shared) = u186_test_state();
+
+        let mut said = std::collections::HashMap::new();
+        said.insert(58u32, "Order rejected for margin".to_string());
+        super::handle_venue_error(&said, &shared);
+        assert_eq!(shared.market.drain_venue_errors(), ["Order rejected for margin"]);
+
+        // Where it names something code-like, that travels with the text
+        // rather than being read as a number it never stated.
+        said.insert(149u32, "MARGIN".to_string());
+        super::handle_venue_error(&said, &shared);
+        assert_eq!(shared.market.drain_venue_errors(), ["Order rejected for margin (MARGIN)"]);
+
+        // Trouble it says nothing about leaves nothing to report.
+        super::handle_venue_error(&std::collections::HashMap::new(), &shared);
+        assert!(shared.market.drain_venue_errors().is_empty());
     }
 }
