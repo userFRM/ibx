@@ -1116,6 +1116,9 @@ fn exec_inst_for(kind: &crate::types::OrderKind) -> String {
         K::PegMkt { .. } => "P",
         K::PegMid { .. } => "M",
         K::Rel { .. } => "R",
+        // Pegged to a benchmark states the same instruction a relative order
+        // does, beside its own order type. It had stated none.
+        K::PegBench { .. } => "R",
         K::Adaptive { .. } | K::Algo { .. } => "e",
         _ => "",
     }
