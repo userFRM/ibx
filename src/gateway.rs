@@ -488,9 +488,21 @@ pub struct ReconnectAuth {
     pub trading_farm: String,
 }
 
+/// Record an account the venue named, in the order it named them, ignoring
+/// repeats. The venue names an account more than once across the logon ACK and
+/// the init burst, and a login holding several accounts names each of them.
+fn note_account(accounts: &mut Vec<String>, account: &str) {
+    if !account.is_empty() && !accounts.iter().any(|a| a == account) {
+        accounts.push(account.to_string());
+    }
+}
+
 /// Full gateway connection.
 pub struct Gateway {
     pub account_id: String,
+    /// Every account this login holds, the first being [`Gateway::account_id`].
+    /// A login with one account holds one entry.
+    pub accounts: Vec<String>,
     pub session_token: BigUint,
     /// Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
     /// Sourced from the post-auth FIX logon ACK, falling back to the locally generated
@@ -1658,6 +1670,7 @@ impl Gateway {
         tls.get_ref().set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
         let ack_deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
         let mut account_id = String::new();
+        let mut accounts: Vec<String> = Vec::new();
         let mut heartbeat_interval = CCP_HEARTBEAT;
         let mut server_session_id = String::new();
         let mut ccp_token = String::new();
@@ -1717,8 +1730,10 @@ impl Gateway {
                 _ => {}
             }
 
-            if let Some(v) = fields.get(&1)
-                && account_id.is_empty() { account_id = v.clone(); }
+            if let Some(v) = fields.get(&1) {
+                if account_id.is_empty() { account_id = v.clone(); }
+                note_account(&mut accounts, v);
+            }
             if let Some(v) = fields.get(&108)
                 && let Ok(hb) = v.parse() { heartbeat_interval = hb; }
             if let Some(v) = fields.get(&6386)
@@ -1887,11 +1902,13 @@ impl Gateway {
         for part in init_str.split('\x01') {
             if part.starts_with("1=") && part.len() > 2 {
                 let val = &part[2..];
-                if (val.starts_with("DU") || val.starts_with("DF") || val.starts_with("U"))
-                    && (account_id.is_empty() || account_id == config.username) {
+                if val.starts_with("DU") || val.starts_with("DF") || val.starts_with("U") {
+                    note_account(&mut accounts, val);
+                    if account_id.is_empty() || account_id == config.username {
                         account_id = val.to_string();
                         log::info!("Found account ID from init response: {account_id}");
                     }
+                }
             } else if part.starts_with("6560=") && raw_soft_dollar_tiers.is_empty() {
                 raw_soft_dollar_tiers = part[5..].to_string();
                 log::info!("Found soft dollar tiers from init response ({} bytes)", raw_soft_dollar_tiers.len());
@@ -2091,8 +2108,23 @@ impl Gateway {
             Err(e) => { log::warn!("Historical data farm connection failed (non-fatal): {e}"); None }
         };
 
+        // A family names the accounts linked to this login, which are accounts
+        // this login may trade, so they belong in the list a caller asks for.
+        for entry in raw_family_codes.split(';') {
+            if let Some((account, _)) = entry.split_once('|') { note_account(&mut accounts, account); }
+        }
+        let account_id = if account_id.is_empty() { config.username.clone() } else { account_id };
+        note_account(&mut accounts, &account_id);
+        // The account a caller gets by default leads the list.
+        if accounts.first().map(String::as_str) != Some(account_id.as_str()) {
+            accounts.retain(|a| a != &account_id);
+            accounts.insert(0, account_id.clone());
+        }
+        log::info!("Login holds {} account(s)", accounts.len());
+
         let gw = Gateway {
-            account_id: if account_id.is_empty() { config.username.clone() } else { account_id },
+            account_id,
+            accounts,
             session_token: session_key,
             server_session_id,
             ccp_token,

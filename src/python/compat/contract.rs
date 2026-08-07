@@ -2401,9 +2401,11 @@ mod tests {
     /// (ibx#395).
     #[test]
     fn a_python_trail_limit_offset_survives_the_conversion() {
-        let mut o = Order::default();
-        o.order_type = "TRAIL LIMIT".into();
-        o.lmt_price_offset = 0.25;
+        let o = Order {
+            order_type: "TRAIL LIMIT".into(),
+            lmt_price_offset: 0.25,
+            ..Default::default()
+        };
 
         let api = o.to_api();
 
@@ -2492,15 +2494,17 @@ mod tests {
     /// when unset, which is why the two are set to different numbers here.
     #[test]
     fn to_api_carries_oca_type_trail_stop_and_lmt_price_offset() {
-        let mut o = Order::default();
-        o.action = "BUY".into();
-        o.total_quantity = 1.0;
-        o.order_type = "TRAIL LIMIT".into();
-        o.lmt_price = 10.0;
-        o.lmt_price_offset = 0.5;
-        o.aux_price = 1.0;
-        o.trail_stop_price = 99.0;
-        o.oca_type = 2;
+        let o = Order {
+            action: "BUY".into(),
+            total_quantity: 1.0,
+            order_type: "TRAIL LIMIT".into(),
+            lmt_price: 10.0,
+            lmt_price_offset: 0.5,
+            aux_price: 1.0,
+            trail_stop_price: 99.0,
+            oca_type: 2,
+            ..Default::default()
+        };
 
         let cmd = ClientCore::build_order_request(&o.to_api(), 1, 0, None).unwrap();
         let ControlCommand::Order(OrderRequest::SubmitEx {

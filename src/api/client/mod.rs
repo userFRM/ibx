@@ -162,6 +162,8 @@ pub struct EClient {
     pub(crate) control_tx: SyncSender<ControlCommand>,
     pub(crate) thread: Mutex<Option<thread::JoinHandle<()>>>,
     pub account_id: String,
+    /// Every account this login holds, the first being [`EClient::account_id`].
+    pub accounts: Vec<String>,
     pub(crate) connected: AtomicBool,
     /// True once `connection_closed` has been delivered, so it fires at most
     /// once per session.
@@ -263,6 +265,7 @@ impl EClient {
 
         let (gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&gw_config)?;
         let account_id = gw.account_id.clone();
+        let accounts = gw.accounts.clone();
         let session_token_bytes = crate::auth::crypto::strip_leading_zeros(
             &gw.session_token.to_bytes_be(),
         ).to_vec();
@@ -315,6 +318,7 @@ impl EClient {
             control_tx,
             thread: Mutex::new(Some(handle)),
             account_id,
+            accounts,
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
             next_order_id: AtomicU64::new(start_id),
@@ -341,6 +345,7 @@ impl EClient {
             shared,
             control_tx,
             thread: Mutex::new(Some(handle)),
+            accounts: vec![account_id.clone()],
             account_id,
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),

@@ -9,10 +9,25 @@ use std::time::{Duration, Instant};
 use ibx::bridge::SharedState;
 use ibx::gateway::{connect_farm, reconnect_ccp, Gateway, GatewayConfig, ReconnectAuth};
 
-fn config() -> GatewayConfig {
-    GatewayConfig {
-        username: std::env::var("IB_USERNAME").expect("IB_USERNAME"),
-        password: zeroize::Zeroizing::new(std::env::var("IB_PASSWORD").expect("IB_PASSWORD")),
+/// The credentials these tests need. Missing credentials fail rather than pass
+/// quietly, because a reconnect test that never connected has proved nothing.
+/// A checkout with no credentials skips on purpose with
+/// `IBX_ALLOW_SKIP_NO_CREDS=1`, the same switch the compat suite uses.
+fn config() -> Option<GatewayConfig> {
+    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+    let (username, password) = match (var("IB_USERNAME"), var("IB_PASSWORD")) {
+        (Some(u), Some(p)) => (u, p),
+        _ if var("IBX_ALLOW_SKIP_NO_CREDS").as_deref() == Some("1") => return None,
+        _ => panic!(
+            "IB_USERNAME/IB_PASSWORD unset or empty — a reconnect test that \
+             never connected proves nothing, so it fails rather than passing \
+             silently. Export them first (`set -a; . ./.env; set +a`), or set \
+             IBX_ALLOW_SKIP_NO_CREDS=1 to skip deliberately."
+        ),
+    };
+    Some(GatewayConfig {
+        username,
+        password: zeroize::Zeroizing::new(password),
         host: std::env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string()),
         paper: true,
         accept_invalid_certs: false,
@@ -20,12 +35,12 @@ fn config() -> GatewayConfig {
         ib_key_token_sub_type: ibx::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
         code_provider: None,
         resume: None,
-    }
+    })
 }
 
 #[test]
 fn farm_reconnect_with_cached_credentials() {
-    let cfg = config();
+    let Some(cfg) = config() else { return };
 
     // Phase 1: Full auth
     let t0 = Instant::now();
@@ -60,7 +75,7 @@ fn farm_reconnect_with_cached_credentials() {
 
 #[test]
 fn hotloop_auto_reconnect_on_farm_disconnect() {
-    let cfg = config();
+    let Some(cfg) = config() else { return };
 
     let (gw, farm_conn, ccp_conn, hmds) =
         Gateway::connect(&cfg).expect("Initial connect failed");
@@ -121,7 +136,7 @@ fn hotloop_auto_reconnect_on_farm_disconnect() {
 
 #[test]
 fn ccp_reconnect_with_cached_credentials() {
-    let cfg = config();
+    let Some(cfg) = config() else { return };
 
     let t0 = Instant::now();
     let (gw, _farm_conn, ccp_conn, _hmds) =

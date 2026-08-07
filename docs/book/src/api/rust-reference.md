@@ -134,6 +134,18 @@ pub fn disconnect(&self)
 
 ---
 
+#### `unread_wire`
+
+Everything the venue has sent this session that nothing here reads, as the connection it arrived on and what it was. Empty is this client's claim that it reads everything this venue sends it, and the only way to check that claim rather than take it. A message deliberately not read — one carrying nothing a caller could use — is not listed here; those are named in the source with the reason.
+
+```rust
+pub fn unread_wire(&self) -> Vec<(&'static str, String)>
+```
+
+**Returns:** `Vec<(&'static str, String)>`
+
+---
+
 #### `ccp_session_id`
 
 Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
@@ -332,7 +344,7 @@ pub fn cancel_positions(&self)
 
 #### `req_managed_accts`
 
-Request managed accounts.
+Request managed accounts. Answered with every account this login holds, comma separated, which is the shape the reference client answers in. A login with one account is answered with that one account and no comma.
 
 ```rust
 pub fn req_managed_accts(&self, wrapper: &mut impl Wrapper)
@@ -404,6 +416,34 @@ pub fn cancel_positions_multi(&self, _req_id: i64)
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+
+---
+
+#### `positions_elsewhere`
+
+Holdings the venue reports that this broker does not hold itself: positions held away at another broker, and rows it marks as shown but not held. Kept apart from `positions`, which answers what the account itself holds. The reference client has no call for these — its own front end shows them in a separate table — so this is the only way to reach them.
+
+```rust
+pub fn positions_elsewhere(&self) -> Vec<crate::types::PositionElsewhere>
+```
+
+**Returns:** `Vec<crate::types::PositionElsewhere>`
+
+---
+
+#### `values_elsewhere`
+
+The account figures describing one of the sets of holdings the account does not hold itself, as name and value. The venue states these the same way it states the account's own, and mixing them in would overstate what the account is worth, so they are kept where the holdings they describe are kept.
+
+```rust
+pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String)>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `held` | `crate::types::HeldElsewhere` |  |
+
+**Returns:** `Vec<(String, String)>`
 
 ---
 

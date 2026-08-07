@@ -4082,3 +4082,26 @@ fn a_display_group_keeps_its_followers_in_step() {
     assert_eq!(told.len(), 1, "only the one still following: {told:?}");
     assert!(told[0].ends_with(":none"), "and an empty contract empties the group: {told:?}");
 }
+
+/// A login holding more than one account is answered with all of them, comma
+/// separated, led by the account a caller gets by default. Answering with only
+/// the first is how a caller managing linked accounts stops seeing the rest.
+#[test]
+fn managed_accounts_names_every_account_the_login_holds() {
+    #[derive(Default)]
+    struct W(Vec<String>);
+    impl crate::api::wrapper::Wrapper for W {
+        fn managed_accounts(&mut self, accounts: &str) { self.0.push(accounts.to_string()); }
+    }
+
+    let (mut client, _rx, _shared) = test_client();
+    let mut w = W::default();
+
+    // One account: answered with that account and no comma.
+    client.req_managed_accts(&mut w);
+    assert_eq!(w.0, vec!["DU123".to_string()]);
+
+    client.accounts = vec!["DU123".into(), "DU456".into(), "DU789".into()];
+    client.req_managed_accts(&mut w);
+    assert_eq!(w.0[1], "DU123,DU456,DU789");
+}

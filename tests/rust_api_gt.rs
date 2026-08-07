@@ -1554,6 +1554,15 @@ fn reference_and_account_calls_live() {
 
     let h = heard.lock().unwrap();
     assert!(!h.accounts.is_empty(), "the session names the account it manages");
+    // Every account the login holds, comma separated. This login holds one, so
+    // it is answered with one name and no comma; a login holding several is
+    // answered with each of them.
+    for answer in &h.accounts {
+        assert!(!answer.starts_with(','), "an account list does not lead with a comma: {answer:?}");
+        for account in answer.split(',') {
+            assert!(!account.trim().is_empty(), "every name in the list is an account: {answer:?}");
+        }
+    }
     assert_eq!(h.rule_refusals.len(), 1, "a rule never seen says so: {:?}", h.rule_refusals);
     assert_eq!(h.positions_multi_end, vec![9101], "holdings answer on their own callback");
     assert_eq!(h.values_multi_end, vec![9102], "account values answer on their own callback");

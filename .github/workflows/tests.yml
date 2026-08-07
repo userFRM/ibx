@@ -118,7 +118,7 @@ jobs:
       # A feature that is not the default is compiled by nobody until it breaks
       # somebody. Both configurations are lint-clean and stay that way.
       - name: Lint the Python bindings
-        run: cargo clippy --lib --features python -- -D warnings
+        run: cargo clippy --lib --all-targets --features python -- -D warnings
 
   docs:
     name: generated docs match the source
