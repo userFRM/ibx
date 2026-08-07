@@ -613,6 +613,10 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     // among them. The client writes it; whether the venue takes it is the
     // venue's answer, and the same answer the reference client gets.
     "not supported",
+    // The venue's answer to a race a phase creates on purpose: a modify sent
+    // while a cancel for the same order is in flight. Losing that race is the
+    // outcome under test, not a badly built order.
+    "already being cancelled",
 ];
 
 /// The reason a rejected order was rejected, for a phase that is about to skip.
