@@ -330,6 +330,7 @@ fn compat_suite() {
     conns = ensure_ccp_alive(conns, &mut gw, &config);
 
     // ── New compatibility test phases (issues #83-#93) ──
+    conns = multi_asset::phase_global_venues(conns);
     conns = multi_asset::phase_forex_order(conns);
     conns = multi_asset::phase_futures_order(conns);
     conns = multi_asset::phase_options_order(conns);
