@@ -486,11 +486,47 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
 /// type outside its session and the client encoding one wrong print the same
 /// line. The reason (FIX tag 58 text plus the tag 103 code) is what separates
 /// them, and the engine records it on the order snapshot.
+/// Reasons a rejection is about the market or the account rather than the
+/// order this client built: the session cannot trade the thing, cannot trade
+/// it now, or cannot afford it. Matched case-insensitively on the venue's own
+/// prose, and grown only from a reason a live session actually stated.
+const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
+    "outside",                  // outside regular trading hours
+    "closed",                   // the market is closed
+    "no trading permission",
+    "not permitted",
+    "no security definition",   // the account cannot see the contract
+    "not available",
+    "not subscribed",
+    "market data",              // no quote to price against
+    "insufficient",             // margin, buying power
+    "residency",
+    "halted",
+];
+
+/// The reason a rejected order was rejected, for a phase that is about to skip.
+///
+/// A rejection is treated as a defect in the order this client built unless the
+/// venue's stated reason says it was the market or the account. Skipping on any
+/// rejection is how a malformed order reads as a closed market: the phase
+/// reports SKIP, the suite stays green, and nothing was verified. Fail closed,
+/// and widen [`REJECTED_BY_MARKET_OR_ACCOUNT`] only against prose a live
+/// session actually produced.
 pub(super) fn reject_reason(shared: &SharedState, order_id: u64) -> String {
-    shared.orders.get_order_info(order_id)
+    let reason = shared.orders.get_order_info(order_id)
         .map(|info| info.order_state.reject_reason)
         .filter(|reason| !reason.is_empty())
-        .unwrap_or_else(|| "no reason reported".to_string())
+        .unwrap_or_else(|| "no reason reported".to_string());
+
+    let lowered = reason.to_lowercase();
+    assert!(
+        REJECTED_BY_MARKET_OR_ACCOUNT.iter().any(|known| lowered.contains(known)),
+        "the venue rejected this order for a reason that is not about the market \
+         or the account, so the order this client built is wrong until shown \
+         otherwise: {reason:?}. If this reason really is the market or the \
+         account talking, add it to REJECTED_BY_MARKET_OR_ACCOUNT."
+    );
+    reason
 }
 
 // ─── Generic submit+cancel helper ───
