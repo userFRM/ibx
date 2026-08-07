@@ -102,7 +102,9 @@ A user message carries what it is for on tag 6040.
 | `143` |
 | `152` |
 | `186` |
+| `192` |
 | `210` |
+| `278` |
 
 ### On the market data connection
 

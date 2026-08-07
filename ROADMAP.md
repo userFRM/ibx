@@ -178,7 +178,7 @@ a record rather than discarding it in silence.
 | Out-of-band `DO` | Holdings marked display-only | As above |
 | Out-of-band `DP` | A holding being withdrawn | As above. The vendor's own client treats an unrecognised out-of-band type as an error, so this list is what it would consider missing |
 | Out-of-band `AL`, `UL` | The account list, siblings of the `RL` this client reads | As above. Reading one of three is an accident of what this account sends, not a decision |
-| `6040` 192, 278 | The venue's own error channel | Never sent to this account. A session that provoked one would show it, and nothing here has |
+| `6040` 192, 278 | The venue's own error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
 | `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
 | `6040` 10020, 10021 | Contract adjustments, for splits and dividends | Not yet built. Historical prices are unadjusted without it |
