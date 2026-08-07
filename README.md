@@ -30,7 +30,7 @@ IBX connects directly to Interactive Brokers servers — without requiring the o
 
 ### Processing Latency (no network)
 
-Internal engine processing measured in isolation (1M iterations, no network I/O). Compared to the Java Gateway's internal processing, measured via bytecode instrumentation.
+Internal engine processing measured in isolation (1M iterations, no network I/O).
 
 #### Tick Reading (wire → strategy)
 

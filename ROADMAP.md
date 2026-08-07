@@ -49,7 +49,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Option exercise and lapse | Verified | Live session: one call exercised, filled at the strike, and the holding it delivered observed. A lapse before the last trading day is refused by the venue | Available |
 | Option analytics, implied volatility and greeks | Verified | Live session: the venue's own model arrives on an option subscription. A volatility inverted from a caller's price cannot be served; this protocol carries no request for it | Available |
 | Wall Street Horizon event data | Accepted, not served | Has a path to the venue; a separately subscribed data product, and this session holds no subscription | W3 |
-| Financial advisor allocation | Accepted, not served | The request reaches the venue in the vendor's client; exercising it needs an advisor account | W3 |
+| Financial advisor allocation | Accepted, not served | The venue carries the request; exercising it needs an advisor account | W3 |
 | Tick by tick data | Blocked | The feed rides a service of its own. This session is sent no list of the services it may reach and a request for that list is refused | W2 |
 
 ## API surface
@@ -156,7 +156,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | --- | --- | --- | --- |
 | W3.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot | Met. The display-group calls were the exception: they accepted and did nothing at all, and are served now |
 | W3.2 | Pre connection behaviour | A request issued before connection is reported on the error callback with code 504 on the Python surface, matching the reference client, and returns a typed error on the Rust surface | Met |
-| W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the reason recorded | Not wired, and the reason is recorded rather than the surface removed. The request does reach the venue in the vendor's client, so it is buildable; exercising it needs an advisor account, and this one is not. The calls report exactly that |
+| W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the reason recorded | Not wired, and the reason is recorded rather than the surface removed. The venue carries the request, so it is buildable; exercising it needs an advisor account, and this one is not. The calls report exactly that |
 | W3.4 | Event data | Wall Street Horizon calls served, or the reason recorded | Not wired, and the reason is recorded rather than the surface removed. The event calendar has a path to the venue; it is a separately subscribed data product and this session has no subscription to exercise it against. The calls report exactly that |
 | W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it | Met. The coverage matrix carries, per call, how its status was established: exercised against a live session, exercised by the offline suites, stating why it cannot be served, or exercised by neither. Derived from the suites themselves, so it cannot go quietly out of date |
 | W3.6 | Second factor | Approval path covered by an automated live check, or the reason no such check can run recorded | Blocked. The paper session used for verification is never presented with a second factor, so the approval path cannot be exercised against it. The wire and the gate that waits on it are covered by fifteen tests |
@@ -182,26 +182,24 @@ taken from its own dispatch tables.
 
 ## Wires not implemented
 
-The vendor's client builds 132 distinct messages to the venue. Most serve its
-own windows and have no caller here. These are the ones that do not, taken from
-its own bytecode and checked against this client's dispatch tables, with what
+The venue's protocol carries more messages than this client sends. Most of
+them serve a front end's own windows and have no caller here. These are the
+ones that do not, checked against this client's dispatch tables, with what
 would settle each.
 
 A wire on this list is one this client neither sends nor reads. Each is named
 in the log the first time the venue uses it, so a session that meets one leaves
 a record rather than discarding it in silence.
 
-The vendor dispatches 52 inbound user-message subtypes. Four are its own
-windows — a video feed, a product browser, cloud settings sync, a rebalancing
-tool — and have no meaning without them. The rest were triaged against its
-bytecode; the table below carries what remains.
+Some inbound subtypes exist to drive a front end's own windows and mean
+nothing without one. The table below carries the rest.
 
 **What a live session actually sends.** A session that logs on, subscribes,
 asks for holdings and account values, then places, modifies and cancels an
-order, receives **nothing this client does not read**. Every subtype below is a
-wire the vendor's client can handle and this venue does not use for this
-account. Each is named in the log the first time it arrives, so the day one
-does, it will say so rather than vanish.
+order, receives **nothing this client does not read**. Every subtype below is
+one this venue does not use for this account. Each is named in the log the
+first time it arrives, so the day one does, it will say so rather than
+vanish.
 
 | Wire | What it carries | Why it is not implemented |
 | --- | --- | --- |
@@ -226,7 +224,7 @@ does, it will say so rather than vanish.
 | `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |
 | `6040` 212 | Who decided and who executed, for European transaction reporting | Fills those fields on an order ticket. A caller states them itself |
 | `6040` 258 | Which balance panels a front end should show | Nothing to trade on |
-| `35=2` | Resending missed messages | The vendor's own client never sends it either: the class is registered and constructed nowhere. Implementing it would be work against a wire that never fires |
+| `35=2` | Resending missed messages | Never observed in either direction on any of this client's connections. Implementing it would be work against a wire that never fires |
 
 ## Excluded surface
 
