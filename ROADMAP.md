@@ -267,6 +267,13 @@ execution instruction beside it, the time in force, the displayed quantity, the
 side and the locate flag. So a caller sending one of these receives the venue's
 refusal because the venue refuses it, not because it was asked wrongly.
 
+Some of these are the simulated account rather than the venue. The broker
+documents that a paper account does not support auction orders, pegged to
+market, requests for quote or VWAP, and that its fills are simulated from the
+top of the book. Three of the refusals above are named in that list, so they
+are what a paper account answers and say nothing about what a funded one would.
+Verifying them needs an account that is not simulated.
+
 That distinction had to be earned. Two of these were recorded here as refusals
 and were not: an order asking to peg went out under a type the venue uses for
 something else, so it was refused under a name nobody had asked for. Asked the
