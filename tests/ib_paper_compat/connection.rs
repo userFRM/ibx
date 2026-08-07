@@ -201,7 +201,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
     let conns1 = shutdown_and_reclaim(&control_tx, join, account_id.clone());
 
     if !got_ticks {
-        println!("  SKIP: No ticks received before disconnect — market closed\n");
+        no_market("no ticks arrived before the disconnect");
         return conns1;
     }
 

@@ -72,7 +72,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
         return conns;
     }
     if buy_price == 0 {
-        println!("  SKIP: No buy fill — market is closed\n");
+        no_market("no buy fill");
         return conns;
     }
     assert!(sell_price > 0, "Buy filled but no sell fill received");
@@ -313,7 +313,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
         return conns;
     }
     if buy_price == 0 {
-        println!("  SKIP: No fill — market may not have liquidity\n");
+        no_market("no fill");
         return conns;
     }
     let bp = buy_price as f64 / PRICE_SCALE as f64;
@@ -1203,7 +1203,7 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
         assert!(dispatcher_validated, "Dispatcher path (open_order + order_status) failed validation");
         println!("  PASS\n");
     } else {
-        println!("  SKIP: Commission=0 (pre-market / no active quote)\n");
+        no_market("commission was zero, so nothing was priced");
     }
     conns
 }
@@ -1431,7 +1431,7 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
     }
     println!("  Entry filled: {entry_filled}, TP active: {tp_active}, SL active: {sl_active}");
     if !entry_filled {
-        println!("  SKIP: Entry did not fill — market may not have liquidity\n");
+        no_market("the entry order did not fill");
         return conns;
     }
     assert!(tp_active, "Take-profit child was never activated after entry fill");
@@ -1513,7 +1513,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order { println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id)); return conns; }
-    if !buy_filled { println!("  SKIP: No fill — market may not have liquidity\n"); return conns; }
+    if !buy_filled { no_market("no fill"); return conns; }
 
     println!("  Buy filled: {buy_filled}, Sell filled: {sell_filled}");
     if pnl_updated {
@@ -2057,7 +2057,7 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
         return conns;
     }
     if phase < 2 {
-        println!("  SKIP: No fill received — market may be closed\n");
+        no_market("no fill arrived");
         return conns;
     }
     // IB may silently ignore cancel on filled order (no CancelReject),

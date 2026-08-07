@@ -185,7 +185,7 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if phase < 1 {
-        println!("  SKIP: No ticks received — market closed\n");
+        no_market("no ticks arrived");
     } else if phase == 2 && got_position_update {
         // After buy+sell round trip, position should return to 0 (or near it)
         let pos = shared.portfolio.position(0);
@@ -766,7 +766,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
 
     if !filled {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        println!("  SKIP: No fill received (market closed?)\n");
+        no_market("no fill arrived");
         return conns;
     }
 
