@@ -575,7 +575,12 @@ impl Order {
             con_id: self.delta_neutral_con_id as i64,
         }))
     }
-
+    /// Whether this order states anything beyond a plain one.
+    ///
+    /// Every order routes through the encoder now, so nothing branches on
+    /// this: it is kept because it answers a question worth asking of an
+    /// order, and its own tests are what check the attribute block stays
+    /// complete as fields are added.
     pub fn has_extended_attrs(&self) -> bool {
         self.display_size > 0
             || self.min_qty > 0

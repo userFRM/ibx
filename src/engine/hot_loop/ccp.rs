@@ -2696,20 +2696,37 @@ impl CcpState {
     /// so it answers the oldest request outstanding for that symbol.
     fn handle_option_chain(&mut self, msg: &[u8], shared: &SharedState) {
         let Some(scopes) = crate::control::contracts::parse_option_chain_response(msg) else { return };
+
+        // One reply can carry the venues of more than one underlying. Handing
+        // the lot to the first one's request gives that caller another
+        // underlying's strikes, and leaves the other request to time out with
+        // an empty chain — so each underlying is answered to the request that
+        // asked for it.
+        let mut by_underlying: Vec<(String, Vec<_>)> = Vec::new();
+        for scope in scopes {
+            match by_underlying.iter_mut().find(|(sym, _)| sym.eq_ignore_ascii_case(&scope.symbol)) {
+                Some((_, group)) => group.push(scope),
+                None => by_underlying.push((scope.symbol.clone(), vec![scope])),
+            }
+        }
         // An underlying the venue lists nothing for still answers the request,
         // and then the symbol tag is all there is to attribute it by.
-        let symbol = scopes.first().map(|s| s.symbol.clone())
-            .or_else(|| extract_tag_value(msg, b"55="))
-            .unwrap_or_default();
-        let Some(pos) = self.pending_option_params.iter()
-            .position(|(_, pending, _, _)| pending.eq_ignore_ascii_case(&symbol))
-        else {
-            log::warn!("Option chain reply for '{symbol}' matches no request");
-            return;
-        };
-        let (req_id, _, con_id, _) = self.pending_option_params.remove(pos);
-        log::info!("Option chain reply: req_id={req_id} symbol={symbol} scopes={}", scopes.len());
-        shared.reference.push_option_params(req_id, con_id, scopes);
+        if by_underlying.is_empty() {
+            let symbol = extract_tag_value(msg, b"55=").unwrap_or_default();
+            by_underlying.push((symbol, Vec::new()));
+        }
+
+        for (symbol, scopes) in by_underlying {
+            let Some(pos) = self.pending_option_params.iter()
+                .position(|(_, pending, _, _)| pending.eq_ignore_ascii_case(&symbol))
+            else {
+                log::warn!("Option chain reply for '{symbol}' matches no request");
+                continue;
+            };
+            let (req_id, _, con_id, _) = self.pending_option_params.remove(pos);
+            log::info!("Option chain reply: req_id={req_id} symbol={symbol} scopes={}", scopes.len());
+            shared.reference.push_option_params(req_id, con_id, scopes);
+        }
     }
 
     /// Give up on chain requests the gateway never answered. The request is

@@ -2019,32 +2019,16 @@ impl ClientCore {
         Ok(())
     }
 
-    /// Reject orders whose contract is not a common stock.
+    /// What an order states that this client cannot carry out as stated.
     ///
-    /// The outbound order encoding in `engine::hot_loop::order_builder` only
-    /// supports common stock, and the instrument registry drops
-    /// `sec_type`/`exchange`. A non-STK contract (OPT/FUT/BAG/…) would
-    /// therefore be sent as a stock order on the underlying symbol with no
-    /// error surfaced. Until non-STK encoding lands, reject those contracts
-    /// up front.
+    /// Two cases, and both would otherwise go out meaning something the caller
+    /// did not ask for: a delta-neutral order naming no order type for its
+    /// hedging leg, which describes nothing to place, and a hedge parameter
+    /// given to a hedge type that takes none.
     ///
-    /// An empty `sec_type` is treated as STK (the engine default), so existing
-    /// stock callers that omit the field are unaffected.
-    /// See: <https://github.com/deepentropy/ibx/issues/202>
-    /// Refuse an order carrying an instruction this does not send.
-    ///
-    /// The compatible order struct has a field for everything the vendor's API
-    /// has, and most of them reach no encoder. For the ones listed here that is
-    /// not a missing nicety: dropping a volatility makes a volatility order a
-    /// plain limit, dropping a hedge or a delta-neutral leg leaves a position
-    /// unhedged, dropping a scale turns a worked order into one order for the
-    /// whole size, and dropping a short-sale slot or its exemption is a
-    /// regulatory answer nobody gave. Each of those is a different trade from
-    /// the one asked for, so each is refused by name rather than placed.
-    ///
-    /// Fields whose absence changes nothing about the execution — a reference
-    /// string, a routing preference, MiFID reporting — are not listed and do
-    /// not refuse. They are still dropped.
+    /// Everything else an order can state is encoded. This list was once much
+    /// longer — volatility, scale, short-sale slots and the rest were refused
+    /// here because no encoder carried them. They are carried now.
     pub fn validate_supported_instructions(o: &ApiOrder) -> Result<(), String> {
         let mut unsent: Vec<&str> = Vec::new();
         // A hedging leg with no order type describes nothing to place.
