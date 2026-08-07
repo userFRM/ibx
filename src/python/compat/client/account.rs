@@ -108,9 +108,10 @@ impl EClient {
         Ok(())
     }
 
-    /// Request managed accounts list.
+    /// Request managed accounts list. Answered with every account this login
+    /// holds, comma separated, matching the reference client.
     fn req_managed_accts(&self, py: Python<'_>) -> PyResult<()> {
-        self.wrapper.call_method1(py, "managed_accounts", (self.account().as_str(),))?;
+        self.wrapper.call_method1(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
         Ok(())
     }
 

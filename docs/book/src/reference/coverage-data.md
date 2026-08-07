@@ -55,13 +55,13 @@ that did not run.
 |  | `req_historical_schedule` | `reqHistoricalSchedule` | Y | Y | Live session |
 | Orders | `place_order` | `placeOrder` | Y | Y | Live session |
 |  | `cancel_order` | `cancelOrder` | Y | Y | Live session |
-|  | `req_open_orders` | `reqOpenOrders` | Y | Y | Offline suites |
+|  | `req_open_orders` | `reqOpenOrders` | Y | Y | Live session |
 |  | `req_all_open_orders` | `reqAllOpenOrders` | Y | Y | Live session |
 |  | `req_auto_open_orders` | `reqAutoOpenOrders` | Y | Y | Live session |
 |  | `req_ids` | `reqIds` | Y | Y | Live session |
 |  | `req_global_cancel` | `reqGlobalCancel` | Y | Y | Live session |
 |  | `req_completed_orders` | `reqCompletedOrders` | Y | Y | Live session |
-| Executions | `req_executions` | `reqExecutions` | Y | Y | Offline suites |
+| Executions | `req_executions` | `reqExecutions` | Y | Y | Live session |
 | Account | `req_account_updates` | `reqAccountUpdates` | Y | Y | Live session |
 |  | `req_account_summary` | `reqAccountSummary` | Y | Y | Live session |
 |  | `cancel_account_summary` | `cancelAccountSummary` | Y | Y | Live session |
@@ -94,7 +94,7 @@ that did not run.
 |  | `calculate_option_price` | `calculateOptionPrice` | STUB | STUB | States why it cannot be served |
 |  | `cancel_calculate_option_price` | `cancelCalculateOptionPrice` | STUB | STUB | States why it cannot be served |
 |  | `exercise_options` | `exerciseOptions` | Y | Y | Offline suites |
-|  | `req_sec_def_opt_params` | `reqSecDefOptParams` | Y | Y | Offline suites |
+|  | `req_sec_def_opt_params` | `reqSecDefOptParams` | Y | Y | Live session |
 | Reference | `req_soft_dollar_tiers` | `reqSoftDollarTiers` | Y | Y | Live session |
 |  | `req_family_codes` | `reqFamilyCodes` | Y | Y | Live session |
 |  | `req_user_info` | `reqUserInfo` | Y | Y | Live session |

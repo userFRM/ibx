@@ -106,8 +106,12 @@ impl EClient {
     }
 
     /// Request managed accounts. Matches `reqManagedAccts` in C++.
+    ///
+    /// Answered with every account this login holds, comma separated, which is
+    /// the shape the reference client answers in. A login with one account is
+    /// answered with that one account and no comma.
     pub fn req_managed_accts(&self, wrapper: &mut impl Wrapper) {
-        wrapper.managed_accounts(&self.account_id);
+        wrapper.managed_accounts(&self.accounts.join(","));
     }
 
     /// Request account updates for multiple accounts/models. Matches `reqAccountUpdatesMulti` in C++.

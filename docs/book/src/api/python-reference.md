@@ -245,7 +245,7 @@ def req_account_updates(subscribe, _acct_code=""))
 
 #### `req_managed_accts`
 
-Request managed accounts list.
+Request managed accounts list. Answered with every account this login holds, comma separated, matching the reference client.
 
 ```python
 def req_managed_accts()

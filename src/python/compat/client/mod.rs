@@ -56,6 +56,8 @@ pub struct EClient {
     pub(crate) _thread: Mutex<Option<thread::JoinHandle<()>>>,
     /// Set by connect(), cleared by disconnect().
     pub(crate) account_id: Mutex<Option<String>>,
+    /// Every account this login holds, the first being `account_id`.
+    pub(crate) accounts: Mutex<Vec<String>>,
     pub(crate) connected: AtomicBool,
     /// Receiver for engine events (disconnects, etc.).
     pub(crate) event_rx: Mutex<Option<std::sync::mpsc::Receiver<Event>>>,
@@ -136,6 +138,7 @@ impl EClient {
             next_order_id: AtomicU64::new(0),
             _thread: Mutex::new(None),
             account_id: Mutex::new(None),
+            accounts: Mutex::new(Vec::new()),
             connected: AtomicBool::new(false),
             event_rx: Mutex::new(None),
             _test_event_tx: Mutex::new(None),
@@ -210,6 +213,7 @@ impl EClient {
             .map_err(|e| PyRuntimeError::new_err(format!("Connection failed: {e}")))?;
 
         *self.account_id.lock().unwrap() = Some(gw.account_id.clone());
+        *self.accounts.lock().unwrap() = gw.accounts.clone();
         let shared = Arc::new(SharedState::new());
         gw.populate_init_data(&shared);
 
@@ -255,7 +259,7 @@ impl EClient {
         // Fire initial callbacks synchronously, matching official Python ibapi
         // where connect_ack signals "socket ready" before run() is called.
         self.wrapper.call_method0(py, "connect_ack")?;
-        self.wrapper.call_method1(py, "managed_accounts", (self.account().as_str(),))?;
+        self.wrapper.call_method1(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
         self.wrapper.call_method1(py, "next_valid_id", (start_id as i64,))?;
 
         Ok(())
@@ -277,6 +281,7 @@ impl EClient {
         *self.control_tx.lock().unwrap() = None;
         *self.event_rx.lock().unwrap() = None;
         *self.account_id.lock().unwrap() = None;
+        self.accounts.lock().unwrap().clear();
         self.core.reset();
         Ok(())
     }
@@ -389,6 +394,14 @@ impl EClient {
     /// Return the account id (empty string if not connected).
     pub(crate) fn account(&self) -> String {
         self.account_id.lock().unwrap().clone().unwrap_or_default()
+    }
+
+    /// Every account this login holds, comma separated, which is the shape
+    /// the reference client answers `managed_accounts` in. Falls back to the
+    /// default account so a client built by hand still answers something.
+    pub(crate) fn accounts_csv(&self) -> String {
+        let accounts = self.accounts.lock().unwrap();
+        if accounts.is_empty() { self.account() } else { accounts.join(",") }
     }
 
     /// Find instrument ID for a contract, registering if needed. The hot
