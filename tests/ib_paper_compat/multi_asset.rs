@@ -588,3 +588,146 @@ pub(super) fn phase_global_venues(conns: Conns) -> Conns {
 
     Conns { farm, ccp, hmds, account_id }
 }
+
+/// An order on a contract that is not priced in dollars.
+///
+/// Every order the suite places is quoted in USD, and the currency is part of a
+/// contract's identity, so the whole order path could be wrong for a foreign
+/// listing and nothing here would say so. This resolves the London listing of a
+/// share quoted in sterling and places a limit far below anything it could
+/// trade at, then cancels it.
+///
+/// The limit is deliberately unreachable: the point is that the venue accepts
+/// and works the order, not that anyone gets filled.
+///
+/// **This does not pass yet, and the reason is not settled.** With London
+/// trading, the venue neither acknowledges nor refuses the order — through
+/// SMART and routed to LSE by name alike. Silence is not a refusal: a
+/// permission this account lacks is normally stated. What is established is
+/// that the listing resolves correctly and the currency reaches the wire —
+/// omitting it earns "Contract does not match supplied contract parameters",
+/// which is the venue confirming it reads tag 15. What is not established is
+/// whether this account may trade London at all, or whether an order on a
+/// foreign venue must carry a field this client does not send. The logon
+/// permission map answers the first and has not been read for this account.
+pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
+    println!("--- Non-dollar order (VOD, London, sterling) ---");
+
+    let now = ibx::gateway::chrono_free_timestamp();
+    let mut ccp = conns.ccp;
+    ccp.send_fix(&[
+        (fix::TAG_MSG_TYPE, "c"),
+        (fix::TAG_SENDING_TIME, &now),
+        (contracts::TAG_SECURITY_REQ_ID, "RGBP"),
+        (contracts::TAG_SECURITY_REQ_TYPE, "2"),
+        (contracts::TAG_SYMBOL, "VOD"),
+        (contracts::TAG_SECURITY_TYPE, "CS"),
+        (contracts::TAG_EXCHANGE, "SMART"),
+        (contracts::TAG_CURRENCY, "GBP"),
+        (contracts::TAG_IB_SOURCE, "Socket"),
+    ]).expect("failed to send the definition request");
+
+    let mut listing: Option<contracts::ContractDefinition> = None;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && listing.is_none() {
+        match ccp.try_recv() {
+            Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
+            Err(e) => { println!("  CCP recv error: {e}"); break; }
+            Ok(_) => {}
+        }
+        for frame in ccp.extract_frames() {
+            let messages = match frame {
+                Frame::FixComp(raw) => {
+                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
+                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
+                }
+                Frame::Fix(raw) => vec![raw],
+                _ => continue,
+            };
+            for msg in messages {
+                let tags = fix::fix_parse(&msg);
+                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
+                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                    && def.currency == "GBP"
+                {
+                    listing = Some(def);
+                }
+            }
+        }
+    }
+
+    let Some(def) = listing else {
+        lookup_returned_nothing("no sterling listing of VOD came back");
+    };
+    println!("  Listing: con_id={} currency={} primary={}",
+        def.con_id, def.currency, def.primary_exchange);
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
+    );
+    let inst = hot_loop.context_mut().register_instrument(def.con_id as i64);
+    hot_loop.context_mut().set_symbol(inst, "VOD".to_string());
+    hot_loop.context_mut().set_routing(inst, "CS", "SMART");
+    // What the contract is priced in. Without it the order states dollars, and
+    // the venue answers that the contract does not match the parameters given —
+    // correctly, because a sterling listing ordered in dollars is a different
+    // contract. This is the identity the client surface builds for itself.
+    hot_loop.context_mut().set_order_identity(
+        inst,
+        &ibx::client_core::ClientCore::contract_identity("", 0.0, "", "", &def.currency),
+    );
+
+    // A tenth of a pound, against a share that trades near three quarters of
+    // one. Nothing this order does can fill.
+    let limit = ibx::types::PRICE_SCALE / 10;
+    let oid = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: oid, instrument: inst, side: Side::Buy, qty: 1,
+        kind: OrderKind::Limit { price: limit }, tif: b'1',
+        attrs: OrderAttrs { outside_rth: true, ..Default::default() },
+    })).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut order_acked = false;
+    let mut cancel_sent = false;
+    let mut order_cancelled = false;
+    let mut rejected_order: Option<u64> = None;
+
+    while Instant::now() < deadline {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && update.order_id == oid {
+                match update.status {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                        order_acked = true;
+                        if !cancel_sent {
+                            control_tx.send(ControlCommand::Order(
+                                OrderRequest::Cancel { order_id: oid })).unwrap();
+                            cancel_sent = true;
+                        }
+                    }
+                    OrderStatus::Cancelled => { order_cancelled = true; break; }
+                    OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
+                    _ => {}
+                }
+            }
+    }
+
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    if let Some(id) = rejected_order {
+        println!("  SKIP: the venue refused a sterling order — {}\n", reject_reason(&shared, id));
+    } else {
+        if !order_acked && !london_is_trading() {
+            println!("  SKIP: London is not trading, so nothing works this order\n");
+            return conns;
+        }
+        assert!(order_acked, "London is trading, so a sterling order should be acknowledged");
+        assert!(order_cancelled, "a sterling order should be cancelled");
+        println!("  PASS\n");
+    }
+    conns
+}
