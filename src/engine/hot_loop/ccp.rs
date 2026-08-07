@@ -296,6 +296,9 @@ pub(crate) struct CcpState {
     pub(crate) next_fanout_id: u32,
     /// Counter for internal secdef req IDs (auto-fetch on cold-cache positions).
     pub(crate) next_internal_secdef_id: u32,
+    /// User-message subtypes the venue has sent that nothing here reads, so
+    /// each is named once rather than on every arrival.
+    unread_subtypes: std::collections::HashSet<String>,
     /// Market data subscriptions waiting on the lookup that will name their
     /// contract, keyed by that lookup's request id.
     pub(crate) pending_md_subscribe: Vec<(u32, PendingSubscribe, Instant)>,
@@ -364,6 +367,7 @@ impl CcpState {
             details_delivered: std::collections::HashMap::new(),
             next_fanout_id: 1,
             next_internal_secdef_id: 0xF000_0000,
+            unread_subtypes: std::collections::HashSet::new(),
             pending_md_subscribe: Vec::new(),
             resolved_md_subscribe: Vec::new(),
             auto_fetched_conids: HashSet::new(),
@@ -591,7 +595,20 @@ impl CcpState {
                         "139" => self.handle_option_chain(msg, shared),
                         "102" => self.handle_exchange_list(msg, shared),
                         "107" => self.handle_schedule_reply(msg, shared, event_tx),
-                        _ => {}
+                        // Something the venue said that nothing here reads.
+                        // Dropped in silence it is indistinguishable from the
+                        // venue saying nothing, which is how an answer that had
+                        // been arriving all along went unnoticed. Named once,
+                        // the first time each is seen, so a session that meets
+                        // one leaves a record without repeating itself.
+                        other => {
+                            if self.unread_subtypes.insert(other.to_string()) {
+                                log::info!(
+                                    "Unread user message: subtype {other}. Nothing here reads it, \
+                                     so whatever it carries is being discarded"
+                                );
+                            }
+                        }
                     }
                 }
             }
