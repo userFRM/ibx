@@ -240,8 +240,16 @@ does, it will say so rather than vanish.
 
 | Method | What it establishes |
 | --- | --- |
-| Unit tests, 1126 engine and client, 308 Python bindings | The call encodes and decodes as specified |
+| Unit tests, 1195 engine and client, 310 Python bindings | The call encodes and decodes as specified |
 | Live session phases against a paper account | The venue accepts the request and returns what is expected |
 | Continuous integration on every push | Tests, lint, documentation, and builds for Linux, macOS and Windows |
 
 Test count is not coverage. It states what is checked, not what fraction of venue behaviour is reached.
+
+### What a skipped phase is allowed to mean
+
+A live phase may skip, because a venue is not always in a state to answer. It may not skip on silence alone, which is the same reason a test count that cannot be read is not a passing one: a client that asks wrongly and a venue that is closed look identical from the outside, and the closed venue is the reading that keeps a suite green.
+
+So a phase skips only against something stated. Fills and quotes are gated on a clock that knows Eastern time, daylight saving, the holidays and the early closes, and the skip names the session it saw. A rejected order skips only when the venue's own words say the market or the account refused it, and fails on any other reason, printed. A historical request skips only when the venue answered with a code and a message, pacing or an entitlement, and fails on silence.
+
+Nothing skips for contract data or account state. The venue answers for a contract's definition, its details, its trading schedule and a symbol search when every market is shut, and a session that is logged in reports its account values, its profit and loss, the position that follows a fill, and the loss of its own connection at any hour. An absence there is this client's.
