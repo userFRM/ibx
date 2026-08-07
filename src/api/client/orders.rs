@@ -51,9 +51,24 @@ impl EClient {
         self.shared.reference.permitted_order_types(&sec_type.to_ascii_uppercase())
     }
 
-    /// Feature tokens the venue enables for this account, as stated at logon.
+    /// Feature tokens the venue enables for this account: those stated at
+    /// logon, and those the account configuration adds afterwards.
     pub fn enabled_features(&self) -> Vec<String> {
         self.shared.reference.enabled_features()
+    }
+
+    /// Which algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
+    ///
+    /// Stated on the session rather than per contract. An algorithm absent
+    /// here is one this account may not use, and an order naming it is
+    /// refused by the venue.
+    pub fn algorithms(&self) -> std::collections::HashMap<String, Vec<String>> {
+        self.shared.reference.algorithms()
+    }
+
+    /// The algorithms offered for one security type, across every provider.
+    pub fn algorithms_for(&self, sec_type: &str) -> Vec<String> {
+        self.shared.reference.algorithms_for(sec_type)
     }
 
     /// Place an order. Matches `placeOrder` in C++.

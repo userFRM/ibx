@@ -133,6 +133,51 @@ fn perm_id_from_fix_order_id(s: &str) -> i64 {
     (h >> 1) as i64
 }
 
+/// The algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
+///
+/// Stated once, unasked, after logon. Nothing here read it, so a caller had no
+/// way to know which algorithms this account may use and would find out by
+/// having an order refused.
+///
+/// `FOXRIVER/STK:FOXRIVER-AE,FOXRIVER-AL-COMMON;IBALGO/BAG:IBALGO-AE`
+fn parse_algorithms(raw: &str) -> std::collections::HashMap<String, Vec<String>> {
+    raw.split(';')
+        .filter(|entry| !entry.is_empty())
+        .filter_map(|entry| {
+            let (key, names) = entry.split_once(':')?;
+            let names: Vec<String> = names
+                .split(',')
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .collect();
+            Some((key.to_string(), names))
+        })
+        .collect()
+}
+
+fn handle_algorithms(parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
+    let Some(raw) = parsed.get(&6597) else { return };
+    let offered = parse_algorithms(raw);
+    if offered.is_empty() {
+        return;
+    }
+    log::info!("Algorithms offered on {} provider and security type pairs", offered.len());
+    shared.reference.set_algorithms(offered);
+}
+
+/// The account's own configuration, which states further feature tokens on the
+/// same tag the logon used. Read only from the logon, the list is short by
+/// whatever this adds.
+fn handle_account_config(parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
+    let Some(raw) = parsed.get(&6542) else { return };
+    let more: Vec<String> = raw.split(',').filter(|t| !t.is_empty()).map(str::to_string).collect();
+    if more.is_empty() {
+        return;
+    }
+    log::info!("Account configuration states {} further features: {raw}", more.len());
+    shared.reference.add_enabled_features(more);
+}
+
 /// A market data subscription held back until the venue names its contract.
 ///
 /// The venue answers a subscription only when it is named by contract id, and
@@ -592,6 +637,8 @@ impl CcpState {
                                 }
                             }
                         }
+                        "81" => handle_algorithms(&parsed, shared),
+                        "210" => handle_account_config(&parsed, shared),
                         "139" => self.handle_option_chain(msg, shared),
                         "102" => self.handle_exchange_list(msg, shared),
                         "107" => self.handle_schedule_reply(msg, shared, event_tx),
@@ -602,9 +649,6 @@ impl CcpState {
                         // the first time each is seen, so a session that meets
                         // one leaves a record without repeating itself.
                         other => {
-                            if std::env::var("IBX_DUMP_UNREAD").is_ok() {
-                                log::warn!("UNREAD {other}: {}", crate::protocol::fix::fmt_pipe(msg));
-                            }
                             if self.unread_subtypes.insert(other.to_string()) {
                                 log::info!(
                                     "Unread user message: subtype {other}. Nothing here reads it, \
@@ -5974,5 +6018,23 @@ mod tests {
         assert!(shared.reference.drain_historical_errors().is_empty());
         assert!(shared.reference.drain_contract_details_end().is_empty());
         assert!(ccp.pending_secdef.is_empty());
+    }
+
+    /// The venue's own answer, verbatim from a live session. Nothing read it,
+    /// so a caller could not know which algorithms the account may use.
+    #[test]
+    fn the_venue_states_which_algorithms_it_offers() {
+        let offered = super::parse_algorithms(
+            "FOXRIVER/STK:FOXRIVER-AE,FOXRIVER-AL-COMMON;IBALGO/BAG:IBALGO-AE,IBALGO-AL-BAG;\
+             IBALGO/CASH:IBALGO-AE,IBALGO-AL-CASH;IBALGO/OPT:IBALGO-AE,IBALGO-AL-OPT"
+        );
+        assert_eq!(offered.len(), 4, "one entry per provider and security type: {offered:?}");
+        assert_eq!(offered["FOXRIVER/STK"], ["FOXRIVER-AE", "FOXRIVER-AL-COMMON"]);
+        assert_eq!(offered["IBALGO/OPT"], ["IBALGO-AE", "IBALGO-AL-OPT"]);
+        assert!(super::parse_algorithms("").is_empty(), "a session that offered none");
+        assert!(
+            super::parse_algorithms("NOCOLON").is_empty(),
+            "an entry naming no algorithms states nothing",
+        );
     }
 }

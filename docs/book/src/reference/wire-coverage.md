@@ -92,12 +92,14 @@ A user message carries what it is for on tag 6040.
 | --- |
 | `75` |
 | `77` |
+| `81` |
 | `102` |
 | `107` |
 | `139` |
 | `143` |
 | `152` |
 | `186` |
+| `210` |
 
 ### On the market data connection
 

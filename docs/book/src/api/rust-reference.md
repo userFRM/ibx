@@ -451,11 +451,39 @@ pub fn permitted_order_types(&self, sec_type: &str) -> Option<Vec<String>>
 
 #### `enabled_features`
 
-Feature tokens the venue enables for this account, as stated at logon.
+Feature tokens the venue enables for this account: those stated at logon, and those the account configuration adds afterwards.
 
 ```rust
 pub fn enabled_features(&self) -> Vec<String>
 ```
+
+**Returns:** `Vec<String>`
+
+---
+
+#### `algorithms`
+
+Which algorithms the venue offers, keyed `PROVIDER/SECTYPE`. Stated on the session rather than per contract. An algorithm absent here is one this account may not use, and an order naming it is refused by the venue.
+
+```rust
+pub fn algorithms(&self) -> std::collections::HashMap<String, Vec<String>>
+```
+
+**Returns:** `std::collections::HashMap<String, Vec<String>>`
+
+---
+
+#### `algorithms_for`
+
+The algorithms offered for one security type, across every provider.
+
+```rust
+pub fn algorithms_for(&self, sec_type: &str) -> Vec<String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `sec_type` | `&str` |  |
 
 **Returns:** `Vec<String>`
 
