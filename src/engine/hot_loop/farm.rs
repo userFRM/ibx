@@ -90,6 +90,8 @@ pub(crate) struct FarmState {
     /// The option-model subscriptions and what they were taken out on, so one
     /// can be withdrawn the same way it was asked for.
     greeks_subs: Vec<(u32, i64, String)>,
+    /// Message types the venue has sent on this connection that nothing reads.
+    unread_types: std::collections::HashSet<String>,
     pub(crate) disconnected: bool,
     pub(crate) tick_buf: Vec<tick_decoder::RawTick>,
     pub(crate) farm_msg_buf: Vec<Vec<u8>>,
@@ -118,6 +120,10 @@ fn build_greeks_subscribe_tags(req_id: u32, con_id: i64, sec_type: &str, ts: &st
 
 /// What the option model goes by where an exchange would be named.
 const GREEKS_VENUE: &str = "IBVOL";
+
+/// One venue refusing to show its book. Not the end of the request: this
+/// client asks several venues for one book and the others may answer.
+const DEPTH_VENUE_REFUSED: i32 = 321;
 
 /// The option model's own tick, in place of a request type.
 const GREEKS_REQUEST_TYPE: &str = "732";
@@ -246,6 +252,7 @@ impl FarmState {
             depth_resub_info: Vec::new(),
             md_resub_info: Vec::new(),
             greeks_subs: Vec::new(),
+            unread_types: std::collections::HashSet::new(),
             disconnected: false,
             tick_buf: Vec::with_capacity(16),
             farm_msg_buf: Vec::with_capacity(32),
@@ -377,10 +384,26 @@ impl FarmState {
                 let parsed = fix::fix_parse(msg);
                 super::ccp::handle_position_update(&parsed, context, shared, event_tx);
             }
+            // The venue refusing a subscription it was asked for, naming the
+            // request that asked. Dropped, a caller that asked for depth on a
+            // venue this account cannot see waits for data that was refused
+            // before it started.
+            b"3" => self.handle_subscription_reject(msg, context, shared),
             b"Y" => self.handle_depth_35y(msg, shared),
             b"G" => self.handle_tick_news(msg, context, shared, event_tx),
+            // Named once, the first time each arrives, the way the trading
+            // connection names what it does not read. Reported where nobody
+            // looks, a type the venue sends and this client drops is
+            // indistinguishable from one it never sends.
             other => {
-                log::debug!("Farm unhandled 35={}: {} bytes", String::from_utf8_lossy(other), msg.len());
+                let named = String::from_utf8_lossy(other).to_string();
+                if self.unread_types.insert(named.clone()) {
+                    log::info!(
+                        "Unread on the market data connection: type {named}, {} bytes. Nothing \
+                         here reads it, so whatever it carries is being discarded",
+                        msg.len(),
+                    );
+                }
             }
         }
     }
@@ -569,6 +592,55 @@ impl FarmState {
         context.market.register_server_tag(server_tag, instrument);
         context.market.set_min_tick(instrument, min_tick);
         log::info!("Subscribed instrument {instrument} -> server_tag {server_tag}, minTick {min_tick}");
+    }
+
+    /// The venue refusing something this connection asked for.
+    ///
+    /// It names the request on tag 262 and says why on tag 58, so unlike the
+    /// trading connection's own error channel this one can be handed back to
+    /// the caller that asked. A refusal read as nothing leaves that caller
+    /// waiting on data the venue already said it would not send.
+    fn handle_subscription_reject(&mut self, msg: &[u8], context: &Context, shared: &SharedState) {
+        let parsed = fix::fix_parse(msg);
+        let said = parsed.get(&58).map(String::as_str).unwrap_or("");
+        if said.is_empty() {
+            return;
+        }
+        // The venue writes these as "Error&VENUE/TYPE/WHAT". The lead-in says
+        // only that it is one, which the caller already knows from being told.
+        let reason = said.strip_prefix("Error&").unwrap_or(said);
+        let req_id = parsed.get(&262).and_then(|s| s.parse::<u32>().ok());
+        let instrument = req_id.and_then(|rid| {
+            self.md_req_to_instrument.iter().find(|(id, _)| *id == rid).map(|(_, i)| *i)
+        });
+        match instrument {
+            Some(instrument) => {
+                let named = context.market.symbol(instrument);
+                log::warn!("The venue refused a subscription on {named}: {reason}");
+                shared.market.push_subscription_failure(
+                    instrument, format!("the venue refused this subscription: {reason}"),
+                );
+            }
+            // A depth subscription asks under an id of its own, and one venue's
+            // refusal does not end the request: this client asks several venues
+            // for one book and the others may answer. So the caller is told
+            // which venue refused, and the request stands.
+            None => {
+                let asked_for = req_id
+                    .and_then(|rid| {
+                        self.depth_fanout_map.iter().find(|(sub, _)| *sub == rid).map(|(_, u)| *u)
+                    })
+                    .or(req_id);
+                log::warn!("The venue refused a subscription: {reason}");
+                if let Some(rid) = asked_for {
+                    shared.reference.push_historical_error(
+                        rid,
+                        DEPTH_VENUE_REFUSED,
+                        format!("the venue refused depth here: {reason}"),
+                    );
+                }
+            }
+        }
     }
 
     fn handle_ticker_setup(&mut self, msg: &[u8], context: &mut Context) {

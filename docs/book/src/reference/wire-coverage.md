@@ -117,6 +117,7 @@ A user message carries what it is for on tag 6040.
 | --- | --- |
 | `0` | Heartbeat |
 | `1` | Test request |
+| `3` | Session reject |
 | `G` | Tick payload, binary |
 | `L` | Ticker setup |
 | `P` | Tick |
