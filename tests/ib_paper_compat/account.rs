@@ -185,7 +185,7 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if phase < 1 {
-        no_market("no ticks arrived");
+        no_market(&shared, "no ticks arrived");
     } else if phase == 2 && got_position_update {
         // After buy+sell round trip, position should return to 0 (or near it)
         let pos = shared.portfolio.position(0);
@@ -193,7 +193,7 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
         assert!(pos.abs() <= 1.0, "Position after round trip should be 0 (±1 for timing), got {pos}");
         println!("  PASS (position returned to {pos})\n");
     } else if phase == 2 {
-        session_owed("the orders filled and no position update followed");
+        session_owed(&shared, "the orders filled and no position update followed");
     } else {
         println!("  SKIP: Only reached phase {phase} (buy may not have filled)\n");
     }
@@ -261,7 +261,7 @@ pub(super) fn phase_account_summary(conns: Conns) -> Conns {
     if has_account_data {
         println!("  PASS\n");
     } else {
-        session_owed("no account data arrived");
+        session_owed(&shared, "no account data arrived");
     }
     conns
 }
@@ -780,7 +780,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
 
     if !filled {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        no_market("no fill arrived");
+        no_market(&shared, "no fill arrived");
         return conns;
     }
 
@@ -923,7 +923,7 @@ pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
         // PnL fields populated (even if 0 — that's valid for no-position accounts)
         println!("  PASS\n");
     } else {
-        session_owed("no profit and loss figures arrived");
+        session_owed(&shared, "no profit and loss figures arrived");
     }
     conns
 }

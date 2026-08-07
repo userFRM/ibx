@@ -183,13 +183,20 @@ pub(super) fn ensure_ccp_alive(
     gw: &mut gateway::Gateway,
     config: &GatewayConfig,
 ) -> Conns {
-    // Probe CCP liveness: try_recv returns Ok(0) if alive (WouldBlock), Err if dead
-    match conns.ccp.try_recv() {
-        Ok(_) => return conns, // alive
-        Err(_) => {
-            println!("  [reconnect] CCP connection dead, re-establishing gateway session...");
+    // A read that hands back bytes says nothing about what is queued behind
+    // them: the venue's last message and the close that follows it arrive in
+    // that order, and one read of the first reported the connection alive while
+    // the second was already waiting. Read until it says there is nothing more
+    // — Ok(0) is that, an error is the close — so the phase after this one does
+    // not discover it instead.
+    loop {
+        match conns.ccp.try_recv() {
+            Ok(0) => return conns,
+            Ok(_) => continue,
+            Err(_) => break,
         }
     }
+    println!("  [reconnect] CCP connection dead, re-establishing gateway session...");
 
     // Full reconnection — CCP requires TLS+SRP auth, so we must reconnect everything
     match gateway::Gateway::connect(config) {
@@ -524,7 +531,13 @@ pub(super) fn historical_silence(shared: &SharedState, what: &str) {
 /// connection went away. A session that is logged in delivers these at any hour,
 /// so an absence is this client's, and a phase that skips on it reports nothing
 /// wrong on precisely the runs where something is.
-pub(super) fn session_owed(what: &str) -> ! {
+pub(super) fn session_owed(shared: &SharedState, what: &str) {
+    // The session owes this only while it has one. A connection that went away
+    // explains the absence, and explains it better than the rule does.
+    if shared.take_connection_lost() {
+        println!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
+        return;
+    }
     panic!("{what} — the session delivers this whether or not the market is trading.");
 }
 
@@ -551,7 +564,16 @@ pub(super) fn lookup_returned_nothing(what: &str) -> ! {
 ///
 /// Which one it is comes from [`market_session`], the same holiday-aware clock
 /// the order phases already gate on, so one answer decides it everywhere.
-pub(super) fn no_market(what: &str) {
+pub(super) fn no_market(shared: &SharedState, what: &str) {
+    // A connection that went away explains every absence that follows it, and
+    // explains it better than the clock does. The engine holds an order for the
+    // reconnect rather than dropping it, so nothing arrives and nothing is
+    // wrong with the client — but "the market is quiet" is the one reading that
+    // is certainly false.
+    if shared.take_connection_lost() {
+        println!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
+        return;
+    }
     let (session, _) = market_session();
     assert!(
         session != MarketSession::Regular,

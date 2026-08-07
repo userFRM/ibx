@@ -63,7 +63,7 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
 
     if !first_tick {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        no_market("no ticks in 30s");
+        no_market(&shared, "no ticks in 30s");
         return conns;
     }
 
@@ -138,7 +138,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
 
     if !first_tick {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        no_market("no ticks");
+        no_market(&shared, "no ticks");
         return conns;
     }
 
@@ -161,7 +161,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     if tick_count <= 3 {
-        no_market(&format!("only {tick_count} ticks, too few for a multi-instrument test"));
+        no_market(&shared, &format!("only {tick_count} ticks, too few for a multi-instrument test"));
     } else {
         assert!(
             instruments_with_data >= 2,
@@ -294,7 +294,7 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     if depth_updates.is_empty() {
-        no_market("no depth updates on either subscription");
+        no_market(&shared, "no depth updates on either subscription");
     } else {
         println!("  PASS ({} depth updates)\n", depth_updates.len());
     }
@@ -358,7 +358,7 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared,
+        shared.clone(),
         Some(event_tx),
         account_id.clone(),
         conns.farm,
@@ -416,7 +416,7 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
 
     if !first_tbt {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        no_market("no tick-by-tick data in 30s");
+        no_market(&shared, "no tick-by-tick data in 30s");
         return conns;
     }
 
@@ -504,7 +504,7 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if tick_count == 0 {
-        no_market("no ticks arrived");
+        no_market(&shared, "no ticks arrived");
         return conns;
     }
 
@@ -890,7 +890,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !first_tick {
-        no_market("no ticks in 30s");
+        no_market(&shared, "no ticks in 30s");
         return conns;
     }
 
@@ -927,7 +927,7 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared,
+        shared.clone(),
         Some(event_tx),
         account_id.clone(),
         conns.farm,
@@ -965,7 +965,7 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
 
     if tbt_before == 0 {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        no_market("no tick-by-tick data");
+        no_market(&shared, "no tick-by-tick data");
         return conns;
     }
     println!(
@@ -1094,7 +1094,7 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !got_tick && !got_tbt {
-        no_market("no data on either stream");
+        no_market(&shared, "no data on either stream");
         return conns;
     }
 
@@ -1175,7 +1175,7 @@ pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if total_ticks == 0 {
-        no_market("no ticks");
+        no_market(&shared, "no ticks");
         return conns;
     }
 
