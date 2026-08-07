@@ -706,8 +706,11 @@ pub struct ReferenceState {
     misc_urls: Mutex<HashMap<String, String>>,
     /// Security type → the order types the venue permits for it, from logon tag 6652.
     order_permissions: Mutex<HashMap<String, Vec<String>>>,
-    /// Feature tokens the venue enables for this account, from logon tag 6542.
+    /// Feature tokens the venue enables for this account, from logon tag 6542
+    /// and from the account configuration that follows it.
     enabled_features: Mutex<Vec<String>>,
+    /// Which algorithms the venue offers, by provider and security type.
+    algorithms: Mutex<HashMap<String, Vec<String>>>,
 }
 
 impl ReferenceState {
@@ -741,6 +744,7 @@ impl ReferenceState {
             misc_urls: Mutex::new(HashMap::new()),
             order_permissions: Mutex::new(HashMap::new()),
             enabled_features: Mutex::new(Vec::new()),
+            algorithms: Mutex::new(HashMap::new()),
         }
     }
 
@@ -980,6 +984,42 @@ impl ReferenceState {
     /// Feature tokens the venue enables for this account.
     pub fn enabled_features(&self) -> Vec<String> {
         self.enabled_features.lock().unwrap().clone()
+    }
+
+    /// Which algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
+    ///
+    /// The venue states this on the session; it is not a property of a
+    /// contract. An algorithm absent here is one this account may not use.
+    pub fn algorithms(&self) -> HashMap<String, Vec<String>> {
+        self.algorithms.lock().unwrap().clone()
+    }
+
+    /// The algorithms offered for one security type, across every provider.
+    pub fn algorithms_for(&self, sec_type: &str) -> Vec<String> {
+        let want = format!("/{}", sec_type.to_ascii_uppercase());
+        let mut out: Vec<String> = self.algorithms.lock().unwrap()
+            .iter()
+            .filter(|(k, _)| k.to_ascii_uppercase().ends_with(&want))
+            .flat_map(|(_, v)| v.iter().cloned())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    #[doc(hidden)] pub fn set_algorithms(&self, algorithms: HashMap<String, Vec<String>>) {
+        *self.algorithms.lock().unwrap() = algorithms;
+    }
+
+    /// Add feature tokens the venue states after logon. What logon already
+    /// stated is kept; this only ever adds.
+    #[doc(hidden)] pub fn add_enabled_features(&self, more: Vec<String>) {
+        let mut have = self.enabled_features.lock().unwrap();
+        for token in more {
+            if !have.contains(&token) {
+                have.push(token);
+            }
+        }
     }
 
     pub fn feature_enabled(&self, token: &str) -> bool {

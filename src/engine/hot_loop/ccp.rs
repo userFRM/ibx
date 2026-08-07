@@ -602,6 +602,9 @@ impl CcpState {
                         // the first time each is seen, so a session that meets
                         // one leaves a record without repeating itself.
                         other => {
+                            if std::env::var("IBX_DUMP_UNREAD").is_ok() {
+                                log::warn!("UNREAD {other}: {}", crate::protocol::fix::fmt_pipe(msg));
+                            }
                             if self.unread_subtypes.insert(other.to_string()) {
                                 log::info!(
                                     "Unread user message: subtype {other}. Nothing here reads it, \

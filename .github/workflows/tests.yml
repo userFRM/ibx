@@ -136,7 +136,10 @@ jobs:
         run: |
           python scripts/gen_api_docs.py
           python scripts/gen_wire_coverage.py
-          git diff --exit-code docs/ || {
+          # Staged, so a page a generator has only just started producing
+          # counts as a difference rather than as an untracked file nobody sees.
+          git add -A docs/
+          git diff --cached --exit-code docs/ || {
             echo "::error::generated docs are stale — run the scripts under scripts/ and commit the result"
             exit 1
           }
