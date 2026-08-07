@@ -486,6 +486,26 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
 /// type outside its session and the client encoding one wrong print the same
 /// line. The reason (FIX tag 58 text plus the tag 103 code) is what separates
 /// them, and the engine records it on the order snapshot.
+/// A phase that needed the market to be trading and did not get it.
+///
+/// Outside regular hours this is the truth and the phase skips. Inside them it
+/// is a defect: a market order on a liquid contract that never fills, or a
+/// subscription that never ticks, is this client's problem and must not read as
+/// a quiet afternoon. The run states which it is with `IBX_MARKET_IS_OPEN=1`,
+/// because the venue's schedule arrives as local times in a named zone and this
+/// tree does no timezone arithmetic — the operator knows, and says so, rather
+/// than the suite guessing from a clock.
+pub(super) fn no_market(what: &str) {
+    if std::env::var("IBX_MARKET_IS_OPEN").as_deref() == Ok("1") {
+        panic!(
+            "{what} — but this run was told the market is open, so this is not \
+             the market being quiet. Either the client failed to get what it \
+             asked for, or IBX_MARKET_IS_OPEN=1 is wrong."
+        );
+    }
+    println!("  SKIP: {what}\n");
+}
+
 /// Reasons a rejection is about the market or the account rather than the
 /// order this client built: the session cannot trade the thing, cannot trade
 /// it now, or cannot afford it. Matched case-insensitively on the venue's own

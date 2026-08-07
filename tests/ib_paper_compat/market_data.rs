@@ -63,7 +63,7 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
 
     if !first_tick {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        println!("  SKIP: No ticks in 30s — market closed or IB throttling\n");
+        no_market("no ticks in 30s");
         return conns;
     }
 
@@ -138,7 +138,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
 
     if !first_tick {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        println!("  SKIP: No ticks — market closed or IB throttling\n");
+        no_market("no ticks");
         return conns;
     }
 
@@ -161,9 +161,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     if tick_count <= 3 {
-        println!(
-            "  SKIP: Only {tick_count} ticks — insufficient for multi-instrument test\n"
-        );
+        no_market(&format!("only {tick_count} ticks, too few for a multi-instrument test"));
     } else {
         assert!(
             instruments_with_data >= 2,
@@ -296,7 +294,7 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     if depth_updates.is_empty() {
-        println!("  SKIP: No depth updates on either subscription\n");
+        no_market("no depth updates on either subscription");
     } else {
         println!("  PASS ({} depth updates)\n", depth_updates.len());
     }
@@ -506,7 +504,7 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if tick_count == 0 {
-        println!("  SKIP: No ticks received — market closed\n");
+        no_market("no ticks arrived");
         return conns;
     }
 
@@ -898,7 +896,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !first_tick {
-        println!("  SKIP: No ticks in 30s — market closed\n");
+        no_market("no ticks in 30s");
         return conns;
     }
 
@@ -1183,7 +1181,7 @@ pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if total_ticks == 0 {
-        println!("  SKIP: No ticks — market closed\n");
+        no_market("no ticks");
         return conns;
     }
 
