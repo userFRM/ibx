@@ -221,7 +221,11 @@ does, it will say so rather than vanish.
 | `6040` 141, 154, 175 | Combination position state and leg definitions | Not sent to this account |
 | `6040` 145 | A session-level control message, sibling of the error channel | Not sent to this account |
 | `6040` 18 | The venue's own clock, for drift against ours | Not sent to this account |
-| `6040` 119, 148, 188, 212, 258 | Not established | Reaching real account and contract managers in the vendor's client, but what they carry could not be settled from its bytecode, and this account is sent none of them |
+| `6040` 188 | A newly added or linked account, and what it may do | The one of these with a consequence: a client managing linked accounts that ignores it does not learn of a new one until it reconnects. This session holds a single account and is sent none |
+| `6040` 119 | Model allocation figures, per account | Answers a request for them, which this client does not send |
+| `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |
+| `6040` 212 | Who decided and who executed, for European transaction reporting | Fills those fields on an order ticket. A caller states them itself |
+| `6040` 258 | Which balance panels a front end should show | Nothing to trade on |
 | `35=2` | Resending missed messages | The vendor's own client never sends it either: the class is registered and constructed nowhere. Implementing it would be work against a wire that never fires |
 
 ## Excluded surface
