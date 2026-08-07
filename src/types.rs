@@ -391,6 +391,16 @@ pub struct OrderAttrs {
     /// Implied volatility for a volatility order, as a decimal (0.25 = 25%),
     /// on tag 9816. Zero means the caller set none.
     pub volatility: f64,
+    /// Whether the venue keeps re-pricing a volatility order as the underlying
+    /// moves, on tag 6275.
+    pub continuous_update: bool,
+    /// Which price a volatility order takes its reference from, on tag 6279.
+    /// Zero means the caller stated none.
+    pub reference_price_type: i32,
+    /// The band of underlying prices a volatility order stays active within, on
+    /// tags 6152 and 6153. `f64::MAX` is this API's "not set" for a price.
+    pub stock_range_lower: f64,
+    pub stock_range_upper: f64,
     /// Whether the volatility above is daily or annual, on tag 6280. Zero means
     /// the caller set none.
     pub volatility_type: u8,
@@ -495,6 +505,10 @@ impl Default for OrderAttrs {
             sweep_to_fill: Default::default(),
             all_or_none: Default::default(),
             volatility: Default::default(),
+            continuous_update: false,
+            reference_price_type: 0,
+            stock_range_lower: f64::MAX,
+            stock_range_upper: f64::MAX,
             volatility_type: Default::default(),
             percent_offset: f64::MAX,
             not_held: Default::default(),

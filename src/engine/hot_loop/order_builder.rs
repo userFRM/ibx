@@ -1202,6 +1202,21 @@ fn push_order_attrs(
     if attrs.volatility_type > 0 {
         fields.push((6280, attrs.volatility_type.to_string()));
     }
+    // What a volatility order does as the underlying moves: whether the venue
+    // re-prices it, which price it references, and the band it stays inside.
+    // A caller could state all four and have none of them sent.
+    if attrs.continuous_update {
+        fields.push((6275, "1".to_string()));
+    }
+    if attrs.reference_price_type > 0 {
+        fields.push((6279, attrs.reference_price_type.to_string()));
+    }
+    if attrs.stock_range_lower != f64::MAX {
+        fields.push((6152, format!("{:.6}", attrs.stock_range_lower)));
+    }
+    if attrs.stock_range_upper != f64::MAX {
+        fields.push((6153, format!("{:.6}", attrs.stock_range_upper)));
+    }
     if attrs.percent_offset != f64::MAX {
         fields.push((9822, format!("{:.6}", attrs.percent_offset)));
     }
@@ -2655,6 +2670,41 @@ mod tests {
         let msg = String::from_utf8_lossy(&buf[..n]).to_string();
         let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
         assert_eq!(tag("54=").as_deref(), Some("5"), "a short sale, not a sale: {msg}");
+    }
+
+    /// What a volatility order does as the underlying moves.
+    ///
+    /// A caller could state that the venue should keep re-pricing the order,
+    /// which price to reference, and the band of underlying prices to stay
+    /// inside — and the API accepted all four and sent none of them. An order
+    /// asking to be managed arrived asking for nothing of the sort.
+    #[test]
+    fn a_volatility_order_carries_what_it_asked_to_be_managed_by() {
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'0',
+            crate::types::OrderAttrs {
+                volatility: 0.25,
+                volatility_type: 2,
+                continuous_update: true,
+                reference_price_type: 2,
+                stock_range_lower: 100.0,
+                stock_range_upper: 200.0,
+                ..Default::default()
+            },
+        );
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("6280=").as_deref(), Some("2"), "the volatility kind: {msg}");
+        assert_eq!(tag("6275=").as_deref(), Some("1"), "kept re-priced: {msg}");
+        assert_eq!(tag("6279=").as_deref(), Some("2"), "the price it references: {msg}");
+        assert!(
+            tag("6152=").is_some_and(|v| v.starts_with("100.")),
+            "the band it stays above: {msg}",
+        );
+        assert!(
+            tag("6153=").is_some_and(|v| v.starts_with("200.")),
+            "the band it stays below: {msg}",
+        );
     }
 
     /// A fill-or-kill order states that time in force on the wire.
