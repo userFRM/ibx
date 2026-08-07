@@ -2146,9 +2146,25 @@ impl CcpState {
         shared.market.push_news_bulletin(bulletin);
     }
 
+    /// One account figure, and a tag saying which figure it is.
+    ///
+    /// The message carries a single number on 9806 and a selector on 6566. The
+    /// number was read as net liquidation whatever the selector said, so a
+    /// figure of another kind replaced a correct net liquidation — the one the
+    /// keyed account values state — and it only showed when that other figure
+    /// happened to be negative: an account holding nothing, with the better
+    /// part of a million in cash, reported a net liquidation of minus fourteen
+    /// hundred.
+    ///
+    /// Which selector means net liquidation is not established, and the one
+    /// this session is sent is demonstrably not it, so nothing is written from
+    /// here. The selector is recorded as an unread wire rather than guessed at.
     fn handle_account_summary(&mut self, parsed: &std::collections::HashMap<u32, String>, context: &mut Context, shared: &SharedState) {
-        if let Some(val) = parsed.get(&9806).and_then(|s| s.parse::<f64>().ok()) {
-            context.account.net_liquidation = (val * PRICE_SCALE as f64) as Price;
+        if let Some(selector) = parsed.get(&6566) {
+            shared.market.note_unread_wire(
+                "trading",
+                format!("account figure of kind {selector} (6040=77), kind not established"),
+            );
         }
         shared.portfolio.set_account(context.account());
     }
