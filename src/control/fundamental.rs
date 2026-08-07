@@ -59,12 +59,31 @@ fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     Some(&xml[start..end])
 }
 
+/// What a fundamentals request calls itself, and what a cancel names to
+/// withdraw it.
+pub const FUNDAMENTALS_QUERY_ID: &str = "COMPANY_FUNDAMENTALS";
+
+/// Withdraw a fundamentals request.
+///
+/// A request withdrawn only here goes on being served: the venue was never
+/// told, and keeps sending. It is named by the id the request gave itself, and
+/// carried in the list the venue expects even when it withdraws one thing.
+pub fn build_fundamental_cancel_xml(query_id: &str) -> String {
+    format!(
+        "<ListOfCancelQueries>\
+         <CancelQuery>\
+         <id>{query_id}</id>\
+         </CancelQuery>\
+         </ListOfCancelQueries>",
+    )
+}
+
 /// Build the XML query for a fundamental data request.
 pub fn build_fundamental_request_xml(req: &FundamentalRequest) -> String {
     format!(
         "<ListOfQueries>\
          <FundamentalsQuery>\
-         <id>COMPANY_FUNDAMENTALS</id>\
+         <id>{FUNDAMENTALS_QUERY_ID}</id>\
          <contractID>{con_id}</contractID>\
          <exchange>RTRSFND</exchange>\
          <secType>{sec_type}</secType>\
@@ -158,5 +177,24 @@ mod tests {
     fn parse_response_rejects_other() {
         assert!(parse_fundamental_response_id("<ResultSetBar>...</ResultSetBar>").is_none());
         assert!(parse_fundamental_response_id("not xml").is_none());
+    }
+
+    /// The shape the venue expects, which is a list even when it withdraws one
+    /// thing, and names the request by the id the request gave itself.
+    #[test]
+    fn a_withdrawal_names_the_request_it_withdraws() {
+        let xml = build_fundamental_cancel_xml(FUNDAMENTALS_QUERY_ID);
+        assert_eq!(
+            xml,
+            "<ListOfCancelQueries><CancelQuery><id>COMPANY_FUNDAMENTALS</id>\
+             </CancelQuery></ListOfCancelQueries>".replace(' ', ""),
+        );
+        assert!(
+            build_fundamental_request_xml(&FundamentalRequest {
+                con_id: 265598, sec_type: "STK", currency: "USD",
+                report_type: ReportType::Snapshot,
+            }).contains(&format!("<id>{FUNDAMENTALS_QUERY_ID}</id>")),
+            "the request and the withdrawal name the same thing",
+        );
     }
 }
