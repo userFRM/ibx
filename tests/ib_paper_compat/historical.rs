@@ -66,7 +66,7 @@ pub(super) fn phase_historical_data(mut conns: Conns, gw: &Gateway, config: &Gat
 
     println!("  Total bars received: {}", all_bars.len());
     if all_bars.is_empty() {
-        println!("  SKIP: No historical bars received (HMDS may be unavailable)\n");
+        historical_silence(&shared, "no historical bars arrived");
         return conns;
     }
 
@@ -136,7 +136,7 @@ pub(super) fn phase_historical_daily_bars(mut conns: Conns, gw: &Gateway, config
 
     println!("  Total daily bars: {}", all_bars.len());
     if all_bars.is_empty() {
-        println!("  SKIP: No daily bars received (HMDS may be unavailable)\n");
+        historical_silence(&shared, "no daily bars arrived");
         return conns;
     }
     assert!(all_bars.len() <= 5, "Should have at most 5 daily bars, got {}", all_bars.len());
@@ -326,7 +326,7 @@ pub(super) fn phase_head_timestamp(mut conns: Conns, gw: &Gateway, config: &Gate
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if response.is_none() {
-        println!("  SKIP: No head timestamp received (HMDS may be unavailable)\n");
+        historical_silence(&shared, "no head timestamp arrived");
         return conns;
     }
     let resp = response.unwrap();
@@ -603,7 +603,7 @@ pub(super) fn phase_historical_ticks(mut conns: Conns, gw: &Gateway, config: &Ga
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if tick_count == 0 {
-        println!("  SKIP: No historical ticks received\n");
+        historical_silence(&shared, "no historical ticks arrived");
     } else {
         assert_eq!(monotonic_violations, 0, "Timestamps should be monotonically increasing");
         println!("  PASS ({tick_count} ticks, timestamps monotonic)\n");
@@ -770,7 +770,7 @@ pub(super) fn phase_realtime_bars(mut conns: Conns, gw: &Gateway, config: &Gatew
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if bars.is_empty() {
-        println!("  SKIP: No real-time bars received (market may be closed)\n");
+        no_market("no real-time bars arrived");
     } else {
         let bar = &bars[0];
         println!("  First bar: O={:.2} H={:.2} L={:.2} C={:.2} V={:.0}", bar.open, bar.high, bar.low, bar.close, bar.volume);
@@ -1110,7 +1110,7 @@ pub(super) fn phase_historical_ohlc_validation(conns: Conns, _gw: &Gateway, _con
     let data = match bars_data {
         Some(d) => d,
         None => {
-            println!("  SKIP: No historical data received\n");
+            historical_silence(&shared, "no historical data arrived");
             return conns;
         }
     };
@@ -1217,7 +1217,7 @@ pub(super) fn phase_large_historical_dataset(mut conns: Conns, gw: &Gateway, con
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if total_bars == 0 {
-        println!("  SKIP: No bars received\n");
+        historical_silence(&shared, "no bars arrived");
         return conns;
     }
     println!("  Total bars: {total_bars} (complete={complete})");

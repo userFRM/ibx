@@ -416,7 +416,7 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
 
     if !first_tbt {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        println!("  SKIP: No TBT data in 30s — market closed or HMDS not streaming\n");
+        no_market("no tick-by-tick data in 30s");
         return conns;
     }
 
@@ -965,7 +965,7 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
 
     if tbt_before == 0 {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        println!("  SKIP: No TBT data — market closed or HMDS not streaming\n");
+        no_market("no tick-by-tick data");
         return conns;
     }
     println!(
@@ -1094,7 +1094,7 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !got_tick && !got_tbt {
-        println!("  SKIP: No data on either stream — market closed\n");
+        no_market("no data on either stream");
         return conns;
     }
 
