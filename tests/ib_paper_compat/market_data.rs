@@ -976,26 +976,40 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
     control_tx
         .send(ControlCommand::UnsubscribeTbt { instrument: 0 })
         .unwrap();
+    // What matters is that the stream stops, not how much of it was already on
+    // its way. A payload in flight when the withdrawal goes out still arrives,
+    // and on a busy contract that is several ticks, not one — this counted them
+    // against a fixed ceiling that had never been reached, because until the
+    // payload was read at all the count was always zero.
+    //
+    // So: let what is in flight land, then require silence.
     std::thread::sleep(Duration::from_secs(3));
-
-    // Step 3: Count TBT events after unsubscribe (should be 0 or very few)
-    let mut tbt_after = 0u32;
+    let mut in_flight = 0u32;
     while let Ok(ev) = event_rx.try_recv() {
         match ev {
-            Event::TbtTrade(_) | Event::TbtQuote(_) => tbt_after += 1,
+            Event::TbtTrade(_) | Event::TbtQuote(_) => in_flight += 1,
             _ => {}
+        }
+    }
+
+    let settle = Instant::now() + Duration::from_secs(5);
+    let mut tbt_after = 0u32;
+    while Instant::now() < settle {
+        if let Ok(Event::TbtTrade(_) | Event::TbtQuote(_)) =
+            event_rx.recv_timeout(Duration::from_millis(200))
+        {
+            tbt_after += 1;
         }
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     println!(
-        "  Step 2: {tbt_after} TBT events after unsubscribe (expect 0 or near-0)"
+        "  Step 2: {in_flight} in flight, then {tbt_after} in the five seconds after"
     );
-    // Allow a small number of in-flight events that were already queued
-    assert!(
-        tbt_after <= 3,
-        "Too many TBT events after unsubscribe: {tbt_after} (expected <=3)"
+    assert_eq!(
+        tbt_after, 0,
+        "the withdrawal did not stop the stream: {tbt_after} ticks arrived five seconds on",
     );
     println!("  PASS\n");
     conns
