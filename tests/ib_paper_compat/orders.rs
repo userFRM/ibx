@@ -29,6 +29,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
     let mut buy_sent_at: Option<Instant> = None;
     let mut sell_sent_at: Option<Instant> = None;
     let mut rejected_order: Option<u64> = None;
+    let mut uncertain = false;
 
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -56,6 +57,14 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
                     break;
                 }
             }
+            // The transport went away with the order on it. The client says so
+            // rather than guessing, and the phase must not read that as a
+            // market with nothing to trade: no fill follows an order whose
+            // state the venue never confirmed.
+            Ok(Event::OrderUpdate(update)) if update.status == OrderStatus::Uncertain => {
+                uncertain = true;
+                break;
+            }
             Ok(Event::OrderUpdate(update))
                 if update.status == OrderStatus::Rejected => {
                     rejected_order = Some(update.order_id);
@@ -71,8 +80,19 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
         println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
+    if uncertain {
+        println!("  SKIP: the connection went away with the order on it, so its state is not known\n");
+        return conns;
+    }
     if buy_price == 0 {
-        no_market("no buy fill");
+        // Which of the two it is matters: the order is only sent once quotes
+        // arrive, so no fill after no ticks is a market-data fault and no fill
+        // after an order is an execution one. Reported as the same line, they
+        // are indistinguishable in a log.
+        no_market(&format!(
+            "no buy fill (ticks seen {tick_count}, order {})",
+            if phase >= 1 { "sent" } else { "never sent, waiting on quotes" },
+        ));
         return conns;
     }
     assert!(sell_price > 0, "Buy filled but no sell fill received");

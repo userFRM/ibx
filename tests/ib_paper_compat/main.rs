@@ -294,6 +294,11 @@ fn compat_suite() {
     conns = market_data::phase_news_ticks(conns);
     conns = heartbeat::phase_heartbeat_keepalive(conns);
     conns = heartbeat::phase_farm_heartbeat_keepalive(conns);
+    // Those two sit idle for longer than the venue leaves a quiet trading
+    // connection open, which is the point of them. What follows places orders
+    // and needs that connection, so it is brought back before they run rather
+    // than each of them failing for the reason the phase before it proved.
+    conns = ensure_ccp_alive(conns, &mut gw, &config);
 
     if needs_ticks {
         conns = orders::phase_market_order(conns);
