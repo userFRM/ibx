@@ -65,17 +65,23 @@ def test_query_display_groups_stub():
     c.query_display_groups(1)
 
 
-def test_subscribe_to_group_events_stub():
+def test_subscribe_to_group_events_returns_normally():
     c, w = make_client()
     c.subscribe_to_group_events(1, 1)
 
 
-def test_unsubscribe_from_group_events_stub():
+def test_unsubscribe_from_group_events_returns_normally():
     c, w = make_client()
     c.unsubscribe_from_group_events(1)
 
 
-def test_update_display_group_stub():
+def test_update_display_group_without_subscribing_returns_normally():
+    """A request that follows no group cannot put a contract in one.
+
+    The reference client answers such a request on the error callback and
+    returns normally, so this must not raise: a caller written against it would
+    fall over on a request that merely came in the wrong order.
+    """
     c, w = make_client()
     c.update_display_group(1, "265598")
 

@@ -105,8 +105,14 @@ impl EClient {
     }
 
     fn update_display_group(&self, req_id: i64, contract_info: &str) -> PyResult<()> {
-        self.core.update_display_group(req_id, contract_info)
-            .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+        // The reference client answers a request it cannot serve on the error
+        // callback and returns normally. Raising here would make a caller
+        // written against it fall over on a request that merely came in the
+        // wrong order.
+        if let Err(reason) = self.core.update_display_group(req_id, contract_info) {
+            report_reason(self, req_id, &reason);
+        }
+        Ok(())
     }
 
     // ── Smart Components ──
@@ -223,11 +229,13 @@ impl EClient {
 /// exactly like a slow gateway. Code 321 is what the venue answers a request
 /// it will not act on.
 fn unserviceable(client: &EClient, req_id: i64, call: &str) {
+    report_reason(client, req_id, &format!("{call} is not served by this client"));
+}
+
+/// Answer a request this client cannot serve the way the reference client
+/// does: on the error callback, returning normally.
+fn report_reason(client: &EClient, req_id: i64, reason: &str) {
     if let Ok(shared) = client.shared_state() {
-        shared.reference.push_historical_error(
-            req_id.max(0) as u32,
-            321,
-            format!("{call} is not served by this client"),
-        );
+        shared.reference.push_historical_error(req_id.max(0) as u32, 321, reason.to_string());
     }
 }
