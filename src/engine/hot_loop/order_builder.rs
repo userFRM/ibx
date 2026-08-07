@@ -1509,8 +1509,15 @@ fn push_order_attrs(
             }
         }
         K::PegMid { offset, price_cap } => {
-            fields.push((8403, "0.0".to_string())); // midOffsetAtWhole — differentiates PEGMID
-            fields.push((8404, "0.0".to_string())); // midOffsetAtHalf
+            // The two-part offset, stated as none. A midpoint peg can give its
+            // offset either as one continuous number, which is what a caller
+            // states here and what rides tag 211, or as a whole-tick part and a
+            // half-tick part together — and the counterpart sends a different
+            // order type entirely for that second form, chosen precisely when
+            // both of these are non-zero and both land on the destination's tick
+            // boundaries. Zero is how that form says "not this one".
+            fields.push((8403, "0.0".to_string()));
+            fields.push((8404, "0.0".to_string()));
             fields.push((211, format_price(*offset).to_string()));
             // The worst price the peg may reach, which IBKR documents as the
             // limit-price field for these types. A zero cap is no cap, and zero
