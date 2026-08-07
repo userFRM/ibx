@@ -486,6 +486,15 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
 /// type outside its session and the client encoding one wrong print the same
 /// line. The reason (FIX tag 58 text plus the tag 103 code) is what separates
 /// them, and the engine records it on the order snapshot.
+/// Something the session had to deliver and did not, on a path the market does
+/// not gate: account values, a position after a fill, the notification that the
+/// connection went away. A session that is logged in delivers these at any hour,
+/// so an absence is this client's, and a phase that skips on it reports nothing
+/// wrong on precisely the runs where something is.
+pub(super) fn session_owed(what: &str) -> ! {
+    panic!("{what} — the session delivers this whether or not the market is trading.");
+}
+
 /// A lookup that had to answer and did not.
 ///
 /// Contract definitions and their details are reference data: the venue answers
