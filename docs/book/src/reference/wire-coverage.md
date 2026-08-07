@@ -22,6 +22,7 @@ sends. That comparison needs the vendor's own inventory.
 | --- | --- |
 | `0` | Heartbeat |
 | `1` | Test request |
+| `5` | Logout |
 | `A` | Logon |
 | `D` | New order |
 | `F` | Order cancel |

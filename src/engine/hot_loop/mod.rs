@@ -867,6 +867,10 @@ impl HotLoop {
                     for instrument in news_instruments {
                         self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb);
                     }
+                    // Everything this session asked for has been withdrawn;
+                    // now tell the venue it is going, rather than leaving it to
+                    // notice.
+                    self.ccp.send_logout(&mut self.ccp_conn, &mut self.hb);
                     self.running = false;
                     self.shared.set_connection_lost();
                     emit(&self.event_tx, Event::Disconnected);
