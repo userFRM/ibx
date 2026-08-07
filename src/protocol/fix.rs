@@ -1,6 +1,6 @@
 //! FIX message framing.
 //!
-//! IB's FIX format (from decompiled a8.java):
+//! IB's FIX format, as observed on the wire:
 //! - Body length: 4-digit zero-padded (e.g. "0199")
 //! - MsgSeqNum: 6-digit zero-padded (e.g. "000001")
 //! - No SenderCompID (49) or TargetCompID (56) — set at session level

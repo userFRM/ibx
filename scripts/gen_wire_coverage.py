@@ -234,7 +234,7 @@ def main() -> None:
         "",
         "What this does **not** establish: a type absent here is one this client",
         "neither sends nor handles, which is not the same as one the venue never",
-        "sends. That comparison needs the vendor's own inventory.",
+        "sends. Settling that needs a record of everything the venue can send.",
         "",
         "## Sent",
         "",
