@@ -133,6 +133,26 @@ fn perm_id_from_fix_order_id(s: &str) -> i64 {
     (h >> 1) as i64
 }
 
+/// Why a message this client receives is deliberately not read.
+///
+/// Told apart from one nobody has looked at yet. Both are discarded, but only
+/// one of them is a gap, and a diagnostic that cannot tell them apart is one
+/// nobody keeps listening to.
+fn known_unread(subtype: &str) -> Option<&'static str> {
+    match subtype {
+        "93" => Some(
+            "it acknowledges the account and position subscription this client sends, and \
+             carries nothing the subscription itself does not already deliver",
+        ),
+        "194" => Some(
+            "it carries the order presets the vendor's own ticket fills its fields from. \
+             They are defaults for a user interface, and this client has none: an order \
+             here states every field it means",
+        ),
+        _ => None,
+    }
+}
+
 /// The algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
 ///
 /// Stated once, unasked, after logon. Nothing here read it, so a caller had no
@@ -650,10 +670,13 @@ impl CcpState {
                         // one leaves a record without repeating itself.
                         other => {
                             if self.unread_subtypes.insert(other.to_string()) {
-                                log::info!(
-                                    "Unread user message: subtype {other}. Nothing here reads it, \
-                                     so whatever it carries is being discarded"
-                                );
+                                match known_unread(other) {
+                                    Some(why) => log::debug!("Subtype {other} is not read: {why}"),
+                                    None => log::info!(
+                                        "Unread user message: subtype {other}. Nothing here reads \
+                                         it, so whatever it carries is being discarded"
+                                    ),
+                                }
                             }
                         }
                     }
@@ -6036,5 +6059,15 @@ mod tests {
             super::parse_algorithms("NOCOLON").is_empty(),
             "an entry naming no algorithms states nothing",
         );
+    }
+
+    /// A message nobody has looked at and a message deliberately not read are
+    /// both discarded, but only one is a gap.
+    #[test]
+    fn a_message_not_read_on_purpose_is_told_apart_from_one_overlooked() {
+        assert!(super::known_unread("93").is_some(), "an acknowledgement carrying nothing new");
+        assert!(super::known_unread("194").is_some(), "defaults for a user interface");
+        assert!(super::known_unread("81").is_none(), "the algorithms are read, not excused");
+        assert!(super::known_unread("99999").is_none(), "and anything unexamined is a gap");
     }
 }
