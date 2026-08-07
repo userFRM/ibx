@@ -186,10 +186,10 @@ does, it will say so rather than vanish.
 
 | Wire | What it carries | Why it is not implemented |
 | --- | --- | --- |
-| Out-of-band `AP` | Positions held away from this broker | Never sent to the account used for verification, so an implementation could not be exercised. Reported by name if it arrives |
-| Out-of-band `DO` | Holdings marked display-only | As above |
-| Out-of-band `DP` | A holding being withdrawn | As above. The vendor's own client treats an unrecognised out-of-band type as an error, so this list is what it would consider missing |
-| Out-of-band `AL`, `UL` | The account list, siblings of the `RL` this client reads | As above. Reading one of three is an accident of what this account sends, not a decision |
+| Out-of-band `AP`, `DO`, `DP` | Holdings the broker does not hold itself: held away, shown but not held, and one set it reports apart without saying why | Read. They carry the same fields in the same tags as the account's own holdings, and are kept apart from them |
+
+
+| Out-of-band `AL`, `UL` | Account values for the held-away and pending sets, siblings of the `RL` this client reads | Not yet read. One handler serves all three in the vendor's client, split only by which set the values belong to |
 | `6040` 192, 278 | The venue's own error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
 | `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |

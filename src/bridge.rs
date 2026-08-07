@@ -1083,6 +1083,11 @@ pub struct PortfolioState {
     account_download_complete: AtomicBool,
     /// Position info (conId -> PositionInfo) for reqPositions and P&L.
     position_infos: Mutex<HashMap<i64, PositionInfo>>,
+    /// Holdings the venue reports that this broker does not itself hold:
+    /// positions held away, and rows it marks as shown but not held. Kept
+    /// apart from the account's own, which is what a caller asking for
+    /// positions means.
+    positions_elsewhere: Mutex<HashMap<i64, crate::types::PositionElsewhere>>,
     positions: [AtomicU64; MAX_INSTRUMENTS],
     /// Midnight seeds from 6040=143 for client-side daily P&L computation.
     midnight_seeds: Mutex<HashMap<i64, MidnightSeed>>,
@@ -1100,6 +1105,7 @@ impl PortfolioState {
             account_data_received: AtomicBool::new(false),
             account_download_complete: AtomicBool::new(false),
             position_infos: Mutex::new(HashMap::new()),
+            positions_elsewhere: Mutex::new(HashMap::new()),
             positions: std::array::from_fn(|_| AtomicU64::new(0)),
             midnight_seeds: Mutex::new(HashMap::new()),
             pnl_request_key: Mutex::new(String::new()),
@@ -1113,6 +1119,17 @@ impl PortfolioState {
     }
 
     /// Get all position infos (for reqPositions).
+    /// Holdings the venue reports that this broker does not hold itself.
+    pub fn positions_elsewhere(&self) -> Vec<crate::types::PositionElsewhere> {
+        self.positions_elsewhere.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Record one, as the venue states it. The venue restates a row rather
+    /// than withdrawing it, so this replaces what it holds for that contract.
+    #[doc(hidden)] pub fn set_position_elsewhere(&self, row: crate::types::PositionElsewhere) {
+        self.positions_elsewhere.lock().unwrap().insert(row.con_id, row);
+    }
+
     pub fn position_infos(&self) -> Vec<PositionInfo> {
         self.position_infos.lock().unwrap().values().cloned().collect()
     }

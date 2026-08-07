@@ -798,6 +798,13 @@ impl CcpState {
             }
             "UT" | "UM" | "RL" => handle_account_update(msg, context, shared),
             "UP" => handle_position_update(&parsed, context, shared, event_tx),
+            // The venue keeps three sets of holdings and this client read one.
+            // The others carry the same fields in the same tags — they differ
+            // only in which set they belong to — and were discarded, so a
+            // caller could not learn the account held anything away at all.
+            "AP" => handle_position_elsewhere(&parsed, shared, crate::types::HeldElsewhere::Away),
+            "DO" => handle_position_elsewhere(&parsed, shared, crate::types::HeldElsewhere::DisplayOnly),
+            "DP" => handle_position_elsewhere(&parsed, shared, crate::types::HeldElsewhere::Aside),
             "d" => {
                 let response_req_id = crate::control::contracts::secdef_response_req_id(msg);
                 // A reply can describe several contracts: a symbol asked for
@@ -3310,6 +3317,39 @@ fn adopt_position(context: &mut Context, instrument: InstrumentId, position: f64
 }
 
 /// Handle position update messages (cross-cutting, called from CCP message processing).
+/// A holding the venue reports apart from the account's own.
+///
+/// The same fields in the same tags as a holding of the account's own, so it
+/// is read the same way — and kept apart, because a caller asking what the
+/// account holds does not mean what it holds somewhere else.
+fn handle_position_elsewhere(
+    parsed: &std::collections::HashMap<u32, String>,
+    shared: &SharedState,
+    held: crate::types::HeldElsewhere,
+) {
+    let Some(con_id) = parsed.get(&6008).and_then(|s| s.parse::<i64>().ok()).filter(|id| *id != 0)
+    else {
+        return;
+    };
+    let position = parsed.get(&6064).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    let avg_cost = parsed.get(&6101)
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .map(|v| (v * PRICE_SCALE as f64) as Price)
+        .unwrap_or(0);
+    let row = crate::types::PositionElsewhere {
+        con_id,
+        symbol: parsed.get(&6068).map(|s| s.trim_end().to_string()).unwrap_or_default(),
+        sec_type: parsed.get(&167).cloned().unwrap_or_default(),
+        currency: parsed.get(&15).cloned().unwrap_or_default(),
+        position,
+        avg_cost,
+        held,
+    };
+    log::info!("Held elsewhere: {} {:?} x{position}", row.symbol, held);
+    shared.portfolio.set_position_elsewhere(row);
+}
+
 pub(crate) fn handle_position_update(
     parsed: &std::collections::HashMap<u32, String>,
     context: &mut Context,
@@ -6204,5 +6244,47 @@ mod tests {
         // Trouble it says nothing about leaves nothing to report.
         super::handle_venue_error(&std::collections::HashMap::new(), &shared);
         assert!(shared.market.drain_venue_errors().is_empty());
+    }
+
+    /// The venue keeps three sets of holdings and this client read one. The
+    /// others carry the same fields in the same tags, so they are read the
+    /// same way — and kept apart, because a caller asking what the account
+    /// holds does not mean what it holds somewhere else.
+    #[test]
+    fn a_holding_the_account_does_not_hold_is_kept_apart() {
+        let (_ccp, _context, shared) = u186_test_state();
+        let mut row = std::collections::HashMap::new();
+        row.insert(6008u32, "265598".to_string());
+        row.insert(6068u32, "AAPL  ".to_string());
+        row.insert(167u32, "STK".to_string());
+        row.insert(15u32, "USD".to_string());
+        row.insert(6064u32, "100".to_string());
+        row.insert(6101u32, "150.0".to_string());
+
+        super::handle_position_elsewhere(&row, &shared, crate::types::HeldElsewhere::Away);
+        let held = shared.portfolio.positions_elsewhere();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].con_id, 265598);
+        assert_eq!(held[0].symbol, "AAPL", "the venue pads a symbol out");
+        assert_eq!(held[0].position, 100.0);
+        assert_eq!(held[0].avg_cost, 150 * PRICE_SCALE);
+        assert_eq!(held[0].held, crate::types::HeldElsewhere::Away);
+
+        // It stays out of what the account itself holds.
+        assert!(shared.portfolio.position_infos().is_empty(), "not one of the account's own");
+
+        // The venue restates a row rather than withdrawing it.
+        row.insert(6064u32, "50".to_string());
+        super::handle_position_elsewhere(&row, &shared, crate::types::HeldElsewhere::DisplayOnly);
+        let held = shared.portfolio.positions_elsewhere();
+        assert_eq!(held.len(), 1, "restated, not added again");
+        assert_eq!(held[0].position, 50.0);
+        assert_eq!(held[0].held, crate::types::HeldElsewhere::DisplayOnly);
+
+        // A row naming no contract names nothing.
+        super::handle_position_elsewhere(
+            &std::collections::HashMap::new(), &shared, crate::types::HeldElsewhere::Away,
+        );
+        assert_eq!(shared.portfolio.positions_elsewhere().len(), 1);
     }
 }
