@@ -58,8 +58,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     let fx_con_id = match forex_con_id {
         Some(id) => id,
         None => {
-            println!("  SKIP: No forex contract found for EUR.USD\n");
-            return Conns { farm: conns.farm, ccp, hmds: conns.hmds, account_id: conns.account_id };
+            lookup_returned_nothing("no EUR.USD forex contract came back");
         }
     };
 
@@ -176,8 +175,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     let fut_def = match fut_contract {
         Some(def) => def,
         None => {
-            println!("  SKIP: No MES futures contract found\n");
-            return Conns { farm: conns.farm, ccp, hmds: conns.hmds, account_id: conns.account_id };
+            lookup_returned_nothing("no MES futures contract came back");
         }
     };
 
@@ -311,8 +309,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     }
 
     if option_contracts.is_empty() {
-        println!("  SKIP: No SPY option contracts found\n");
-        return Conns { farm: conns.farm, ccp, hmds: conns.hmds, account_id: conns.account_id };
+        lookup_returned_nothing("no SPY option contracts came back");
     }
 
     // Pick the first call option found
