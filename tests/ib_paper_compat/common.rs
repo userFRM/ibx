@@ -587,6 +587,10 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     // of round lots and every one refused alike, so the value it wants is not a
     // multiple of anything the client controls.
     "display size",
+    // A variant of an order this venue does not work at all — a short sale
+    // among them. The client writes it; whether the venue takes it is the
+    // venue's answer, and the same answer the reference client gets.
+    "not supported",
 ];
 
 /// The reason a rejected order was rejected, for a phase that is about to skip.

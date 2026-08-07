@@ -516,9 +516,20 @@ pub enum TbtEntry {
 ///
 /// `body` is the raw message body after stripping FIX framing and HMAC.
 /// Prices are signed VLQ deltas in cents from a running state (caller tracks).
+/// Tick-by-tick records out of a `35=E` body.
+///
+/// The body opens with two bytes that are not a record and are not identified:
+/// they track neither the body's length nor the number of records in it across
+/// the payloads seen. Whatever they are, records begin at the first marker, so
+/// the scan starts there rather than at byte zero. Reading from byte zero found
+/// no marker and returned nothing, which is why a subscription that was
+/// receiving several payloads a second delivered not one tick to a caller.
 pub fn decode_ticks_35e(body: &[u8]) -> Vec<TbtEntry> {
     let mut entries = Vec::new();
-    let mut pos = 0;
+    let mut pos = match body.iter().position(|b| matches!(*b, TBT_MARKER_ALL_LAST | TBT_MARKER_BID_ASK)) {
+        Some(at) => at,
+        None => return entries,
+    };
 
     while pos < body.len() {
         let marker = body[pos];
@@ -586,7 +597,15 @@ pub fn decode_ticks_35e(body: &[u8]) -> Vec<TbtEntry> {
                     ask_size,
                 });
             }
-            _ => break, // unknown marker, stop parsing
+            // A byte that starts no record. The records are self-delimiting and
+            // each begins with a marker, so the next one is found rather than
+            // the rest of the payload abandoned.
+            _ => match body[pos..].iter()
+                .position(|b| matches!(*b, TBT_MARKER_ALL_LAST | TBT_MARKER_BID_ASK))
+            {
+                Some(at) => pos += at,
+                None => break,
+            },
         }
     }
 
