@@ -293,6 +293,10 @@ pub struct MarketDataState {
     subscription_failures: Mutex<Vec<(crate::types::InstrumentId, String)>>,
     /// What the venue has said went wrong, in its own words.
     venue_errors: Mutex<Vec<String>>,
+    /// Messages the venue sent that nothing here reads, named once each:
+    /// which connection, and what it was. Empty is the claim that this client
+    /// reads everything this venue sends it, and the only way to check it.
+    unread_wire: Mutex<Vec<(&'static str, String)>>,
 }
 
 impl MarketDataState {
@@ -309,6 +313,7 @@ impl MarketDataState {
             option_computations: Mutex::new(Vec::with_capacity(16)),
             subscription_failures: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
+            unread_wire: Mutex::new(Vec::new()),
         }
     }
 
@@ -364,6 +369,18 @@ impl MarketDataState {
 
     pub fn drain_option_computations(&self) -> Vec<crate::types::OptionComputation> {
         self.option_computations.lock().unwrap().drain(..).collect()
+    }
+
+    /// Everything the venue has sent this session that nothing reads.
+    pub fn unread_wire(&self) -> Vec<(&'static str, String)> {
+        self.unread_wire.lock().unwrap().clone()
+    }
+
+    #[doc(hidden)] pub fn note_unread_wire(&self, connection: &'static str, what: String) {
+        let mut seen = self.unread_wire.lock().unwrap();
+        if !seen.iter().any(|(c, w)| *c == connection && *w == what) {
+            seen.push((connection, what));
+        }
     }
 
     pub fn drain_venue_errors(&self) -> Vec<String> {

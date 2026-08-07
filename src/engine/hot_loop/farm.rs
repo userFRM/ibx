@@ -398,6 +398,7 @@ impl FarmState {
             other => {
                 let named = String::from_utf8_lossy(other).to_string();
                 if self.unread_types.insert(named.clone()) {
+                    shared.market.note_unread_wire("market data", format!("type {named}"));
                     log::info!(
                         "Unread on the market data connection: type {named}, {} bytes. Nothing \
                          here reads it, so whatever it carries is being discarded",
