@@ -5,10 +5,14 @@
 Which messages this client speaks. A claim to replace the vendor's
 gateway is a claim about messages rather than about method names, so
 this is taken from the dispatch tables and the message builders
-themselves and CI checks it against them.
+themselves, and CI regenerates it and fails if it has drifted.
 
-A message type absent here is one this client neither sends nor
-handles. That is not the same as one the venue never sends.
+Test code is excluded: a fixture that builds a message is not this
+client sending one.
+
+What this does **not** establish: a type absent here is one this client
+neither sends nor handles, which is not the same as one the venue never
+sends. That comparison needs the vendor's own inventory.
 
 ## Sent
 
@@ -22,12 +26,12 @@ handles. That is not the same as one the venue never sends.
 | `D` | New order |
 | `F` | Order cancel |
 | `G` | Order replace |
+| `H` | Order mass status request |
 | `U` | User message |
 | `V` | Market data request |
 | `W` | Chart request |
 | `Z` | Chart cancel |
 | `c` | Security definition request |
-| `d` | Security definition |
 
 ### User-message subtypes
 
@@ -44,10 +48,8 @@ A user message carries what it is for on tag 6040.
 | `101` |
 | `112` |
 | `138` |
-| `139` |
 | `142` |
 | `185` |
-| `186` |
 | `193` |
 | `209` |
 | `10003` |
@@ -56,6 +58,14 @@ A user message carries what it is for on tag 6040.
 | `10030` |
 
 ## Handled
+
+### During the logon exchange, before the dispatch tables run
+
+| Type | Meaning |
+| --- | --- |
+| `3` | Session reject |
+| `A` | Logon |
+| `U` | User message |
 
 ### On the trading connection
 
@@ -76,7 +86,7 @@ A user message carries what it is for on tag 6040.
 | `UP` | Position update |
 | `UT` | Account update |
 
-### User-message subtypes handled
+### User-message subtypes on the trading connection
 
 | Subtype |
 | --- |
@@ -101,7 +111,28 @@ A user message carries what it is for on tag 6040.
 | `Q` | Subscription ack |
 | `Y` | Subscription reject |
 | `RL` | Account update |
-| `UM` | not named here |
+| `UM` | Account update |
 | `UP` | Position update |
-| `UT` | not named here |
+| `UT` | Account update |
+
+### On the historical connection
+
+| Type | Meaning |
+| --- | --- |
+| `0` | Heartbeat |
+| `1` | Test request |
+| `E` | Historical payload |
+| `G` | Bar payload |
+| `U` | User message |
+| `W` | Chart response |
+
+### User-message subtypes on the historical connection
+
+| Subtype |
+| --- |
+| `10002` |
+| `10005` |
+| `10012` |
+| `10022` |
+| `10032` |
 
