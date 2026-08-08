@@ -245,6 +245,29 @@ vanish.
 
 Test count is not coverage. It states what is checked, not what fraction of venue behaviour is reached.
 
+### How much of an order this client writes
+
+Measured rather than asserted, by taking every field the counterpart's encoder
+writes on a new order and comparing it against every field this one writes.
+
+| Measure | State |
+| --- | --- |
+| Fields the counterpart's encoder writes on a new order | 79 |
+| Of those, written here | 51 |
+| Of those, not written here | 28, each one named or numbered below |
+| Fields this client writes in total | 163 |
+
+The twenty-eight are: a request for quote's own id, the server and client-session
+ids, the basket an order belongs to, deactivation at the close, the id of an
+order container, an acknowledgement flag, the manual order type, a hedge child's
+parent-price flag, a model flag, and sixteen more that are numbered in the
+counterpart and named nowhere.
+
+Writing more than the counterpart is not the same as writing what it writes:
+this client states 163 fields against its 79 because much of what it states
+rides fields the counterpart writes from elsewhere. The number that matters is
+the fifty-one, and the twenty-eight beside it.
+
 ### Order fields this client deliberately does not send
 
 Every field on the order this API takes was checked against what reaches the
