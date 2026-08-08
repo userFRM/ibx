@@ -160,6 +160,10 @@ fn a_what_if_preview_reports_the_parent_the_child_was_given() {
         init_margin_before: 0, maint_margin_before: 0, equity_with_loan_before: 0,
         init_margin_after: 0, maint_margin_after: 0, equity_with_loan_after: 0,
         commission: 0,
+        min_commission: 0,
+        max_commission: 0,
+        commission_currency: String::new(),
+        warning_text: String::new(),
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3122,6 +3126,10 @@ fn process_msgs_dispatches_what_if() {
         maint_margin_after: 3000 * PRICE_SCALE,
         equity_with_loan_after: 0,
         commission: PRICE_SCALE,
+        min_commission: 0,
+        max_commission: 0,
+        commission_currency: String::new(),
+        warning_text: String::new(),
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3143,6 +3151,10 @@ fn process_msgs_what_if_emits_full_order_state() {
         maint_margin_after:    500 * PRICE_SCALE,
         equity_with_loan_after: 600 * PRICE_SCALE,
         commission:            7 * PRICE_SCALE,
+        min_commission: 0,
+        max_commission: 0,
+        commission_currency: String::new(),
+        warning_text: String::new(),
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
