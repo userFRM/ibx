@@ -2032,6 +2032,78 @@ pub struct ContractDetails {
     #[pyo3(get, set)]
     pub min_size: f64,
     #[pyo3(get, set)]
+    pub industry: String,
+    #[pyo3(get, set)]
+    pub subcategory: String,
+    #[pyo3(get, set)]
+    pub price_magnifier: i32,
+    #[pyo3(get, set)]
+    pub contract_month: String,
+    #[pyo3(get, set)]
+    pub under_sec_type: String,
+    #[pyo3(get, set)]
+    pub agg_group: i32,
+    #[pyo3(get, set)]
+    pub coupon: f64,
+    #[pyo3(get, set)]
+    pub bond_type: String,
+    #[pyo3(get, set)]
+    pub coupon_type: String,
+    #[pyo3(get, set)]
+    pub callable: bool,
+    #[pyo3(get, set)]
+    pub puttable: bool,
+    #[pyo3(get, set)]
+    pub convertible: bool,
+    #[pyo3(get, set)]
+    pub next_option_partial: bool,
+    #[pyo3(get, set)]
+    pub next_option_date: String,
+    #[pyo3(get, set)]
+    pub next_option_type: String,
+    #[pyo3(get, set)]
+    pub ratings: String,
+    #[pyo3(get, set)]
+    pub bond_notes: String,
+    #[pyo3(get, set)]
+    pub desc_append: String,
+    #[pyo3(get, set)]
+    pub real_expiration_date: String,
+    #[pyo3(get, set)]
+    pub fund_name: String,
+    #[pyo3(get, set)]
+    pub fund_family: String,
+    #[pyo3(get, set)]
+    pub fund_type: String,
+    #[pyo3(get, set)]
+    pub fund_front_load: String,
+    #[pyo3(get, set)]
+    pub fund_back_load: String,
+    #[pyo3(get, set)]
+    pub fund_back_load_time_interval: String,
+    #[pyo3(get, set)]
+    pub fund_management_fee: String,
+    #[pyo3(get, set)]
+    pub fund_closed: bool,
+    #[pyo3(get, set)]
+    pub fund_closed_for_new_investors: bool,
+    #[pyo3(get, set)]
+    pub fund_closed_for_new_money: bool,
+    #[pyo3(get, set)]
+    pub fund_notify_amount: String,
+    #[pyo3(get, set)]
+    pub fund_minimum_initial_purchase: String,
+    #[pyo3(get, set)]
+    pub fund_minimum_subsequent_purchase: String,
+    #[pyo3(get, set)]
+    pub fund_blue_sky_states: String,
+    #[pyo3(get, set)]
+    pub fund_blue_sky_territories: String,
+    #[pyo3(get, set)]
+    pub fund_distribution_policy_indicator: String,
+    #[pyo3(get, set)]
+    pub fund_asset_type: String,
+    #[pyo3(get, set)]
     pub trading_hours: String,
     #[pyo3(get, set)]
     pub liquid_hours: String,
@@ -2059,6 +2131,42 @@ impl Clone for ContractDetails {
     fn clone(&self) -> Self {
         Python::attach(|py| Self {
             contract: self.contract.clone_ref(py),
+            industry: self.industry.clone(),
+            subcategory: self.subcategory.clone(),
+            price_magnifier: self.price_magnifier,
+            contract_month: self.contract_month.clone(),
+            under_sec_type: self.under_sec_type.clone(),
+            agg_group: self.agg_group,
+            coupon: self.coupon,
+            bond_type: self.bond_type.clone(),
+            coupon_type: self.coupon_type.clone(),
+            callable: self.callable,
+            puttable: self.puttable,
+            convertible: self.convertible,
+            next_option_partial: self.next_option_partial,
+            next_option_date: self.next_option_date.clone(),
+            next_option_type: self.next_option_type.clone(),
+            ratings: self.ratings.clone(),
+            bond_notes: self.bond_notes.clone(),
+            desc_append: self.desc_append.clone(),
+            real_expiration_date: self.real_expiration_date.clone(),
+            fund_name: self.fund_name.clone(),
+            fund_family: self.fund_family.clone(),
+            fund_type: self.fund_type.clone(),
+            fund_front_load: self.fund_front_load.clone(),
+            fund_back_load: self.fund_back_load.clone(),
+            fund_back_load_time_interval: self.fund_back_load_time_interval.clone(),
+            fund_management_fee: self.fund_management_fee.clone(),
+            fund_closed: self.fund_closed,
+            fund_closed_for_new_investors: self.fund_closed_for_new_investors,
+            fund_closed_for_new_money: self.fund_closed_for_new_money,
+            fund_notify_amount: self.fund_notify_amount.clone(),
+            fund_minimum_initial_purchase: self.fund_minimum_initial_purchase.clone(),
+            fund_minimum_subsequent_purchase: self.fund_minimum_subsequent_purchase.clone(),
+            fund_blue_sky_states: self.fund_blue_sky_states.clone(),
+            fund_blue_sky_territories: self.fund_blue_sky_territories.clone(),
+            fund_distribution_policy_indicator: self.fund_distribution_policy_indicator.clone(),
+            fund_asset_type: self.fund_asset_type.clone(),
             market_name: self.market_name.clone(),
             min_tick: self.min_tick,
             order_types: self.order_types.clone(),
@@ -2108,6 +2216,42 @@ impl ContractDetails {
             country: String::new(),
             isin: String::new(),
             min_size: 0.0,
+            industry: String::new(),
+            subcategory: String::new(),
+            price_magnifier: 0,
+            contract_month: String::new(),
+            under_sec_type: String::new(),
+            agg_group: 0,
+            coupon: 0.0,
+            bond_type: String::new(),
+            coupon_type: String::new(),
+            callable: false,
+            puttable: false,
+            convertible: false,
+            next_option_partial: false,
+            next_option_date: String::new(),
+            next_option_type: String::new(),
+            ratings: String::new(),
+            bond_notes: String::new(),
+            desc_append: String::new(),
+            real_expiration_date: String::new(),
+            fund_name: String::new(),
+            fund_family: String::new(),
+            fund_type: String::new(),
+            fund_front_load: String::new(),
+            fund_back_load: String::new(),
+            fund_back_load_time_interval: String::new(),
+            fund_management_fee: String::new(),
+            fund_closed: false,
+            fund_closed_for_new_investors: false,
+            fund_closed_for_new_money: false,
+            fund_notify_amount: String::new(),
+            fund_minimum_initial_purchase: String::new(),
+            fund_minimum_subsequent_purchase: String::new(),
+            fund_blue_sky_states: String::new(),
+            fund_blue_sky_territories: String::new(),
+            fund_distribution_policy_indicator: String::new(),
+            fund_asset_type: String::new(),
             trading_hours: String::new(),
             liquid_hours: String::new(),
             time_zone_id: String::new(),
@@ -2153,6 +2297,42 @@ impl ContractDetails {
             country: def.country.clone(),
             isin: def.isin.clone(),
             min_size: def.min_size,
+            industry: def.industry.clone(),
+            subcategory: def.subcategory.clone(),
+            price_magnifier: def.price_magnifier,
+            contract_month: def.contract_month.clone(),
+            under_sec_type: def.under_sec_type.clone(),
+            agg_group: def.agg_group,
+            coupon: def.coupon,
+            bond_type: def.bond_type.clone(),
+            coupon_type: def.coupon_type.clone(),
+            callable: def.callable,
+            puttable: def.puttable,
+            convertible: def.convertible,
+            next_option_partial: def.next_option_partial,
+            next_option_date: def.next_option_date.clone(),
+            next_option_type: def.next_option_type.clone(),
+            ratings: def.ratings.clone(),
+            bond_notes: def.bond_notes.clone(),
+            desc_append: def.desc_append.clone(),
+            real_expiration_date: def.real_expiration_date.clone(),
+            fund_name: def.fund_name.clone(),
+            fund_family: def.fund_family.clone(),
+            fund_type: def.fund_type.clone(),
+            fund_front_load: def.fund_front_load.clone(),
+            fund_back_load: def.fund_back_load.clone(),
+            fund_back_load_time_interval: def.fund_back_load_time_interval.clone(),
+            fund_management_fee: def.fund_management_fee.clone(),
+            fund_closed: def.fund_closed,
+            fund_closed_for_new_investors: def.fund_closed_for_new_investors,
+            fund_closed_for_new_money: def.fund_closed_for_new_money,
+            fund_notify_amount: def.fund_notify_amount.clone(),
+            fund_minimum_initial_purchase: def.fund_minimum_initial_purchase.clone(),
+            fund_minimum_subsequent_purchase: def.fund_minimum_subsequent_purchase.clone(),
+            fund_blue_sky_states: def.fund_blue_sky_states.clone(),
+            fund_blue_sky_territories: def.fund_blue_sky_territories.clone(),
+            fund_distribution_policy_indicator: def.fund_distribution_policy_indicator.clone(),
+            fund_asset_type: def.fund_asset_type.clone(),
             trading_hours: def.trading_hours.clone().unwrap_or_default(),
             liquid_hours: def.liquid_hours.clone().unwrap_or_default(),
             time_zone_id: def.time_zone_id.clone().unwrap_or_default(),
