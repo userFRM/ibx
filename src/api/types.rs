@@ -897,7 +897,12 @@ pub struct ContractDetails {
     /// What kind of stock it is, what it does, and where it is domiciled —
     /// parsed off the definition all along and handed to nobody.
     pub stock_type: String,
+    /// What the issuer does, broadest first. The venue states all three in one
+    /// field; kept whole, a caller asking for the category was handed all of
+    /// them with bars between.
+    pub industry: String,
     pub category: String,
+    pub subcategory: String,
     pub country: String,
     /// The identifier the contract is known by outside this venue.
     pub isin: String,
@@ -944,7 +949,9 @@ impl ContractDetails {
             time_zone_id: def.time_zone_id.clone(),
             market_rule_ids: def.market_rule_id.map(|r| r.to_string()).unwrap_or_default(),
             stock_type: def.stock_type.clone(),
+            industry: def.industry.clone(),
             category: def.category.clone(),
+            subcategory: def.subcategory.clone(),
             country: def.country.clone(),
             isin: def.isin.clone(),
             min_size: def.min_size,
