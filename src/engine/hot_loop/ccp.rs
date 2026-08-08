@@ -1123,7 +1123,12 @@ impl CcpState {
 
         let clord_id = recovery_origin_order_id.unwrap_or_else(|| {
             parsed.get(&11).and_then(|s| {
-                let stripped = s.strip_prefix('C').unwrap_or(s);
+                // A cancel names the order with a leading C, and a position the
+                // broker liquidated with a leading L. Only the first was taken
+                // off, so every report on a liquidated position parsed to no
+                // order at all and the fill reached nobody: a forced
+                // liquidation was the one fill a caller could not see.
+                let stripped = s.strip_prefix('C').or_else(|| s.strip_prefix('L')).unwrap_or(s);
                 // Strip versioned suffix (.0, .1, .2) from modify-chained ClOrdIDs
                 let base = stripped.split('.').next().unwrap_or(stripped);
                 base.parse::<u64>().ok()
@@ -1965,6 +1970,18 @@ impl CcpState {
                 cum_qty: cum_qty.unwrap_or(0.0),
                 avg_price: avg_px,
                 last_liquidity: last_liq,
+                // Not a field of its own: the broker says it liquidated the
+                // position by naming the order with a leading L rather than by
+                // setting anything. Read as a flag it was never set at all, and
+                // a caller could not tell a liquidation from any other fill.
+                liquidation: i32::from(parsed.get(&11).is_some_and(|s| s.starts_with('L'))),
+                // What the instrument's economic value is reckoned by, where it
+                // has one, and what the reckoning is multiplied by.
+                ev_rule: parsed.get(&6858).cloned().unwrap_or_default(),
+                ev_multiplier: parsed.get(&6892).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                // The price on this report may yet be revised.
+                pending_price_revision: parsed.get(&8497)
+                    .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
                 ..Default::default()
             };
 
@@ -6188,6 +6205,46 @@ mod tests {
             events.iter().filter(|e| matches!(e, Event::Fill(_))).count(), 1,
             "exactly one Fill reaches the channel across both deliveries: {events:?}",
         );
+    }
+
+    /// A broker liquidating a position says so by naming the order with a
+    /// leading L, not by setting a field. Read as a field it was never set, and
+    /// a caller could not tell a forced liquidation from any other fill.
+    #[test]
+    fn a_liquidation_is_told_apart_from_an_ordinary_fill() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let mut frame = exec_report_frame(&[
+            (150, "2"), (39, "2"), (32, "1"), (31, "100.00"), (151, "0"), (17, "E1"),
+            (6008, "756733"), (55, "SPY"),
+        ]);
+        frame.insert(11, "L42".to_string());
+        frame.insert(6858, "AVG_LEG_CLOSE_DIFF".to_string());
+        frame.insert(6892, "2.5".to_string());
+        frame.insert(8497, "1".to_string());
+
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+
+        let info = shared.orders.get_order_info(42).expect("the order is recorded");
+        assert_eq!(info.last_exec.liquidation, 1, "the broker liquidated this");
+        assert_eq!(info.last_exec.ev_rule, "AVG_LEG_CLOSE_DIFF");
+        assert_eq!(info.last_exec.ev_multiplier, 2.5);
+        assert!(info.last_exec.pending_price_revision, "the price may still be revised");
+    }
+
+    /// An ordinary fill is not a liquidation, and states none of the rest.
+    #[test]
+    fn an_ordinary_fill_claims_none_of_it() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let frame = exec_report_frame(&[
+            (150, "2"), (39, "2"), (32, "1"), (31, "100.00"), (151, "0"), (17, "E1"),
+            (6008, "756733"), (55, "SPY"),
+        ]);
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+
+        let info = shared.orders.get_order_info(42).expect("the order is recorded");
+        assert_eq!(info.last_exec.liquidation, 0);
+        assert!(info.last_exec.ev_rule.is_empty());
+        assert!(!info.last_exec.pending_price_revision);
     }
 
     /// A late duplicate of an earlier partial must not put a finished order
