@@ -1205,6 +1205,10 @@ fn push_order_attrs(
     // What a volatility order does as the underlying moves: whether the venue
     // re-prices it, which price it references, and the band it stays inside.
     // A caller could state all four and have none of them sent.
+    // An error the caller has decided to send the order past anyway.
+    if !attrs.advanced_error_override.is_empty() {
+        fields.push((8229, attrs.advanced_error_override.clone()));
+    }
     // The window an order is live in, and whether it may take liquidity.
     if !attrs.active_start_time.is_empty() {
         fields.push((6670, attrs.active_start_time.clone()));
