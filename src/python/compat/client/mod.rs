@@ -260,9 +260,9 @@ impl EClient {
 
         // Fire initial callbacks synchronously, matching official Python ibapi
         // where connect_ack signals "socket ready" before run() is called.
-        self.wrapper.call_method0(py, "connect_ack")?;
-        self.wrapper.call_method1(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
-        self.wrapper.call_method1(py, "next_valid_id", (start_id as i64,))?;
+        self.callback(py, "connect_ack", ())?;
+        self.callback(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
+        self.callback(py, "next_valid_id", (start_id as i64,))?;
 
         Ok(())
     }
@@ -321,7 +321,7 @@ impl EClient {
         }
 
         // Signal disconnection to wrapper
-        self.wrapper.call_method0(py, "connection_closed")?;
+        self.callback(py, "connection_closed", ())?;
 
         Ok(())
     }
@@ -341,6 +341,58 @@ impl EClient {
     fn misc_url(&self, key: &str) -> PyResult<Option<String>> {
         Ok(self.shared_state()?.reference.misc_url(key))
     }
+}
+
+/// Call a callback on a wrapper under the reference client's name for it where
+/// the caller defined one, and under this client's name otherwise.
+pub(crate) fn call_named<'py, A>(
+    py: Python<'py>,
+    wrapper: &Py<PyAny>,
+    name: &str,
+    args: A,
+) -> PyResult<()>
+where
+    A: pyo3::call::PyCallArgs<'py> + Clone,
+{
+    let alias = ibapi_name(name);
+    if alias != name
+        && let Ok(f) = wrapper.getattr(py, alias.as_str())
+        && !is_base_noop(py, &f)
+    {
+        f.call1(py, args.clone())?;
+        return Ok(());
+    }
+    wrapper.call_method1(py, name, args)?;
+    Ok(())
+}
+
+/// The reference client's spelling of a callback name: its words run together
+/// with each after the first capitalised.
+fn ibapi_name(snake: &str) -> String {
+    let mut out = String::with_capacity(snake.len());
+    let mut upper = false;
+    for c in snake.chars() {
+        if c == '_' {
+            upper = true;
+        } else if upper {
+            out.extend(c.to_uppercase());
+            upper = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Whether an attribute is this base class's own do-nothing default rather than
+/// something the caller wrote. Calling the default would report the callback as
+/// delivered when nobody received it.
+fn is_base_noop(py: Python<'_>, f: &Py<PyAny>) -> bool {
+    f.getattr(py, "__objclass__")
+        .and_then(|c| c.getattr(py, "__name__"))
+        .and_then(|n| n.extract::<String>(py))
+        .map(|n| n == "EWrapper")
+        .unwrap_or(false)
 }
 
 impl EClient {
@@ -398,6 +450,39 @@ impl EClient {
     /// Return the account id (empty string if not connected).
     pub(crate) fn account(&self) -> String {
         self.account_id.lock().unwrap().clone().unwrap_or_default()
+    }
+
+    /// Call a callback on the caller's wrapper, under the name the reference
+    /// client gives it as well as the name this one does.
+    ///
+    /// The reference client names its callbacks in one style and this one names
+    /// them in another. A caller who brought a wrapper written against the
+    /// reference client defines the reference client's names, and every call
+    /// here landed on the no-op this base class supplies instead — so their
+    /// callbacks never ran and nothing said so. Silence is the whole of the
+    /// fault: an exception would at least have been visible.
+    ///
+    /// So the reference name is tried first, and the name this client has
+    /// always used second, which keeps every existing caller working.
+    pub(crate) fn callback<'py, A>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+        args: A,
+    ) -> PyResult<()>
+    where
+        A: pyo3::call::PyCallArgs<'py> + Clone,
+    {
+        let alias = ibapi_name(name);
+        if alias != name
+            && let Ok(f) = self.wrapper.getattr(py, alias.as_str())
+            && !is_base_noop(py, &f)
+        {
+            f.call1(py, args.clone())?;
+            return Ok(());
+        }
+        self.wrapper.call_method1(py, name, args)?;
+        Ok(())
     }
 
     /// Every account this login holds, comma separated, which is the shape
@@ -693,8 +778,12 @@ w = W()",
 
             let g = pyo3::types::PyDict::new(py);
             g.set_item("w", &w).unwrap();
+            // This wrapper answers to any name at all, so the callback reaches
+            // it under the reference client's spelling as readily as under this
+            // one's. Either is correct here; a wrapper that names the callback
+            // explicitly is what the naming tests cover.
             let call = py.eval(
-                c"[c for c in w.calls if c[0] == 'security_definition_option_parameter'][0]",
+                c"[c for c in w.calls if c[0] in ('security_definition_option_parameter', 'securityDefinitionOptionParameter')][0]",
                 Some(&g), None,
             ).unwrap();
             let arg = |n: usize| call.get_item(n).unwrap();
@@ -707,7 +796,7 @@ w = W()",
             assert_eq!(arg(7).extract::<Vec<f64>>().unwrap(), [140.0, 145.0]);
 
             let ended: usize = py.eval(
-                c"len([c for c in w.calls if c[0] == 'security_definition_option_parameter_end'])",
+                c"len([c for c in w.calls if c[0] in ('security_definition_option_parameter_end', 'securityDefinitionOptionParameterEnd')])",
                 Some(&g), None,
             ).unwrap().extract().unwrap();
             assert_eq!(ended, 1, "the request ends once");

@@ -100,7 +100,7 @@ impl EClient {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        self.wrapper.call_method1(py, "current_time", (now,))?;
+        self.callback(py, "current_time", (now,))?;
         Ok(())
     }
 
@@ -161,7 +161,7 @@ impl EClient {
             };
             map.set_item(c.bit_number, Py::new(py, obj)?)?;
         }
-        self.wrapper.call_method1(py, "smart_components", (req_id, map.as_any()))?;
+        self.callback(py, "smart_components", (req_id, map.as_any()))?;
         Ok(())
     }
 
@@ -176,7 +176,7 @@ impl EClient {
             providers.push(Py::new(py, obj)?);
         }
         let py_list = pyo3::types::PyList::new(py, providers)?;
-        self.wrapper.call_method1(py, "news_providers", (py_list.as_any(),))?;
+        self.callback(py, "news_providers", (py_list.as_any(),))?;
         Ok(())
     }
 
@@ -195,7 +195,7 @@ impl EClient {
             objs.push(Py::new(py, obj)?);
         }
         let py_list = pyo3::types::PyList::new(py, objs)?;
-        self.wrapper.call_method1(py, "soft_dollar_tiers", (req_id, py_list.as_any()))?;
+        self.callback(py, "soft_dollar_tiers", (req_id, py_list.as_any()))?;
         Ok(())
     }
 
@@ -210,7 +210,7 @@ impl EClient {
                 fc.family_code_str.as_str().into_pyobject(py).unwrap().into_any(),
             ]).unwrap()
         }))?;
-        self.wrapper.call_method1(py, "family_codes", (py_list.as_any(),))?;
+        self.callback(py, "family_codes", (py_list.as_any(),))?;
         Ok(())
     }
 
@@ -235,7 +235,7 @@ impl EClient {
     fn req_user_info(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let shared = self.shared_state()?;
         let id = shared.reference.white_branding_id();
-        self.wrapper.call_method1(py, "user_info", (req_id, id))?;
+        self.callback(py, "user_info", (req_id, id))?;
         Ok(())
     }
 

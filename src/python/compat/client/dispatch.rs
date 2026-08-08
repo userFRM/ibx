@@ -23,9 +23,15 @@ use super::super::super::types::PRICE_SCALE_F;
 /// `SystemExit`, and any other exception deriving from `BaseException` rather than
 /// `Exception` are re-raised so Ctrl-C during a callback still stops `run()` and a
 /// callback-raised `SystemExit` still terminates it, matching ibapi.
+/// Fire a callback on the caller's wrapper.
+///
+/// Routed through the dispatcher that also tries the name the reference client
+/// gives the callback: a wrapper written against that client defines those
+/// names, and a call made only under this client's names lands on the base
+/// class's do-nothing default instead of on the caller's code.
 macro_rules! call_wrapper {
     ($wrapper:expr, $py:expr, $method:expr, $args:expr) => {
-        if let Err(e) = $wrapper.call_method($py, $method, $args, None) {
+        if let Err(e) = crate::python::compat::client::call_named($py, &$wrapper, $method, $args) {
             if !e.is_instance_of::<pyo3::exceptions::PyException>($py) {
                 return Err(e);
             }
