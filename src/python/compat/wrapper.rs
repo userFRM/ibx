@@ -16,6 +16,40 @@ impl EWrapper {
         Self
     }
 
+    /// Answer to the name the reference client gives a callback as well as the
+    /// name this one gives it.
+    ///
+    /// Every callback here is named with underscores. Code written for the
+    /// reference client names them with the words run together, and asks the
+    /// base class about them — whether a subclass overrode one, or by calling
+    /// the default through `super()`. Under this class those names were simply
+    /// absent.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines, and a name that names no callback is still
+    /// refused rather than answered with a do-nothing.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        let mut snake = String::with_capacity(name.len() + 4);
+        for (i, c) in name.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i != 0 {
+                    snake.push('_');
+                }
+                snake.extend(c.to_lowercase());
+            } else {
+                snake.push(c);
+            }
+        }
+        if snake != name
+            && let Ok(f) = slf.as_any().getattr(snake.as_str())
+        {
+            return Ok(f.unbind());
+        }
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "'EWrapper' object has no attribute '{name}'"
+        )))
+    }
+
     // ── Connection ──
 
     fn connect_ack(&self) {}
