@@ -1916,6 +1916,20 @@ impl CcpState {
                 use_price_mgmt_algo,
                 trail_stop_price,
                 algo_strategy,
+                // The report restates the order, and a caller asking what its
+                // orders are is answered from it. Everything below arrived on
+                // every report and was read from none of them, so an order came
+                // back naming neither the reference the caller gave it, nor the
+                // client that placed it, nor how it allocates.
+                order_ref: parsed.get(&6010).cloned().unwrap_or_default(),
+                rule80a: parsed.get(&47).cloned().unwrap_or_default(),
+                good_till_date: parsed.get(&432).cloned().unwrap_or_default(),
+                client_id: parsed.get(&109).and_then(|s| s.parse().ok()).unwrap_or(0),
+                // How an advisor's order is divided, which is the whole of what
+                // an advisor's order is.
+                fa_group: parsed.get(&6160).cloned().unwrap_or_default(),
+                fa_method: parsed.get(&6159).cloned().unwrap_or_default(),
+                fa_percentage: parsed.get(&6164).cloned().unwrap_or_default(),
                 ..Default::default()
             };
 
@@ -6205,6 +6219,37 @@ mod tests {
             events.iter().filter(|e| matches!(e, Event::Fill(_))).count(), 1,
             "exactly one Fill reaches the channel across both deliveries: {events:?}",
         );
+    }
+
+    /// The report restates the order, and a caller asking what its orders are
+    /// is answered from that. An order that came back naming neither the
+    /// reference the caller gave it nor the client that placed it is not the
+    /// order they placed.
+    #[test]
+    fn the_order_a_report_restates_carries_what_the_caller_gave_it() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let mut frame = exec_report_frame(&[
+            (150, "2"), (39, "2"), (32, "1"), (31, "100.00"), (151, "0"), (17, "E1"),
+            (6008, "756733"), (55, "SPY"),
+        ]);
+        frame.insert(6010, "my-strategy".to_string());
+        frame.insert(47, "A".to_string());
+        frame.insert(432, "20260401-16:00:00".to_string());
+        frame.insert(109, "7".to_string());
+        frame.insert(6160, "GROUP1".to_string());
+        frame.insert(6159, "PctChange".to_string());
+        frame.insert(6164, "25".to_string());
+
+        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+
+        let info = shared.orders.get_order_info(42).expect("the order is recorded");
+        assert_eq!(info.order.order_ref, "my-strategy", "the caller's own name for it");
+        assert_eq!(info.order.rule80a, "A");
+        assert_eq!(info.order.good_till_date, "20260401-16:00:00");
+        assert_eq!(info.order.client_id, 7);
+        assert_eq!(info.order.fa_group, "GROUP1");
+        assert_eq!(info.order.fa_method, "PctChange");
+        assert_eq!(info.order.fa_percentage, "25");
     }
 
     /// A broker liquidating a position says so by naming the order with a
