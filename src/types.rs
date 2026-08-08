@@ -391,6 +391,15 @@ pub struct OrderAttrs {
     /// Implied volatility for a volatility order, as a decimal (0.25 = 25%),
     /// on tag 9816. Zero means the caller set none.
     pub volatility: f64,
+    /// Whether to let the venue manage the price of the order, on tag 8339.
+    /// Zero is the caller saying nothing.
+    pub use_price_mgmt_algo: i32,
+    /// How long the order runs for, where its kind takes a duration, on tag 8402.
+    pub duration: i32,
+    /// The smallest size worth competing for, on tag 8411, and how far past the
+    /// best price to compete, on tag 8412.
+    pub min_compete_size: i32,
+    pub compete_against_best_offset: f64,
     /// Whether the venue keeps re-pricing a volatility order as the underlying
     /// moves, on tag 6275.
     pub continuous_update: bool,
@@ -505,6 +514,10 @@ impl Default for OrderAttrs {
             sweep_to_fill: Default::default(),
             all_or_none: Default::default(),
             volatility: Default::default(),
+            use_price_mgmt_algo: 0,
+            duration: i32::MAX,
+            min_compete_size: 0,
+            compete_against_best_offset: f64::MAX,
             continuous_update: false,
             reference_price_type: 0,
             stock_range_lower: f64::MAX,

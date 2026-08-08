@@ -1205,6 +1205,20 @@ fn push_order_attrs(
     // What a volatility order does as the underlying moves: whether the venue
     // re-prices it, which price it references, and the band it stays inside.
     // A caller could state all four and have none of them sent.
+    // Letting the venue manage the price, how long the order runs, and what it
+    // competes against. A caller states these and they reached nothing.
+    if attrs.use_price_mgmt_algo > 0 {
+        fields.push((8339, attrs.use_price_mgmt_algo.to_string()));
+    }
+    if attrs.duration != i32::MAX && attrs.duration > 0 {
+        fields.push((8402, attrs.duration.to_string()));
+    }
+    if attrs.min_compete_size > 0 {
+        fields.push((8411, attrs.min_compete_size.to_string()));
+    }
+    if attrs.compete_against_best_offset != f64::MAX {
+        fields.push((8412, format!("{:.6}", attrs.compete_against_best_offset)));
+    }
     if attrs.continuous_update {
         fields.push((6275, "1".to_string()));
     }
@@ -2705,6 +2719,49 @@ mod tests {
             tag("6153=").is_some_and(|v| v.starts_with("200.")),
             "the band it stays below: {msg}",
         );
+    }
+
+    /// An order that asked the venue to manage its price, to run for a set
+    /// time, and what to compete against.
+    ///
+    /// All four are on the order this API takes and on the Python one, where a
+    /// caller coming from the reference client puts them, and none of them
+    /// reached the wire.
+    #[test]
+    fn an_order_carries_what_it_competes_against_and_how_long_it_runs() {
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'0',
+            crate::types::OrderAttrs {
+                use_price_mgmt_algo: 1,
+                duration: 60,
+                min_compete_size: 100,
+                compete_against_best_offset: 0.02,
+                ..Default::default()
+            },
+        );
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("8339=").as_deref(), Some("1"), "price managed by the venue: {msg}");
+        assert_eq!(tag("8402=").as_deref(), Some("60"), "how long it runs: {msg}");
+        assert_eq!(tag("8411=").as_deref(), Some("100"), "the smallest size worth competing for: {msg}");
+        assert!(
+            tag("8412=").is_some_and(|v| v.starts_with("0.02")),
+            "how far past the best price: {msg}",
+        );
+    }
+
+    /// A default order states none of them, so an order that asked for nothing
+    /// does not arrive asking for something.
+    #[test]
+    fn a_default_order_competes_for_nothing() {
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'0',
+            crate::types::OrderAttrs::default(),
+        );
+        for t in ["8339=", "8402=", "8411=", "8412="] {
+            assert!(!msg.contains(t), "{t} stated on an order that asked for nothing: {msg}");
+        }
     }
 
     /// A fill-or-kill order states that time in force on the wire.

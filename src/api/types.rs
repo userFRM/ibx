@@ -474,6 +474,10 @@ impl Order {
             // Stated by a caller and carried nowhere until now: an order that
             // asked to be re-priced as the underlying moved, or to stay inside
             // a band of underlying prices, was accepted and sent without either.
+            use_price_mgmt_algo: self.use_price_mgmt_algo,
+            duration: self.duration,
+            min_compete_size: if self.min_compete_size == i32::MAX { 0 } else { self.min_compete_size },
+            compete_against_best_offset: self.compete_against_best_offset,
             continuous_update: self.continuous_update,
             reference_price_type: self.reference_price_type,
             stock_range_lower: self.stock_range_lower,
@@ -612,6 +616,10 @@ impl Order {
             || self.oca_type > 0
             || (self.volatility != f64::MAX && self.volatility > 0.0)
             || self.volatility_type > 0
+            || self.use_price_mgmt_algo > 0
+            || self.duration != i32::MAX
+            || (self.min_compete_size != i32::MAX && self.min_compete_size > 0)
+            || self.compete_against_best_offset != f64::MAX
             || self.continuous_update
             || self.reference_price_type > 0
             || self.stock_range_lower != f64::MAX
@@ -1199,6 +1207,10 @@ mod tests {
             ("auto_cancel_date", |o| o.auto_cancel_date = "20261231".into()),
             ("clearing_account", |o| o.clearing_account = "U123".into()),
             ("clearing_intent", |o| o.clearing_intent = "IB".into()),
+            ("use_price_mgmt_algo", |o| o.use_price_mgmt_algo = 1),
+            ("duration", |o| o.duration = 60),
+            ("min_compete_size", |o| o.min_compete_size = 100),
+            ("compete_against_best_offset", |o| o.compete_against_best_offset = 0.02),
             ("continuous_update", |o| o.continuous_update = true),
             ("reference_price_type", |o| o.reference_price_type = 2),
             ("stock_range_lower", |o| o.stock_range_lower = 100.0),
@@ -1214,7 +1226,9 @@ mod tests {
             oca_type: _, parent_id: _, discretionary_amt: _, sweep_to_fill: _,
             all_or_none: _, trigger_method: _, cash_qty: _, conditions: _,
             conditions_cancel_order: _, conditions_ignore_rth: _,
-            volatility: _, volatility_type: _, continuous_update: _, reference_price_type: _,
+            volatility: _, volatility_type: _, use_price_mgmt_algo: _, duration: _,
+            min_compete_size: _, compete_against_best_offset: _,
+            continuous_update: _, reference_price_type: _,
             stock_range_lower: _, stock_range_upper: _,
             percent_offset: _, not_held: _, order_ref: _, open_close: _,
             scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
