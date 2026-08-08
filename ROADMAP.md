@@ -245,6 +245,23 @@ vanish.
 
 Test count is not coverage. It states what is checked, not what fraction of venue behaviour is reached.
 
+### Order fields this client deliberately does not send
+
+Every field on the order this API takes was checked against what reaches the
+wire. Most of what was reaching nothing is carried now. These are the ones that
+are not, and are not gaps:
+
+| field | why |
+| --- | --- |
+| The open/close of a delta-neutral leg | The counterpart's handler for it is empty: it writes nothing, so neither does this |
+| Shareholder, auction strategy, basis points and their type, accrued interest on a bond, the percentage-constraint override, the auto-price override for a hedge | Nothing in the counterpart writes any of them. Sending a field it does not send is a guess about what the venue reads |
+| The scale table, the position and fill quantity a scale starts from | Named nowhere that could be established. Two classes look like the last two by name alone, which is not evidence |
+| Order origin, opt-out of smart routing, the parent's permanent id, the combo routing parameters, the miscellaneous options | Sought and not established. Each has a candidate that was rejected on inspection rather than accepted on resemblance |
+
+A field written on a guessed tag is worse than a field not written: the first
+puts something on a live order that the venue may read as something else, and
+the second is visible. So these stay unsent until the tag is established.
+
 ### What the venue refuses this account
 
 Eleven order types and times in force are refused, and the refusal is the

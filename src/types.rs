@@ -391,6 +391,11 @@ pub struct OrderAttrs {
     /// Implied volatility for a volatility order, as a decimal (0.25 = 25%),
     /// on tag 9816. Zero means the caller set none.
     pub volatility: f64,
+    /// Let the venue better the price where it can, on tag 6557.
+    pub seek_price_improvement: bool,
+    /// When a person entered the order by hand, on tag 6532 — which is a
+    /// regulatory record, not a preference.
+    pub manual_order_time: String,
     /// Override an error the venue would otherwise refuse the order for, on
     /// tag 8229.
     pub advanced_error_override: String,
@@ -551,6 +556,8 @@ impl Default for OrderAttrs {
             sweep_to_fill: Default::default(),
             all_or_none: Default::default(),
             volatility: Default::default(),
+            seek_price_improvement: false,
+            manual_order_time: String::new(),
             advanced_error_override: String::new(),
             active_start_time: String::new(),
             active_stop_time: String::new(),
