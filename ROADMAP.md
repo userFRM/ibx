@@ -257,14 +257,18 @@ Every type here was compared against it.
 | An execution | 21 | all but the exercise-or-lapse kind |
 | A contract | 21 | all |
 | A combination leg | 9 | 7 |
-| A contract's details | 64 | 17 |
+| A contract's details | 64 | 48 |
 
-The last row is the gap. A caller asking what a contract is receives what it
-trades in and when, and not what it is: no industry, no category, none of the
-sizes it trades in, none of a bond's terms — its coupon, its ratings, whether it
-can be called or put — and none of a fund's, which is most of what a fund is.
-Five of those seventeen were being parsed off the definition already and handed
-to nobody; they are handed over now.
+A bond now states its terms — what it pays, how, when it can be called or put,
+whether it converts, what it is rated — and a fund states what it charges, what
+it is closed to and where it may be sold. Those two blocks are most of what a
+bond and a fund are, and a caller asking about either used to receive a symbol.
+
+Sixteen remain. Six are precision and sizing figures the counterpart computes
+rather than reads, so they are not a tag to copy. One, a contract's CUSIP, has
+no field of its own at all: it is taken from the list of identifiers, chosen by
+which kind each one is. The rest are named in the counterpart and not yet tied
+to the field they fill, and are left out rather than guessed at.
 
 An order and an execution are all but complete against that schema. A contract's
 details are a quarter of it.

@@ -210,6 +210,41 @@ pub struct ContractDefinition {
     /// What a quoted price must be multiplied by to be a price. A contract
     /// quoted in a hundredth of the currency states a hundred here, and a price
     /// read without it is out by that factor.
+    /// What a bond is: its terms, its ratings, and the option on it. A caller
+    /// asking about a bond received a contract with none of what makes it one.
+    pub coupon: f64,
+    pub contract_month: String,
+    pub under_sec_type: String,
+    pub bond_notes: String,
+    pub desc_append: String,
+    pub bond_type: String,
+    pub coupon_type: String,
+    pub next_option_date: String,
+    pub next_option_type: String,
+    pub ratings: String,
+    pub fund_name: String,
+    pub fund_family: String,
+    pub fund_type: String,
+    pub fund_front_load: String,
+    pub fund_back_load: String,
+    pub fund_back_load_time_interval: String,
+    pub fund_management_fee: String,
+    pub fund_notify_amount: String,
+    pub fund_minimum_initial_purchase: String,
+    pub fund_minimum_subsequent_purchase: String,
+    pub fund_blue_sky_states: String,
+    pub fund_blue_sky_territories: String,
+    pub fund_distribution_policy_indicator: String,
+    pub fund_asset_type: String,
+    pub real_expiration_date: String,
+    pub callable: bool,
+    pub puttable: bool,
+    pub convertible: bool,
+    pub next_option_partial: bool,
+    pub fund_closed: bool,
+    pub fund_closed_for_new_investors: bool,
+    pub fund_closed_for_new_money: bool,
+    pub agg_group: i32,
     pub price_magnifier: i32,
     /// What the issuer does, from broadest to narrowest. The venue states all
     /// three in one field separated by bars; a caller wants them apart.
@@ -252,6 +287,39 @@ impl Default for ContractDefinition {
             strike: 0.0,
             right: None,
             stock_type: String::new(),
+            coupon: 0.0,
+            contract_month: String::new(),
+            under_sec_type: String::new(),
+            bond_notes: String::new(),
+            desc_append: String::new(),
+            bond_type: String::new(),
+            coupon_type: String::new(),
+            next_option_date: String::new(),
+            next_option_type: String::new(),
+            ratings: String::new(),
+            fund_name: String::new(),
+            fund_family: String::new(),
+            fund_type: String::new(),
+            fund_front_load: String::new(),
+            fund_back_load: String::new(),
+            fund_back_load_time_interval: String::new(),
+            fund_management_fee: String::new(),
+            fund_notify_amount: String::new(),
+            fund_minimum_initial_purchase: String::new(),
+            fund_minimum_subsequent_purchase: String::new(),
+            fund_blue_sky_states: String::new(),
+            fund_blue_sky_territories: String::new(),
+            fund_distribution_policy_indicator: String::new(),
+            fund_asset_type: String::new(),
+            real_expiration_date: String::new(),
+            callable: false,
+            puttable: false,
+            convertible: false,
+            next_option_partial: false,
+            fund_closed: false,
+            fund_closed_for_new_investors: false,
+            fund_closed_for_new_money: false,
+            agg_group: 0,
             price_magnifier: 0,
             industry: String::new(),
             category: String::new(),
@@ -508,6 +576,43 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&8077) { // StockType
         def.stock_type = v.clone();
     }
+    if let Some(v) = tags.get(&200) { def.contract_month = v.clone(); }
+    if let Some(v) = tags.get(&6577) { def.under_sec_type = v.clone(); }
+    if let Some(v) = tags.get(&6493) { def.bond_notes = v.clone(); }
+    if let Some(v) = tags.get(&6494) { def.desc_append = v.clone(); }
+    if let Some(v) = tags.get(&6495) { def.bond_type = v.clone(); }
+    if let Some(v) = tags.get(&6496) { def.coupon_type = v.clone(); }
+    if let Some(v) = tags.get(&6501) { def.next_option_date = v.clone(); }
+    if let Some(v) = tags.get(&6502) { def.next_option_type = v.clone(); }
+    if let Some(v) = tags.get(&6720) { def.ratings = v.clone(); }
+    if let Some(v) = tags.get(&6481) { def.fund_name = v.clone(); }
+    if let Some(v) = tags.get(&6472) { def.fund_family = v.clone(); }
+    if let Some(v) = tags.get(&6473) { def.fund_type = v.clone(); }
+    if let Some(v) = tags.get(&6474) { def.fund_front_load = v.clone(); }
+    if let Some(v) = tags.get(&6475) { def.fund_back_load = v.clone(); }
+    if let Some(v) = tags.get(&6482) { def.fund_back_load_time_interval = v.clone(); }
+    if let Some(v) = tags.get(&6476) { def.fund_management_fee = v.clone(); }
+    if let Some(v) = tags.get(&6478) { def.fund_notify_amount = v.clone(); }
+    if let Some(v) = tags.get(&6479) { def.fund_minimum_initial_purchase = v.clone(); }
+    if let Some(v) = tags.get(&8505) { def.fund_minimum_subsequent_purchase = v.clone(); }
+    if let Some(v) = tags.get(&8150) { def.fund_blue_sky_states = v.clone(); }
+    if let Some(v) = tags.get(&8151) { def.fund_blue_sky_territories = v.clone(); }
+    if let Some(v) = tags.get(&8502) { def.fund_distribution_policy_indicator = v.clone(); }
+    if let Some(v) = tags.get(&8503) { def.fund_asset_type = v.clone(); }
+    if let Some(v) = tags.get(&8383) { def.real_expiration_date = v.clone(); }
+    // Stated under its own field, or under the shorter one where that is all
+    // the venue gives.
+    if def.desc_append.is_empty()
+        && let Some(v) = tags.get(&6853) { def.desc_append = v.clone(); }
+    if let Some(v) = tags.get(&6497) { def.callable = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = tags.get(&6498) { def.puttable = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = tags.get(&6499) { def.convertible = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = tags.get(&6500) { def.next_option_partial = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = tags.get(&6477) { def.fund_closed = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = tags.get(&6511) { def.fund_closed_for_new_investors = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = tags.get(&6512) { def.fund_closed_for_new_money = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = tags.get(&223) && let Ok(x) = v.trim().parse() { def.coupon = x; }
+    if let Some(v) = tags.get(&6178) && let Ok(x) = v.trim().parse() { def.agg_group = x; }
     if let Some(v) = tags.get(&6021)
         && let Ok(n) = v.trim().parse::<i32>()
     {
@@ -2031,6 +2136,57 @@ mod industry_tests {
         assert_eq!(def.industry, "Technology");
         assert_eq!(def.category, "Computers");
         assert_eq!(def.subcategory, "Computers");
+    }
+
+    /// A bond is its terms: what it pays, when it can be called, what it is
+    /// rated. Read from nothing, a caller asking about a bond received a
+    /// contract with none of what makes it one.
+    #[test]
+    fn a_bond_carries_its_terms() {
+        let def = parse_secdef_response(&secdef(
+            "223=4.25\u{1}6495=CORP\u{1}6496=FIXED\u{1}6497=1\u{1}6498=0\u{1}\
+             6499=0\u{1}6501=20270115\u{1}6502=CALL\u{1}6720=A+\u{1}6493=notes\u{1}",
+        )).expect("the definition parses");
+        assert_eq!(def.coupon, 4.25);
+        assert_eq!(def.bond_type, "CORP");
+        assert_eq!(def.coupon_type, "FIXED");
+        assert!(def.callable, "this one can be called");
+        assert!(!def.puttable, "and cannot be put");
+        assert!(!def.convertible);
+        assert_eq!(def.next_option_date, "20270115");
+        assert_eq!(def.next_option_type, "CALL");
+        assert_eq!(def.ratings, "A+");
+        assert_eq!(def.bond_notes, "notes");
+    }
+
+    /// A fund is what it charges and what it is closed to. Without those it is
+    /// a symbol.
+    #[test]
+    fn a_fund_carries_what_it_charges_and_what_it_is_closed_to() {
+        let def = parse_secdef_response(&secdef(
+            "6481=Some Fund\u{1}6472=Some Family\u{1}6473=Bond\u{1}6474=1.5\u{1}\
+             6475=0.5\u{1}6476=0.75\u{1}6477=0\u{1}6511=1\u{1}6512=1\u{1}\
+             8150=NY,CA\u{1}8503=Fixed Income\u{1}",
+        )).expect("the definition parses");
+        assert_eq!(def.fund_name, "Some Fund");
+        assert_eq!(def.fund_family, "Some Family");
+        assert_eq!(def.fund_type, "Bond");
+        assert_eq!(def.fund_front_load, "1.5");
+        assert_eq!(def.fund_management_fee, "0.75");
+        assert!(!def.fund_closed, "open to existing holders");
+        assert!(def.fund_closed_for_new_investors, "and closed to new ones");
+        assert!(def.fund_closed_for_new_money);
+        assert_eq!(def.fund_blue_sky_states, "NY,CA");
+        assert_eq!(def.fund_asset_type, "Fixed Income");
+    }
+
+    /// The venue states a short description under its own field where it has
+    /// one, and under a shorter field where that is all it gives.
+    #[test]
+    fn a_description_falls_back_to_the_shorter_field() {
+        let def = parse_secdef_response(&secdef("6853=short form\u{1}"))
+            .expect("the definition parses");
+        assert_eq!(def.desc_append, "short form");
     }
 
     /// A price quoted in a fraction of the currency is out by that fraction
