@@ -342,7 +342,7 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
     control_tx.send(ControlCommand::FetchContractDetails {
@@ -400,6 +400,13 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
+    // Nothing answers on a connection that went away, and a definition that did
+    // not arrive because there was nothing to arrive on says nothing about
+    // whether this client reads one.
+    if !got_details && shared.take_connection_lost() {
+        println!("  SKIP: the connection was lost, so nothing could answer\n");
+        return conns;
+    }
     assert!(got_details, "Event::ContractDetails not received for SPY");
     if got_end {
         println!("  ContractDetailsEnd received");
