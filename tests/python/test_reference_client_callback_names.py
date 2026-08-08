@@ -69,3 +69,29 @@ def test_a_wrapper_named_this_way_still_is():
     assert "order_status" in names, (
         f"the name this client has always used stopped working: {w.seen}"
     )
+
+
+def test_the_methods_answer_to_the_reference_clients_names():
+    """Code written for the reference client calls its method names.
+
+    Every method here is named with underscores, so that code stopped at its
+    first call with the method simply not there. The run-together name is
+    translated back to the one this client has.
+    """
+    c = EClient(EWrapper())
+    for name in (
+        "placeOrder", "cancelOrder", "reqMktData", "cancelMktData",
+        "reqContractDetails", "reqHistoricalData", "reqIds", "reqPositions",
+        "reqAccountSummary", "reqExecutions", "reqOpenOrders", "reqMktDepth",
+    ):
+        assert hasattr(c, name), f"code written for the reference client cannot call {name}"
+
+
+def test_a_name_that_is_no_method_is_still_refused():
+    """Translating a name must not invent one."""
+    c = EClient(EWrapper())
+    try:
+        c.thisIsNotAMethod
+    except AttributeError:
+        return
+    raise AssertionError("a name that names no method was answered")
