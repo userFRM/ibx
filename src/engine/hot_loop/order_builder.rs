@@ -1205,6 +1205,65 @@ fn push_order_attrs(
     // What a volatility order does as the underlying moves: whether the venue
     // re-prices it, which price it references, and the band it stays inside.
     // A caller could state all four and have none of them sent.
+    // The window an order is live in, and whether it may take liquidity.
+    if !attrs.active_start_time.is_empty() {
+        fields.push((6670, attrs.active_start_time.clone()));
+    }
+    if !attrs.active_stop_time.is_empty() {
+        fields.push((6671, attrs.active_stop_time.clone()));
+    }
+    if attrs.post_only {
+        fields.push((6605, "1".to_string()));
+    }
+    // Who asked for the order. A regulatory statement, not a preference, and
+    // wrong by omission where it applies.
+    if attrs.solicited {
+        fields.push((6488, "1".to_string()));
+    }
+    if attrs.manual_order_indicator > 0 {
+        fields.push((1028, attrs.manual_order_indicator.to_string()));
+    }
+    if attrs.route_marketable_to_bbo {
+        fields.push((8265, "1".to_string()));
+    }
+    if attrs.imbalance_only {
+        fields.push((6737, "1".to_string()));
+    }
+    if attrs.allow_pre_open {
+        fields.push((6524, "1".to_string()));
+    }
+    if attrs.ignore_open_auction {
+        fields.push((6562, "1".to_string()));
+    }
+    if attrs.is_oms_container {
+        fields.push((6406, "1".to_string()));
+    }
+    if !attrs.ext_operator.is_empty() {
+        fields.push((8089, attrs.ext_operator.clone()));
+    }
+    if !attrs.customer_account.is_empty() {
+        fields.push((6207, attrs.customer_account.clone()));
+    }
+    if attrs.professional_customer {
+        fields.push((6636, "1".to_string()));
+    }
+    if attrs.ref_futures_con_id > 0 {
+        fields.push((6564, attrs.ref_futures_con_id.to_string()));
+    }
+    // Who decided the trade and who executed it. An order that states none of
+    // these where the venue expects them is reported without them.
+    if !attrs.mifid2_decision_maker.is_empty() {
+        fields.push((8237, attrs.mifid2_decision_maker.clone()));
+    }
+    if !attrs.mifid2_decision_algo.is_empty() {
+        fields.push((8243, attrs.mifid2_decision_algo.clone()));
+    }
+    if !attrs.mifid2_execution_trader.is_empty() {
+        fields.push((8254, attrs.mifid2_execution_trader.clone()));
+    }
+    if !attrs.mifid2_execution_algo.is_empty() {
+        fields.push((8255, attrs.mifid2_execution_algo.clone()));
+    }
     // Letting the venue manage the price, how long the order runs, and what it
     // competes against. A caller states these and they reached nothing.
     if attrs.use_price_mgmt_algo > 0 {
@@ -1538,15 +1597,33 @@ fn push_order_attrs(
             }
         }
         K::PegMid { offset, price_cap } => {
-            // The two-part offset, stated as none. A midpoint peg can give its
-            // offset either as one continuous number, which is what a caller
-            // states here and what rides tag 211, or as a whole-tick part and a
-            // half-tick part together — and the counterpart sends a different
-            // order type entirely for that second form, chosen precisely when
-            // both of these are non-zero and both land on the destination's tick
-            // boundaries. Zero is how that form says "not this one".
-            fields.push((8403, "0.0".to_string()));
-            fields.push((8404, "0.0".to_string()));
+            // A midpoint peg states its offset one of two ways: as one
+            // continuous number on tag 211, or as a whole-tick part and a
+            // half-tick part together. The counterpart sends a different order
+            // type for the second form, chosen when both parts are set, and
+            // states no peg instruction beside it. Zero is how the first form
+            // says it is not the second.
+            //
+            // Both parts were sent as zero whatever the caller asked for, so a
+            // caller stating the two-part offset had it replaced with nothing
+            // and got the continuous form with no offset in it.
+            let whole = if attrs.mid_offset_at_whole == f64::MAX { 0.0 } else { attrs.mid_offset_at_whole };
+            let half = if attrs.mid_offset_at_half == f64::MAX { 0.0 } else { attrs.mid_offset_at_half };
+            fields.push((8403, format!("{whole:.6}")));
+            fields.push((8404, format!("{half:.6}")));
+            if whole != 0.0 && half != 0.0 {
+                // The two-part form. The order type stated above is the one for
+                // a continuous offset, so it is restated, and the instruction
+                // that names the peg is dropped — the type carries it.
+                for (tag, value) in fields.iter_mut() {
+                    if *tag == 40 {
+                        *value = "PMID2".to_string();
+                    } else if *tag == 18 {
+                        value.retain(|c| c != 'M');
+                    }
+                }
+                fields.retain(|(tag, value)| *tag != 18 || !value.is_empty());
+            }
             fields.push((211, format_price(*offset).to_string()));
             // The worst price the peg may reach, which IBKR documents as the
             // limit-price field for these types. A zero cap is no cap, and zero
@@ -2762,6 +2839,40 @@ mod tests {
         for t in ["8339=", "8402=", "8411=", "8412="] {
             assert!(!msg.contains(t), "{t} stated on an order that asked for nothing: {msg}");
         }
+    }
+
+    /// A midpoint peg whose offset is stated as two parts is the other form of
+    /// the order, and says so by its type rather than by an instruction.
+    #[test]
+    fn a_two_part_midpoint_offset_is_the_other_peg() {
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::PegMid { offset: crate::types::PRICE_SCALE / 100, price_cap: 0 },
+            b'0',
+            crate::types::OrderAttrs {
+                mid_offset_at_whole: 0.01,
+                mid_offset_at_half: 0.005,
+                ..Default::default()
+            },
+        );
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("40=").as_deref(), Some("PMID2"), "the two-part peg: {msg}");
+        assert!(tag("18=").is_none(), "the type carries it, not an instruction: {msg}");
+        assert!(tag("8403=").is_some_and(|v| v.starts_with("0.01")), "the whole part: {msg}");
+        assert!(tag("8404=").is_some_and(|v| v.starts_with("0.005")), "the half part: {msg}");
+    }
+
+    /// One part alone is not the two-part form, and the ordinary peg still
+    /// states its instruction.
+    #[test]
+    fn one_part_alone_is_still_the_ordinary_midpoint_peg() {
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::PegMid { offset: crate::types::PRICE_SCALE / 100, price_cap: 0 },
+            b'0',
+            crate::types::OrderAttrs { mid_offset_at_whole: 0.01, ..Default::default() },
+        );
+        let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+        assert_eq!(tag("40=").as_deref(), Some("P"), "still the ordinary peg: {msg}");
+        assert_eq!(tag("18=").as_deref(), Some("M"), "which states its instruction: {msg}");
     }
 
     /// A fill-or-kill order states that time in force on the wire.

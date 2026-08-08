@@ -391,6 +391,40 @@ pub struct OrderAttrs {
     /// Implied volatility for a volatility order, as a decimal (0.25 = 25%),
     /// on tag 9816. Zero means the caller set none.
     pub volatility: f64,
+    /// The window an order is live in, on tags 6670 and 6671.
+    pub active_start_time: String,
+    pub active_stop_time: String,
+    /// Never take liquidity, on tag 6605.
+    pub post_only: bool,
+    /// Whether the client asked for this order or the account holder did, on
+    /// tags 6488 and 1028 — which is a regulatory statement, not a preference.
+    pub solicited: bool,
+    pub manual_order_indicator: i32,
+    /// Route to the best bid or offer where the order is marketable, on tag 8265.
+    pub route_marketable_to_bbo: bool,
+    /// Take part in an auction only to correct an imbalance, on tag 6737.
+    pub imbalance_only: bool,
+    /// Take part in the opening auction, or stand out of it, on tags 6524 and 6562.
+    pub allow_pre_open: bool,
+    pub ignore_open_auction: bool,
+    /// One of several orders the venue treats as a unit, on tag 6406.
+    pub is_oms_container: bool,
+    /// Who is operating the account and on whose behalf, on tags 8089, 6207 and 6636.
+    pub ext_operator: String,
+    pub customer_account: String,
+    pub professional_customer: bool,
+    /// The future a spread prices against, on tag 6564.
+    pub ref_futures_con_id: i32,
+    /// Who decided the trade and who executed it, for European transaction
+    /// reporting, on tags 8237, 8243, 8254 and 8255.
+    pub mifid2_decision_maker: String,
+    pub mifid2_decision_algo: String,
+    pub mifid2_execution_trader: String,
+    pub mifid2_execution_algo: String,
+    /// A midpoint peg's offset stated as a whole-tick part and a half-tick
+    /// part, on tags 8403 and 8404. Both set is the other form of the peg.
+    pub mid_offset_at_whole: f64,
+    pub mid_offset_at_half: f64,
     /// Whether to let the venue manage the price of the order, on tag 8339.
     /// Zero is the caller saying nothing.
     pub use_price_mgmt_algo: i32,
@@ -514,6 +548,26 @@ impl Default for OrderAttrs {
             sweep_to_fill: Default::default(),
             all_or_none: Default::default(),
             volatility: Default::default(),
+            active_start_time: String::new(),
+            active_stop_time: String::new(),
+            post_only: false,
+            solicited: false,
+            manual_order_indicator: 0,
+            route_marketable_to_bbo: false,
+            imbalance_only: false,
+            allow_pre_open: false,
+            ignore_open_auction: false,
+            is_oms_container: false,
+            ext_operator: String::new(),
+            customer_account: String::new(),
+            professional_customer: false,
+            ref_futures_con_id: 0,
+            mifid2_decision_maker: String::new(),
+            mifid2_decision_algo: String::new(),
+            mifid2_execution_trader: String::new(),
+            mifid2_execution_algo: String::new(),
+            mid_offset_at_whole: f64::MAX,
+            mid_offset_at_half: f64::MAX,
             use_price_mgmt_algo: 0,
             duration: i32::MAX,
             min_compete_size: 0,

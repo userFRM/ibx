@@ -474,6 +474,26 @@ impl Order {
             // Stated by a caller and carried nowhere until now: an order that
             // asked to be re-priced as the underlying moved, or to stay inside
             // a band of underlying prices, was accepted and sent without either.
+            active_start_time: self.active_start_time.clone(),
+            active_stop_time: self.active_stop_time.clone(),
+            post_only: self.post_only,
+            solicited: self.solicited,
+            manual_order_indicator: if self.manual_order_indicator == i32::MAX { 0 } else { self.manual_order_indicator },
+            route_marketable_to_bbo: self.route_marketable_to_bbo,
+            imbalance_only: self.imbalance_only,
+            allow_pre_open: self.allow_pre_open,
+            ignore_open_auction: self.ignore_open_auction,
+            is_oms_container: self.is_oms_container,
+            ext_operator: self.ext_operator.clone(),
+            customer_account: self.customer_account.clone(),
+            professional_customer: self.professional_customer,
+            ref_futures_con_id: self.ref_futures_con_id,
+            mifid2_decision_maker: self.mifid2_decision_maker.clone(),
+            mifid2_decision_algo: self.mifid2_decision_algo.clone(),
+            mifid2_execution_trader: self.mifid2_execution_trader.clone(),
+            mifid2_execution_algo: self.mifid2_execution_algo.clone(),
+            mid_offset_at_whole: self.mid_offset_at_whole,
+            mid_offset_at_half: self.mid_offset_at_half,
             use_price_mgmt_algo: self.use_price_mgmt_algo,
             duration: self.duration,
             min_compete_size: if self.min_compete_size == i32::MAX { 0 } else { self.min_compete_size },
@@ -616,6 +636,26 @@ impl Order {
             || self.oca_type > 0
             || (self.volatility != f64::MAX && self.volatility > 0.0)
             || self.volatility_type > 0
+            || !self.active_start_time.is_empty()
+            || !self.active_stop_time.is_empty()
+            || self.post_only
+            || self.solicited
+            || (self.manual_order_indicator != i32::MAX && self.manual_order_indicator > 0)
+            || self.route_marketable_to_bbo
+            || self.imbalance_only
+            || self.allow_pre_open
+            || self.ignore_open_auction
+            || self.is_oms_container
+            || !self.ext_operator.is_empty()
+            || !self.customer_account.is_empty()
+            || self.professional_customer
+            || self.ref_futures_con_id > 0
+            || !self.mifid2_decision_maker.is_empty()
+            || !self.mifid2_decision_algo.is_empty()
+            || !self.mifid2_execution_trader.is_empty()
+            || !self.mifid2_execution_algo.is_empty()
+            || self.mid_offset_at_whole != f64::MAX
+            || self.mid_offset_at_half != f64::MAX
             || self.use_price_mgmt_algo > 0
             || self.duration != i32::MAX
             || (self.min_compete_size != i32::MAX && self.min_compete_size > 0)
@@ -1207,6 +1247,26 @@ mod tests {
             ("auto_cancel_date", |o| o.auto_cancel_date = "20261231".into()),
             ("clearing_account", |o| o.clearing_account = "U123".into()),
             ("clearing_intent", |o| o.clearing_intent = "IB".into()),
+            ("active_start_time", |o| o.active_start_time = "20260101-09:30:00".into()),
+            ("active_stop_time", |o| o.active_stop_time = "20260101-16:00:00".into()),
+            ("post_only", |o| o.post_only = true),
+            ("solicited", |o| o.solicited = true),
+            ("manual_order_indicator", |o| o.manual_order_indicator = 1),
+            ("route_marketable_to_bbo", |o| o.route_marketable_to_bbo = true),
+            ("imbalance_only", |o| o.imbalance_only = true),
+            ("allow_pre_open", |o| o.allow_pre_open = true),
+            ("ignore_open_auction", |o| o.ignore_open_auction = true),
+            ("is_oms_container", |o| o.is_oms_container = true),
+            ("ext_operator", |o| o.ext_operator = "OP1".into()),
+            ("customer_account", |o| o.customer_account = "CUST".into()),
+            ("professional_customer", |o| o.professional_customer = true),
+            ("ref_futures_con_id", |o| o.ref_futures_con_id = 12345),
+            ("mifid2_decision_maker", |o| o.mifid2_decision_maker = "DM".into()),
+            ("mifid2_decision_algo", |o| o.mifid2_decision_algo = "DA".into()),
+            ("mifid2_execution_trader", |o| o.mifid2_execution_trader = "ET".into()),
+            ("mifid2_execution_algo", |o| o.mifid2_execution_algo = "EA".into()),
+            ("mid_offset_at_whole", |o| o.mid_offset_at_whole = 0.01),
+            ("mid_offset_at_half", |o| o.mid_offset_at_half = 0.005),
             ("use_price_mgmt_algo", |o| o.use_price_mgmt_algo = 1),
             ("duration", |o| o.duration = 60),
             ("min_compete_size", |o| o.min_compete_size = 100),
@@ -1227,6 +1287,13 @@ mod tests {
             all_or_none: _, trigger_method: _, cash_qty: _, conditions: _,
             conditions_cancel_order: _, conditions_ignore_rth: _,
             volatility: _, volatility_type: _, use_price_mgmt_algo: _, duration: _,
+            active_start_time: _, active_stop_time: _, post_only: _, solicited: _,
+            manual_order_indicator: _, route_marketable_to_bbo: _, imbalance_only: _,
+            allow_pre_open: _, ignore_open_auction: _, is_oms_container: _,
+            ext_operator: _, customer_account: _, professional_customer: _,
+            ref_futures_con_id: _, mifid2_decision_maker: _, mifid2_decision_algo: _,
+            mifid2_execution_trader: _, mifid2_execution_algo: _,
+            mid_offset_at_whole: _, mid_offset_at_half: _,
             min_compete_size: _, compete_against_best_offset: _,
             continuous_update: _, reference_price_type: _,
             stock_range_lower: _, stock_range_upper: _,
