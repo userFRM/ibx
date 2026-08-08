@@ -268,7 +268,7 @@ pub fn ord_type_fix_str(t: u8) -> &'static str {
 
 /// What-If margin/commission preview response (execution report with tag 6091=1).
 /// Returned when a what-if order is submitted — the order is NOT placed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct WhatIfResponse {
     pub order_id: OrderId,
     pub instrument: InstrumentId,
@@ -279,6 +279,28 @@ pub struct WhatIfResponse {
     pub maint_margin_after: Price,
     pub equity_with_loan_after: Price,
     pub commission: Price,
+    /// Where a commission is given as a range rather than a number, and the
+    /// money it is quoted in. A preview that states the margin and not the cost
+    /// is half a preview.
+    pub min_commission: Price,
+    pub max_commission: Price,
+    pub commission_currency: String,
+    /// What the venue warned about, which is its own text and not the order's.
+    pub warning_text: String,
+}
+
+impl WhatIfResponse {
+    /// What the order does to the margin, which the venue states as before and
+    /// after and leaves to be taken as the difference.
+    pub fn init_margin_change(&self) -> Price {
+        self.init_margin_after - self.init_margin_before
+    }
+    pub fn maint_margin_change(&self) -> Price {
+        self.maint_margin_after - self.maint_margin_before
+    }
+    pub fn equity_with_loan_change(&self) -> Price {
+        self.equity_with_loan_after - self.equity_with_loan_before
+    }
 }
 
 /// Adjusted order type for adjustable stops (FIX tag 6261).
@@ -2145,10 +2167,18 @@ mod tests {
             maint_margin_after: 814_351 * (PRICE_SCALE / 100),
             equity_with_loan_after: 75_425_514 * (PRICE_SCALE / 100),
             commission: PRICE_SCALE,
+            min_commission: 0,
+            max_commission: 0,
+            commission_currency: String::new(),
+            warning_text: String::new(),
         };
-        let r2 = r; // Copy
+        // The reply carries the venue's own words now, so it is cloned rather
+        // than copied.
+        let r2 = r.clone();
         assert_eq!(r.init_margin_after, r2.init_margin_after);
         assert_eq!(r.commission, r2.commission);
+        // The change is the difference, which the venue leaves to be taken.
+        assert_eq!(r.init_margin_change(), r.init_margin_after - r.init_margin_before);
     }
 
     // --- AdjustedOrderType ---

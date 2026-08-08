@@ -1364,6 +1364,12 @@ impl CcpState {
                         maint_margin_after: parse_price_tag(parsed.get(&6093)),
                         equity_with_loan_after: parse_price_tag(parsed.get(&6094)),
                         commission: parse_price_tag(parsed.get(&6378)),
+                        min_commission: parse_price_tag(parsed.get(&6379)),
+                        max_commission: parse_price_tag(parsed.get(&6380)),
+                        commission_currency: parsed.get(&6381).cloned().unwrap_or_default(),
+                        // The venue's own warning, which rides its own tag and
+                        // not the order's text.
+                        warning_text: parsed.get(&6361).cloned().unwrap_or_default(),
                     };
                     log::info!("WhatIf response: clord={} initMargin={:.2}->{:.2} commission={:.2}",
                         clord_id,
@@ -1371,7 +1377,7 @@ impl CcpState {
                         response.init_margin_after as f64 / PRICE_SCALE as f64,
                         response.commission as f64 / PRICE_SCALE as f64);
                     context.retire_order(clord_id);
-                    shared.orders.push_what_if(response);
+                    shared.orders.push_what_if(response.clone());
                     emit(event_tx, Event::WhatIf(response));
                 }
             // A preview the venue refuses has no margin figures to state, so it
