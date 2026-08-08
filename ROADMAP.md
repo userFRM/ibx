@@ -245,6 +245,30 @@ vanish.
 
 Test count is not coverage. It states what is checked, not what fraction of venue behaviour is reached.
 
+### Measured against the counterpart's own published schema
+
+The counterpart carries a complete, named description of every message it
+exchanges — 198 messages and 941 fields, with the real name and number of each.
+Every type here was compared against it.
+
+| Type | Fields it names | Carried here |
+| --- | --- | --- |
+| An order | 150 | 149. The one missing states a hedge's largest size, and the field it rides is not established |
+| An execution | 21 | all but the exercise-or-lapse kind |
+| A contract | 21 | all |
+| A combination leg | 9 | 7 |
+| A contract's details | 64 | 17 |
+
+The last row is the gap. A caller asking what a contract is receives what it
+trades in and when, and not what it is: no industry, no category, none of the
+sizes it trades in, none of a bond's terms — its coupon, its ratings, whether it
+can be called or put — and none of a fund's, which is most of what a fund is.
+Five of those seventeen were being parsed off the definition already and handed
+to nobody; they are handed over now.
+
+An order and an execution are all but complete against that schema. A contract's
+details are a quarter of it.
+
 ### Whether the reference this was measured against is current
 
 It is. A build four releases newer was fetched and compared: the encoder that

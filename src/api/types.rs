@@ -894,6 +894,15 @@ pub struct ContractDetails {
     /// states them. Parsed all along and never surfaced, so a caller had no way
     /// to learn which rule to ask `req_market_rule` for.
     pub market_rule_ids: String,
+    /// What kind of stock it is, what it does, and where it is domiciled —
+    /// parsed off the definition all along and handed to nobody.
+    pub stock_type: String,
+    pub category: String,
+    pub country: String,
+    /// The identifier the contract is known by outside this venue.
+    pub isin: String,
+    /// The smallest quantity the contract trades in, which is not always one.
+    pub min_size: f64,
 }
 
 impl ContractDetails {
@@ -934,6 +943,11 @@ impl ContractDetails {
             liquid_hours: def.liquid_hours.clone(),
             time_zone_id: def.time_zone_id.clone(),
             market_rule_ids: def.market_rule_id.map(|r| r.to_string()).unwrap_or_default(),
+            stock_type: def.stock_type.clone(),
+            category: def.category.clone(),
+            country: def.country.clone(),
+            isin: def.isin.clone(),
+            min_size: def.min_size,
         }
     }
 }
