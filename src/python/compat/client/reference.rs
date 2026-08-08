@@ -317,7 +317,7 @@ impl EClient {
                 let list = pyo3::types::PyList::new(py, increments.iter().map(|(low, inc)| {
                     pyo3::types::PyTuple::new(py, [*low, *inc]).unwrap()
                 }))?;
-                self.wrapper.call_method1(py, "market_rule", (market_rule_id as i64, list.as_any()))?;
+                self.callback(py, "market_rule", (market_rule_id as i64, list.as_any()))?;
                 return Ok(());
             }
         log::warn!("req_market_rule: rule {market_rule_id} not in cache");

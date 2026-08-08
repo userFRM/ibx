@@ -92,7 +92,7 @@ impl EClient {
                 None,
             )?;
         }
-        self.wrapper.call_method0(py, "position_end")?;
+        self.callback(py, "position_end", ())?;
         Ok(())
     }
 
@@ -111,7 +111,7 @@ impl EClient {
     /// Request managed accounts list. Answered with every account this login
     /// holds, comma separated, matching the reference client.
     fn req_managed_accts(&self, py: Python<'_>) -> PyResult<()> {
-        self.wrapper.call_method1(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
+        self.callback(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
         Ok(())
     }
 
@@ -143,7 +143,7 @@ impl EClient {
                 None,
             )?;
         }
-        self.wrapper.call_method1(py, "account_update_multi_end", (req_id,))?;
+        self.callback(py, "account_update_multi_end", (req_id,))?;
         Ok(())
     }
 
@@ -171,7 +171,7 @@ impl EClient {
                 None,
             )?;
         }
-        self.wrapper.call_method1(py, "position_multi_end", (req_id,))?;
+        self.callback(py, "position_multi_end", (req_id,))?;
         Ok(())
     }
 

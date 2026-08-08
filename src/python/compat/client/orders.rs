@@ -199,7 +199,7 @@ impl EClient {
     #[pyo3(signature = (num_ids=1))]
     fn req_ids(&self, py: Python<'_>, num_ids: i32) -> PyResult<()> {
         let next_id = self.next_order_id.load(Ordering::Relaxed) as i64;
-        self.wrapper.call_method1(py, "next_valid_id", (next_id,))?;
+        self.callback(py, "next_valid_id", (next_id,))?;
         let _ = num_ids;
         Ok(())
     }
@@ -249,7 +249,7 @@ impl EClient {
                 None,
             )?;
         }
-        self.wrapper.call_method0(py, "open_order_end")?;
+        self.callback(py, "open_order_end", ())?;
         Ok(())
     }
 
@@ -340,9 +340,9 @@ impl EClient {
                 yield_redemption_date: se.commission_and_fees.yield_redemption_date.clone(),
             };
             let report_py = Py::new(py, report)?.into_any();
-            self.wrapper.call_method1(py, "commission_and_fees_report", (&report_py,))?;
+            self.callback(py, "commission_and_fees_report", (&report_py,))?;
         }
-        self.wrapper.call_method1(py, "exec_details_end", (req_id,))?;
+        self.callback(py, "exec_details_end", (req_id,))?;
         Ok(())
     }
 
@@ -440,7 +440,7 @@ impl EClient {
                 if let Some((c, o)) = tracked {
                     let c_py = Py::new(py, c)?.into_any();
                     let o_py = Py::new(py, o)?.into_any();
-                    self.wrapper.call_method1(py, "completed_order", (&c_py, &o_py, &state_py))?;
+                    self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
                 } else if let Some(info) = rich_info {
                     let c = Contract::from_api(&info.contract);
                     let o = Order {
@@ -458,17 +458,17 @@ impl EClient {
                     };
                     let c_py = Py::new(py, c)?.into_any();
                     let o_py = Py::new(py, o)?.into_any();
-                    self.wrapper.call_method1(py, "completed_order", (&c_py, &o_py, &state_py))?;
+                    self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
                 } else {
                     let c_py = Py::new(py, Contract::default())?.into_any();
                     let o_py = Py::new(py, Order::default())?.into_any();
-                    self.wrapper.call_method1(py, "completed_order", (&c_py, &o_py, &state_py))?;
+                    self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
                 }
                 // Bound `order_cache` growth: terminal entries are no longer
                 // needed once delivered through `completed_order`.
                 shared.orders.remove_order_info(co.order_id);
             }
-            self.wrapper.call_method0(py, "completed_orders_end")?;
+            self.callback(py, "completed_orders_end", ())?;
         }
         Ok(())
     }
