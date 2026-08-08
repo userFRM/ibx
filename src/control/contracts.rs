@@ -207,7 +207,11 @@ pub struct ContractDefinition {
     pub right: Option<OptionRight>,
     // Extended fields
     pub stock_type: String,
+    /// What the issuer does, from broadest to narrowest. The venue states all
+    /// three in one field separated by bars; a caller wants them apart.
+    pub industry: String,
     pub category: String,
+    pub subcategory: String,
     pub country: String,
     pub market_name: String,
     pub isin: String,
@@ -244,7 +248,9 @@ impl Default for ContractDefinition {
             strike: 0.0,
             right: None,
             stock_type: String::new(),
+            industry: String::new(),
             category: String::new(),
+            subcategory: String::new(),
             country: String::new(),
             market_name: String::new(),
             isin: String::new(),
@@ -497,8 +503,18 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&8077) { // StockType
         def.stock_type = v.clone();
     }
-    if let Some(v) = tags.get(&6624) { // Category (pipe-delimited: "Technology|Computers|Computers")
-        def.category = v.clone();
+    if let Some(v) = tags.get(&6624) {
+        // Stated as one field with bars between: broadest first, then narrower.
+        // Kept whole it read as a category nobody has, spelled with bars.
+        let mut parts = v.split('|');
+        def.industry = parts.next().unwrap_or_default().trim().to_string();
+        def.category = parts.next().unwrap_or_default().trim().to_string();
+        def.subcategory = parts.next().unwrap_or_default().trim().to_string();
+        // A value stating only one thing is the category, which is what a
+        // caller asking for one means by it.
+        if def.category.is_empty() && def.subcategory.is_empty() {
+            def.category = std::mem::take(&mut def.industry);
+        }
     }
     if let Some(v) = tags.get(&6911) { // Country
         def.country = v.clone();
@@ -1982,5 +1998,38 @@ mod tests {
         let defs = parse_secdef_responses(&single);
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].con_id, 265598);
+    }
+}
+
+#[cfg(test)]
+mod industry_tests {
+    use super::*;
+
+    fn secdef(extra: &str) -> Vec<u8> {
+        format!("35=d\u{1}320=R1\u{1}6008=756733\u{1}55=SPY\u{1}167=CS\u{1}\
+                 207=SMART\u{1}15=USD\u{1}{extra}")
+            .into_bytes()
+    }
+
+    /// The venue states what the issuer does as one field with bars between,
+    /// broadest first. Kept whole, a caller asking for the category was handed
+    /// all three of them with bars in the middle.
+    #[test]
+    fn what_the_issuer_does_arrives_as_three_things() {
+        let def = parse_secdef_response(&secdef("6624=Technology|Computers|Computers\u{1}"))
+            .expect("the definition parses");
+        assert_eq!(def.industry, "Technology");
+        assert_eq!(def.category, "Computers");
+        assert_eq!(def.subcategory, "Computers");
+    }
+
+    /// A value stating one thing is the category, which is what a caller asking
+    /// for a category means by it.
+    #[test]
+    fn one_thing_stated_is_the_category() {
+        let def = parse_secdef_response(&secdef("6624=Financial\u{1}"))
+            .expect("the definition parses");
+        assert_eq!(def.category, "Financial");
+        assert!(def.industry.is_empty() && def.subcategory.is_empty());
     }
 }
