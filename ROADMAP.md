@@ -245,6 +245,16 @@ vanish.
 
 Test count is not coverage. It states what is checked, not what fraction of venue behaviour is reached.
 
+### Whether the reference this was measured against is current
+
+It is. A build four releases newer was fetched and compared: the encoder that
+builds an order gained two fields, one of which this client already writes, and
+lost none. The parser that reads an execution report is identical — the same
+number of fields, none added, none removed.
+
+So the protocol did not move, and a measurement taken against the older build
+stands for the newer one.
+
 ### How much of an order this client writes
 
 Measured rather than asserted, by taking every field the counterpart's encoder
