@@ -474,6 +474,7 @@ impl Order {
             // Stated by a caller and carried nowhere until now: an order that
             // asked to be re-priced as the underlying moved, or to stay inside
             // a band of underlying prices, was accepted and sent without either.
+            advanced_error_override: self.advanced_error_override.clone(),
             active_start_time: self.active_start_time.clone(),
             active_stop_time: self.active_stop_time.clone(),
             post_only: self.post_only,
@@ -636,6 +637,7 @@ impl Order {
             || self.oca_type > 0
             || (self.volatility != f64::MAX && self.volatility > 0.0)
             || self.volatility_type > 0
+            || !self.advanced_error_override.is_empty()
             || !self.active_start_time.is_empty()
             || !self.active_stop_time.is_empty()
             || self.post_only
@@ -1247,6 +1249,7 @@ mod tests {
             ("auto_cancel_date", |o| o.auto_cancel_date = "20261231".into()),
             ("clearing_account", |o| o.clearing_account = "U123".into()),
             ("clearing_intent", |o| o.clearing_intent = "IB".into()),
+            ("advanced_error_override", |o| o.advanced_error_override = "1".into()),
             ("active_start_time", |o| o.active_start_time = "20260101-09:30:00".into()),
             ("active_stop_time", |o| o.active_stop_time = "20260101-16:00:00".into()),
             ("post_only", |o| o.post_only = true),
@@ -1287,6 +1290,7 @@ mod tests {
             all_or_none: _, trigger_method: _, cash_qty: _, conditions: _,
             conditions_cancel_order: _, conditions_ignore_rth: _,
             volatility: _, volatility_type: _, use_price_mgmt_algo: _, duration: _,
+            advanced_error_override: _,
             active_start_time: _, active_stop_time: _, post_only: _, solicited: _,
             manual_order_indicator: _, route_marketable_to_bbo: _, imbalance_only: _,
             allow_pre_open: _, ignore_open_auction: _, is_oms_container: _,
