@@ -267,6 +267,40 @@ impl EClient {
         Ok(())
     }
 
+    /// Answer to the name the reference client gives a method as well as the
+    /// name this one gives it.
+    ///
+    /// The reference client names its methods with the words run together, and
+    /// code written against it calls them that way. Every method here is named
+    /// with underscores, so that code stopped at its first call with the method
+    /// simply not there. Rather than write a second name for each of ninety
+    /// methods, the run-together name is translated back and the method this
+    /// client already has is returned.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the name this client has always used.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        let mut snake = String::with_capacity(name.len() + 4);
+        for (i, c) in name.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i != 0 {
+                    snake.push('_');
+                }
+                snake.extend(c.to_lowercase());
+            } else {
+                snake.push(c);
+            }
+        }
+        if snake != name
+            && let Ok(f) = slf.as_any().getattr(snake.as_str())
+        {
+            return Ok(f.unbind());
+        }
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "'EClient' object has no attribute '{name}'"
+        )))
+    }
+
     /// Disconnect from IB.
     fn disconnect(&self, py: Python<'_>) -> PyResult<()> {
         if let Some(tx) = self.control_tx.lock().unwrap().as_ref() {
