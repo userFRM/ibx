@@ -207,6 +207,10 @@ pub struct ContractDefinition {
     pub right: Option<OptionRight>,
     // Extended fields
     pub stock_type: String,
+    /// What a quoted price must be multiplied by to be a price. A contract
+    /// quoted in a hundredth of the currency states a hundred here, and a price
+    /// read without it is out by that factor.
+    pub price_magnifier: i32,
     /// What the issuer does, from broadest to narrowest. The venue states all
     /// three in one field separated by bars; a caller wants them apart.
     pub industry: String,
@@ -248,6 +252,7 @@ impl Default for ContractDefinition {
             strike: 0.0,
             right: None,
             stock_type: String::new(),
+            price_magnifier: 0,
             industry: String::new(),
             category: String::new(),
             subcategory: String::new(),
@@ -502,6 +507,11 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     // Extended fields
     if let Some(v) = tags.get(&8077) { // StockType
         def.stock_type = v.clone();
+    }
+    if let Some(v) = tags.get(&6021)
+        && let Ok(n) = v.trim().parse::<i32>()
+    {
+        def.price_magnifier = n;
     }
     if let Some(v) = tags.get(&6624) {
         // Stated as one field with bars between: broadest first, then narrower.
@@ -2021,6 +2031,15 @@ mod industry_tests {
         assert_eq!(def.industry, "Technology");
         assert_eq!(def.category, "Computers");
         assert_eq!(def.subcategory, "Computers");
+    }
+
+    /// A price quoted in a fraction of the currency is out by that fraction
+    /// unless the multiplier comes with it.
+    #[test]
+    fn a_price_carries_what_it_must_be_multiplied_by() {
+        let def = parse_secdef_response(&secdef("6021=100\u{1}"))
+            .expect("the definition parses");
+        assert_eq!(def.price_magnifier, 100);
     }
 
     /// A value stating one thing is the category, which is what a caller asking
