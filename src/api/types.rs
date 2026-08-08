@@ -897,6 +897,9 @@ pub struct ContractDetails {
     /// What kind of stock it is, what it does, and where it is domiciled —
     /// parsed off the definition all along and handed to nobody.
     pub stock_type: String,
+    /// What a quoted price must be multiplied by to be a price. A price read
+    /// without it is out by that factor, which is not a rounding error.
+    pub price_magnifier: i32,
     /// What the issuer does, broadest first. The venue states all three in one
     /// field; kept whole, a caller asking for the category was handed all of
     /// them with bars between.
@@ -949,6 +952,7 @@ impl ContractDetails {
             time_zone_id: def.time_zone_id.clone(),
             market_rule_ids: def.market_rule_id.map(|r| r.to_string()).unwrap_or_default(),
             stock_type: def.stock_type.clone(),
+            price_magnifier: def.price_magnifier,
             industry: def.industry.clone(),
             category: def.category.clone(),
             subcategory: def.subcategory.clone(),
