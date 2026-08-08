@@ -95,3 +95,26 @@ def test_a_name_that_is_no_method_is_still_refused():
     except AttributeError:
         return
     raise AssertionError("a name that names no method was answered")
+
+
+def test_the_base_wrapper_answers_to_the_reference_clients_names():
+    """Code written for the reference client asks the base class about its
+    callbacks — whether a subclass overrode one, or by calling the default
+    through super(). Under this class those names were simply absent."""
+    w = EWrapper()
+    for name in (
+        "nextValidId", "managedAccounts", "connectionClosed", "currentTime",
+        "contractDetails", "contractDetailsEnd", "execDetails", "orderStatus",
+        "tickPrice", "tickSize", "historicalData", "accountSummary",
+        "position", "openOrder", "completedOrder", "updateAccountValue",
+    ):
+        assert hasattr(w, name), f"the base class does not answer to {name}"
+
+
+def test_the_base_wrapper_still_refuses_a_name_that_is_no_callback():
+    w = EWrapper()
+    try:
+        w.thisIsNotACallback
+    except AttributeError:
+        return
+    raise AssertionError("a name that names no callback was answered with a do-nothing")
