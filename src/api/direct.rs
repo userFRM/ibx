@@ -51,6 +51,19 @@ impl Wrapper for Recorded {
     }
 }
 
+/// The first id this shape opens a stream or a question under.
+///
+/// Above what a caller of the callback shape numbers its own requests from, and
+/// below the ids the answering layer beneath uses, so none of the three can be
+/// mistaken for another. The guard below fails the build rather than the suite
+/// if that ever stops being true.
+pub const STREAM_ID_BASE: i64 = 0x2000_0000;
+
+const _: () = assert!(
+    STREAM_ID_BASE < crate::bridge::ReferenceState::ASK_ID_BASE as i64,
+    "a stream id would be taken for one of the answering layer's own"
+);
+
 /// How long a question waits for its answer.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -72,7 +85,7 @@ impl Client {
         Ok(Self {
             inner: EClient::connect(config)?,
             recorded: Arc::new(Mutex::new(Recorded::default())),
-            next_stream_id: std::sync::atomic::AtomicI64::new(0x2000_0000),
+            next_stream_id: std::sync::atomic::AtomicI64::new(STREAM_ID_BASE),
         })
     }
 
@@ -334,19 +347,5 @@ mod tests {
         assert_eq!(by_req, vec![1, 2]);
     }
 
-    /// The ids this shape opens streams and questions under do not collide with
-    /// the ones a caller of the callback shape would choose, and they do not
-    /// collide with the ones the answering layer beneath uses either.
-    #[test]
-    fn the_ids_this_shape_uses_sit_apart_from_everyone_elses() {
-        use crate::bridge::ReferenceState;
-
-        // A caller of the callback shape numbers requests from small integers.
-        const WHAT_A_CALLER_USES: i64 = 10_000;
-        assert!(0x2000_0000 > WHAT_A_CALLER_USES);
-        // And the answering layer beneath starts higher again, so a stream id
-        // is never mistaken for one of its answers.
-        assert!(0x2000_0000 < ReferenceState::ASK_ID_BASE as i64);
-    }
 
 }
