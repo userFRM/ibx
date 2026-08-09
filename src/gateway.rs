@@ -2184,33 +2184,36 @@ impl Gateway {
         shared.reference.set_smart_components(smart_components);
         shared.reference.note_smart_components_provisional(true);
 
-        // News providers: parse from CCP logon tag 6830, fall back to defaults.
-        // Wire format: "code1,name1;code2,name2;..." (tag value capped at 155 entries).
-        let news_providers: Vec<NewsProvider> = if self.raw_news_providers.is_empty() {
-            // Default list — only used when account-specific entitlement data is unavailable.
-            [
-                ("BRFG", "Briefing.com General Market Columns"),
-                ("BRFUPDN", "Briefing.com Analyst Actions"),
-                ("DJ-N", "Dow Jones Global Equity Trader"),
-                ("DJ-RTA", "Dow Jones Top Stories Asia Pacific"),
-                ("DJ-RTE", "Dow Jones Top Stories Europe"),
-                ("DJ-RTG", "Dow Jones Top Stories Global"),
-                ("DJ-RTPRO", "Dow Jones Top Stories Pro"),
-                ("DJNL", "Dow Jones Newsletters"),
-            ].iter().map(|(code, name)| NewsProvider {
-                code: code.to_string(), name: name.to_string(),
-            }).collect()
-        } else {
-            self.raw_news_providers.split(';').filter_map(|entry| {
+        // News providers, as the logon stated them and only as it stated them.
+        //
+        // There is no request for this list: the counterpart serves it from the
+        // logon alone, and an empty tag means the account is entitled to
+        // nothing. A fallback list of eight Dow Jones and Briefing providers
+        // used to stand in, which told a caller it held entitlements it does
+        // not — and a caller enumerating providers and then asking for an
+        // article gets a refusal it cannot explain.
+        //
+        // Wire format: "code1,name1;code2,name2;…".
+        let news_providers: Vec<NewsProvider> = self
+            .raw_news_providers
+            .split(';')
+            .filter_map(|entry| {
                 let entry = entry.trim();
-                if entry.is_empty() { return None; }
+                if entry.is_empty() {
+                    return None;
+                }
                 let (code, name) = entry.split_once(',')?;
                 Some(NewsProvider {
                     code: code.trim().to_string(),
                     name: name.trim().to_string(),
                 })
-            }).collect()
-        };
+            })
+            .collect();
+        if news_providers.is_empty() {
+            log::info!(
+                "the logon stated no news providers, so this account is entitled to none"
+            );
+        }
         shared.reference.set_news_providers(news_providers);
 
         // Soft dollar tiers: parse from CCP logon tag 6560, fall back to defaults.

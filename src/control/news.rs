@@ -88,14 +88,20 @@ pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
         format!("@@0:{providers_star}@")
     };
 
+    // The identity fields are an authorisation pair the news service issues,
+    // not something a client invents. The counterpart sends empty strings where
+    // it holds none, and the same slot is what carries a refusal back. This
+    // used to send the literal "dummy" for each — accepted, because the venue
+    // is not validating them for what is asked here, but not what the
+    // counterpart sends.
     let query_raw = format!(
         "conid_count=\"{count}\";\
          total_count=\"{count}\";\
-         ip=\"dummy\";\
-         fingerprint=\"dummy\";\
+         ip=\"\";\
+         fingerprint=\"\";\
          cmd=\"history\";\
          tags=\"{tags}\";\
-         url_key=\"dummy\\;{providers}\";\
+         url_key=\"\\;{providers}\";\
          ",
         count = req.max_results,
         tags = tags,
@@ -127,10 +133,10 @@ pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
 pub fn build_article_request_xml(req: &NewsArticleRequest) -> String {
     let query_raw = format!(
         "eId=\"{article_id}*{provider}\";\
-         ip=\"dummy\";\
-         fingerprint=\"dummy\";\
+         ip=\"\";\
+         fingerprint=\"\";\
          cmd=\"article_file\";\
-         url_key=\"dummy\";\
+         url_key=\"\";\
          ",
         article_id = req.article_id,
         provider = req.provider_code,
