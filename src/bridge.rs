@@ -821,15 +821,15 @@ impl ReferenceState {
     }
 
     pub fn drain_historical_data(&self) -> Vec<(u32, HistoricalResponse)> {
-        Self::drain_dispatchable(&self.historical_data)
+        self.historical_data.lock().unwrap().drain(..).collect()
     }
 
     pub fn drain_head_timestamps(&self) -> Vec<(u32, HeadTimestampResponse)> {
-        Self::drain_dispatchable(&self.head_timestamps)
+        self.head_timestamps.lock().unwrap().drain(..).collect()
     }
 
     pub fn drain_contract_details(&self) -> Vec<(u32, ContractDefinition)> {
-        Self::drain_dispatchable(&self.contract_details)
+        self.contract_details.lock().unwrap().drain(..).collect()
     }
 
     /// Whether the smart-component table came from the venue or is this
@@ -848,6 +848,56 @@ impl ReferenceState {
             .store(provisional, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// The definitions a dispatch loop should deliver, leaving an answering
+    /// call's own where that call will find them.
+    pub fn drain_contract_details_for_dispatch(&self) -> Vec<(u32, ContractDefinition)> {
+        Self::drain_dispatchable(&self.contract_details)
+    }
+
+    pub fn drain_historical_data_for_dispatch(&self) -> Vec<(u32, HistoricalResponse)> {
+        Self::drain_dispatchable(&self.historical_data)
+    }
+
+    pub fn drain_head_timestamps_for_dispatch(&self) -> Vec<(u32, HeadTimestampResponse)> {
+        Self::drain_dispatchable(&self.head_timestamps)
+    }
+
+    pub fn drain_matching_symbols_for_dispatch(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
+        Self::drain_dispatchable(&self.matching_symbols)
+    }
+
+    pub fn drain_histogram_data_for_dispatch(&self) -> Vec<(u32, Vec<HistogramEntry>)> {
+        Self::drain_dispatchable(&self.histogram_data)
+    }
+
+    pub fn drain_fundamental_data_for_dispatch(&self) -> Vec<(u32, String)> {
+        Self::drain_dispatchable(&self.fundamental_data)
+    }
+
+    pub fn drain_historical_schedules_for_dispatch(&self) -> Vec<(u32, HistoricalScheduleResponse)> {
+        Self::drain_dispatchable(&self.historical_schedules)
+    }
+
+    pub fn drain_contract_details_end_for_dispatch(&self) -> Vec<u32> {
+        let mut g = self.contract_details_end.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < g.len() {
+            if Self::is_ask_id(g[i]) { i += 1; } else { out.push(g.remove(i)); }
+        }
+        out
+    }
+
+    pub fn drain_historical_errors_for_dispatch(&self) -> Vec<(u32, i32, String)> {
+        let mut g = self.historical_errors.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < g.len() {
+            if Self::is_ask_id(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
+        }
+        out
+    }
+
     /// The first id this client's own answering calls ask under.
     ///
     /// Far above what a caller is likely to use, so an answer to one of these
@@ -864,10 +914,12 @@ impl ReferenceState {
     /// Drain what a dispatch loop should deliver, leaving behind what a waiting
     /// answering call is going to take.
     ///
-    /// Without this the two compete: whichever ran first emptied the queue, and
-    /// the other reported nothing arrived. A caller never sees an answering
-    /// call's id, so nothing is withheld from them here.
-    fn drain_dispatchable<T>(q: &Mutex<Vec<(u32, T)>>) -> Vec<(u32, T)> {
+    /// Only for a dispatch loop whose answering calls take their replies out of
+    /// these queues by id. A dispatch loop that *is* how its answering calls
+    /// receive must use the plain drain, or it withholds from itself — which is
+    /// what happened, and no offline test could see it, because the queues were
+    /// filled by hand rather than by a venue.
+    pub fn drain_dispatchable<T>(q: &Mutex<Vec<(u32, T)>>) -> Vec<(u32, T)> {
         let mut g = q.lock().unwrap();
         let mut out = Vec::new();
         let mut i = 0;
@@ -949,17 +1001,11 @@ impl ReferenceState {
     }
 
     pub fn drain_contract_details_end(&self) -> Vec<u32> {
-        let mut g = self.contract_details_end.lock().unwrap();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < g.len() {
-            if Self::is_ask_id(g[i]) { i += 1; } else { out.push(g.remove(i)); }
-        }
-        out
+        self.contract_details_end.lock().unwrap().drain(..).collect()
     }
 
     pub fn drain_matching_symbols(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
-        Self::drain_dispatchable(&self.matching_symbols)
+        self.matching_symbols.lock().unwrap().drain(..).collect()
     }
 
     pub fn drain_option_params(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
@@ -983,11 +1029,11 @@ impl ReferenceState {
     }
 
     pub fn drain_fundamental_data(&self) -> Vec<(u32, String)> {
-        Self::drain_dispatchable(&self.fundamental_data)
+        self.fundamental_data.lock().unwrap().drain(..).collect()
     }
 
     pub fn drain_histogram_data(&self) -> Vec<(u32, Vec<HistogramEntry>)> {
-        Self::drain_dispatchable(&self.histogram_data)
+        self.histogram_data.lock().unwrap().drain(..).collect()
     }
 
     pub fn drain_historical_ticks(&self) -> Vec<(u32, HistoricalTickData, String, bool)> {
@@ -995,17 +1041,11 @@ impl ReferenceState {
     }
 
     pub fn drain_historical_schedules(&self) -> Vec<(u32, HistoricalScheduleResponse)> {
-        Self::drain_dispatchable(&self.historical_schedules)
+        self.historical_schedules.lock().unwrap().drain(..).collect()
     }
 
     pub fn drain_historical_errors(&self) -> Vec<(u32, i32, String)> {
-        let mut g = self.historical_errors.lock().unwrap();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < g.len() {
-            if Self::is_ask_id(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
-        }
-        out
+        self.historical_errors.lock().unwrap().drain(..).collect()
     }
 
     /// Get cached market rules.

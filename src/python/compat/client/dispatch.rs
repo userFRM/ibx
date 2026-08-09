@@ -390,12 +390,12 @@ impl EClient {
 
         // Drain HMDS query errors -> error (ibx#186). Surface gateway-side validation
         // failures (e.g. "Invalid time length") that previously vanished silently.
-        for (req_id, code, msg) in shared.reference.drain_historical_errors() {
+        for (req_id, code, msg) in shared.reference.drain_historical_errors_for_dispatch() {
             call_wrapper!(self.wrapper, py, "error", (req_id as i64, code as i64, msg.as_str(), ""));
         }
 
         // Drain historical data -> historicalData + historicalDataEnd / historicalDataUpdate
-        let hist_data = shared.reference.drain_historical_data();
+        let hist_data = shared.reference.drain_historical_data_for_dispatch();
         for (req_id, response) in hist_data {
             let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
             for bar in &response.bars {
@@ -418,27 +418,27 @@ impl EClient {
         }
 
         // Drain head timestamps -> headTimestamp
-        let head_ts = shared.reference.drain_head_timestamps();
+        let head_ts = shared.reference.drain_head_timestamps_for_dispatch();
         for (req_id, response) in head_ts {
             call_wrapper!(self.wrapper, py, "head_timestamp",
                 (req_id as i64, response.head_timestamp.as_str()));
         }
 
         // Drain contract details -> contractDetails + contractDetailsEnd
-        let contract_defs = shared.reference.drain_contract_details();
+        let contract_defs = shared.reference.drain_contract_details_for_dispatch();
         for (req_id, def) in contract_defs {
             let details = ContractDetails::from_definition(py, &def);
             let details_py = Py::new(py, details)?.into_any();
             call_wrapper!(self.wrapper, py, "contract_details",
                 (req_id as i64, &details_py));
         }
-        let contract_ends = shared.reference.drain_contract_details_end();
+        let contract_ends = shared.reference.drain_contract_details_end_for_dispatch();
         for req_id in contract_ends {
             call_wrapper!(self.wrapper, py, "contract_details_end", (req_id as i64,));
         }
 
         // Drain matching symbols -> symbolSamples
-        let symbol_results = shared.reference.drain_matching_symbols();
+        let symbol_results = shared.reference.drain_matching_symbols_for_dispatch();
         for (req_id, matches) in symbol_results {
             let descriptions: Vec<Py<ContractDescription>> = matches.iter().map(|m| {
                 Py::new(py, ContractDescription {
@@ -532,13 +532,13 @@ impl EClient {
         }
 
         // Drain fundamental data -> fundamentalData
-        let fundamentals = shared.reference.drain_fundamental_data();
+        let fundamentals = shared.reference.drain_fundamental_data_for_dispatch();
         for (req_id, data) in fundamentals {
             call_wrapper!(self.wrapper, py, "fundamental_data", (req_id as i64, data.as_str()));
         }
 
         // Drain histogram data -> histogram_data
-        let histograms = shared.reference.drain_histogram_data();
+        let histograms = shared.reference.drain_histogram_data_for_dispatch();
         for (req_id, entries) in histograms {
             let tuples: Vec<Bound<'_, pyo3::types::PyTuple>> = entries.iter().map(|e| {
                 pyo3::types::PyTuple::new(py, &[e.price.into_pyobject(py).unwrap().into_any(), e.count.into_pyobject(py).unwrap().into_any()]).unwrap()
@@ -613,7 +613,7 @@ impl EClient {
         }
 
         // Drain historical schedules -> historical_schedule
-        let schedules = shared.reference.drain_historical_schedules();
+        let schedules = shared.reference.drain_historical_schedules_for_dispatch();
         for (req_id, resp) in schedules {
             let sessions: Vec<Bound<'_, pyo3::types::PyTuple>> = resp.sessions.iter().map(|s| {
                 pyo3::types::PyTuple::new(py, &[

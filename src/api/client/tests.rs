@@ -4120,3 +4120,55 @@ fn managed_accounts_names_every_account_the_login_holds() {
     client.req_managed_accts(&mut w);
     assert_eq!(w.0[1], "DU123,DU456,DU789");
 }
+
+#[cfg(test)]
+mod answering_calls_receive_through_dispatch {
+    use crate::bridge::SharedState;
+    use crate::control::contracts::ContractDefinition;
+
+    /// This shape's answering calls receive through the dispatch loop, so the
+    /// drain that feeds it must hand over their replies too.
+    ///
+    /// Withholding them was a change made for the other shape, whose answering
+    /// calls take replies out of the queue by id and so need them left alone.
+    /// One drain served both, and the change broke every answering call here
+    /// while every offline test kept passing — the queues in those tests are
+    /// filled by hand, so nothing depended on the drain being the delivery.
+    #[test]
+    fn a_reply_to_an_answering_call_is_not_withheld_from_the_dispatch_that_delivers_it() {
+        let shared = SharedState::new();
+        let ask_id = crate::bridge::ReferenceState::ASK_ID_BASE;
+        shared.reference.push_contract_details(
+            ask_id,
+            ContractDefinition { con_id: 756733, ..Default::default() },
+        );
+
+        let delivered = shared.reference.drain_contract_details();
+        assert_eq!(
+            delivered.len(),
+            1,
+            "an answering call's reply was withheld from the drain that delivers it"
+        );
+        assert_eq!(delivered[0].0, ask_id);
+    }
+
+    /// The other shape still gets its replies left where it will find them.
+    #[test]
+    fn the_dispatch_that_does_not_deliver_them_still_leaves_them() {
+        let shared = SharedState::new();
+        let ask_id = crate::bridge::ReferenceState::ASK_ID_BASE;
+        shared.reference.push_contract_details(
+            ask_id,
+            ContractDefinition { con_id: 756733, ..Default::default() },
+        );
+        shared.reference.push_contract_details(
+            7,
+            ContractDefinition { con_id: 111, ..Default::default() },
+        );
+
+        let delivered = shared.reference.drain_contract_details_for_dispatch();
+        assert_eq!(delivered.len(), 1, "a caller's own reply was withheld");
+        assert_eq!(delivered[0].0, 7);
+        assert_eq!(shared.reference.take_contract_details_for(ask_id).len(), 1);
+    }
+}
