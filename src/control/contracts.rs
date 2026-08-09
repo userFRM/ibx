@@ -75,7 +75,13 @@ pub const TAG_MARKET_RULE_START: u32 = 6019; // value "1" starts a new rule bloc
 pub const TAG_MARKET_RULE_ID: u32 = 6031;    // rule ID integer
 pub const TAG_LOW_EDGE: u32 = 6023;          // price increment threshold
 pub const TAG_INCREMENT: u32 = 6027;         // tick size at that price level
-pub const TAG_MARKET_RULE_END: u32 = 6030;   // end marker
+/// Opens the table of price increments in a rule. What follows, until the size
+/// table opens, is a low edge and an increment per price band.
+pub const TAG_PRICE_INCREMENT_COUNT: u32 = 6026;
+/// Opens the table of SIZE increments in the same rule, under the same low-edge
+/// and increment tags as the price table. Treating this as the end of the rule
+/// stopped before it, which is why a contract's size increment was never read.
+pub const TAG_SIZE_INCREMENT_COUNT: u32 = 6030;
 
 /// Security types (IB internal encoding).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -327,6 +333,9 @@ pub struct ContractDefinition {
     pub last_trade_time: String,
     /// The day a bond was issued.
     pub issue_date: String,
+    /// The size a contract may be dealt in, from the rule's size table.
+    pub size_increment: f64,
+    pub suggested_size_increment: f64,
     pub last_price_precision: f64,
     pub last_size_precision: f64,
     pub settlement_method: String,
@@ -412,6 +421,8 @@ impl Default for ContractDefinition {
             under_symbol: String::new(),
             last_trade_time: String::new(),
             issue_date: String::new(),
+            size_increment: 0.0,
+            suggested_size_increment: 0.0,
             last_price_precision: 0.0,
             last_size_precision: 0.0,
             settlement_method: String::new(),
@@ -708,6 +719,22 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     {
         def.min_tick = min_increment;
     }
+
+    // The smallest size the rule states, from its size table. Taken from the
+    // rule the venue sent rather than assumed: a contract dealt in whole units
+    // and one dealt in fractions state different tables.
+    if let Some(size) = parse_market_rules(data)
+        .iter()
+        .flat_map(|r| r.size_increments.iter())
+        .map(|b| b.increment)
+        .find(|v| *v > 0.0)
+    {
+        def.size_increment = size;
+        // The reference client publishes a suggested size beside the required
+        // one. The venue states one table; where it states no separate
+        // suggestion, the suggestion is the increment itself.
+        def.suggested_size_increment = size;
+    }
     if let Some(v) = tags.get(&TAG_MULTIPLIER) {
         def.multiplier = v.parse().unwrap_or(1.0);
     }
@@ -949,6 +976,12 @@ pub struct PriceIncrement {
 pub struct MarketRule {
     pub rule_id: i32,
     pub price_increments: Vec<PriceIncrement>,
+    /// The size a contract may be dealt in, per size band.
+    ///
+    /// Stated in the same rule under the same tags as the price bands, after a
+    /// count that opens a second table. Reading stopped at that count, so this
+    /// was empty for every contract.
+    pub size_increments: Vec<PriceIncrement>,
 }
 
 /// Parse market rules from a raw message.
@@ -967,9 +1000,15 @@ pub fn parse_market_rules(data: &[u8]) -> Vec<MarketRule> {
             }
     }
 
+    /// Which of a rule's two tables the bands now arriving belong to. Both are
+    /// stated under the same tags, and only the count that opened them says
+    /// which is which.
+    enum Table { Price, Size }
+
     let mut rules: Vec<MarketRule> = Vec::new();
     let mut current: Option<MarketRule> = None;
     let mut pending_low_edge: Option<f64> = None;
+    let mut filling = Table::Price;
 
     for (tag, val) in &tags {
         match *tag {
@@ -981,8 +1020,10 @@ pub fn parse_market_rules(data: &[u8]) -> Vec<MarketRule> {
                 current = Some(MarketRule {
                     rule_id: 0,
                     price_increments: Vec::new(),
+                    size_increments: Vec::new(),
                 });
                 pending_low_edge = None;
+                filling = Table::Price;
             }
             TAG_MARKET_RULE_ID => {
                 if let Some(ref mut rule) = current {
@@ -998,13 +1039,22 @@ pub fn parse_market_rules(data: &[u8]) -> Vec<MarketRule> {
                 if let Some(ref mut rule) = current
                     && let Some(low_edge) = pending_low_edge.take()
                         && let Ok(increment) = val.parse::<f64>() {
-                            rule.price_increments.push(PriceIncrement { low_edge, increment });
+                            let band = PriceIncrement { low_edge, increment };
+                            match filling {
+                                Table::Price => rule.price_increments.push(band),
+                                Table::Size => rule.size_increments.push(band),
+                            }
                         }
             }
-            TAG_MARKET_RULE_END => {
-                if let Some(rule) = current.take() {
-                    rules.push(rule);
-                }
+            TAG_PRICE_INCREMENT_COUNT => {
+                filling = Table::Price;
+                pending_low_edge = None;
+            }
+            // Opens the size table. This used to end the rule, so everything
+            // stated after it — the sizes a contract may be dealt in — was
+            // never read.
+            TAG_SIZE_INCREMENT_COUNT => {
+                filling = Table::Size;
                 pending_low_edge = None;
             }
             _ => {}
@@ -1600,7 +1650,7 @@ mod tests {
                 (TAG_MARKET_RULE_ID, "26"),
                 (TAG_LOW_EDGE, "0"),
                 (TAG_INCREMENT, "0.01"),
-                (TAG_MARKET_RULE_END, "1"),
+                (TAG_SIZE_INCREMENT_COUNT, "1"),
             ],
             1,
         );
@@ -1642,7 +1692,7 @@ mod tests {
                 (TAG_INCREMENT, "0.0001"),
                 (TAG_LOW_EDGE, "1"),
                 (TAG_INCREMENT, "0.01"),
-                (TAG_MARKET_RULE_END, "1"),
+                (TAG_SIZE_INCREMENT_COUNT, "1"),
             ],
             1,
         );
@@ -2168,7 +2218,7 @@ mod tests {
                 (TAG_INCREMENT, "0.01"),
                 (TAG_LOW_EDGE, "1"),
                 (TAG_INCREMENT, "0.01"),
-                (TAG_MARKET_RULE_END, "1"),
+                (TAG_SIZE_INCREMENT_COUNT, "1"),
             ],
             1,
         );
@@ -2192,7 +2242,7 @@ mod tests {
                 (TAG_MARKET_RULE_ID, "26"),
                 (TAG_LOW_EDGE, "0"),
                 (TAG_INCREMENT, "0.01"),
-                (TAG_MARKET_RULE_END, "1"),
+                (TAG_SIZE_INCREMENT_COUNT, "1"),
                 // Rule 2: nickel increments above $1
                 (TAG_MARKET_RULE_START, "1"),
                 (TAG_MARKET_RULE_ID, "42"),
@@ -2200,7 +2250,7 @@ mod tests {
                 (TAG_INCREMENT, "0.01"),
                 (TAG_LOW_EDGE, "1"),
                 (TAG_INCREMENT, "0.05"),
-                (TAG_MARKET_RULE_END, "1"),
+                (TAG_SIZE_INCREMENT_COUNT, "1"),
             ],
             1,
         );
@@ -2765,5 +2815,43 @@ mod size_and_precision_tests {
         let def = parse_secdef_response(frame).expect("the definition parses");
         assert_eq!(def.settlement_method, "C");
         assert_eq!(def.real_expiration_date, "20260918");
+    }
+}
+
+#[cfg(test)]
+mod size_table_tests {
+    use super::*;
+
+    /// A rule states two tables under the same tags: price bands first, then
+    /// size bands after a second count. That count used to end the rule, so
+    /// everything after it — the sizes a contract may be dealt in — was never
+    /// read, and the last price band was silently the last thing seen.
+    #[test]
+    fn a_rules_size_table_is_read_as_well_as_its_price_table() {
+        let data = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01\
+                     6019=1\x016031=26\x01\
+                     6026=1\x016023=0\x016027=0.01\x01\
+                     6030=1\x016023=0\x016027=40\x01";
+        let rules = parse_market_rules(data);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].price_increments.len(), 1, "the price band is read");
+        assert_eq!(rules[0].price_increments[0].increment, 0.01);
+        assert_eq!(rules[0].size_increments.len(), 1, "the size band is read");
+        assert_eq!(rules[0].size_increments[0].increment, 40.0);
+
+        let def = parse_secdef_response(data).expect("the definition parses");
+        assert_eq!(def.min_tick, 0.01, "the price table gives the tick");
+        assert_eq!(def.size_increment, 40.0, "the size table gives the size");
+    }
+
+    /// A rule stating only price bands leaves the size unset rather than
+    /// borrowing the price increment for it.
+    #[test]
+    fn a_rule_with_no_size_table_states_no_size() {
+        let data = b"35=d\x01320=R1\x016008=1\x0155=SPY\x01\
+                     6019=1\x016031=26\x016026=1\x016023=0\x016027=0.05\x01";
+        let def = parse_secdef_response(data).expect("the definition parses");
+        assert_eq!(def.min_tick, 0.05);
+        assert_eq!(def.size_increment, 0.0);
     }
 }

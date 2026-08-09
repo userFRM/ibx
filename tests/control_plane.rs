@@ -44,7 +44,7 @@ fn contract_request_response_roundtrip() {
             (TAG_MARKET_RULE_ID, "26"),
             (TAG_LOW_EDGE, "0"),
             (TAG_INCREMENT, "0.01"),
-            (TAG_MARKET_RULE_END, "1"),
+            (TAG_SIZE_INCREMENT_COUNT, "1"),
         ],
         11,
     );
