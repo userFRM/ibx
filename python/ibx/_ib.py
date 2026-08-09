@@ -12,32 +12,20 @@ market with nothing in it.
 
 from __future__ import annotations
 
-from .ibx import Contract, EClient, EWrapper
+import threading
 
-
-class _Collector(EWrapper):
-    """A wrapper that keeps what arrives instead of acting on it.
-
-    The facade's calls take their own answers out of the session by request id,
-    so this exists to satisfy the client's constructor and to keep a record of
-    anything that arrives unbidden — above all the venue's errors, which a
-    caller will want after the fact.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.errors: list[tuple[int, int, str, str]] = []
-
-    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
-        self.errors.append((reqId, errorCode, errorString, advancedOrderRejectJson))
+from ._state import LiveState
+from .ibx import Contract, EClient
 
 
 class IB:
     """One session, asked questions directly."""
 
     def __init__(self) -> None:
-        self.wrapper = _Collector()
+        self.wrapper = LiveState()
         self.client = EClient(self.wrapper)
+        self._pump: threading.Thread | None = None
+        self._stop = threading.Event()
 
     # -- session ---------------------------------------------------------
 
@@ -73,10 +61,98 @@ class IB:
             paper=paper,
             readonly=readonly,
         )
+        self._start_pump()
         return self
 
+    def _start_pump(self) -> None:
+        """Keep dispatch running so the live state stays current.
+
+        A daemon thread, so it never holds a program open. It owns dispatch;
+        the calls that answer take their replies by request id and are left
+        alone by it, so the two run together rather than competing.
+        """
+        if self._pump is not None and self._pump.is_alive():
+            return
+        self._stop.clear()
+
+        def pump():
+            try:
+                # Loops until the session closes, releasing the interpreter
+                # lock while it waits, so it costs a thread and not a core.
+                self.client.run()
+            except Exception:
+                # A session that has gone ends the pump. connect() starts a new
+                # one; nothing here tries to reconnect behind the caller's back.
+                return
+
+        self._pump = threading.Thread(target=pump, name="ibx-pump", daemon=True)
+        self._pump.start()
+
     def disconnect(self) -> None:
+        self._stop.set()
         self.client.disconnect()
+        if self._pump is not None:
+            self._pump.join(timeout=2.0)
+            self._pump = None
+
+    # -- what the session currently holds --------------------------------
+
+    def positions(self):
+        return self.wrapper.snapshot_positions()
+
+    def portfolio(self):
+        return self.wrapper.snapshot_portfolio()
+
+    def accountValues(self):
+        return self.wrapper.snapshot_account_values()
+
+    def trades(self):
+        return self.wrapper.snapshot_trades()
+
+    def openTrades(self):
+        return [t for t in self.wrapper.snapshot_trades() if t.isActive()]
+
+    def orders(self):
+        return [t.order for t in self.wrapper.snapshot_trades() if t.order is not None]
+
+    def openOrders(self):
+        return [t.order for t in self.openTrades() if t.order is not None]
+
+    def fills(self):
+        return self.wrapper.snapshot_fills()
+
+    def executions(self):
+        return [f.execution for f in self.wrapper.snapshot_fills()]
+
+    def managedAccounts(self):
+        return self.wrapper.snapshot_accounts()
+
+    # -- asking the venue to start sending it ----------------------------
+
+    def reqPositions(self):
+        self.client.req_positions()
+        return self.positions()
+
+    def reqAccountUpdates(self, account=""):
+        self.client.req_account_updates(True, account)
+        return self.accountValues()
+
+    def reqOpenOrders(self):
+        self.client.req_open_orders()
+        return self.openTrades()
+
+    def reqAllOpenOrders(self):
+        self.client.req_all_open_orders()
+        return self.trades()
+
+    def reqExecutions(self, execFilter=None):
+        del execFilter
+        self.client.req_executions(1)
+        return self.fills()
+
+    def reqManagedAccts(self):
+        self.client.req_managed_accts()
+        return self.managedAccounts()
 
     def isConnected(self) -> bool:
         return self.client.isConnected()
@@ -170,15 +246,15 @@ class IB:
 #: impression, and so a caller gets a named refusal instead of an AttributeError
 #: that reads like a typo.
 _NOT_YET = frozenset({
-    "waitOnUpdate", "loopUntil", "setTimeout", "managedAccounts", "accountValues",
-    "accountSummary", "portfolio", "positions", "pnl", "pnlSingle", "trades",
-    "openTrades", "orders", "openOrders", "fills", "executions", "ticker",
+    "waitOnUpdate", "loopUntil", "setTimeout", 
+    "accountSummary", "pnl", "pnlSingle", 
+    "ticker",
     "tickers", "pendingTickers", "realtimeBars", "newsTicks", "newsBulletins",
     "reqTickers", "bracketOrder", "oneCancelsAll", "whatIfOrder", "placeOrder",
-    "cancelOrder", "reqGlobalCancel", "reqCurrentTime", "reqAccountUpdates",
+    "cancelOrder", "reqGlobalCancel", "reqCurrentTime", 
     "reqAccountUpdatesMulti", "reqAccountSummary", "reqAutoOpenOrders",
-    "reqOpenOrders", "reqAllOpenOrders", "reqCompletedOrders", "reqExecutions",
-    "reqPositions", "reqPnL", "cancelPnL", "reqPnLSingle", "cancelPnLSingle",
+    "reqCompletedOrders", 
+    "reqPnL", "cancelPnL", "reqPnLSingle", "cancelPnLSingle",
     "reqMarketRule", "reqRealTimeBars", "cancelRealTimeBars",
     "cancelHistoricalData", "reqHistoricalSchedule", "reqHistoricalTicks",
     "reqMarketDataType", "reqMktData", "cancelMktData", "reqTickByTickData",

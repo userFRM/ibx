@@ -14,7 +14,7 @@ Counts here are measured, not asserted. Where a number is an estimate it says so
 | The gateway's settings | 11 with a counterpart, 7 without | all 11 carried, all 7 named |
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
-| The asynchronous wrapper's shape | 90 methods | 7 carried, 83 open |
+| The asynchronous wrapper's shape | 90 methods | 26 carried, 65 open |
 | The Rust client's shape | 77 methods | not started |
 
 ## 1. The wire
@@ -77,7 +77,7 @@ to a callback.
 ### The asynchronous wrapper — 7 of 90
 
 `ibx.IB()`. Its names, its argument names, its defaults, and its habit of
-filling a contract in place. The 83 not carried raise and name themselves; a
+filling a contract in place. The rest raise and name themselves; a
 test holds that list honest, so it cannot drift into claiming more than is
 there.
 
@@ -88,13 +88,16 @@ Three kinds of work sit behind the 83, and they are not the same size:
 2. **Calls needing an answering form first** — the request exists and returns
    through a callback; the answering version has to be built beneath it.
    Roughly twenty.
-3. **Live state.** `positions()`, `trades()`, `openOrders()`, `tickers()`,
-   `pendingTickers` return objects that a background loop keeps current, and
-   `Ticker` and `Trade` mutate as the session runs. This is an architecture — a
-   pump owning dispatch, and objects that change under the caller — not a list
-   of methods. It is the part that cannot be faked one method at a time, and
-   doing it badly would be worse than not doing it: a stale object that looks
-   live is a wrong number with no warning on it.
+3. **Live state.** Carried for what the account holds and what its orders are
+   doing: `positions()`, `portfolio()`, `accountValues()`, `trades()`,
+   `openTrades()`, `orders()`, `openOrders()`, `fills()`, `executions()`,
+   `managedAccounts()`. A pump owns dispatch and the callbacks record rather
+   than act; a reader gets a snapshot taken under a lock, so a list cannot
+   change while it is being read.
+
+   Quotes are not carried yet — `tickers()`, `pendingTickers`, `reqTickers()`.
+   A `Ticker` accumulates several kinds of tick into one object and says which
+   of them are stale, which is more than recording what arrives.
 
 ### The Rust client — not started
 
@@ -104,9 +107,10 @@ idea, so the work is naming and coverage rather than design.
 
 ## Order of work
 
-1. Live state for the asynchronous wrapper, because everything else in that
-   shape leans on it and because faking it is worse than lacking it.
-2. The thin wrappers, which are volume rather than difficulty.
+1. ~~Live state for what the account holds and what its orders are doing.~~
+   Carried.
+2. Live quotes, which are the remaining half of live state.
+3. The thin wrappers, which are volume rather than difficulty.
 3. The answering forms beneath the rest.
 4. The Rust shape, once the answering layer is complete enough to name.
 5. The wire's remaining refusals, which need a live session.
