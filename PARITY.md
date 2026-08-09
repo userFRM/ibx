@@ -16,6 +16,7 @@ below, and the second one is the one that matters.
 | --- | --- | --- |
 | What reaches the venue | 76 caller-facing requests | 35 wire, 26 from the session, 8 withdraw nothing, 4 refuse, 3 missing, 0 silent |
 | The wire | 77 canonical calls | 69 served, 8 answer that they cannot be |
+| A contract's fields | what the reference client publishes | all but four, and every stated field kept whether named or not |
 | The gateway's settings | 11 with a counterpart, 7 without | all 11 carried, all 7 named |
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
