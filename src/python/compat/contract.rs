@@ -2090,6 +2090,10 @@ pub struct ContractDetails {
     #[pyo3(get, set)]
     pub issue_date: String,
     #[pyo3(get, set)]
+    pub size_increment: f64,
+    #[pyo3(get, set)]
+    pub suggested_size_increment: f64,
+    #[pyo3(get, set)]
     pub last_price_precision: f64,
     #[pyo3(get, set)]
     pub last_size_precision: f64,
@@ -2222,6 +2226,8 @@ impl Clone for ContractDetails {
             under_symbol: self.under_symbol.clone(),
             last_trade_time: self.last_trade_time.clone(),
             issue_date: self.issue_date.clone(),
+            size_increment: self.size_increment,
+            suggested_size_increment: self.suggested_size_increment,
             last_price_precision: self.last_price_precision,
             last_size_precision: self.last_size_precision,
             settlement_method: self.settlement_method.clone(),
@@ -2320,6 +2326,8 @@ impl ContractDetails {
             under_symbol: String::new(),
             last_trade_time: String::new(),
             issue_date: String::new(),
+            size_increment: 0.0,
+            suggested_size_increment: 0.0,
             last_price_precision: 0.0,
             last_size_precision: 0.0,
             settlement_method: String::new(),
@@ -2412,6 +2420,8 @@ impl ContractDetails {
             under_symbol: def.under_symbol.clone(),
             last_trade_time: def.last_trade_time.clone(),
             issue_date: def.issue_date.clone(),
+            size_increment: def.size_increment,
+            suggested_size_increment: def.suggested_size_increment,
             last_price_precision: def.last_price_precision,
             last_size_precision: def.last_size_precision,
             settlement_method: def.settlement_method.clone(),

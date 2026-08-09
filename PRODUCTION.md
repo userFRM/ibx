@@ -76,7 +76,7 @@ fund, an option and a future.
 | Underlying id, symbol, kind | **wired, proved** |
 | Last trade time, issue date, economic-value rule | **wired, proved** |
 | Settlement method, price and size precision | **wired** |
-| Size increment, suggested size increment | **open** — the grammar is known: the second size-delimited table in the rule block, which the rule parser stops before reaching |
+| Size increment, suggested size increment | **wired** — a rule states two tables under the same tags; reading stopped at the count that opens the second |
 | Market rule ids | **open** — assembled per venue, not stated as a list |
 | Economic-value multiplier | **open** — no field for it on a definition; it arrives by another path |
 
