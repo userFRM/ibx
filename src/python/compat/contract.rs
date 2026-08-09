@@ -2030,6 +2030,10 @@ pub struct ContractDetails {
     #[pyo3(get, set)]
     pub isin: String,
     #[pyo3(get, set)]
+    pub cusip: String,
+    #[pyo3(get, set)]
+    pub sec_id_list: Vec<(String, String)>,
+    #[pyo3(get, set)]
     pub min_size: f64,
     #[pyo3(get, set)]
     pub industry: String,
@@ -2184,6 +2188,8 @@ impl Clone for ContractDetails {
             category: self.category.clone(),
             country: self.country.clone(),
             isin: self.isin.clone(),
+            cusip: self.cusip.clone(),
+            sec_id_list: self.sec_id_list.clone(),
             min_size: self.min_size,
             trading_hours: self.trading_hours.clone(),
             liquid_hours: self.liquid_hours.clone(),
@@ -2215,6 +2221,8 @@ impl ContractDetails {
             category: String::new(),
             country: String::new(),
             isin: String::new(),
+            cusip: String::new(),
+            sec_id_list: Vec::new(),
             min_size: 0.0,
             industry: String::new(),
             subcategory: String::new(),
@@ -2296,6 +2304,8 @@ impl ContractDetails {
             category: def.category.clone(),
             country: def.country.clone(),
             isin: def.isin.clone(),
+            cusip: def.cusip.clone(),
+            sec_id_list: def.sec_id_list.clone(),
             min_size: def.min_size,
             industry: def.industry.clone(),
             subcategory: def.subcategory.clone(),
