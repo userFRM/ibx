@@ -832,6 +832,18 @@ impl CcpState {
                 // here; the row the path below delivers is deduplicated
                 // against these by contract id.
                 {
+                    // What a definition carried that nothing here reads. The
+                    // point of asking about a contract is to be told about it,
+                    // and a field that arrives and is dropped is a fact about
+                    // the contract nobody can see. Recorded rather than guessed
+                    // at, so the gap is measurable from a real reply.
+                    let unread = crate::control::contracts::unread_definition_tags(msg);
+                    if !unread.is_empty() {
+                        shared.market.note_unread_wire(
+                            "definition",
+                            unread.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(","),
+                        );
+                    }
                     let all = crate::control::contracts::parse_secdef_responses(msg);
                     if all.len() > 1
                         && let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())

@@ -1,0 +1,128 @@
+//! Ask the venue about a few contracts and report what it told us that nothing
+//! reads.
+//!
+//! Seven fields the reference client publishes are not carried here, and the
+//! tags that hold them could not be settled from anything offline. They arrive
+//! on a real reply or they do not exist, so this asks for real replies and
+//! names every tag on them that the parser ignores.
+//!
+//! Reads only. It places nothing and cancels nothing.
+//!
+//!     IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_definitions
+
+use std::time::Duration;
+
+use ibx::api::client::{EClient, EClientConfig};
+use ibx::api::types::Contract;
+
+/// One contract of each kind whose fields differ: a share, a fund, a bond, an
+/// option and a future. A definition only carries the fields its kind has, so
+/// asking about one kind answers for one kind.
+fn subjects() -> Vec<(&'static str, Contract)> {
+    let stk = |symbol: &str| Contract {
+        symbol: symbol.to_string(),
+        sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(),
+        currency: "USD".to_string(),
+        ..Default::default()
+    };
+    vec![
+        ("a share", stk("SPY")),
+        ("a share on a venue outside the United States", Contract {
+            symbol: "VOD".to_string(),
+            sec_type: "STK".to_string(),
+            exchange: "LSE".to_string(),
+            currency: "GBP".to_string(),
+            ..Default::default()
+        }),
+        ("a fund", stk("VFIAX")),
+        ("an index", Contract {
+            symbol: "SPX".to_string(),
+            sec_type: "IND".to_string(),
+            exchange: "CBOE".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("a future", Contract {
+            symbol: "ES".to_string(),
+            sec_type: "FUT".to_string(),
+            exchange: "CME".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+    ]
+}
+
+fn main() {
+    let _ = env_logger::try_init();
+
+    let username = std::env::var("IB_USERNAME").unwrap_or_default();
+    let password = std::env::var("IB_PASSWORD").unwrap_or_default();
+    if username.trim().is_empty() || password.trim().is_empty() {
+        eprintln!(
+            "IB_USERNAME/IB_PASSWORD unset. This reads from real servers and \
+             does nothing without them."
+        );
+        std::process::exit(2);
+    }
+
+    let config = EClientConfig {
+        username,
+        password,
+        host: std::env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string()),
+        paper: true,
+        core_id: None,
+        code_provider: None,
+        ..Default::default()
+    };
+
+    let client = match EClient::connect(&config) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("could not open a session: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("session open");
+
+    for (what, contract) in subjects() {
+        match client.contract_details(&contract) {
+            Ok(found) => println!(
+                "  {what:<48} {} definition(s)",
+                found.len()
+            ),
+            // A contract this account cannot see is not a failure of the
+            // capture: the tags come from whichever replies do arrive.
+            Err(e) => println!("  {what:<48} {e}"),
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    // Give the last reply a moment to be parsed before reading what it left.
+    std::thread::sleep(Duration::from_secs(1));
+
+    let unread = client.unread_wire();
+    let mut tags: Vec<u32> = unread
+        .iter()
+        .filter(|(kind, _)| *kind == "definition")
+        .flat_map(|(_, list)| list.split(','))
+        .filter_map(|t| t.trim().parse::<u32>().ok())
+        .collect();
+    tags.sort_unstable();
+    tags.dedup();
+
+    println!();
+    if tags.is_empty() {
+        println!("every tag on every definition received was read");
+    } else {
+        println!("tags received on a definition that nothing reads ({}):", tags.len());
+        for chunk in tags.chunks(16) {
+            println!(
+                "  {}",
+                chunk.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ")
+            );
+        }
+    }
+
+    client.disconnect();
+}

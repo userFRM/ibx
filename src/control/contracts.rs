@@ -490,6 +490,59 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
     out
 }
 
+/// Every tag this parser reads from a definition.
+///
+/// Written out rather than derived, and checked against the parser by a test,
+/// so that asking "what arrived that we did not read" has an answer that cannot
+/// quietly drift as fields are added.
+pub fn tags_read_from_a_definition() -> Vec<u32> {
+    let source = include_str!("contracts.rs");
+    let mut seen: Vec<u32> = Vec::new();
+    // The parser reads a definition by looking tags up in one map, so every tag
+    // it reads appears as a lookup on that map.
+    for cap in source.split("tags.get(&").skip(1) {
+        let token: String = cap.chars().take_while(|c| *c != ')').collect();
+        let tag = token
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .or_else(|| named_tag(token.trim()));
+        if let Some(tag) = tag
+            && !seen.contains(&tag)
+        {
+            seen.push(tag);
+        }
+    }
+    seen.sort_unstable();
+    seen
+}
+
+/// The value of a tag the parser refers to by name rather than by number.
+fn named_tag(name: &str) -> Option<u32> {
+    let source = include_str!("contracts.rs");
+    let needle = format!("pub const {name}: u32 = ");
+    let at = source.find(&needle)? + needle.len();
+    let digits: String = source[at..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// The tags a definition carried that nothing here reads.
+///
+/// The point of asking a venue for a contract is to be told about it, and a
+/// field that arrives and is dropped is a fact about the contract nobody can
+/// see. This names them so the gap is measurable rather than suspected.
+pub fn unread_definition_tags(data: &[u8]) -> Vec<u32> {
+    let read = tags_read_from_a_definition();
+    let mut unread: Vec<u32> = fix::fix_parse(data)
+        .keys()
+        .copied()
+        .filter(|t| !read.contains(t))
+        .collect();
+    unread.sort_unstable();
+    unread.dedup();
+    unread
+}
+
 pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     let tags = fix::fix_parse(data);
 
@@ -2256,5 +2309,31 @@ mod industry_tests {
             .expect("the definition parses");
         assert_eq!(def.category, "Financial");
         assert!(def.industry.is_empty() && def.subcategory.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod unread_tag_tests {
+    use super::*;
+
+    /// The list of tags the parser reads is derived from the parser itself, so
+    /// it cannot fall behind as fields are added.
+    #[test]
+    fn the_tags_read_include_the_ones_known_to_be_read() {
+        let read = tags_read_from_a_definition();
+        for known in [TAG_IB_CON_ID, TAG_EV_RULE, 6577, 6624] {
+            assert!(read.contains(&known), "{known} is read but not reported as read");
+        }
+        assert!(read.len() > 40, "only {} tags reported as read", read.len());
+    }
+
+    /// A tag the venue sends that nothing reads is named, so the gap is
+    /// measurable rather than suspected.
+    #[test]
+    fn a_tag_that_arrives_and_is_dropped_is_named() {
+        let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x019999=something\x01";
+        let unread = unread_definition_tags(frame);
+        assert!(unread.contains(&9999), "an unread tag was not reported");
+        assert!(!unread.contains(&6008), "a tag that is read was reported unread");
     }
 }
