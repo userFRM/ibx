@@ -43,6 +43,27 @@ fn subjects() -> Vec<(&'static str, Contract)> {
             currency: "USD".to_string(),
             ..Default::default()
         }),
+        // A bond states its maturity, issue date, coupon and ratings; an
+        // option states its underlying. The fields still unnamed here belong to
+        // those kinds, and a share's definition never carries them — which is
+        // why asking only about shares learned nothing about them.
+        ("a bond", Contract {
+            symbol: "912797ND9".to_string(),
+            sec_type: "BOND".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("an option", Contract {
+            symbol: "SPY".to_string(),
+            sec_type: "OPT".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            last_trade_date_or_contract_month: "20260918".to_string(),
+            strike: 600.0,
+            right: "C".to_string(),
+            ..Default::default()
+        }),
         ("a future", Contract {
             symbol: "ES".to_string(),
             sec_type: "FUT".to_string(),
@@ -102,11 +123,11 @@ fn main() {
                 // joins the two.
                 if let Some(d) = found.first() {
                     println!(
-                        "        named: stockType={:?} validExchanges={:?} marketRule={:?} minSize={:?}",
-                        d.stock_type,
-                        d.valid_exchanges.chars().take(60).collect::<String>(),
-                        d.min_tick,
-                        d.min_size,
+                        "        named: underConId={} underSymbol={:?} underSecType={:?} lastTradeTime={:?}",
+                        d.under_con_id,
+                        d.under_symbol,
+                        d.under_sec_type,
+                        d.last_trade_time,
                     );
                     for (tag, value) in &d.unnamed_fields {
                         let shown: String = value.chars().take(48).collect();

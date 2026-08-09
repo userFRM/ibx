@@ -41,6 +41,16 @@ pub const TAG_EV_RULE: u32 = 6858;
 /// The venues SMART routes a contract to, comma separated, in the order whose
 /// positions a quote's exchange bitmask refers to.
 pub const TAG_SMART_VENUES: u32 = 6177;
+/// The contract a derivative is written on: its id, its symbol and its kind.
+///
+/// Settled from a real option's definition rather than inferred: the id it
+/// carried was the id of the share it is written on, and the symbol beside it
+/// was that share's symbol.
+pub const TAG_UNDERLYING_CON_ID: u32 = 6346;
+pub const TAG_UNDERLYING_SYMBOL: u32 = 6855;
+pub const TAG_UNDERLYING_SEC_TYPE: u32 = 310;
+/// The time of day a contract stops trading, stated beside the date it stops.
+pub const TAG_LAST_TRADE_TIME: u32 = 8584;
 pub const TAG_IB_STOCK_TYPE: u32 = 8077;
 
 // Market rule tags.
@@ -289,6 +299,15 @@ pub struct ContractDefinition {
     ///
     /// Sent per contract, and only where SMART routing applies, so it is empty
     /// for a contract listed on one venue.
+    /// The contract a derivative is written on.
+    pub under_con_id: u32,
+    pub under_symbol: String,
+    /// The time of day trading stops, stated separately from the date.
+    ///
+    /// A caller holding only the date knows which day a contract stops trading
+    /// and not when, and an option that stops at three in the afternoon is not
+    /// one that stops at the close.
+    pub last_trade_time: String,
     pub smart_venues: Vec<String>,
     pub unnamed_fields: Vec<(u32, String)>,
     pub min_size: f64,
@@ -367,6 +386,9 @@ impl Default for ContractDefinition {
             isin: String::new(),
             cusip: String::new(),
             sec_id_list: Vec::new(),
+            under_con_id: 0,
+            under_symbol: String::new(),
+            last_trade_time: String::new(),
             smart_venues: Vec::new(),
             unnamed_fields: Vec::new(),
             min_size: 0.0,
@@ -682,6 +704,20 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&200) { def.contract_month = v.clone(); }
     if let Some(v) = tags.get(&6577) { def.under_sec_type = v.clone(); }
     if let Some(v) = tags.get(&TAG_EV_RULE) { def.ev_rule = v.clone(); }
+    if let Some(v) = tags.get(&TAG_UNDERLYING_CON_ID) {
+        def.under_con_id = v.parse().unwrap_or(0);
+    }
+    if let Some(v) = tags.get(&TAG_UNDERLYING_SYMBOL) {
+        def.under_symbol = v.clone();
+    }
+    if let Some(v) = tags.get(&TAG_UNDERLYING_SEC_TYPE)
+        && def.under_sec_type.is_empty()
+    {
+        def.under_sec_type = v.clone();
+    }
+    if let Some(v) = tags.get(&TAG_LAST_TRADE_TIME) {
+        def.last_trade_time = v.clone();
+    }
     if let Some(v) = tags.get(&TAG_SMART_VENUES) {
         def.smart_venues = v
             .split(',')
@@ -2475,5 +2511,46 @@ mod smart_venue_tests {
         // A venue with no known abbreviation gets none rather than one that
         // would collide with a venue that has one.
         assert_eq!(exchange_letter("SOMEWHERE"), "");
+    }
+}
+
+#[cfg(test)]
+mod underlying_tests {
+    use super::*;
+
+    /// An option is written on something, and its definition says what. These
+    /// were settled from a real reply rather than inferred: the id the venue
+    /// sent was the id of the share the option is written on, and the symbol
+    /// beside it was that share's symbol.
+    #[test]
+    fn a_derivative_names_the_contract_it_is_written_on() {
+        let frame = b"35=d\x01320=R1\x016008=36233584\x0155=SPY\x01167=OPT\x01\
+                      6346=756733\x016855=SPY\x01310=STK\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert_eq!(def.under_con_id, 756733);
+        assert_eq!(def.under_symbol, "SPY");
+        assert_eq!(def.under_sec_type, "STK");
+        // And it is not the contract's own id.
+        assert_ne!(def.under_con_id, def.con_id);
+    }
+
+    /// Trading stops at a time of day, not only on a date. A caller holding
+    /// the date alone knows which day a contract stops and not when, and an
+    /// option that stops at three in the afternoon is not one that stops at
+    /// the close.
+    #[test]
+    fn the_time_trading_stops_is_read_as_well_as_the_date() {
+        let frame = b"35=d\x01320=R1\x016008=1\x0155=SPY\x018583=20260918\x018584=150000\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert_eq!(def.last_trade_time, "150000");
+    }
+
+    /// A share is written on nothing, and says so by sending none of them.
+    #[test]
+    fn a_contract_written_on_nothing_names_nothing() {
+        let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01167=CS\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert_eq!(def.under_con_id, 0);
+        assert!(def.under_symbol.is_empty());
     }
 }
