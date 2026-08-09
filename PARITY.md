@@ -15,7 +15,7 @@ Counts here are measured, not asserted. Where a number is an estimate it says so
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
 | The asynchronous wrapper's shape | 90 methods | 90 carried |
-| The Rust client's shape | 77 methods | 36 carried, 41 open |
+| The Rust client's shape | 77 methods | 56 carried, 21 open |
 
 ## 1. The wire
 
@@ -112,7 +112,7 @@ What that took, in three parts of very different size:
    `reqTickers()` — subscribe, wait for a quote, unsubscribe — is not carried
    yet.
 
-### The Rust client — 36 of 77
+### The Rust client — 56 of 77
 
 `ibx::api::Client`, beside `EClient` rather than instead of it. A call that
 answers returns the answer; a call that only sends returns nothing, because
@@ -129,7 +129,17 @@ bulletins, market rules, scanner parameters, depth exchanges, market data type,
 account updates and the P&L pair.
 
 `place_order` returns the id the venue answers under. A caller with nothing to
-correlate on cannot tell which of several answers is theirs.
+correlate on cannot tell which of several answers is theirs, and the same holds
+for a scanner subscription and a display group.
+
+Four calls reach requests this client answers as not served — implied
+volatility, option price, and the advisor pair. They report that rather than
+pretending, which is the honest shape for a request this protocol does not
+carry.
+
+What is open is the part of that shape this client has no equivalent for at all:
+its builder and configuration, the notice and order-update streams, the server's
+own version and clock, and message verification.
 
 Streams are carried as `Subscription<T>`, which a caller loops over. It does two
 things a bare loop over a queue would not. It **withdraws**: a dropped
