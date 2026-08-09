@@ -17,6 +17,7 @@ use super::super::contract::{Contract, Order, CommissionAndFeesReport, Execution
 impl EClient {
     /// Place an order.
     fn place_order(&self, py: Python<'_>, order_id: i64, contract: &Contract, order: &Order) -> PyResult<()> {
+        self.core.refuse_if_readonly("an order").map_err(PyRuntimeError::new_err)?;
         // Convert and validate order params first (fail fast, no connection needed)
         let mut api_order = order.to_api();
         api_order.conditions = order.convert_conditions(py);
@@ -129,6 +130,7 @@ impl EClient {
         &self, py: Python<'_>, req_id: i64, contract: &Contract, exercise_action: i32,
         exercise_quantity: i32, account: &str, _override: i32,
     ) -> PyResult<()> {
+        self.core.refuse_if_readonly("an exercise").map_err(PyRuntimeError::new_err)?;
         // The session is what names the account an exercise would be taken on,
         // so it is established before the one the caller named is compared
         // against it. Without a session there is nothing to compare and nothing
@@ -161,6 +163,7 @@ impl EClient {
     /// Cancel an order.
     #[pyo3(signature = (order_id, manual_order_cancel_time=""))]
     fn cancel_order(&self, py: Python<'_>, order_id: i64, manual_order_cancel_time: &str) -> PyResult<()> {
+        self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
         let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: order_id as u64 }))?;
         let _ = manual_order_cancel_time;
@@ -171,6 +174,7 @@ impl EClient {
     /// the local order id. The cancel frame is orderId-only, so the local id is
     /// looked up from the open-order cache; fails if `perm_id` is not tracked.
     fn cancel_order_by_perm_id(&self, py: Python<'_>, perm_id: i64) -> PyResult<()> {
+        self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
         if perm_id == 0 {
             return Err(PyRuntimeError::new_err("cancel_order_by_perm_id: perm_id must be non-zero"));
         }
@@ -186,6 +190,7 @@ impl EClient {
 
     /// Cancel all orders globally.
     fn req_global_cancel(&self, py: Python<'_>) -> PyResult<()> {
+        self.core.refuse_if_readonly("a global cancel").map_err(PyRuntimeError::new_err)?;
         let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let count = shared.market.instrument_count();

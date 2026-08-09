@@ -420,6 +420,12 @@ pub enum GroupEvent {
 }
 
 pub struct ClientCore {
+    /// Whether this session refuses to send anything that changes a position.
+    ///
+    /// The counterpart carries the same control, and a caller running a
+    /// research or reporting program wants the guarantee at the client rather
+    /// than in their own discipline. Set once when the session opens.
+    pub readonly: std::sync::atomic::AtomicBool,
     // reqId <-> InstrumentId mapping
     pub req_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     pub instrument_to_req: Mutex<HashMap<InstrumentId, i64>>,
@@ -493,6 +499,7 @@ impl Default for ClientCore {
 impl ClientCore {
     pub fn new() -> Self {
         Self {
+            readonly: std::sync::atomic::AtomicBool::new(false),
             req_to_instrument: Mutex::new(HashMap::new()),
             instrument_to_req: Mutex::new(HashMap::new()),
             con_id_to_instrument: Mutex::new(HashMap::new()),
@@ -523,6 +530,26 @@ impl ClientCore {
     }
 
     /// Clear all per-session state so the owning client can reconnect.
+    /// Refuse this session anything that changes a position.
+    pub fn set_readonly(&self, on: bool) {
+        self.readonly.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_readonly(&self) -> bool {
+        self.readonly.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The refusal a read-only session gives, naming the call that was made.
+    ///
+    /// Loud rather than silent: a program that believes it placed an order and
+    /// did not is worse off than one that stops.
+    pub fn refuse_if_readonly(&self, what: &str) -> Result<(), String> {
+        if self.is_readonly() {
+            return Err(format!("this session is read-only; {what} was not sent"));
+        }
+        Ok(())
+    }
+
     pub fn reset(&self) {
         self.req_to_instrument.lock().unwrap().clear();
         self.instrument_to_req.lock().unwrap().clear();

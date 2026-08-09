@@ -173,7 +173,7 @@ impl EClient {
     /// owns its own state, sockets, and engine thread, and ``connect()`` does
     /// not serialize across instances. If you pin engines via ``core_id``, give
     /// each a distinct value. See ibx#203 / ibx#207.
-    #[pyo3(signature = (host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None))]
+    #[pyo3(signature = (host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false))]
     fn connect(
         &self,
         py: Python<'_>,
@@ -187,10 +187,15 @@ impl EClient {
         ib_key_timeout_secs: Option<u64>,
         ib_key_token_sub_type: Option<String>,
         code_provider: Option<Py<PyAny>>,
+        readonly: bool,
     ) -> PyResult<()> {
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
+
+        // Set before anything is sent, so there is no window in which the
+        // session is open and the refusal is not yet in force.
+        self.core.set_readonly(readonly);
 
         let code_provider = code_provider.map(code_provider_from_py);
 

@@ -16,8 +16,9 @@ use super::EClient;
 impl EClient {
     /// Create a fake "connected" EClient backed by a SharedState + channel.
     #[doc(hidden)]
-    #[pyo3(signature = (account_id="TEST123".to_string()))]
-    fn _test_connect(&self, account_id: String) -> PyResult<()> {
+    #[pyo3(signature = (account_id="TEST123".to_string(), readonly=false))]
+    fn _test_connect(&self, account_id: String, readonly: bool) -> PyResult<()> {
+        self.core.set_readonly(readonly);
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
         }

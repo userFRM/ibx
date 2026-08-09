@@ -41,15 +41,38 @@ class IB:
 
     # -- session ---------------------------------------------------------
 
-    def connect(self, host="", port=0, clientId=1, timeout=4, readonly=False, account=""):
+    def connect(
+        self,
+        host="",
+        port=0,
+        clientId=1,
+        timeout=4,
+        readonly=False,
+        account="",
+        username="",
+        password="",
+        paper=True,
+    ):
         """Open the session.
 
-        The host and port of the reference client's local process mean nothing
-        here — there is no local process. They are accepted and ignored so that
-        a program written against that client needs no edit.
+        The host and port name a local process in the wrapper this follows.
+        There is no local process here — this client logs in itself — so they
+        are accepted and ignored, and the credentials are given here instead.
+        A program that already holds a session needs no edit; one that relied
+        on a running gateway to have logged in supplies the login here.
+
+        ``readonly`` is carried through: a read-only session refuses to send
+        anything that changes a position, and says so rather than appearing to
+        have sent it.
         """
-        del host, port, timeout, readonly
-        self.client.connect(clientId=clientId, account=account)
+        del host, port, timeout, account
+        self.client.connect(
+            client_id=clientId,
+            username=username,
+            password=password,
+            paper=paper,
+            readonly=readonly,
+        )
         return self
 
     def disconnect(self) -> None:
