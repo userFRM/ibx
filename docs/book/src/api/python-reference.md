@@ -447,7 +447,7 @@ def req_all_open_orders()
 
 #### `req_auto_open_orders`
 
-Automatically bind future orders to this client.
+Binding an order placed elsewhere to this session.  The reference client asks a local process to hand over orders a person entered by hand in front of it. There is no such process here and no such person, so there is nothing to hand over, and this reports that rather than returning as though the binding were in place.  Returning quietly was worse than either alternative: a caller that asked to be given those orders and was told nothing waits for orders that are never coming, with nothing to say why.
 
 ```python
 def req_auto_open_orders(b_auto_bind))
