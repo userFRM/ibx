@@ -5,11 +5,13 @@
 
 pub mod client;
 pub mod direct;
+pub mod subscription;
 pub mod reliability;
 pub mod types;
 pub mod wrapper;
 
 pub use client::{EClient, EClientConfig};
 pub use direct::Client;
+pub use subscription::Subscription;
 pub use types::*;
 pub use wrapper::Wrapper;
