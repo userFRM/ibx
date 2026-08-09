@@ -51,6 +51,10 @@ pub const TAG_UNDERLYING_SYMBOL: u32 = 6855;
 pub const TAG_UNDERLYING_SEC_TYPE: u32 = 310;
 /// The time of day a contract stops trading, stated beside the date it stops.
 pub const TAG_LAST_TRADE_TIME: u32 = 8584;
+/// The day a bond was issued. Standard in this protocol, and stated only by
+/// contracts that have an issuer — which is why asking about shares never saw
+/// it.
+pub const TAG_ISSUE_DATE: u32 = 225;
 pub const TAG_IB_STOCK_TYPE: u32 = 8077;
 
 // Market rule tags.
@@ -308,6 +312,8 @@ pub struct ContractDefinition {
     /// and not when, and an option that stops at three in the afternoon is not
     /// one that stops at the close.
     pub last_trade_time: String,
+    /// The day a bond was issued.
+    pub issue_date: String,
     pub smart_venues: Vec<String>,
     pub unnamed_fields: Vec<(u32, String)>,
     pub min_size: f64,
@@ -389,6 +395,7 @@ impl Default for ContractDefinition {
             under_con_id: 0,
             under_symbol: String::new(),
             last_trade_time: String::new(),
+            issue_date: String::new(),
             smart_venues: Vec::new(),
             unnamed_fields: Vec::new(),
             min_size: 0.0,
@@ -717,6 +724,9 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     }
     if let Some(v) = tags.get(&TAG_LAST_TRADE_TIME) {
         def.last_trade_time = v.clone();
+    }
+    if let Some(v) = tags.get(&TAG_ISSUE_DATE) {
+        def.issue_date = v.clone();
     }
     if let Some(v) = tags.get(&TAG_SMART_VENUES) {
         def.smart_venues = v
@@ -2552,5 +2562,29 @@ mod underlying_tests {
         let def = parse_secdef_response(frame).expect("the definition parses");
         assert_eq!(def.under_con_id, 0);
         assert!(def.under_symbol.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod issue_date_tests {
+    use super::*;
+
+    /// A bond was issued on a day, and its definition states which. Only a
+    /// contract with an issuer states it, which is why asking about shares
+    /// never saw the field and it looked absent from the wire.
+    #[test]
+    fn a_bond_states_the_day_it_was_issued() {
+        let frame = b"35=d\x01320=R1\x016008=851160433\x0155=IBM\x01167=CORP\x01225=20260203\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert_eq!(def.issue_date, "20260203");
+    }
+
+    /// A share has no issuer in this sense and states none, which is empty
+    /// rather than missing.
+    #[test]
+    fn a_share_states_no_issue_date() {
+        let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01167=CS\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert!(def.issue_date.is_empty());
     }
 }

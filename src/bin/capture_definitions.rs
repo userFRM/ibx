@@ -35,7 +35,6 @@ fn subjects() -> Vec<(&'static str, Contract)> {
             currency: "GBP".to_string(),
             ..Default::default()
         }),
-        ("a fund", stk("VFIAX")),
         ("an index", Contract {
             symbol: "SPX".to_string(),
             sec_type: "IND".to_string(),
@@ -43,14 +42,35 @@ fn subjects() -> Vec<(&'static str, Contract)> {
             currency: "USD".to_string(),
             ..Default::default()
         }),
-        // A bond states its maturity, issue date, coupon and ratings; an
-        // option states its underlying. The fields still unnamed here belong to
-        // those kinds, and a share's definition never carries them — which is
-        // why asking only about shares learned nothing about them.
-        ("a bond", Contract {
-            symbol: "912797ND9".to_string(),
+        // A bond states its maturity, issue date, coupon and ratings. Which
+        // description resolves one is itself unknown, so several are tried and
+        // whichever answers is the one that teaches something.
+        ("a bond by issuer", Contract {
+            symbol: "IBM".to_string(),
             sec_type: "BOND".to_string(),
             exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("a treasury by issuer", Contract {
+            symbol: "T-BILL".to_string(),
+            sec_type: "BOND".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("a bond by its identifier", Contract {
+            sec_id_type: "ISIN".to_string(),
+            sec_id: "US912797ND90".to_string(),
+            sec_type: "BOND".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("a fund", Contract {
+            symbol: "VWELX".to_string(),
+            sec_type: "FUND".to_string(),
+            exchange: "FUNDSERV".to_string(),
             currency: "USD".to_string(),
             ..Default::default()
         }),
@@ -109,10 +129,13 @@ fn main() {
     for (what, contract) in subjects() {
         match client.contract_details(&contract) {
             Ok(found) => {
-                let kept = found
-                    .first()
-                    .map(|d| d.unnamed_fields.len())
-                    .unwrap_or(0);
+                // The richest reply, not the first. A lookup answering with
+                // many contracts often answers with a sparse header first, and
+                // reading only that learns nothing about the kind.
+                let richest = found
+                    .iter()
+                    .max_by_key(|d| d.unnamed_fields.len());
+                let kept = richest.map(|d| d.unnamed_fields.len()).unwrap_or(0);
                 println!(
                     "  {what:<44} {:>2} definition(s), {kept:>2} field(s) kept unnamed",
                     found.len()
@@ -121,7 +144,7 @@ fn main() {
                 // date reads as a date, a contract id as a contract id. The
                 // field list is known; the numbers are not, and a value is what
                 // joins the two.
-                if let Some(d) = found.first() {
+                if let Some(d) = richest {
                     println!(
                         "        named: underConId={} underSymbol={:?} underSecType={:?} lastTradeTime={:?}",
                         d.under_con_id,
