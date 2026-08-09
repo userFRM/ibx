@@ -13,8 +13,9 @@ market with nothing in it.
 from __future__ import annotations
 
 import threading
+import time
 
-from ._state import LiveState
+from ._state import BracketOrder, LiveState
 from .ibx import Contract, EClient
 
 
@@ -176,6 +177,215 @@ class IB:
         self._subscribed.pop(req_id, None)
         self.client.cancel_mkt_data(req_id)
 
+
+
+    # -- the rest of the live state ---------------------------------------
+
+    def accountSummary(self, account=""):
+        del account
+        return self.wrapper.snapshot_account_values()
+
+    def pnl(self, account="", modelCode=""):
+        del account, modelCode
+        return self.wrapper.snapshot_pnl()
+
+    def pnlSingle(self, account="", modelCode="", conId=0):
+        del account, modelCode, conId
+        return self.wrapper.snapshot_pnl_single()
+
+    def newsBulletins(self):
+        return self.wrapper.snapshot_bulletins()
+
+    def newsTicks(self):
+        return self.wrapper.snapshot_news_ticks()
+
+    def realtimeBars(self):
+        return self.wrapper.snapshot_bars()
+
+    def cancelPnL(self, account="", modelCode=""):
+        del account, modelCode
+        self.client.cancel_pnl(self._req_id)
+
+    def cancelPnLSingle(self, account="", modelCode="", conId=0):
+        del account, modelCode, conId
+        self.client.cancel_pnl_single(self._req_id)
+
+    # -- waiting -----------------------------------------------------------
+
+    def waitOnUpdate(self, timeout=0):
+        """Wait for something to arrive.
+
+        A pump is already running, so this is a sleep with a floor rather than
+        an event loop turn. It returns True to say the wait completed, matching
+        the wrapper this follows.
+        """
+        time.sleep(timeout if timeout else 0.01)
+        return True
+
+    def sleep(self, secs=0.02):
+        time.sleep(secs)
+        return True
+
+    def setTimeout(self, timeout=60):
+        self._timeout = timeout
+
+    def loopUntil(self, condition=None, timeout=0):
+        """Run until a condition holds, or until the time is up.
+
+        Yields as the wrapper this follows does, so ``for _ in ib.loopUntil(...)``
+        reads the same.
+        """
+        deadline = time.monotonic() + timeout if timeout else None
+        while True:
+            if condition is not None and condition():
+                return
+            if deadline is not None and time.monotonic() > deadline:
+                return
+            yield self
+            time.sleep(0.01)
+
+    # -- questions that answer ---------------------------------------------
+
+    def reqTickers(self, *contracts, regulatorySnapshot=False, timeout=5):
+        """Subscribe, wait for each quote to arrive, then unsubscribe.
+
+        A snapshot rather than a stream. A contract whose quote never arrives is
+        returned with its fields unset rather than dropped, so the result lines
+        up with what was asked for.
+        """
+        del regulatorySnapshot
+        tickers = [self.reqMktData(c, snapshot=True) for c in contracts]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if all(t.hasBidAsk() or t.last is not None or t.close is not None for t in tickers):
+                break
+            time.sleep(0.01)
+        for c in contracts:
+            self.cancelMktData(c)
+        return tickers
+
+    def whatIfOrder(self, contract, order, timeout=5):
+        """What the venue says an order would cost, without sending it.
+
+        The order is marked as a question rather than an instruction, so nothing
+        reaches the market. Returns what the venue answered about margin and
+        commission, or raises if it answered nothing.
+        """
+        order.whatIf = True
+        trade = self.placeOrder(contract, order)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if trade.orderState is not None:
+                return trade.orderState
+            time.sleep(0.01)
+        raise TimeoutError("the venue did not answer what the order would cost")
+
+    def reqScannerData(self, subscription, scannerSubscriptionOptions=None, scannerSubscriptionFilterOptions=None, timeout=5):
+        del scannerSubscriptionOptions, scannerSubscriptionFilterOptions
+        req_id = self.reqScannerSubscription(subscription)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            rows = self.wrapper.take_scanner(req_id)
+            if rows:
+                self.cancelScannerSubscription(req_id)
+                return [cd for _, cd in rows]
+            time.sleep(0.01)
+        self.cancelScannerSubscription(req_id)
+        return []
+
+    def reqScannerSubscription(self, subscription, scannerSubscriptionOptions=None, scannerSubscriptionFilterOptions=None):
+        del scannerSubscriptionOptions, scannerSubscriptionFilterOptions
+        req_id = self._next_req_id()
+        self.client.req_scanner_subscription(req_id, subscription)
+        return req_id
+
+    def cancelScannerSubscription(self, req_id):
+        self.client.cancel_scanner_subscription(req_id)
+
+    # -- orders built here rather than asked for ---------------------------
+
+    def bracketOrder(
+        self, action, quantity, limitPrice, takeProfitPrice, stopLossPrice, **kwargs
+    ):
+        """A parent and its two exits, linked so that filling one cancels the other.
+
+        Built here; nothing is sent. The children are held until the parent is
+        transmitted, which is what stops a stop-loss reaching the market before
+        there is a position for it to protect.
+        """
+        from .ibx import Order
+
+        reverse = "SELL" if action.upper() == "BUY" else "BUY"
+        parent = Order()
+        parent.action = action
+        parent.orderType = "LMT"
+        parent.totalQuantity = quantity
+        parent.lmtPrice = limitPrice
+        parent.transmit = False
+
+        take_profit = Order()
+        take_profit.action = reverse
+        take_profit.orderType = "LMT"
+        take_profit.totalQuantity = quantity
+        take_profit.lmtPrice = takeProfitPrice
+        take_profit.transmit = False
+
+        stop_loss = Order()
+        stop_loss.action = reverse
+        stop_loss.orderType = "STP"
+        stop_loss.totalQuantity = quantity
+        stop_loss.auxPrice = stopLossPrice
+        stop_loss.transmit = True
+
+        for o in (parent, take_profit, stop_loss):
+            for k, v in kwargs.items():
+                setattr(o, k, v)
+        return BracketOrder(parent, take_profit, stop_loss)
+
+    def oneCancelsAll(self, orders, ocaGroup, ocaType):
+        """Link orders so that a fill on one withdraws the rest."""
+        for o in orders:
+            o.ocaGroup = ocaGroup
+            o.ocaType = ocaType
+        return orders
+
+    # -- carried, and answered by the venue as not served ------------------
+
+    def calculateImpliedVolatility(self, contract, optionPrice, underPrice, **kwargs):
+        del kwargs
+        return self.client.calculate_implied_volatility(
+            self._next_req_id(), contract, optionPrice, underPrice, []
+        )
+
+    def calculateOptionPrice(self, contract, volatility, underPrice, **kwargs):
+        del kwargs
+        return self.client.calculate_option_price(
+            self._next_req_id(), contract, volatility, underPrice, []
+        )
+
+    def requestFA(self, faDataType):
+        return self.client.request_fa(faDataType)
+
+    def replaceFA(self, faDataType, xml):
+        return self.client.replace_fa(self._next_req_id(), faDataType, xml)
+
+    def reqWshMetaData(self):
+        return self.client.req_wsh_meta_data(self._next_req_id())
+
+    def cancelWshMetaData(self, reqId=0):
+        return self.client.cancel_wsh_meta_data(reqId or self._req_id)
+
+    def reqWshEventData(self, data):
+        return self.client.req_wsh_event_data(self._next_req_id(), data)
+
+    def cancelWshEventData(self, reqId=0):
+        return self.client.cancel_wsh_event_data(reqId or self._req_id)
+
+    def getWshMetaData(self):
+        return self.reqWshMetaData()
+
+    def getWshEventData(self, data):
+        return self.reqWshEventData(data)
 
     # -- orders ----------------------------------------------------------
 
@@ -466,24 +676,24 @@ class IB:
 #: impression, and so a caller gets a named refusal instead of an AttributeError
 #: that reads like a typo.
 _NOT_YET = frozenset({
-    "waitOnUpdate", "loopUntil", "setTimeout", 
-    "accountSummary", "pnl", "pnlSingle", 
-    
-    "realtimeBars", "newsTicks", "newsBulletins",
-    "reqTickers", "bracketOrder", "oneCancelsAll", "whatIfOrder", 
-    
-    
-    
-    "cancelPnL", "cancelPnLSingle",
     
     
     
     
-    "reqScannerData", "reqScannerSubscription",
-    "cancelScannerSubscription", 
-    "calculateImpliedVolatility", "calculateOptionPrice", 
     
-    "requestFA", "replaceFA",
-    "reqWshMetaData", "cancelWshMetaData", "reqWshEventData", "cancelWshEventData",
-    "getWshMetaData", "getWshEventData", 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 })

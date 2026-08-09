@@ -83,6 +83,7 @@ class Trade:
     contract: Any = None
     order: Any = None
     orderStatus: OrderStatus = field(default_factory=OrderStatus)
+    orderState: Any = None
     fills: list = field(default_factory=list)
     log: list = field(default_factory=list)
 
@@ -123,6 +124,12 @@ class LiveState(EWrapper):
         self._fills: list[Fill] = []
         self._accounts: list[str] = []
         self._tickers: dict[int, Ticker] = {}
+        self._pnl: dict[int, tuple] = {}
+        self._pnl_single: dict[int, tuple] = {}
+        self._scanner: dict[int, list] = {}
+        self._bulletins: list = []
+        self._news_ticks: list = []
+        self._bars: dict[int, list] = {}
         self._pending: set[int] = set()
         self._fields = None
         self.errors: list[tuple[int, int, str, str]] = []
@@ -166,6 +173,7 @@ class LiveState(EWrapper):
             trade = self._trades.setdefault(orderId, Trade())
             trade.contract = contract
             trade.order = order
+            trade.orderState = orderState
             trade.orderStatus.orderId = orderId
 
     def orderStatus(
@@ -222,6 +230,59 @@ class LiveState(EWrapper):
     def trade_for(self, order_id) -> Trade | None:
         with self._lock:
             return self._trades.get(order_id)
+
+    def pnl(self, reqId, dailyPnL, unrealizedPnL, realizedPnL):
+        with self._lock:
+            self._pnl[reqId] = (dailyPnL, unrealizedPnL, realizedPnL)
+
+    def pnlSingle(self, reqId, pos, dailyPnL, unrealizedPnL, realizedPnL, value):
+        with self._lock:
+            self._pnl_single[reqId] = (pos, dailyPnL, unrealizedPnL, realizedPnL, value)
+
+    def scannerData(self, reqId, rank, contractDetails, distance, benchmark, projection, legsStr):
+        with self._lock:
+            self._scanner.setdefault(reqId, []).append((rank, contractDetails))
+
+    def scannerDataEnd(self, reqId):
+        pass
+
+    def updateNewsBulletin(self, msgId, msgType, newsMessage, originExch):
+        with self._lock:
+            self._bulletins.append((msgId, msgType, newsMessage, originExch))
+
+    def tickNews(self, tickerId, timeStamp, providerCode, articleId, headline, extraData):
+        with self._lock:
+            self._news_ticks.append((tickerId, timeStamp, providerCode, articleId, headline))
+
+    def realtimeBar(self, reqId, time, open_, high, low, close, volume, wap, count):
+        with self._lock:
+            self._bars.setdefault(reqId, []).append(
+                (time, open_, high, low, close, volume, wap, count)
+            )
+
+    def snapshot_pnl(self) -> list:
+        with self._lock:
+            return list(self._pnl.values())
+
+    def snapshot_pnl_single(self) -> list:
+        with self._lock:
+            return list(self._pnl_single.values())
+
+    def take_scanner(self, req_id):
+        with self._lock:
+            return list(self._scanner.get(req_id, []))
+
+    def snapshot_bulletins(self) -> list:
+        with self._lock:
+            return list(self._bulletins)
+
+    def snapshot_news_ticks(self) -> list:
+        with self._lock:
+            return list(self._news_ticks)
+
+    def snapshot_bars(self) -> list:
+        with self._lock:
+            return [b for bars in self._bars.values() for b in bars]
 
     # -- quotes ----------------------------------------------------------
 
@@ -391,3 +452,15 @@ def _tick_fields():
         T.CLOSE: ("close", None),
         T.HALTED: ("halted", None),
     }
+
+
+@dataclass
+class BracketOrder:
+    """A parent and the two exits that close it, one cancelling the other."""
+
+    parent: Any = None
+    takeProfit: Any = None
+    stopLoss: Any = None
+
+    def __iter__(self):
+        return iter((self.parent, self.takeProfit, self.stopLoss))

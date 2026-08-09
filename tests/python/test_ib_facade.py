@@ -56,15 +56,16 @@ def test_the_earliest_data_comes_back_from_the_facade():
     assert ib.reqHeadTimeStamp(spy()) == "19930129 14:30:00"
 
 
-def test_a_call_not_carried_yet_names_itself():
-    """Not an AttributeError that reads like a typo, and not a quiet empty list."""
-    ib = ibx.IB()
-    # Picked from the list itself, so this test cannot go stale as the list shrinks.
-    from ibx._ib import _NOT_YET
+def test_nothing_is_left_uncarried_and_the_refusal_still_works_if_it_were():
+    """The list is empty now. The mechanism stays, because it is what keeps a
+    future gap loud instead of silent."""
+    from ibx._ib import IB, _NOT_YET
 
-    name = sorted(_NOT_YET)[0]
-    with pytest.raises(NotImplementedError, match=name):
-        getattr(ib, name)()
+    assert _NOT_YET == frozenset()
+
+    ib = ibx.IB()
+    with pytest.raises(AttributeError):
+        ib.somethingNobodyImplemented()
 
 
 def test_a_name_that_is_no_method_is_still_refused():
@@ -155,3 +156,46 @@ def test_every_carried_method_is_actually_callable():
             continue
         attr = getattr(IB, name)
         assert callable(attr) or isinstance(attr, property), name
+
+
+def test_a_bracket_holds_its_children_until_the_parent_is_transmitted():
+    """A stop-loss reaching the market before there is a position to protect
+    is an unhedged short."""
+    ib = ibx.IB()
+    b = ib.bracketOrder("BUY", 100, limitPrice=10.0, takeProfitPrice=12.0, stopLossPrice=9.0)
+
+    assert b.parent.action == "BUY"
+    assert b.takeProfit.action == "SELL" and b.stopLoss.action == "SELL"
+    assert b.parent.transmit is False
+    assert b.takeProfit.transmit is False
+    assert b.stopLoss.transmit is True  # the last one releases the set
+
+    assert b.takeProfit.lmtPrice == 12.0
+    assert b.stopLoss.auxPrice == 9.0
+    assert [o for o in b] == [b.parent, b.takeProfit, b.stopLoss]
+
+
+def test_one_cancels_all_links_every_order_in_the_set():
+    ib = ibx.IB()
+    orders = []
+    for _ in range(3):
+        o = ibx.Order()
+        o.action = "BUY"
+        orders.append(o)
+    ib.oneCancelsAll(orders, "grp-1", 1)
+    assert all(o.ocaGroup == "grp-1" and o.ocaType == 1 for o in orders)
+
+
+def test_a_what_if_never_reaches_the_market():
+    """It is a question, not an instruction."""
+    ib = connected_ib()
+    order = ibx.Order()
+    order.orderId = 11
+    order.action = "BUY"
+    order.orderType = "MKT"
+    order.totalQuantity = 1
+    try:
+        ib.whatIfOrder(spy(), order, timeout=0.05)
+    except (TimeoutError, RuntimeError):
+        pass
+    assert order.whatIf is True

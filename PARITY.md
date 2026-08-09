@@ -14,7 +14,7 @@ Counts here are measured, not asserted. Where a number is an estimate it says so
 | The gateway's settings | 11 with a counterpart, 7 without | all 11 carried, all 7 named |
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
-| The asynchronous wrapper's shape | 90 methods | 63 carried, 28 open |
+| The asynchronous wrapper's shape | 90 methods | 90 carried |
 | The Rust client's shape | 77 methods | not started |
 
 ## 1. The wire
@@ -74,22 +74,27 @@ rather than one being chosen.
 naming conventions resolve, on the client, the wrapper, and every object handed
 to a callback.
 
-### The asynchronous wrapper — 63 of 90
+### The asynchronous wrapper — 90 of 90
 
 `ibx.IB()`. Its names, its argument names, its defaults, and its habit of
-filling a contract in place. The rest raise and name themselves; a
-test holds that list honest, so it cannot drift into claiming more than is
-there.
+filling a contract in place. Every one of its ninety public calls is carried,
+checked against a written-out list rather than against this client's own
+bookkeeping, so the check cannot shrink to match what happens to be built.
 
-Three kinds of work sit behind the rest, and they are not the same size:
+Carried is not the same as verified. Four of them reach calls this client
+answers as not served — implied volatility, option price, and the advisor pair
+— and they report that rather than pretending. Everything else is exercised
+offline; what a live session has confirmed is in ROADMAP.md, not here.
+
+What that took, in three parts of very different size:
 
 1. ~~**Thin wrappers** over a call that already answers or already sends.~~
    Carried, including the order path: `placeOrder` hands back a record whose
    status moves under the caller rather than a return code.
-2. **Calls needing an answering form first** — the request exists and returns
-   through a callback; the answering version has to be built beneath it. This
-   is most of what is left: `reqTickers`, `whatIfOrder`, `reqScannerData`, the
-   P&L pair, the event-data pair, and the advisor pair.
+2. ~~**Calls needing an answering form first**.~~ Carried. `reqTickers`
+   subscribes, waits and unsubscribes; `whatIfOrder` marks the order as a
+   question so nothing reaches the market; `reqScannerData` runs a subscription
+   for one answer and withdraws it.
 3. **Live state.** Carried for what the account holds and what its orders are
    doing: `positions()`, `portfolio()`, `accountValues()`, `trades()`,
    `openTrades()`, `orders()`, `openOrders()`, `fills()`, `executions()`,
@@ -119,16 +124,18 @@ idea, so the work is naming and coverage rather than design.
    Carried.
 2. ~~Live quotes.~~ Carried.
 3. ~~The thin wrappers.~~ Carried.
-4. The answering forms beneath the rest.
-5. The Rust shape, once the answering layer is complete enough to name.
+4. ~~The answering forms beneath the rest.~~ Carried.
+5. The Rust shape, 77 methods, once the answering layer is complete enough to
+   name. This is the largest remaining piece.
 6. The wire's remaining refusals, which need a live session.
 
 ## What is not claimed
 
 This is not yet a complete replacement, and the parities above say where.
 
-A program reading `ib.positions()`, watching a `Trade`'s status move as fills
-arrive, or watching quotes through `ib.pendingTickers`, runs here now.
+A program written against the asynchronous wrapper finds every call it uses.
+That is not the same as every call having been proved against a live venue, and
+ROADMAP.md is where that distinction is kept.
 
-Twenty-eight of the wrapper's ninety calls do not. They raise and name themselves
-rather than returning something that looks like an answer.
+The Rust client's shape is not started, and the wire still has eight calls that
+answer they cannot be served and one capability the venue refuses this session.
