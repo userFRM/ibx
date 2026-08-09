@@ -75,3 +75,41 @@ def test_the_unfinished_list_is_honest():
 
     carried = {n for n in dir(IB) if not n.startswith("_")}
     assert not (carried & _NOT_YET), "a method is both carried and listed as missing"
+
+
+def test_a_read_only_session_refuses_to_change_a_position():
+    """The counterpart carries the same control. A research program wants the
+    guarantee at the client rather than in its own discipline."""
+    c = ibx.EClient(ibx.EWrapper())
+    c._test_connect("DU0000000", readonly=True)
+
+    order = ibx.Order()
+    order.action = "BUY"
+    order.orderType = "MKT"
+    order.totalQuantity = 1
+
+    for call in (
+        lambda: c.placeOrder(1, spy(), order),
+        lambda: c.cancelOrder(1, ""),
+        lambda: c.reqGlobalCancel(),
+    ):
+        with pytest.raises(RuntimeError, match="read-only"):
+            call()
+
+
+def test_a_session_that_is_not_read_only_does_not_refuse():
+    """The guard must fire on the flag, not on every order.
+
+    A test-connected client has no venue behind it, so the order fails further
+    down. What matters here is that it fails somewhere other than the guard.
+    """
+    c = ibx.EClient(ibx.EWrapper())
+    c._test_connect("DU0000000")
+    order = ibx.Order()
+    order.action = "BUY"
+    order.orderType = "MKT"
+    order.totalQuantity = 1
+    try:
+        c.placeOrder(1, spy(), order)
+    except RuntimeError as e:
+        assert "read-only" not in str(e), "the guard fired on a session that is not read-only"
