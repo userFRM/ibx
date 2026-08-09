@@ -333,20 +333,31 @@ the fifty-one, and the twenty-eight beside it.
 
 ### Data this client states without the venue having stated it
 
-One table is written here rather than received, and what depends on it is named
-so that nobody takes it for the venue's own word.
-
 | What | Why it is written here | What depends on it |
 | --- | --- | --- |
 | The single letter each venue is known by on a quote | The venue names venues in full and states no abbreviation | Which venue a quote's exchange letter refers to |
 
-Settled since: the venue does state which venues SMART routes a contract to,
-and in what order, on the contract's own definition. It is read from there now,
-and the table this client wrote is used only until a definition arrives. What
-remains written here is the abbreviation each venue is known by, which the venue
-does not state and which cannot be taken from the name — NASDAQ is `Q`, not `N`.
-A venue with no known abbreviation is given none rather than one that would
-collide with a venue that has one.
+The venues SMART routes to, and the order whose positions a quote's exchange
+bitmask refers to, were on this list until the venue was asked: it states them
+on the contract's own definition, and the order it states bore no resemblance to
+the one being used. Read from the definition now.
+
+### Fields of a contract still unread
+
+Asked the venue about a share, a share listed outside the United States, an
+index, a bond, a fund, an option and a future, and kept every field each reply
+carried. What the reference client publishes and this does not:
+
+| Field | State |
+| --- | --- |
+| `evMultiplier` | Unsettled. The number carrying it on an execution report is a different field on a definition, so the pair is not evidence |
+| `sizeIncrement`, `suggestedSizeIncrement` | A rule states an increment per price band and again per size band under the same numbers, and the size bands are not read |
+| `marketRuleIds` | The per-venue list is not stated as a list; whether it can be assembled from the rules is not settled |
+
+Everything else the reference client publishes is carried. The rest of what a
+definition states — fifty-one stated fields on a share, forty-six on a bond — is
+kept under its tag number whether or not it has a name here, so a field without
+a name is still reachable.
 
 ### Order fields this client deliberately does not send
 
