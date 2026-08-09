@@ -788,8 +788,6 @@ def cancel_head_time_stamp(req_id)
 
 #### `req_contract_details`
 
-Request contract details.
-
 ```python
 def req_contract_details(req_id, contract)
 ```

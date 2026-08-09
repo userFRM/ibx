@@ -355,6 +355,32 @@ impl EClient {
 
     /// Run ONE iteration of the event dispatch loop.
     #[doc(hidden)]
+    #[doc(hidden)]
+    fn _test_peek_ask_id(&self) -> i64 {
+        super::ask::peek_ask_id()
+    }
+
+    #[doc(hidden)]
+    fn _test_push_contract_details(&self, req_id: u32, con_id: u32, symbol: &str) -> PyResult<()> {
+        let shared = self.shared.lock().unwrap().clone()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("not connected"))?;
+        let def = crate::control::contracts::ContractDefinition {
+            con_id,
+            symbol: symbol.to_string(),
+            ..Default::default()
+        };
+        shared.reference.push_contract_details(req_id, def);
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    fn _test_push_contract_details_end(&self, req_id: u32) -> PyResult<()> {
+        let shared = self.shared.lock().unwrap().clone()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("not connected"))?;
+        shared.reference.push_contract_details_end(req_id);
+        Ok(())
+    }
+
     fn _test_dispatch_once(&self, py: Python<'_>) -> PyResult<()> {
         if !self.connected.load(std::sync::atomic::Ordering::Acquire) {
             return Err(PyRuntimeError::new_err("Not connected"));

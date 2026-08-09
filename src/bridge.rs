@@ -788,6 +788,37 @@ impl ReferenceState {
         self.contract_details.lock().unwrap().drain(..).collect()
     }
 
+    /// Take only the definitions answering one request, leaving every other
+    /// request's alone.
+    ///
+    /// The plain drain empties the queue for whoever calls it first. A caller
+    /// asking one question needs its own answer without swallowing the answers
+    /// belonging to a dispatch loop running beside it.
+    pub fn take_contract_details_for(&self, req_id: u32) -> Vec<ContractDefinition> {
+        let mut q = self.contract_details.lock().unwrap();
+        let mut mine = Vec::new();
+        q.retain(|(id, def)| {
+            if *id == req_id { mine.push(def.clone()); false } else { true }
+        });
+        mine
+    }
+
+    /// Whether the venue has said it has no more to say about one request.
+    pub fn take_contract_details_end_for(&self, req_id: u32) -> bool {
+        let mut q = self.contract_details_end.lock().unwrap();
+        let before = q.len();
+        q.retain(|id| *id != req_id);
+        q.len() != before
+    }
+
+    /// The venue's own words about one request, if it refused it.
+    pub fn take_error_for(&self, req_id: u32) -> Option<(i32, String)> {
+        let mut q = self.historical_errors.lock().unwrap();
+        let at = q.iter().position(|(id, _, _)| *id == req_id)?;
+        let (_, code, msg) = q.remove(at);
+        Some((code, msg))
+    }
+
     pub fn drain_contract_details_end(&self) -> Vec<u32> {
         self.contract_details_end.lock().unwrap().drain(..).collect()
     }

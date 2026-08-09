@@ -4,6 +4,7 @@ mod market_data;
 mod orders;
 mod account;
 mod reference;
+mod ask;
 mod dispatch;
 mod stubs;
 mod test_helpers;
