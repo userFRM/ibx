@@ -15,7 +15,7 @@ Counts here are measured, not asserted. Where a number is an estimate it says so
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
 | The asynchronous wrapper's shape | 90 methods | 90 carried |
-| The Rust client's shape | 77 methods | 17 carried, 60 open |
+| The Rust client's shape | 77 methods | 36 carried, 41 open |
 
 ## 1. The wire
 
@@ -112,7 +112,7 @@ What that took, in three parts of very different size:
    `reqTickers()` — subscribe, wait for a quote, unsubscribe — is not carried
    yet.
 
-### The Rust client — 17 of 77
+### The Rust client — 36 of 77
 
 `ibx::api::Client`, beside `EClient` rather than instead of it. A call that
 answers returns the answer; a call that only sends returns nothing, because
@@ -120,10 +120,16 @@ handing back a value meaning "it was sent" tells a caller nothing they did not
 already know. What the sending calls produce is recorded, since a caller of this
 shape has no callback to hand it to.
 
-Carried: the session itself, contract details, qualifying one contract or a
-list, bars, positions, the account summary, the option chain, the earliest data
-a contract holds, a symbol search, a volume histogram, a fundamental report,
-the current time, the managed accounts and the global cancel.
+Carried: the session, the calls that answer (contract details, qualifying one
+contract or a list, bars, positions, the account summary, the option chain, the
+earliest data a contract holds, a symbol search, a volume histogram, a
+fundamental report), the streams (bars and depth), and the sending calls —
+orders, cancels, exercise, the order books, family codes, news providers and
+bulletins, market rules, scanner parameters, depth exchanges, market data type,
+account updates and the P&L pair.
+
+`place_order` returns the id the venue answers under. A caller with nothing to
+correlate on cannot tell which of several answers is theirs.
 
 Streams are carried as `Subscription<T>`, which a caller loops over. It does two
 things a bare loop over a queue would not. It **withdraws**: a dropped
