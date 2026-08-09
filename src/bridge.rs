@@ -293,6 +293,13 @@ pub struct MarketDataState {
     subscription_failures: Mutex<Vec<(crate::types::InstrumentId, String)>>,
     /// What the venue has said went wrong, in its own words.
     venue_errors: Mutex<Vec<String>>,
+    /// The venue's own clock, from the last message it sent.
+    ///
+    /// Every message it sends is stamped with the time it sent it. Reporting
+    /// this machine's clock instead would answer the question a caller asked —
+    /// how far apart are we and the venue — with the one number that cannot
+    /// tell them.
+    venue_time: Mutex<Option<String>>,
     /// Messages the venue sent that nothing here reads, named once each:
     /// which connection, and what it was. Empty is the claim that this client
     /// reads everything this venue sends it, and the only way to check it.
@@ -313,6 +320,7 @@ impl MarketDataState {
             option_computations: Mutex::new(Vec::with_capacity(16)),
             subscription_failures: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
+            venue_time: Mutex::new(None),
             unread_wire: Mutex::new(Vec::new()),
         }
     }
@@ -403,6 +411,16 @@ impl MarketDataState {
         if !seen.iter().any(|(c, w)| *c == connection && *w == what) {
             seen.push((connection, what));
         }
+    }
+
+    /// Record the time the venue stamped on a message.
+    pub fn note_venue_time(&self, stamped: &str) {
+        *self.venue_time.lock().unwrap() = Some(stamped.to_string());
+    }
+
+    /// The venue's clock as of its last message, if it has sent one.
+    pub fn venue_time(&self) -> Option<String> {
+        self.venue_time.lock().unwrap().clone()
     }
 
     pub fn drain_venue_errors(&self) -> Vec<String> {

@@ -114,6 +114,53 @@ fn write_u2(buf: &mut [u8], val: u8) {
     buf[1] = b'0' + val % 10;
 }
 
+/// Read the venue's own timestamp back to unix seconds (UTC).
+///
+/// It stamps `YYYYMMDD-HH:MM:SS`, sometimes with a fractional part after the
+/// seconds, and sometimes joined by a space rather than a dash. All three are
+/// accepted; anything else returns nothing rather than a plausible wrong
+/// instant, because a clock comparison is exactly where a silently wrong number
+/// does the most harm.
+pub fn ib_datetime_to_unix(stamped: &str) -> Option<i64> {
+    let (date, time) = stamped.split_once(['-', ' '])?;
+    if date.len() != 8 || !date.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let year: i64 = date[0..4].parse().ok()?;
+    let month: u32 = date[4..6].parse().ok()?;
+    let day: u32 = date[6..8].parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    // A fractional second is more precision than seconds can carry, so it is
+    // dropped rather than rounded.
+    let time = time.split(['.', ',']).next()?;
+    let mut parts = time.split(':');
+    let hours: i64 = parts.next()?.parse().ok()?;
+    let minutes: i64 = parts.next()?.parse().ok()?;
+    let seconds: i64 = parts.next().unwrap_or("0").parse().ok()?;
+    if !(0..24).contains(&hours) || !(0..60).contains(&minutes) || !(0..=60).contains(&seconds) {
+        return None;
+    }
+
+    let days = ymd_to_days(year, month, day)?;
+    Some(days * 86_400 + hours * 3_600 + minutes * 60 + seconds)
+}
+
+/// Days since the epoch for a civil date, by the same reckoning `days_to_ymd`
+/// undoes.
+fn ymd_to_days(year: i64, month: u32, day: u32) -> Option<i64> {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = month as i64;
+    let d = day as i64;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
 /// Format unix timestamp (seconds) to IB's "YYYYMMDD HH:MM:SS" format (UTC).
 pub fn unix_to_ib_datetime(secs: i64) -> String {
     let secs = secs as u64;
@@ -378,5 +425,47 @@ mod expiry_tests {
         assert!(parse_ib_expiry("20260620 18:00").is_err()); // needs seconds
         assert!(parse_ib_expiry("20261320").is_err()); // month 13
         assert!(parse_ib_expiry("20260620 18:00:00 Mars/Olympus").is_err());
+    }
+}
+
+#[cfg(test)]
+mod venue_clock_tests {
+    use super::*;
+
+    /// The venue's stamp and this client's own formatting are inverses, so a
+    /// time read back is the time that was sent.
+    #[test]
+    fn a_venue_timestamp_reads_back_to_the_instant_it_names() {
+        for secs in [0_i64, 1_000_000_000, 1_767_225_600, 2_000_000_000] {
+            let written = unix_to_ib_utc_dash(secs);
+            assert_eq!(ib_datetime_to_unix(&written), Some(secs), "{written}");
+        }
+    }
+
+    /// The venue joins with a dash; some messages use a space. Both are its
+    /// own timestamp and both must read.
+    #[test]
+    fn both_joins_the_venue_uses_are_read() {
+        assert_eq!(
+            ib_datetime_to_unix("20260101-00:00:00"),
+            ib_datetime_to_unix("20260101 00:00:00"),
+        );
+    }
+
+    /// More precision than seconds can carry is dropped, not rounded.
+    #[test]
+    fn a_fractional_second_is_dropped_rather_than_rounded() {
+        let whole = ib_datetime_to_unix("20260101-12:30:45").unwrap();
+        assert_eq!(ib_datetime_to_unix("20260101-12:30:45.999"), Some(whole));
+    }
+
+    /// Anything that is not one of its timestamps returns nothing rather than
+    /// a plausible instant. A clock comparison is where a silently wrong
+    /// number does the most harm.
+    #[test]
+    fn something_that_is_not_a_timestamp_is_refused() {
+        for bad in ["", "not a time", "20260101", "2026010-12:00:00", "20261301-00:00:00", "20260101-25:00:00"] {
+            assert_eq!(ib_datetime_to_unix(bad), None, "{bad}");
+        }
     }
 }

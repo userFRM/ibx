@@ -585,6 +585,12 @@ impl CcpState {
         account_id: &str,
     ) {
         let parsed = fix::fix_parse(msg);
+        // Every message the venue sends carries the time it sent it. Kept for
+        // any caller asking what the venue's clock says, which is a different
+        // question from what this machine's clock says.
+        if let Some(stamped) = parsed.get(&fix::TAG_SENDING_TIME) {
+            shared.market.note_venue_time(stamped);
+        }
         let msg_type = match parsed.get(&fix::TAG_MSG_TYPE) {
             Some(t) => t.as_str(),
             None => return,
