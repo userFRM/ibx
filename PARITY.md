@@ -14,7 +14,7 @@ Counts here are measured, not asserted. Where a number is an estimate it says so
 | The gateway's settings | 11 with a counterpart, 7 without | all 11 carried, all 7 named |
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
-| The asynchronous wrapper's shape | 90 methods | 26 carried, 65 open |
+| The asynchronous wrapper's shape | 90 methods | 31 carried, 60 open |
 | The Rust client's shape | 77 methods | not started |
 
 ## 1. The wire
@@ -74,7 +74,7 @@ rather than one being chosen.
 naming conventions resolve, on the client, the wrapper, and every object handed
 to a callback.
 
-### The asynchronous wrapper — 26 of 90
+### The asynchronous wrapper — 31 of 90
 
 `ibx.IB()`. Its names, its argument names, its defaults, and its habit of
 filling a contract in place. The rest raise and name themselves; a
@@ -95,9 +95,15 @@ Three kinds of work sit behind the rest, and they are not the same size:
    than act; a reader gets a snapshot taken under a lock, so a list cannot
    change while it is being read.
 
-   Quotes are not carried yet — `tickers()`, `pendingTickers`, `reqTickers()`.
-   A `Ticker` accumulates several kinds of tick into one object and says which
-   of them are stale, which is more than recording what arrives.
+   Quotes are carried too. A quote does not arrive as a quote — it arrives as a
+   bid, then a size, then a trade — so `reqMktData()` hands back a `Ticker` that
+   fills in as the ticks reach it, and `pendingTickers` gives the ones that
+   changed since it was last read. A field nobody has sent stays unset rather
+   than becoming zero, because a bid of zero and no bid at all are different
+   markets and the difference decides whether an order should be sent.
+
+   `reqTickers()` — subscribe, wait for a quote, unsubscribe — is not carried
+   yet.
 
 ### The Rust client — not started
 
@@ -109,7 +115,7 @@ idea, so the work is naming and coverage rather than design.
 
 1. ~~Live state for what the account holds and what its orders are doing.~~
    Carried.
-2. Live quotes, which are the remaining half of live state.
+2. ~~Live quotes.~~ Carried.
 3. The thin wrappers, which are volume rather than difficulty.
 4. The answering forms beneath the rest.
 5. The Rust shape, once the answering layer is complete enough to name.
@@ -119,6 +125,8 @@ idea, so the work is naming and coverage rather than design.
 
 This is not yet a complete replacement, and the parities above say where.
 
-A program reading `ib.positions()`, or watching a `Trade`'s status move as fills
-arrive, runs here now. One that watches quotes through `ib.pendingTickers` does
-not: live quotes are the half of live state still open.
+A program reading `ib.positions()`, watching a `Trade`'s status move as fills
+arrive, or watching quotes through `ib.pendingTickers`, runs here now.
+
+Sixty of the wrapper's ninety calls do not. They raise and name themselves
+rather than returning something that looks like an answer.
