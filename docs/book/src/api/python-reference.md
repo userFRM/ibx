@@ -719,10 +719,8 @@ def quote_by_instrument(instrument)
 
 #### `req_historical_data`
 
-Request historical bar data.
-
 ```python
-def req_historical_data(req_id, contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth, format_date=1, keep_up_to_date=false, chart_options=Vec::new()))
+def req_historical_data(req_id, contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth, format_date, keep_up_to_date, chart_options)
 ```
 
 | Parameter | Type | Description |
@@ -756,10 +754,8 @@ def cancel_historical_data(req_id)
 
 #### `req_head_time_stamp`
 
-Request head timestamp.
-
 ```python
-def req_head_time_stamp(req_id, contract, what_to_show, use_rth, format_date=1))
+def req_head_time_stamp(req_id, contract, what_to_show, use_rth, format_date)
 ```
 
 | Parameter | Type | Description |
@@ -810,8 +806,6 @@ def req_mkt_depth_exchanges()
 ---
 
 #### `req_matching_symbols`
-
-Search for matching symbols.
 
 ```python
 def req_matching_symbols(req_id, pattern)
@@ -922,10 +916,8 @@ def req_historical_news(req_id, con_id, provider_codes, start_date_time, end_dat
 
 #### `req_fundamental_data`
 
-Request fundamental data.
-
 ```python
-def req_fundamental_data(req_id, contract, report_type, fundamental_data_options=Vec::new()))
+def req_fundamental_data(req_id, contract, report_type, fundamental_data_options)
 ```
 
 | Parameter | Type | Description |
@@ -989,10 +981,8 @@ def req_market_rule(market_rule_id)
 
 #### `req_histogram_data`
 
-Request histogram data.
-
 ```python
-def req_histogram_data(req_id, contract, use_rth, time_period))
+def req_histogram_data(req_id, contract, use_rth, time_period)
 ```
 
 | Parameter | Type | Description |
@@ -1020,10 +1010,8 @@ def cancel_histogram_data(req_id)
 
 #### `req_historical_schedule`
 
-Request historical trading schedule.
-
 ```python
-def req_historical_schedule(req_id, contract, end_date_time="", duration_str="1 M", use_rth=true))
+def req_historical_schedule(req_id, contract, end_date_time, duration_str, use_rth)
 ```
 
 | Parameter | Type | Description |

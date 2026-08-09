@@ -93,3 +93,44 @@ def test_a_question_asked_of_a_client_that_is_not_connected_says_so():
     c = ibx.EClient(Wrapper())
     with pytest.raises(RuntimeError):
         c.contract_details(spy())
+
+
+def test_bars_come_back_as_a_list_not_one_callback_at_a_time():
+    c = connected()
+    req_id = c._test_peek_ask_id()
+    c._test_push_historical_data(
+        req_id,
+        [("20260101 09:30:00", 1.0, 2.0, 0.5, 1.5, 100),
+         ("20260101 09:31:00", 1.5, 2.5, 1.0, 2.0, 200)],
+        True,
+    )
+    bars = c.historical_data(spy(), "", "1 D", "1 min", "TRADES")
+    assert [b.close for b in bars] == [1.5, 2.0]
+    assert bars[0].volume == 100
+
+
+def test_a_series_answered_in_parts_is_not_cut_at_the_first_part():
+    """A part that is not the last says so. Stopping on it returns a short
+    series and nothing in the series says it is short."""
+    c = connected()
+    req_id = c._test_peek_ask_id()
+    c._test_push_historical_data(req_id, [("t1", 1.0, 1.0, 1.0, 1.0, 1)], False)
+    c._test_push_historical_data(req_id, [("t2", 2.0, 2.0, 2.0, 2.0, 2)], True)
+    bars = c.historical_data(spy(), "", "1 D", "1 min", "TRADES")
+    assert [b.close for b in bars] == [1.0, 2.0]
+
+
+def test_the_earliest_data_comes_back_as_a_value():
+    c = connected()
+    req_id = c._test_peek_ask_id()
+    c._test_push_head_timestamp(req_id, "19930129 14:30:00")
+    assert c.head_timestamp(spy()) == "19930129 14:30:00"
+
+
+def test_a_refusal_quotes_the_venue_rather_than_reporting_a_timeout():
+    """"The venue said no" and "nothing came" are different facts."""
+    c = connected()
+    req_id = c._test_peek_ask_id()
+    c._test_push_historical_error(req_id, 162, "Historical Market Data Service error")
+    with pytest.raises(RuntimeError, match="Historical Market Data Service error"):
+        c.historical_data(spy(), "", "1 D", "1 min", "TRADES")

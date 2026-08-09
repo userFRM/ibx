@@ -313,6 +313,14 @@ impl EClient {
         Ok(())
     }
 
+    /// Push a venue refusal of one request into SharedState.
+    #[doc(hidden)]
+    fn _test_push_historical_error(&self, req_id: u32, code: i32, message: &str) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.reference.push_historical_error(req_id, code, message.to_string());
+        Ok(())
+    }
+
     /// Push a head timestamp into SharedState.
     #[doc(hidden)]
     fn _test_push_head_timestamp(&self, req_id: u32, timestamp: &str) -> PyResult<()> {

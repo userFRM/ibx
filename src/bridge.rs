@@ -788,6 +788,46 @@ impl ReferenceState {
         self.contract_details.lock().unwrap().drain(..).collect()
     }
 
+    /// Take the one answer belonging to a request, leaving the rest.
+    fn take_one<T>(q: &Mutex<Vec<(u32, T)>>, req_id: u32) -> Option<T> {
+        let mut g = q.lock().unwrap();
+        let at = g.iter().position(|(id, _)| *id == req_id)?;
+        Some(g.remove(at).1)
+    }
+
+    /// Bars answering one request. The venue may answer in several parts, so
+    /// this takes every part waiting and the caller stops on the one that says
+    /// it is the last.
+    pub fn take_historical_for(&self, req_id: u32) -> Vec<HistoricalResponse> {
+        let mut q = self.historical_data.lock().unwrap();
+        let mut mine = Vec::new();
+        let mut i = 0;
+        while i < q.len() {
+            if q[i].0 == req_id { mine.push(q.remove(i).1); } else { i += 1; }
+        }
+        mine
+    }
+
+    pub fn take_head_timestamp_for(&self, req_id: u32) -> Option<HeadTimestampResponse> {
+        Self::take_one(&self.head_timestamps, req_id)
+    }
+
+    pub fn take_matching_symbols_for(&self, req_id: u32) -> Option<Vec<SymbolMatch>> {
+        Self::take_one(&self.matching_symbols, req_id)
+    }
+
+    pub fn take_histogram_for(&self, req_id: u32) -> Option<Vec<HistogramEntry>> {
+        Self::take_one(&self.histogram_data, req_id)
+    }
+
+    pub fn take_fundamental_for(&self, req_id: u32) -> Option<String> {
+        Self::take_one(&self.fundamental_data, req_id)
+    }
+
+    pub fn take_historical_schedule_for(&self, req_id: u32) -> Option<HistoricalScheduleResponse> {
+        Self::take_one(&self.historical_schedules, req_id)
+    }
+
     /// Take only the definitions answering one request, leaving every other
     /// request's alone.
     ///
