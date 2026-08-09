@@ -254,7 +254,7 @@ Every type here was compared against it.
 | Type | Fields it names | Carried here |
 | --- | --- | --- |
 | An order | 150 | 149. The one missing states a hedge's largest size, and the field it rides is not established |
-| An execution | 21 | all but the exercise-or-lapse kind |
+| An execution | 19 published | all of them |
 | A contract | 21 | all |
 | A combination leg | 9 | 7 |
 | A contract's details | 64 | 48 |

@@ -1714,6 +1714,36 @@ pub struct OrderState {
 
 #[pymethods]
 impl OrderState {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    ///
+    /// This object is handed to a caller by a callback and only ever read. Code
+    /// written for the reference client reads the run-together names, and under
+    /// this class they were absent — so the object arrived carrying everything
+    /// and answered nothing.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        let mut snake = String::with_capacity(name.len() + 4);
+        for (i, c) in name.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i != 0 { snake.push('_'); }
+                snake.extend(c.to_lowercase());
+            } else {
+                snake.push(c);
+            }
+        }
+        if snake != name
+            && let Ok(v) = slf.as_any().getattr(snake.as_str())
+        {
+            return Ok(v.unbind());
+        }
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "object has no attribute '{name}'"
+        )))
+    }
+
     #[new]
     #[pyo3(signature = ())]
     fn new() -> Self {
@@ -1973,6 +2003,36 @@ pub struct BarData {
 
 #[pymethods]
 impl BarData {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    ///
+    /// This object is handed to a caller by a callback and only ever read. Code
+    /// written for the reference client reads the run-together names, and under
+    /// this class they were absent — so the object arrived carrying everything
+    /// and answered nothing.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        let mut snake = String::with_capacity(name.len() + 4);
+        for (i, c) in name.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i != 0 { snake.push('_'); }
+                snake.extend(c.to_lowercase());
+            } else {
+                snake.push(c);
+            }
+        }
+        if snake != name
+            && let Ok(v) = slf.as_any().getattr(snake.as_str())
+        {
+            return Ok(v.unbind());
+        }
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "object has no attribute '{name}'"
+        )))
+    }
+
     #[new]
     #[pyo3(signature = (date="".to_string(), open=0.0, high=0.0, low=0.0, close=0.0, volume=0, wap=0.0, bar_count=0, timezone="".to_string()))]
     pub fn new(date: String, open: f64, high: f64, low: f64, close: f64, volume: i64, wap: f64, bar_count: i32, timezone: String) -> Self {
@@ -2117,6 +2177,36 @@ pub struct ContractDetails {
 
 #[pymethods]
 impl ContractDetails {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    ///
+    /// This object is handed to a caller by a callback and only ever read. Code
+    /// written for the reference client reads the run-together names, and under
+    /// this class they were absent — so the object arrived carrying everything
+    /// and answered nothing.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        let mut snake = String::with_capacity(name.len() + 4);
+        for (i, c) in name.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i != 0 { snake.push('_'); }
+                snake.extend(c.to_lowercase());
+            } else {
+                snake.push(c);
+            }
+        }
+        if snake != name
+            && let Ok(v) = slf.as_any().getattr(snake.as_str())
+        {
+            return Ok(v.unbind());
+        }
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "object has no attribute '{name}'"
+        )))
+    }
+
     #[new]
     #[pyo3(signature = ())]
     fn py_new(py: Python<'_>) -> Self {
@@ -2398,6 +2488,36 @@ pub struct Execution {
 
 #[pymethods]
 impl Execution {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    ///
+    /// This object is handed to a caller by a callback and only ever read. Code
+    /// written for the reference client reads the run-together names, and under
+    /// this class they were absent — so the object arrived carrying everything
+    /// and answered nothing.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        let mut snake = String::with_capacity(name.len() + 4);
+        for (i, c) in name.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i != 0 { snake.push('_'); }
+                snake.extend(c.to_lowercase());
+            } else {
+                snake.push(c);
+            }
+        }
+        if snake != name
+            && let Ok(v) = slf.as_any().getattr(snake.as_str())
+        {
+            return Ok(v.unbind());
+        }
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "object has no attribute '{name}'"
+        )))
+    }
+
     #[new]
     #[pyo3(signature = ())]
     fn new() -> Self { Self::default() }

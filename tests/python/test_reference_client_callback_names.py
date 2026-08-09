@@ -118,3 +118,39 @@ def test_the_base_wrapper_still_refuses_a_name_that_is_no_callback():
     except AttributeError:
         return
     raise AssertionError("a name that names no callback was answered with a do-nothing")
+
+
+def test_a_callback_payload_answers_to_the_reference_clients_field_names():
+    """These objects are handed to a caller by a callback and only ever read.
+
+    Code written for the reference client reads the run-together names. Under
+    these classes they were absent, so the object arrived carrying everything
+    and answered nothing.
+    """
+    import ibx
+
+    published_execution_fields = [
+        "orderId", "clientId", "execId", "time", "acctNumber", "exchange",
+        "side", "shares", "price", "permId", "liquidation", "cumQty",
+        "avgPrice", "orderRef", "evRule", "evMultiplier", "modelCode",
+        "lastLiquidity", "pendingPriceRevision",
+    ]
+    e = ibx.Execution()
+    for f in published_execution_fields:
+        assert hasattr(e, f), f"an execution does not answer to {f}"
+
+    d = ibx.ContractDetails()
+    for f in ("marketName", "minTick", "longName", "priceMagnifier", "contractMonth",
+              "industry", "category", "subcategory", "bondType", "couponType",
+              "nextOptionDate", "fundName", "fundFamily", "fundManagementFee",
+              "fundClosedForNewMoney", "realExpirationDate", "cusip"):
+        assert hasattr(d, f), f"contract details do not answer to {f}"
+
+
+def test_a_payload_still_refuses_a_name_that_is_no_field():
+    import ibx
+    try:
+        ibx.Execution().thisIsNotAField
+    except AttributeError:
+        return
+    raise AssertionError("a name that names no field was answered")
