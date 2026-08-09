@@ -397,6 +397,156 @@ impl Client {
         self.inner.req_pnl_single(self.stream_id(), account, model_code, con_id);
     }
 
+
+    /// The schedule a venue keeps for a contract over a period.
+    pub fn historical_schedules(
+        &self,
+        contract: &Contract,
+        end_date_time: &str,
+        duration: &str,
+        use_rth: bool,
+    ) -> Result<crate::types::HistoricalScheduleResponse, String> {
+        let req_id = self.stream_id();
+        self.inner.req_historical_schedule(req_id, contract, end_date_time, duration, use_rth)?;
+        let what = format!("a schedule for {} {}", contract.sec_type, contract.symbol);
+        self.wait_for(req_id, &what, |sh| {
+            sh.reference.take_historical_schedule_for(req_id as u32)
+        })
+    }
+
+    /// Trades or quotes as they printed, over a period.
+    pub fn historical_ticks(
+        &self,
+        contract: &Contract,
+        start_date_time: &str,
+        end_date_time: &str,
+        number_of_ticks: i32,
+        what_to_show: &str,
+        use_rth: bool,
+    ) -> Result<(), String> {
+        self.inner.req_historical_ticks(
+            self.stream_id(), contract, start_date_time, end_date_time,
+            number_of_ticks, what_to_show, use_rth,
+        )
+    }
+
+    /// Headlines for a contract over a period.
+    pub fn historical_news(
+        &self,
+        con_id: i64,
+        provider_codes: &str,
+        start_time: &str,
+        end_time: &str,
+        max_results: u32,
+    ) -> Result<(), String> {
+        self.inner.req_historical_news(
+            self.stream_id(), con_id, provider_codes, start_time, end_time, max_results,
+        )
+    }
+
+    /// One news article by its id.
+    pub fn news_article(&self, provider_code: &str, article_id: &str) -> Result<(), String> {
+        self.inner.req_news_article(self.stream_id(), provider_code, article_id)
+    }
+
+    /// A scan the venue runs and keeps running until it is withdrawn.
+    pub fn scanner_subscription(
+        &self,
+        instrument: &str,
+        location_code: &str,
+        scan_code: &str,
+        max_items: u32,
+        filters: &[crate::api::types::TagValue],
+    ) -> Result<i64, String> {
+        let req_id = self.stream_id();
+        self.inner.req_scanner_subscription(
+            req_id, instrument, location_code, scan_code, max_items, filters,
+        )?;
+        Ok(req_id)
+    }
+
+    pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), String> {
+        self.inner.cancel_scanner_subscription(req_id)
+    }
+
+    pub fn executions(&self, filter: &crate::api::types::ExecutionFilter) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_executions(self.stream_id(), filter, &mut *r);
+    }
+
+    pub fn smart_components(&self, bbo_exchange: &str) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_smart_components(self.stream_id(), bbo_exchange, &mut *r);
+    }
+
+    pub fn soft_dollar_tiers(&self) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_soft_dollar_tiers(self.stream_id(), &mut *r);
+    }
+
+    pub fn user_info(&self) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_user_info(self.stream_id(), &mut *r);
+    }
+
+    pub fn positions_multi(&self, account: &str, model_code: &str) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_positions_multi(self.stream_id(), account, model_code, &mut *r);
+    }
+
+    pub fn account_updates_multi(&self, account: &str, model_code: &str, ledger_and_nlv: bool) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_account_updates_multi(
+            self.stream_id(), account, model_code, ledger_and_nlv, &mut *r,
+        );
+    }
+
+    pub fn auto_open_orders(&self, auto_bind: bool) {
+        self.inner.req_auto_open_orders(auto_bind);
+    }
+
+    pub fn subscribe_to_group_events(&self, group_id: i32) -> i64 {
+        let req_id = self.stream_id();
+        self.inner.subscribe_to_group_events(req_id, group_id);
+        req_id
+    }
+
+    /// Carried, and answered by the venue as not served. It reports that rather
+    /// than pretending, which is the honest shape for a request this protocol
+    /// does not carry.
+    pub fn calculate_implied_volatility(
+        &self,
+        contract: &Contract,
+        option_price: f64,
+        under_price: f64,
+    ) {
+        self.inner.calculate_implied_volatility(
+            self.stream_id(), contract, option_price, under_price,
+        );
+    }
+
+    pub fn calculate_option_price(&self, contract: &Contract, volatility: f64, under_price: f64) {
+        self.inner.calculate_option_price(
+            self.stream_id(), contract, volatility, under_price,
+        );
+    }
+
+    pub fn request_fa(&self, fa_data_type: i32) {
+        self.inner.request_fa(fa_data_type);
+    }
+
+    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) {
+        self.inner.replace_fa(self.stream_id(), fa_data_type, cxml);
+    }
+
+    pub fn wsh_metadata(&self) {
+        self.inner.req_wsh_meta_data(self.stream_id());
+    }
+
+    pub fn wsh_event_data_by_contract(&self) {
+        self.inner.req_wsh_event_data(self.stream_id());
+    }
+
     pub fn req_current_time(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_current_time(&mut *r);
