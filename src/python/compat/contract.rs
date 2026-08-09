@@ -2082,6 +2082,12 @@ pub struct ContractDetails {
     /// is kept here rather than dropped, so a fact the venue stated can be
     /// reached today under its number instead of waiting to be named.
     #[pyo3(get, set)]
+    pub under_con_id: u32,
+    #[pyo3(get, set)]
+    pub under_symbol: String,
+    #[pyo3(get, set)]
+    pub last_trade_time: String,
+    #[pyo3(get, set)]
     pub unnamed_fields: Vec<(u32, String)>,
     #[pyo3(get, set)]
     pub agg_group: i32,
@@ -2204,6 +2210,9 @@ impl Clone for ContractDetails {
             contract_month: self.contract_month.clone(),
             under_sec_type: self.under_sec_type.clone(),
             ev_rule: self.ev_rule.clone(),
+            under_con_id: self.under_con_id,
+            under_symbol: self.under_symbol.clone(),
+            last_trade_time: self.last_trade_time.clone(),
             unnamed_fields: self.unnamed_fields.clone(),
             agg_group: self.agg_group,
             coupon: self.coupon,
@@ -2295,6 +2304,9 @@ impl ContractDetails {
             contract_month: String::new(),
             under_sec_type: String::new(),
             ev_rule: String::new(),
+            under_con_id: 0,
+            under_symbol: String::new(),
+            last_trade_time: String::new(),
             unnamed_fields: Vec::new(),
             agg_group: 0,
             coupon: 0.0,
@@ -2380,6 +2392,9 @@ impl ContractDetails {
             contract_month: def.contract_month.clone(),
             under_sec_type: def.under_sec_type.clone(),
             ev_rule: def.ev_rule.clone(),
+            under_con_id: def.under_con_id,
+            under_symbol: def.under_symbol.clone(),
+            last_trade_time: def.last_trade_time.clone(),
             unnamed_fields: def.unnamed_fields.clone(),
             agg_group: def.agg_group,
             coupon: def.coupon,
