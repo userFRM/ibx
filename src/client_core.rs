@@ -3358,3 +3358,22 @@ mod contract_gate_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod exchange_mask_provenance_tests {
+    use crate::bridge::SharedState;
+
+    /// The letters a quote's bid, ask and last are attributed to come from bit
+    /// numbers the venue assigns. This client's own list can only guess at
+    /// them, and the guess must be marked as one: a table that renders
+    /// confidently is indistinguishable from one that knows.
+    #[test]
+    fn the_built_in_exchange_table_is_marked_as_a_guess() {
+        let shared = SharedState::new();
+        // Nothing has been received, so nothing claims to have been.
+        assert!(!shared.reference.smart_components_are_provisional());
+
+        shared.reference.note_smart_components_provisional(true);
+        assert!(shared.reference.smart_components_are_provisional());
+    }
+}

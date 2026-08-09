@@ -2163,9 +2163,14 @@ impl Gateway {
     pub fn populate_init_data(&self, shared: &SharedState) {
         use crate::types::{SmartComponent, NewsProvider, SoftDollarTier, FamilyCode};
 
-        // Smart components: hardcoded US equity SMART routing exchanges.
-        // Server doesn't send these in a parseable init message; they're
-        // embedded in the Gateway binary. Hardcoded list matches Gateway 10.30+.
+        // Smart components: this client's own list of the US equity venues
+        // SMART routes to. The session sends no message this can be read from.
+        //
+        // The bit numbers below are this list's order, not the venue's
+        // assignment, and the venue's assignment is what decides which exchange
+        // a quote's bid, ask and last are attributed to. So the table is marked
+        // provisional, and anything rendered from it says so rather than
+        // reading as though the venue had stated it.
         let smart_components: Vec<SmartComponent> = [
             ("NASDAQ", "Q"), ("NYSE", "N"), ("ARCA", "P"), ("BATS", "Z"),
             ("IEX", "V"), ("BEX", "B"), ("BYX", "Y"), ("NYSENAT", "C"),
@@ -2177,6 +2182,7 @@ impl Gateway {
             exchange_letter: letter.to_string(),
         }).collect();
         shared.reference.set_smart_components(smart_components);
+        shared.reference.note_smart_components_provisional(true);
 
         // News providers: parse from CCP logon tag 6830, fall back to defaults.
         // Wire format: "code1,name1;code2,name2;..." (tag value capped at 155 entries).
