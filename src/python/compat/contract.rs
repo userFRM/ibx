@@ -2460,6 +2460,10 @@ impl ContractDetails {
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug, Default)]
 pub struct Execution {
+    /// Every field the report stated that this client does not name, as
+    /// (tag, value). Kept rather than dropped.
+    #[pyo3(get, set)]
+    pub unnamed_fields: Vec<(u32, String)>,
     #[pyo3(get, set)]
     pub exec_id: String,
     #[pyo3(get, set)]

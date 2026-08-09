@@ -759,6 +759,13 @@ pub struct OrderState {
 /// ibapi-compatible Execution (used in execDetails callback).
 #[derive(Clone, Debug, Default)]
 pub struct Execution {
+    /// Every field the report stated that this client does not name, as
+    /// (tag, value), in the order the venue stated them.
+    ///
+    /// A report carries far more than any one client reads. What is not named
+    /// is kept rather than dropped, so a fact the venue stated about a fill can
+    /// be reached under its number instead of waiting to be named.
+    pub unnamed_fields: Vec<(u32, String)>,
     pub exec_id: String,
     pub time: String,
     pub acct_number: String,

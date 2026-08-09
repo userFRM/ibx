@@ -438,6 +438,60 @@ pub(crate) struct PendingFanout {
     pub deadline: Instant,
 }
 
+
+/// Every tag the execution-report handler reads.
+///
+/// Derived from the handler itself so it cannot fall behind as fields are
+/// added, the same way a definition's is.
+pub fn tags_read_from_an_execution() -> Vec<u32> {
+    let source = include_str!("ccp.rs");
+    let mut seen: Vec<u32> = Vec::new();
+    for cap in source.split("parsed.get(&").skip(1) {
+        let token: String = cap.chars().take_while(|c| *c != ')').collect();
+        let token = token.trim();
+        let tag = token.parse::<u32>().ok().or_else(|| {
+            let needle = format!("pub const {token}: u32 = ");
+            let at = crate::protocol::fix::SOURCE.find(&needle)? + needle.len();
+            crate::protocol::fix::SOURCE[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .ok()
+        });
+        if let Some(tag) = tag
+            && !seen.contains(&tag)
+        {
+            seen.push(tag);
+        }
+    }
+    seen.sort_unstable();
+    seen
+}
+
+/// What a report stated that nothing here reads, in the order stated.
+///
+/// Read from the bytes rather than the parsed map: a map holds one value per
+/// tag, and a report repeats them.
+pub fn unnamed_execution_fields(data: &[u8]) -> Vec<(u32, String)> {
+    let read = tags_read_from_an_execution();
+    let mut out = Vec::new();
+    for part in data.split(|&b| b == crate::protocol::fix::SOH) {
+        if part.is_empty() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(part);
+        let Some((tag_str, value)) = text.split_once('=') else { continue };
+        let Ok(tag) = tag_str.parse::<u32>() else { continue };
+        // The message's own fields are not the fill's.
+        if read.contains(&tag) || matches!(tag, 8 | 9 | 10 | 34 | 35 | 43 | 49 | 52 | 56 | 115) {
+            continue;
+        }
+        out.push((tag, value.to_string()));
+    }
+    out
+}
+
 impl CcpState {
     pub(crate) fn new() -> Self {
         Self {
@@ -596,7 +650,7 @@ impl CcpState {
             None => return,
         };
         match msg_type {
-            fix::MSG_EXEC_REPORT => self.handle_exec_report(&parsed, context, shared, event_tx, account_id),
+            fix::MSG_EXEC_REPORT => self.handle_exec_report(&parsed, msg, context, shared, event_tx, account_id),
             fix::MSG_CANCEL_REJECT => self.handle_cancel_reject(&parsed, context, shared, event_tx),
             fix::MSG_NEWS => self.handle_news_bulletin(&parsed, shared),
             fix::MSG_HEARTBEAT => {}
@@ -1135,6 +1189,7 @@ impl CcpState {
     fn handle_exec_report(
         &mut self,
         parsed: &std::collections::HashMap<u32, String>,
+        raw: &[u8],
         context: &mut Context,
         shared: &SharedState,
         event_tx: &Option<SyncSender<Event>>,
@@ -2005,6 +2060,10 @@ impl CcpState {
             };
 
             let last_exec = api::Execution {
+                // What the report stated that nothing above names. A report
+                // carries far more than any one client reads, and what was read
+                // used to be the whole of what survived.
+                unnamed_fields: unnamed_execution_fields(raw),
                 exec_id: exec_id.to_string(),
                 time: transact_time,
                 acct_number: account,
@@ -3824,15 +3883,15 @@ mod tests {
         let (mut ccp, mut context, shared) = ord_status_test_state();
 
         // The order is working, then the replace puts a cancel in flight.
-        ccp.handle_exec_report(&exec_report_frame(&[(150, "0"), (39, "0")]),
+        ccp.handle_exec_report(&exec_report_frame(&[(150, "0"), (39, "0")]), b"",
             &mut context, &shared, &None, "");
-        ccp.handle_exec_report(&exec_report_frame(&[(150, "6"), (39, "6")]),
+        ccp.handle_exec_report(&exec_report_frame(&[(150, "6"), (39, "6")]), b"",
             &mut context, &shared, &None, "");
         assert_eq!(context.order(42).map(|o| o.status),
             Some(crate::types::OrderStatus::PendingCancel), "the cancel is in flight");
         let _ = shared.orders.drain_open_orders();
 
-        ccp.handle_exec_report(&exec_report_frame(&[(150, "5"), (39, "5")]),
+        ccp.handle_exec_report(&exec_report_frame(&[(150, "5"), (39, "5")]), b"",
             &mut context, &shared, &None, "");
 
         assert_eq!(
@@ -3861,7 +3920,7 @@ mod tests {
             (11u32, "*"), (150, "0"), (39, "0"), (6008, "265598"), (38, "1"), (54, "1"),
         ].iter().map(|(k, v)| (*k, v.to_string())).collect();
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert!(context.order(0).is_none(), "the reserved order id must not be inserted");
         assert!(
@@ -3880,7 +3939,7 @@ mod tests {
             (14, "30"), (151, "70"), (6, "150.00"), (17, "E1"),
         ]);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let fills = shared.orders.drain_fills();
         assert_eq!(fills.len(), 1);
@@ -3908,7 +3967,7 @@ mod tests {
             (11u32, "77"), (150, "1"), (39, "1"), (6008, "265598"),
             (38, "100"), (14, "30"), (151, "70"), (54, "1"), (6, "150.0"),
         ].iter().map(|(k, v)| (*k, v.to_string())).collect();
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let orders = shared.orders.drain_open_orders();
         let (_, info) = orders.iter().find(|(id, _)| *id == 77)
@@ -3932,7 +3991,7 @@ mod tests {
             (11u32, "78"), (150, "1"), (39, "1"), (6008, "265598"),
             (38, "100"), (14, "30"), (54, "1"), (6, "150.0"),
         ].iter().map(|(k, v)| (*k, v.to_string())).collect();
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let orders = shared.orders.drain_open_orders();
         let (_, info) = orders.iter().find(|(id, _)| *id == 78)
@@ -3949,7 +4008,7 @@ mod tests {
             (11u32, "78"), (150, "6"), (39, "6"), (6008, "265598"),
             (38, "100"), (151, "70"), (54, "1"),
         ].iter().map(|(k, v)| (*k, v.to_string())).collect();
-        ccp.handle_exec_report(&later, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&later, b"", &mut context, &shared, &None, "");
 
         let orders = shared.orders.drain_open_orders();
         let (_, info) = orders.iter().find(|(id, _)| *id == 78)
@@ -4349,7 +4408,7 @@ mod tests {
     fn what_if_zero_init_margin_is_delivered() {
         let (mut ccp, mut context, shared) = what_if_test_state();
         let frame = what_if_frame(&ZERO_CLOSE_FIELDS);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let responses = shared.orders.drain_what_if_responses();
         assert_eq!(responses.len(), 1, "zero-margin preview must be delivered");
         assert_eq!(responses[0].init_margin_after, 0);
@@ -4366,7 +4425,7 @@ mod tests {
             (6826, "n/a"), (6827, "n/a"), (6828, "n/a"),
             (6092, "n/a"), (6093, "n/a"), (6094, "n/a"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         assert!(shared.orders.drain_what_if_responses().is_empty(),
             "n/a ack must not surface as a response");
         // The order stays pending for the subsequent data frame.
@@ -4380,7 +4439,7 @@ mod tests {
     fn what_if_without_6092_but_numeric_siblings_is_delivered() {
         let (mut ccp, mut context, shared) = what_if_test_state();
         let frame = what_if_frame(&[(6093, "0"), (6094, "945923.47")]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let responses = shared.orders.drain_what_if_responses();
         assert_eq!(responses.len(), 1, "sibling-only preview must be delivered");
         assert_eq!(responses[0].init_margin_after, 0);
@@ -4399,7 +4458,7 @@ mod tests {
             (6826, "nan"), (6827, "nan"), (6828, "nan"),
             (6092, "nan"), (6093, "nan"), (6094, "nan"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         assert!(shared.orders.drain_what_if_responses().is_empty(),
             "all-nan frame must not surface as a response");
         assert!(context.order(42).is_some());
@@ -4411,7 +4470,7 @@ mod tests {
     fn what_if_nan_field_with_finite_sibling_is_delivered() {
         let (mut ccp, mut context, shared) = what_if_test_state();
         let frame = what_if_frame(&[(6092, "nan"), (6094, "945923.47")]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let responses = shared.orders.drain_what_if_responses();
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0].init_margin_after, 0, "nan field reads as unset/0");
@@ -4461,7 +4520,7 @@ mod tests {
         }
 
         // The point of the test: this must return rather than panic.
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert!(
             context.order(42).is_none(),
@@ -4506,7 +4565,7 @@ mod tests {
             let (mut ccp, mut context, shared) = tracked_order_state();
             context.update_order_filled(42, 10); // already counted
             let frame = fill_frame(&[marker]);
-            ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+            ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
             assert!(
                 shared.orders.drain_fills().is_empty(),
@@ -4519,7 +4578,7 @@ mod tests {
         // execution and still books, so the assertions above are not passing
         // against a handler that books nothing.
         let (mut ccp, mut context, shared) = tracked_order_state();
-        ccp.handle_exec_report(&fill_frame(&[]), &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&fill_frame(&[]), b"", &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1, "a live execution books");
         assert_eq!(context.position(0), 10.0);
     }
@@ -4544,7 +4603,7 @@ mod tests {
         ] {
             recovery.insert(tag, val.to_string());
         }
-        ccp.handle_exec_report(&recovery, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&recovery, b"", &mut context, &shared, &None, "");
         let _ = shared.orders.drain_fills();
 
         assert_eq!(
@@ -4561,7 +4620,7 @@ mod tests {
         ] {
             replay.insert(tag, val.to_string());
         }
-        ccp.handle_exec_report(&replay, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&replay, b"", &mut context, &shared, &None, "");
 
         assert!(
             shared.orders.drain_fills().is_empty(),
@@ -4585,7 +4644,7 @@ mod tests {
 
         // The replay carries eight cumulative — three of which are news.
         let frame = fill_frame(&[(97, "Y"), (14, "8"), (32, "3"), (151, "92")]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert_eq!(
             shared.orders.drain_fills().len(), 1,
@@ -4594,7 +4653,7 @@ mod tests {
         assert_eq!(context.position(0), 3.0);
 
         // And a second copy of that same replay states no more, so it is history.
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         assert!(
             shared.orders.drain_fills().is_empty(),
             "restating the same cumulative quantity is not new",
@@ -4615,8 +4674,8 @@ mod tests {
         let mut second = fill_frame(&[(32, "10"), (151, "80"), (14, "20")]);
         second.remove(&17);
 
-        ccp.handle_exec_report(&first, &mut context, &shared, &None, "");
-        ccp.handle_exec_report(&second, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&second, b"", &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 2, "both slices book");
         assert_eq!(context.position(0), 20.0);
@@ -4632,8 +4691,8 @@ mod tests {
         let mut frame = fill_frame(&[]);
         frame.remove(&17);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 1, "booked once, not twice");
         assert_eq!(context.position(0), 10.0, "and the position moved once");
@@ -4643,7 +4702,7 @@ mod tests {
         let mut other = fill_frame(&[]);
         other.remove(&17);
         other.insert(32, "5".to_string());
-        ccp.handle_exec_report(&other, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&other, b"", &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1, "a distinct execution still books");
         assert_eq!(context.position(0), 15.0);
     }
@@ -4662,8 +4721,8 @@ mod tests {
         later.remove(&17);
         let mut earlier = fill_frame(&[(97, "Y"), (14, "8"), (32, "3"), (151, "92")]);
         earlier.remove(&17);
-        ccp.handle_exec_report(&later, &mut context, &shared, &None, "");
-        ccp.handle_exec_report(&earlier, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&later, b"", &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&earlier, b"", &mut context, &shared, &None, "");
 
         assert!(shared.orders.drain_fills().is_empty(), "history restated is not new quantity");
         assert_eq!(context.order(42).unwrap().filled, 12, "and the order is not overcounted");
@@ -4673,7 +4732,7 @@ mod tests {
         // and still reaches the caller.
         let mut fresh = fill_frame(&[(97, "Y"), (14, "15"), (32, "3"), (151, "85")]);
         fresh.remove(&17);
-        ccp.handle_exec_report(&fresh, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&fresh, b"", &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1, "quantity the order lacks still books");
         assert_eq!(context.position(0), 3.0);
     }
@@ -4688,13 +4747,13 @@ mod tests {
         context.update_order_filled(42, 5);
 
         let marked = fill_frame(&[(97, "Y"), (17, "E-9"), (14, "9"), (32, "4"), (151, "91")]);
-        ccp.handle_exec_report(&marked, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&marked, b"", &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1, "the marked copy books what is new");
         assert_eq!(context.order(42).unwrap().filled, 9);
 
         // The same execution again, this time without its marker.
         let unmarked = fill_frame(&[(17, "E-9"), (14, "9"), (32, "4"), (151, "91")]);
-        ccp.handle_exec_report(&unmarked, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&unmarked, b"", &mut context, &shared, &None, "");
 
         assert!(
             shared.orders.drain_fills().is_empty(),
@@ -4721,7 +4780,7 @@ mod tests {
         // which is the whole point: the dedup window cannot be what saves this.
         let replayed = fill_frame(&[(97, "Y"), (17, "EVICTED-1"), (14, "12"), (32, "4"), (151, "88")]);
 
-        ccp.handle_exec_report(&replayed, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&replayed, b"", &mut context, &shared, &None, "");
 
         assert!(
             shared.orders.drain_fills().is_empty(),
@@ -4739,8 +4798,8 @@ mod tests {
         context.update_order_filled(42, 5);
 
         let frame = fill_frame(&[(97, "Y"), (14, "12"), (32, "4"), (151, "88")]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 1, "the second copy adds nothing");
         assert_eq!(context.order(42).unwrap().filled, 12);
@@ -4760,8 +4819,8 @@ mod tests {
         let mut second = fill_frame(&[(32, "10"), (151, "90"), (14, "20")]);
         second.remove(&17);
 
-        ccp.handle_exec_report(&first, &mut context, &shared, &None, "");
-        ccp.handle_exec_report(&second, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&second, b"", &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 2, "both slices book");
         assert_eq!(context.position(0), 20.0);
@@ -4778,14 +4837,14 @@ mod tests {
         let mut frame = fill_frame(&[]);
         frame.remove(&17);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         assert!(shared.orders.drain_fills().is_empty(), "nothing to book against yet");
 
         let instrument = context.register_instrument(756733);
         context.insert_order(crate::types::Order::new(
             42, instrument, Side::Buy, 100, 100 * PRICE_SCALE, b'2', b'0', 0,
         ));
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 1, "the execution is still bookable");
         assert_eq!(context.position(0), 10.0);
@@ -4972,7 +5031,7 @@ mod tests {
             (583, "PROBE-OCA-1"),
         ]);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let updates = shared.orders.drain_order_updates();
         assert_eq!(updates.len(), 1, "the status is still reported");
@@ -4993,7 +5052,7 @@ mod tests {
                     (39, ord_status), (150, exec_type), (100, "ARCA"), (198, "ARCA:1"),
                     (583, group),
                 ]);
-                ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+                ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
                 let updates = shared.orders.drain_order_updates();
                 // Without this a case that produced no update at all would
                 // pass the loop below by never entering it.
@@ -5015,7 +5074,7 @@ mod tests {
     fn a_report_without_a_group_still_has_no_parent() {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let frame = exec_report_frame(&[(39, "0"), (150, "0"), (100, "ARCA"), (198, "ARCA:1")]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let updates = shared.orders.drain_order_updates();
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].parent_id, 0);
@@ -5033,7 +5092,7 @@ mod tests {
         let frame = exec_report_frame(&[
             (39, "0"), (150, "0"), (100, "ARCA"), (198, "ARCA:1"), (6107, "4242"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let updates = shared.orders.drain_order_updates();
         assert_eq!(updates[0].parent_id, 0, "6107 is a client id, not a parent order");
     }
@@ -5047,7 +5106,7 @@ mod tests {
         let frame = exec_report_frame(&[
             (39, "5"), (150, "5"), (100, "ARCA"), (198, "ARCA:1"), (378, "102"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let updates = shared.orders.drain_order_updates();
         assert!(
             !updates.iter().any(|u| u.status == crate::types::OrderStatus::Submitted),
@@ -5064,7 +5123,7 @@ mod tests {
             (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
             (20, "1"), (32, "50"), (31, "412.25"), (14, "0"), (38, "100"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let fills = shared.orders.drain_fills();
         assert!(
             fills.iter().all(|f| f.qty == 0),
@@ -5083,7 +5142,7 @@ mod tests {
             (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
             (17, "exec-1"), (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
         ]);
-        ccp.handle_exec_report(&first, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
         let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
         assert_eq!(booked, 50, "the original execution books what it states");
 
@@ -5091,7 +5150,7 @@ mod tests {
             (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
             (17, "exec-2"), (20, "2"), (32, "60"), (31, "412.25"), (14, "60"), (38, "100"),
         ]);
-        ccp.handle_exec_report(&corrected, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
         let after: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
         assert_eq!(after, 10, "the correction books the difference, not the whole trade again");
     }
@@ -5103,7 +5162,7 @@ mod tests {
     fn a_pending_status_does_not_retire_the_order() {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let frame = exec_report_frame(&[(39, "D"), (150, "D"), (100, "ARCA"), (198, "ARCA:1")]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let updates = shared.orders.drain_order_updates();
         assert_eq!(updates[0].status, crate::types::OrderStatus::PendingCancel,
             "D is pending, not cancelled");
@@ -5120,7 +5179,7 @@ mod tests {
             (39, "\u{7}"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
             (32, "50"), (31, "412.25"), (14, "50"), (6, "412.25"), (38, "100"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let fills = shared.orders.drain_fills();
         assert_eq!(fills.len(), 1, "the fill survives a status this does not know");
         assert_eq!(fills[0].qty, 50);
@@ -5135,7 +5194,7 @@ mod tests {
             (39, "1"), (150, "1"), (100, "ARCA"), (198, "ARCA:1"),
             (38, "100"), (14, "30"), (32, "30"), (31, "412.25"), (6, "412.25"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let updates = shared.orders.drain_order_updates();
         assert_eq!(updates[0].remaining_qty, 70.0, "100 ordered less 30 filled, not 0");
     }
@@ -5148,7 +5207,7 @@ mod tests {
             (39, "0"), (150, "0"), (100, "ARCA"), (198, "ARCA:1"),
             (37, "0256d0f1.0001417e.6a6982d2.0001"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         let updates = shared.orders.drain_order_updates();
         assert_ne!(updates[0].perm_id, 0, "the order id still yields a permId");
     }
@@ -5173,7 +5232,7 @@ mod tests {
                 frame.insert(54, missing.to_string());
             }
 
-            ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+            ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
             assert!(
                 context.order(77).is_none(),
@@ -5197,7 +5256,7 @@ mod tests {
                 frame.insert(tag, val.to_string());
             }
 
-            ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+            ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
             let order = context.order(77).expect("a stated side is recovered");
             assert_eq!(order.side, expected, "Side={tag54}");
@@ -5221,7 +5280,7 @@ mod tests {
                 pairs.push((59, v));
             }
             let frame = exec_report_frame(&pairs);
-            ccp.handle_exec_report(&frame, context, shared, &None, "");
+            ccp.handle_exec_report(&frame, b"", context, shared, &None, "");
             shared.orders.get_order_info(42).expect("published").order.tif.clone()
         };
 
@@ -5270,7 +5329,7 @@ mod tests {
         ] {
             frame.insert(tag, val.to_string());
         }
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert_eq!(
             context.order(78).expect("recovered").tif, crate::types::TIF_UNSTATED,
@@ -5375,7 +5434,7 @@ mod tests {
             (39, "1"), (17, "e-1"), (150, "F"), (32, "40"), (31, "100.0"), (151, "60"),
             (6008, "756733"), (38, "100"), (54, "1"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert_eq!(shared.orders.drain_fills().len(), 1, "the fill books");
         assert_eq!(context.position(0), 40.0, "and the position moves");
@@ -5417,7 +5476,7 @@ mod tests {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         // 39=0, no ExDestination, exec ref "NONE" — waiting, not yet routed.
         let frame = exec_report_frame(&[(39, "0"), (150, "0"), (198, "NONE")]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         assert_eq!(context.order(42).unwrap().status,
             crate::types::OrderStatus::PreSubmitted);
     }
@@ -5427,7 +5486,7 @@ mod tests {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         // 39=0 with the order routed to ARCA — working.
         let frame = exec_report_frame(&[(39, "0"), (150, "0"), (100, "ARCA"), (198, "ARCA:1")]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
         assert_eq!(context.order(42).unwrap().status,
             crate::types::OrderStatus::Submitted);
     }
@@ -5436,11 +5495,11 @@ mod tests {
     fn ord_status_presubmitted_then_routed_advances_to_submitted() {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let waiting = exec_report_frame(&[(39, "0"), (150, "0"), (198, "NONE")]);
-        ccp.handle_exec_report(&waiting, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&waiting, b"", &mut context, &shared, &None, "");
         assert_eq!(context.order(42).unwrap().status,
             crate::types::OrderStatus::PreSubmitted);
         let routed = exec_report_frame(&[(39, "0"), (150, "0"), (100, "ARCA"), (198, "ARCA:1")]);
-        ccp.handle_exec_report(&routed, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&routed, b"", &mut context, &shared, &None, "");
         assert_eq!(context.order(42).unwrap().status,
             crate::types::OrderStatus::Submitted);
     }
@@ -5465,7 +5524,7 @@ mod tests {
         let frame = exec_report_frame(&[
             (39, "2"), (150, "F"), (32, "100"), (31, "150.00"), (14, "100"), (151, "0"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &Some(tx), "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &Some(tx), "");
 
         let events: Vec<_> = rx.try_iter().collect();
         assert!(
@@ -5487,7 +5546,7 @@ mod tests {
             (39, "I"), (150, "0"),
             (58, "Order held pending margin check"), (103, "0"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         assert_eq!(context.order(42).unwrap().status, crate::types::OrderStatus::Inactive);
 
@@ -5507,7 +5566,7 @@ mod tests {
             (39, "8"), (150, "0"),
             (58, "No valid bid/ask"), (103, "1"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         // Rejected is terminal — the engine retires the order.
         assert!(context.order(42).is_none());
@@ -5536,7 +5595,7 @@ mod tests {
             (39, "8"), (150, "0"),
             (58, "No valid bid/ask"), (103, "1"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let info = shared.orders.get_order_info(42).unwrap();
         assert_eq!(info.order_state.reject_reason, "No valid bid/ask (reason code 1)");
@@ -5995,7 +6054,7 @@ mod tests {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let frame = untracked_fill(&[]);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let fills = shared.orders.drain_fills();
         assert_eq!(fills.len(), 1, "the fill must be reported");
@@ -6015,7 +6074,7 @@ mod tests {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let frame = untracked_fill(&[(54, "2")]);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let fills = shared.orders.drain_fills();
         assert_eq!(fills.len(), 1);
@@ -6031,7 +6090,7 @@ mod tests {
             let (mut ccp, mut context, shared) = ord_status_test_state();
             let frame = untracked_fill(&[(missing, "")]);
 
-            ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+            ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
             assert!(
                 shared.orders.drain_fills().is_empty(),
@@ -6049,7 +6108,7 @@ mod tests {
         for (tag, name) in [(97u32, "PossResend"), (43, "PossDupFlag")] {
             let (mut ccp, mut context, shared) = ord_status_test_state();
 
-            ccp.handle_exec_report(&untracked_fill(&[(tag, "Y")]), &mut context, &shared, &None, "");
+            ccp.handle_exec_report(&untracked_fill(&[(tag, "Y")]), b"", &mut context, &shared, &None, "");
 
             assert!(
                 shared.orders.drain_fills().is_empty(),
@@ -6060,7 +6119,7 @@ mod tests {
         // The same report without the marker is booked, so the guard is the
         // marker and not something else about the frame.
         let (mut ccp, mut context, shared) = ord_status_test_state();
-        ccp.handle_exec_report(&untracked_fill(&[(97, "N")]), &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&untracked_fill(&[(97, "N")]), b"", &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1);
     }
 
@@ -6073,11 +6132,11 @@ mod tests {
 
         // Same execution, first seen without the contract that would let the
         // engine place it.
-        ccp.handle_exec_report(&untracked_fill(&[(6008, "")]), &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&untracked_fill(&[(6008, "")]), b"", &mut context, &shared, &None, "");
         assert!(shared.orders.drain_fills().is_empty());
 
         // Replayed in full — it must not be rejected as already seen.
-        ccp.handle_exec_report(&untracked_fill(&[]), &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&untracked_fill(&[]), b"", &mut context, &shared, &None, "");
         assert_eq!(
             shared.orders.drain_fills().len(), 1,
             "the replay must be booked, not dropped as a duplicate",
@@ -6095,7 +6154,7 @@ mod tests {
             (32, "5"), (31, "101.00"), (14, "12"), (6, "100.50"), (151, "3"), (39, "1"),
         ]);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let fills = shared.orders.drain_fills();
         assert_eq!(fills.len(), 1);
@@ -6120,7 +6179,7 @@ mod tests {
             &exec_report_frame(&[
                 (150, "2"), (39, "1"), (32, "7"), (31, "100.00"), (14, "7"), (6, "100.00"),
                 (151, "3"), (17, "E1"),
-            ]),
+            ]), b"",
             &mut context, &shared, &None, "",
         );
         let first = shared.orders.drain_fills();
@@ -6130,7 +6189,7 @@ mod tests {
         ccp.handle_exec_report(
             &exec_report_frame(&[
                 (150, "2"), (39, "1"), (32, "1"), (31, "101.00"), (151, "2"), (17, "E2"),
-            ]),
+            ]), b"",
             &mut context, &shared, &None, "",
         );
         let second = shared.orders.drain_fills();
@@ -6147,7 +6206,7 @@ mod tests {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let frame = untracked_fill(&[(32, "5"), (31, "-2.00"), (14, "5"), (6, "-1.50")]);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let fills = shared.orders.drain_fills();
         assert_eq!(fills[0].avg_price, -(PRICE_SCALE + PRICE_SCALE / 2), "-1.50 is kept");
@@ -6160,7 +6219,7 @@ mod tests {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let frame = untracked_fill(&[(32, "5"), (31, "101.00"), (14, ""), (6, "")]);
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let fills = shared.orders.drain_fills();
         assert_eq!(fills.len(), 1);
@@ -6180,7 +6239,7 @@ mod tests {
         ] {
             let (mut ccp, mut context, shared) = ord_status_test_state();
             ccp.handle_exec_report(
-                &untracked_fill(&[(54, tag54)]), &mut context, &shared, &None, "",
+                &untracked_fill(&[(54, tag54)]), b"", &mut context, &shared, &None, "",
             );
             let fills = shared.orders.drain_fills();
             assert_eq!(fills.len(), 1, "Side={tag54} books");
@@ -6206,7 +6265,7 @@ mod tests {
         ccp.handle_exec_report(
             &exec_report_frame(&[
                 (150, "2"), (39, "1"), (32, "1"), (31, "100.00"), (151, "9"), (17, "DUP-1"),
-            ]),
+            ]), b"",
             &mut context, &shared, &event_tx, "",
         );
         assert_eq!(shared.orders.drain_fills().len(), 1, "the first delivery books");
@@ -6216,7 +6275,7 @@ mod tests {
         ccp.handle_exec_report(
             &exec_report_frame(&[
                 (150, "2"), (39, "2"), (32, "1"), (31, "100.00"), (151, "0"), (17, "DUP-1"),
-            ]),
+            ]), b"",
             &mut context, &shared, &event_tx, "",
         );
 
@@ -6276,7 +6335,7 @@ mod tests {
         frame.insert(6159, "PctChange".to_string());
         frame.insert(6164, "25".to_string());
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let info = shared.orders.get_order_info(42).expect("the order is recorded");
         assert_eq!(info.order.order_ref, "my-strategy", "the caller's own name for it");
@@ -6303,7 +6362,7 @@ mod tests {
         frame.insert(6892, "2.5".to_string());
         frame.insert(8497, "1".to_string());
 
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let info = shared.orders.get_order_info(42).expect("the order is recorded");
         assert_eq!(info.last_exec.liquidation, 1, "the broker liquidated this");
@@ -6320,7 +6379,7 @@ mod tests {
             (150, "2"), (39, "2"), (32, "1"), (31, "100.00"), (151, "0"), (17, "E1"),
             (6008, "756733"), (55, "SPY"),
         ]);
-        ccp.handle_exec_report(&frame, &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
         let info = shared.orders.get_order_info(42).expect("the order is recorded");
         assert_eq!(info.last_exec.liquidation, 0);
@@ -6338,18 +6397,18 @@ mod tests {
             (6008, "756733"), (55, "SPY"),
         ]);
 
-        ccp.handle_exec_report(&partial("E1"), &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&partial("E1"), b"", &mut context, &shared, &None, "");
         ccp.handle_exec_report(
             &exec_report_frame(&[
                 (150, "2"), (39, "2"), (32, "9"), (31, "100.00"), (151, "0"), (17, "E2"),
                 (6008, "756733"), (55, "SPY"),
-            ]),
+            ]), b"",
             &mut context, &shared, &None, "",
         );
         let terminal = shared.orders.get_order_info(42).map(|i| i.order_state.status.clone());
 
         // The earlier partial arrives again.
-        ccp.handle_exec_report(&partial("E1"), &mut context, &shared, &None, "");
+        ccp.handle_exec_report(&partial("E1"), b"", &mut context, &shared, &None, "");
 
         assert_eq!(
             shared.orders.get_order_info(42).map(|i| i.order_state.status.clone()),
@@ -6541,5 +6600,43 @@ mod tests {
             context.account().net_liquidation, 0,
             "and none of it is what the account itself is worth",
         );
+    }
+}
+
+#[cfg(test)]
+mod unnamed_execution_tests {
+    use super::*;
+
+    /// A report carries far more than any one client reads, and what was read
+    /// used to be the whole of what survived. A fact the venue stated about a
+    /// fill could not be reached and nothing said it had arrived.
+    #[test]
+    fn a_field_a_report_states_and_nothing_names_is_kept() {
+        let frame = b"35=8\x0117=E1\x0132=100\x019997=something\x019998=42\x01";
+        let kept = unnamed_execution_fields(frame);
+        let tags: Vec<u32> = kept.iter().map(|(t, _)| *t).collect();
+        assert!(tags.contains(&9997));
+        assert!(tags.contains(&9998));
+        assert_eq!(kept.iter().find(|(t, _)| *t == 9997).unwrap().1, "something");
+    }
+
+    /// A field the handler reads is read into its own place, not left as a
+    /// number, and the message's own fields are not the fill's.
+    #[test]
+    fn what_is_read_and_what_belongs_to_the_message_are_both_excluded() {
+        let frame = b"35=8\x0117=E1\x0152=20260101-00:00:00\x01";
+        let tags: Vec<u32> = unnamed_execution_fields(frame).iter().map(|(t, _)| *t).collect();
+        assert!(!tags.contains(&17), "the execution id is read");
+        assert!(!tags.contains(&35), "the message type belongs to the message");
+        assert!(!tags.contains(&52), "the sending time belongs to the message");
+    }
+
+    /// The handler reads a good many tags, so the derived list is not empty or
+    /// tiny — which would make everything look unread.
+    #[test]
+    fn the_tags_the_handler_reads_are_derived_from_the_handler() {
+        let read = tags_read_from_an_execution();
+        assert!(read.len() > 30, "only {} tags reported as read", read.len());
+        assert!(read.contains(&17), "the execution id is read");
     }
 }

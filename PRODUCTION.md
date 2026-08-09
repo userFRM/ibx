@@ -32,7 +32,7 @@ number. A field is never dropped because nothing has got round to reading it.
 | Fields repeated in one message (rule bands, identifier groups) | **kept, proved** — the parsed map held one value per tag and lost the rest |
 | Fields stated after a contract's identifier block | **kept** — every contract in a multi-contract reply was truncated there |
 | A trading halt | **wired** — decoded and dropped; carried on the quote now |
-| Every field an execution report states | **open** — 132 of 173 tags unread, and no equivalent of the definition's keep-everything record |
+| Every field an execution report states | **kept** — what the handler does not name is kept under its number, read from the bytes so repeats survive |
 | Every field an order status states | **open** — same, not yet measured |
 | Account values outside a whitelist of ~18 | **open** — everything else the venue states is dropped with no trace |
 | Tick attributes on a trade or quote | **open** — decoded off the wire, then replaced with defaults presented as the venue's word |
@@ -97,10 +97,11 @@ session at a time.
 
 ## Order of work
 
-1. **Keep everything on the remaining messages.** Executions, order status and
-   account values need what a definition now has: nothing dropped, unnamed
-   fields kept under their numbers. This closes a whole class rather than a
-   field, and it is how the definition's own gaps were found.
+1. **Keep everything on the remaining messages.** Executions are done. Order
+   status and account values still need what a definition and an execution now
+   have: nothing dropped, unnamed fields kept under their numbers. This closes a
+   whole class rather than a field, and it is how the definition's own gaps were
+   found.
 2. **Finish the market-rule block.** The grammar is established; the parser
    stops at the size tables. This settles two published fields.
 3. **Stop the remaining invented values.** Currency, tick-size default, the

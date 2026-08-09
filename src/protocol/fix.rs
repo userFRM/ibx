@@ -22,6 +22,9 @@ pub const TAG_MSG_SEQ_NUM: u32 = 34;
 pub const TAG_MSG_TYPE: u32 = 35;
 pub const TAG_SENDER_COMP_ID: u32 = 49;
 pub const TAG_SENDING_TIME: u32 = 52;
+
+/// This file's own text, so a handler can resolve a tag it refers to by name.
+pub const SOURCE: &str = include_str!("fix.rs");
 pub const TAG_TARGET_COMP_ID: u32 = 56;
 pub const TAG_TEXT: u32 = 58;
 pub const TAG_URGENCY: u32 = 61;
