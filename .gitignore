@@ -37,3 +37,7 @@ DEVLOG.md
 .env
 .idea/
 tests/python/__pycache__/
+
+# The built extension lands here from an editable install.
+python/ibx/*.so
+python/ibx/__pycache__/
