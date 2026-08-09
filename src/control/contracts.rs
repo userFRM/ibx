@@ -513,24 +513,40 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
 
     let header = &data[..starts[0]];
     let mut out = Vec::with_capacity(starts.len());
+    // A contract's fields run from where it is named until the next contract is
+    // named. The symbol tag is reused inside the identifier block — `55=BBG`
+    // and `55=US` sit there — so an occurrence that states neither what the
+    // contract is nor which contract it is does not begin a new one: it belongs
+    // to the contract already open, and everything after it does too.
+    //
+    // Cutting there instead lost every field a contract stated after its own
+    // identifier block. In a reply naming fifty bonds, forty-nine came back
+    // holding three fields each while the last held twelve hundred, because
+    // only the last had nothing following it to be cut by.
+    let mut open: Option<Vec<u8>> = None;
+    let flush = |open: &mut Option<Vec<u8>>, out: &mut Vec<ContractDefinition>| {
+        if let Some(mut record) = open.take() {
+            record.push(SOH);
+            if let Some(def) = parse_secdef_response(&record) {
+                out.push(def);
+            }
+        }
+    };
     for (i, &start) in starts.iter().enumerate() {
         let end = starts.get(i + 1).copied().unwrap_or(data.len());
         let body = &data[start..end];
-        // The symbol tag is reused inside the identifier block — `55=BBG` and
-        // `55=US` sit there — so not every occurrence starts a contract. One
-        // that does states what the contract is and which contract it is.
         let names_a_contract = contains_field(body, b"167=") && contains_field(body, b"6008=");
-        if !names_a_contract {
-            continue;
-        }
-        let mut record = Vec::with_capacity(header.len() + body.len() + 1);
-        record.extend_from_slice(header);
-        record.extend_from_slice(body);
-        record.push(SOH);
-        if let Some(def) = parse_secdef_response(&record) {
-            out.push(def);
+        if names_a_contract {
+            flush(&mut open, &mut out);
+            let mut record = Vec::with_capacity(header.len() + body.len() + 1);
+            record.extend_from_slice(header);
+            record.extend_from_slice(body);
+            open = Some(record);
+        } else if let Some(record) = open.as_mut() {
+            record.extend_from_slice(body);
         }
     }
+    flush(&mut open, &mut out);
     // Records that all name the same contract are one contract described once.
     // The identifier block repeats the symbol tag and states a type and an id
     // beside it, so a single definition can split in two, and a field the
@@ -2624,5 +2640,44 @@ mod repeated_field_tests {
             .map(|(_, v)| v.as_str())
             .collect();
         assert_eq!(values, vec!["alpha", "beta", "gamma"]);
+    }
+}
+
+#[cfg(test)]
+mod record_boundary_tests {
+    use super::*;
+
+    /// A contract's fields run until the next contract is named. The symbol tag
+    /// is reused inside the identifier block, and treating that as the start of
+    /// a new contract cut every contract short: in a reply naming fifty bonds,
+    /// forty-nine came back holding almost nothing while the last held
+    /// everything, because only the last had nothing after it to be cut by.
+    #[test]
+    fn a_contract_keeps_what_it_states_after_its_own_identifier_block() {
+        let data = b"35=d\x01320=R1\x01\
+                     55=AAA\x01167=CORP\x016008=111\x01\
+                     55=BBG\x01456=A\x01\
+                     225=20260101\x01\
+                     55=ZZZ\x01167=CORP\x016008=222\x01\
+                     225=20270202\x01";
+        let defs = parse_secdef_responses(data);
+        assert_eq!(defs.len(), 2, "two contracts are named");
+        assert_eq!(defs[0].con_id, 111);
+        assert_eq!(defs[1].con_id, 222);
+        // The field stated after the first contract's identifier block belongs
+        // to that contract, and used to be dropped.
+        assert_eq!(defs[0].issue_date, "20260101");
+        assert_eq!(defs[1].issue_date, "20270202");
+    }
+
+    /// A field stated after the last contract still belongs to it.
+    #[test]
+    fn the_last_contract_keeps_what_follows_it() {
+        let data = b"35=d\x01320=R1\x01\
+                     55=AAA\x01167=CORP\x016008=111\x01\
+                     55=BBG\x01456=A\x01225=20260101\x01";
+        let defs = parse_secdef_responses(data);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].issue_date, "20260101");
     }
 }
