@@ -15,7 +15,7 @@ Counts here are measured, not asserted. Where a number is an estimate it says so
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
 | The asynchronous wrapper's shape | 90 methods | 90 carried |
-| The Rust client's shape | 77 methods | 11 carried, 66 open |
+| The Rust client's shape | 77 methods | 13 carried, 64 open |
 
 ## 1. The wire
 
@@ -112,7 +112,7 @@ What that took, in three parts of very different size:
    `reqTickers()` — subscribe, wait for a quote, unsubscribe — is not carried
    yet.
 
-### The Rust client — 11 of 77
+### The Rust client — 13 of 77
 
 `ibx::api::Client`, beside `EClient` rather than instead of it. A call that
 answers returns the answer; a call that only sends returns nothing, because
@@ -124,11 +124,18 @@ Carried: the session itself, contract details, qualifying one contract or a
 list, bars, positions, the account summary, the option chain, the current time,
 the managed accounts and the global cancel.
 
-The 66 open are not the same work as the wrapper's were. Most of that shape
-returns a subscription a caller iterates — a stream of bars, of depth, of ticks
-— and this client has no iterator form yet. That is the design piece, and the
-rest is volume behind it. Until then `Client::inner()` reaches the callback
-shape for anything not carried, on the same session, so nothing is unreachable.
+Streams are carried as `Subscription<T>`, which a caller loops over. It does two
+things a bare loop over a queue would not. It **withdraws**: a dropped
+subscription stops asking, because one left running feeds a session nobody reads
+and costs the account a line it is not using. And it **ends on the venue's
+refusal** rather than blocking on data that is never coming, keeping the refusal
+where a caller can read it — a stream that ended because the venue said no and
+one that ended because nothing came look identical otherwise.
+
+Bars and depth run on it. The rest of the streams are volume behind that
+design rather than design. Until they land, `Client::inner()` reaches the
+callback shape for anything not carried, on the same session, so nothing is
+unreachable.
 
 ## Order of work
 
@@ -137,8 +144,8 @@ shape for anything not carried, on the same session, so nothing is unreachable.
 2. ~~Live quotes.~~ Carried.
 3. ~~The thin wrappers.~~ Carried.
 4. ~~The answering forms beneath the rest.~~ Carried.
-5. The Rust shape. Begun; the piece that decides the rest is a subscription a
-   caller can iterate, which nothing here has yet.
+5. The Rust shape. The subscription that decides the rest is built; what is
+   left is coverage.
 6. The wire's remaining refusals, which need a live session.
 
 ## What is not claimed
@@ -149,7 +156,5 @@ A program written against the asynchronous wrapper finds every call it uses.
 That is not the same as every call having been proved against a live venue, and
 ROADMAP.md is where that distinction is kept.
 
-The Rust client's shape is 11 of 77, and what is missing there is a design
-rather than a list: a subscription a caller can iterate. The wire still has
-eight calls that answer they cannot be served, and one capability the venue
-refuses this session.
+The Rust client's shape is 13 of 77. The wire still has eight calls that answer
+they cannot be served, and one capability the venue refuses this session.

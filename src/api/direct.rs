@@ -18,6 +18,9 @@ use crate::api::client::{EClient, EClientConfig};
 use crate::api::types::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
 use crate::api::client::{AccountValue, OptionChain, PositionRow};
+use crate::api::subscription::Subscription;
+use crate::types::{DepthUpdate, RealTimeBar};
+use crate::types::ControlCommand;
 
 use super::Contract;
 
@@ -50,6 +53,9 @@ impl Wrapper for Recorded {
 pub struct Client {
     inner: EClient,
     recorded: Arc<Mutex<Recorded>>,
+    /// Ids for the streams this shape opens. Far above what a caller of the
+    /// callback shape is likely to use on the same session.
+    next_stream_id: std::sync::atomic::AtomicI64,
 }
 
 impl Client {
@@ -58,6 +64,7 @@ impl Client {
         Ok(Self {
             inner: EClient::connect(config)?,
             recorded: Arc::new(Mutex::new(Recorded::default())),
+            next_stream_id: std::sync::atomic::AtomicI64::new(0x2000_0000),
         })
     }
 
@@ -129,6 +136,59 @@ impl Client {
     /// Every expiration and strike a venue lists for an underlying.
     pub fn option_chain(&self, underlying: &Contract) -> Result<Vec<OptionChain>, String> {
         self.inner.option_chain(underlying)
+    }
+
+    // -- streams a caller iterates -----------------------------------------
+
+    fn stream_id(&self) -> i64 {
+        self.next_stream_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Bars as the venue prints them, until the stream is dropped.
+    ///
+    /// Dropping withdraws it. A stream left running feeds a session nobody is
+    /// reading, which costs the account a line it is not using.
+    pub fn realtime_bars(
+        &self,
+        contract: &Contract,
+        what_to_show: &str,
+        use_rth: bool,
+    ) -> Result<Subscription<RealTimeBar>, String> {
+        let req_id = self.stream_id();
+        self.inner.req_real_time_bars(req_id, contract, 5, what_to_show, use_rth)?;
+        // Withdraw through a clone of the session's control channel rather
+        // than a borrow of the client: a stream may outlive the borrow that
+        // made it, and a stream that cannot withdraw itself is one the venue
+        // keeps feeding.
+        let tx = self.inner.control_tx.clone();
+        Ok(Subscription::new(
+            req_id,
+            Arc::clone(&self.inner.shared),
+            |sh, id| sh.market.take_real_time_bars_for(id as u32),
+            move |id| {
+                let _ = tx.send(ControlCommand::CancelRealTimeBar { req_id: id as u32 });
+            },
+        ))
+    }
+
+    /// Every change to a contract's book, until the stream is dropped.
+    pub fn market_depth(
+        &self,
+        contract: &Contract,
+        num_rows: i32,
+        smart_depth: bool,
+    ) -> Result<Subscription<DepthUpdate>, String> {
+        let req_id = self.stream_id();
+        self.inner.req_mkt_depth(req_id, contract, num_rows, smart_depth)?;
+        let tx = self.inner.control_tx.clone();
+        Ok(Subscription::new(
+            req_id,
+            Arc::clone(&self.inner.shared),
+            |sh, id| sh.market.take_depth_updates_for(id as u32),
+            move |id| {
+                let _ = tx.send(ControlCommand::UnsubscribeDepth { req_id: id as u32 });
+            },
+        ))
     }
 
     // -- calls that send ---------------------------------------------------

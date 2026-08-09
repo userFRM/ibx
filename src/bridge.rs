@@ -355,6 +355,28 @@ impl MarketDataState {
         self.real_time_bars.lock().unwrap().drain(..).collect()
     }
 
+    /// Bars answering one request, leaving other requests' alone.
+    pub fn take_real_time_bars_for(&self, req_id: u32) -> Vec<RealTimeBar> {
+        let mut q = self.real_time_bars.lock().unwrap();
+        let mut mine = Vec::new();
+        let mut i = 0;
+        while i < q.len() {
+            if q[i].0 == req_id { mine.push(q.remove(i).1); } else { i += 1; }
+        }
+        mine
+    }
+
+    /// Book changes answering one request.
+    pub fn take_depth_updates_for(&self, req_id: u32) -> Vec<DepthUpdate> {
+        let mut q = self.depth_updates.lock().unwrap();
+        let mut mine = Vec::new();
+        let mut i = 0;
+        while i < q.len() {
+            if q[i].req_id == req_id { mine.push(q.remove(i)); } else { i += 1; }
+        }
+        mine
+    }
+
     pub fn drain_depth_updates(&self) -> Vec<DepthUpdate> {
         self.depth_updates.lock().unwrap().drain(..).collect()
     }
