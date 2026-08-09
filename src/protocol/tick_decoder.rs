@@ -191,7 +191,22 @@ pub const O_TS_OFFSET: u64 = 21;
 pub const O_LAST_EXCH: u64 = 13;
 pub const O_BID_EXCH: u64 = 16;
 pub const O_ASK_EXCH: u64 = 17;
-pub const O_HALTED: u64 = 18;
+/// UNVERIFIED. Named for a halt on no evidence — unlike its neighbours, which
+/// cite measurements against daily bars and wall-clock samples.
+///
+/// The venue does state a halt, but the counterpart reads it elsewhere: as a
+/// generic tick under id 437, whose payload is three big-endian 32-bit ints
+/// (a status bitmask, a timestamp, a status index) rather than anything in this
+/// stream. Its statuses are named in an enum that survived obfuscation:
+/// 0 exchange open, 1 regulatory halt, 2 volatility halt, 3 short-sale
+/// restriction, 4 no status available — and "halted" is bit 0 or bit 1 of the
+/// mask, not an index equal to one.
+///
+/// So this opcode is something else, and nothing may report a halt from it
+/// until the real path is read. A wrong halt is worse than no halt: a caller
+/// told a contract is trading when it is not will price against a book that is
+/// not there.
+pub const O_UNVERIFIED_18: u64 = 18;
 /// Previous session's close. Settled against the authoritative daily bars for
 /// the same contract: the wire carried 27922.00 while the current session's
 /// bar closed at 27913.75 and the prior session's closed at exactly 27922.00
@@ -1125,11 +1140,11 @@ mod tests {
         // Extended tick with has_more=1, followed by a normal tick
         let mut b = PayloadBuilder::new();
         b.server_tag(0, 77);
-        b.tick_extended(1, O_HALTED, 1, 1, false); // has_more=1
+        b.tick_extended(1, O_UNVERIFIED_18, 1, 1, false); // has_more=1
         b.tick(O_BID_PRICE, 0, 1, 99, false);      // has_more=0
         let ticks = decode_ticks_35p(&b.build());
         assert_eq!(ticks.len(), 2);
-        assert_eq!(ticks[0].tick_type, O_HALTED);
+        assert_eq!(ticks[0].tick_type, O_UNVERIFIED_18);
         assert_eq!(ticks[0].magnitude, 1);
         assert_eq!(ticks[1].tick_type, O_BID_PRICE);
         assert_eq!(ticks[1].magnitude, 99);
@@ -1452,7 +1467,7 @@ mod wire_identity_tests {
             O_BID_PRICE, O_ASK_PRICE, O_LAST_PRICE, O_BID_SIZE, O_ASK_SIZE,
             O_LAST_SIZE, O_HIGH_PRICE, O_LOW_PRICE, O_VOLUME, O_TS_BASE,
             O_TS_OFFSET, O_OPEN_PRICE, O_CLOSE_PRICE,
-            O_LAST_EXCH, O_BID_EXCH, O_ASK_EXCH, O_HALTED, O_LAST_TS,
+            O_LAST_EXCH, O_BID_EXCH, O_ASK_EXCH, O_UNVERIFIED_18, O_LAST_TS,
         ];
         let mut seen = all.to_vec();
         seen.sort_unstable();

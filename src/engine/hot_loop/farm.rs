@@ -468,9 +468,12 @@ impl FarmState {
             // leaving the previous one standing is the honest failure.
             let scaled = |m: i64| m.checked_mul(mts);
             match tick.tick_type {
-                tick_decoder::O_HALTED => {
-                    q.halted = tick.magnitude;
-                }
+                // Opcode 18 is deliberately not read as a halt. It was named
+                // for one on no evidence, and the venue states a halt
+                // elsewhere — as a generic tick carrying a status mask. A
+                // wrong halt is worse than none: a caller told a contract is
+                // trading when it is not prices against a book that is not
+                // there.
                 tick_decoder::O_BID_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.bid = v,

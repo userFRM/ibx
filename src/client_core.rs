@@ -1451,19 +1451,10 @@ impl ClientCore {
             }
         }
 
-        // A halt is stated by the venue and changes what every other tick in
-        // this quote means: the prices standing are the ones from before it
-        // stopped, not a market anyone can deal on. Delivered as the reference
-        // client delivers it, so a program watching for it sees it.
-        if fields[15] != last[15] {
-            ticks.push(TickEvent {
-                req_id,
-                tick_type: TICK_HALTED,
-                value: fields[15] as f64,
-                is_price: false,
-            });
-            delivered = true;
-        }
+        // A halt would change what every other tick in this quote means, and
+        // is worth delivering — but not from a field filled by an opcode named
+        // for a halt on no evidence. Nothing writes `halted` until the generic
+        // tick that really carries it is read.
 
         map.insert(iid, fields);
 
