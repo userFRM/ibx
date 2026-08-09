@@ -26,6 +26,13 @@ class IB:
         self.client = EClient(self.wrapper)
         self._pump: threading.Thread | None = None
         self._stop = threading.Event()
+        self._subscribed: dict[int, object] = {}
+        self._by_contract: dict[int, int] = {}
+        self._req_id = 0
+
+    def _next_req_id(self) -> int:
+        self._req_id += 1
+        return self._req_id
 
     # -- session ---------------------------------------------------------
 
@@ -126,6 +133,48 @@ class IB:
 
     def managedAccounts(self):
         return self.wrapper.snapshot_accounts()
+
+    def tickers(self):
+        return self.wrapper.snapshot_tickers()
+
+    def ticker(self, contract):
+        """The quote for a contract already subscribed to, or nothing."""
+        req_id = self._by_contract.get(id(contract))
+        if req_id is None:
+            for rid, c in self._subscribed.items():
+                if getattr(c, "conId", None) and getattr(c, "conId", None) == getattr(contract, "conId", None):
+                    req_id = rid
+                    break
+        return self.wrapper.ticker_for(req_id) if req_id is not None else None
+
+    @property
+    def pendingTickers(self):
+        return self.wrapper.take_pending()
+
+    def reqMktData(
+        self, contract, genericTickList="", snapshot=False,
+        regulatorySnapshot=False, mktDataOptions=None,
+    ):
+        """Subscribe to a contract's quote and hand back the object it fills.
+
+        The object is returned before anything has arrived, and fills in as
+        ticks reach it. Its fields are ``None`` until the venue sends them, so a
+        caller can tell "no bid yet" from "a bid of zero".
+        """
+        del regulatorySnapshot, mktDataOptions
+        req_id = self._next_req_id()
+        self._subscribed[req_id] = contract
+        self._by_contract[id(contract)] = req_id
+        ticker = self.wrapper.bind_ticker(req_id, contract)
+        self.client.req_mkt_data(req_id, contract, genericTickList, snapshot, False, [])
+        return ticker
+
+    def cancelMktData(self, contract):
+        req_id = self._by_contract.pop(id(contract), None)
+        if req_id is None:
+            return
+        self._subscribed.pop(req_id, None)
+        self.client.cancel_mkt_data(req_id)
 
     # -- asking the venue to start sending it ----------------------------
 
@@ -248,8 +297,8 @@ class IB:
 _NOT_YET = frozenset({
     "waitOnUpdate", "loopUntil", "setTimeout", 
     "accountSummary", "pnl", "pnlSingle", 
-    "ticker",
-    "tickers", "pendingTickers", "realtimeBars", "newsTicks", "newsBulletins",
+    
+    "realtimeBars", "newsTicks", "newsBulletins",
     "reqTickers", "bracketOrder", "oneCancelsAll", "whatIfOrder", "placeOrder",
     "cancelOrder", "reqGlobalCancel", "reqCurrentTime", 
     "reqAccountUpdatesMulti", "reqAccountSummary", "reqAutoOpenOrders",
@@ -257,7 +306,7 @@ _NOT_YET = frozenset({
     "reqPnL", "cancelPnL", "reqPnLSingle", "cancelPnLSingle",
     "reqMarketRule", "reqRealTimeBars", "cancelRealTimeBars",
     "cancelHistoricalData", "reqHistoricalSchedule", "reqHistoricalTicks",
-    "reqMarketDataType", "reqMktData", "cancelMktData", "reqTickByTickData",
+    "reqMarketDataType", "reqTickByTickData",
     "cancelTickByTickData", "reqSmartComponents", "reqMktDepthExchanges",
     "reqMktDepth", "cancelMktDepth", "reqScannerData", "reqScannerSubscription",
     "cancelScannerSubscription", "reqScannerParameters",

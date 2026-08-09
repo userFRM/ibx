@@ -122,6 +122,9 @@ class LiveState(EWrapper):
         self._trades: dict[int, Trade] = {}
         self._fills: list[Fill] = []
         self._accounts: list[str] = []
+        self._tickers: dict[int, Ticker] = {}
+        self._pending: set[int] = set()
+        self._fields = None
         self.errors: list[tuple[int, int, str, str]] = []
 
     # -- what the venue tells us -----------------------------------------
@@ -203,6 +206,71 @@ class LiveState(EWrapper):
                     fill.commissionReport = report
                     return
 
+    # -- quotes ----------------------------------------------------------
+
+    def _ticker(self, req_id: int) -> Ticker:
+        t = self._tickers.get(req_id)
+        if t is None:
+            t = Ticker()
+            self._tickers[req_id] = t
+        return t
+
+    def _apply(self, req_id, tick_type, value):
+        if self._fields is None:
+            self._fields = _tick_fields()
+        pair = self._fields.get(tick_type)
+        if pair is None:
+            # A tick this does not carry is not an error and is not recorded as
+            # one. It reaches a caller through the callback either way.
+            return
+        name, prev_name = pair
+        with self._lock:
+            t = self._ticker(req_id)
+            if prev_name is not None:
+                setattr(t, prev_name, getattr(t, name))
+            setattr(t, name, value)
+            self._pending.add(req_id)
+
+    def tickPrice(self, reqId, tickType, price, attrib=None):
+        self._apply(reqId, tickType, price)
+
+    def tickSize(self, reqId, tickType, size):
+        self._apply(reqId, tickType, size)
+
+    def tickString(self, reqId, tickType, value):
+        from .ibx import TickTypeEnum as T
+
+        if tickType == T.LAST_TIMESTAMP:
+            with self._lock:
+                self._ticker(reqId).time = value
+                self._pending.add(reqId)
+
+    def bind_ticker(self, req_id: int, contract) -> Ticker:
+        """Name the contract a request's quote belongs to."""
+        with self._lock:
+            t = self._ticker(req_id)
+            t.contract = contract
+            return t
+
+    def snapshot_tickers(self) -> list[Ticker]:
+        with self._lock:
+            return list(self._tickers.values())
+
+    def ticker_for(self, req_id: int) -> Ticker | None:
+        with self._lock:
+            return self._tickers.get(req_id)
+
+    def take_pending(self) -> list[Ticker]:
+        """The quotes that changed since this was last read, and clear the mark.
+
+        Reading is what clears it, so two readers do not each see half the
+        changes. A caller wanting every change should be the only one reading.
+        """
+        with self._lock:
+            out = [self._tickers[r] for r in self._pending if r in self._tickers]
+            self._pending.clear()
+            return out
+
     # -- what a caller reads ---------------------------------------------
 
     def snapshot_positions(self) -> list[Position]:
@@ -228,3 +296,81 @@ class LiveState(EWrapper):
     def snapshot_accounts(self) -> list[str]:
         with self._lock:
             return list(self._accounts)
+
+
+@dataclass
+class Ticker:
+    """A contract's current quote, accumulated from the ticks that make it up.
+
+    A quote does not arrive as a quote. It arrives as a bid, then a size, then a
+    trade, each on its own, and a caller wanting "the current market" has to
+    hold them together. This does that.
+
+    A field nobody has sent stays ``None`` rather than becoming zero. A bid of
+    zero and no bid at all are different markets, and the difference decides
+    whether an order should be sent.
+    """
+
+    contract: Any = None
+    time: str = ""
+    bid: float | None = None
+    bidSize: float | None = None
+    ask: float | None = None
+    askSize: float | None = None
+    last: float | None = None
+    lastSize: float | None = None
+    prevBid: float | None = None
+    prevAsk: float | None = None
+    prevLast: float | None = None
+    volume: float | None = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    halted: float | None = None
+
+    def hasBidAsk(self) -> bool:
+        return self.bid is not None and self.ask is not None
+
+    def midpoint(self) -> float | None:
+        """Half way between the two sides, or nothing if there are not two."""
+        if not self.hasBidAsk():
+            return None
+        return (self.bid + self.ask) / 2
+
+    def marketPrice(self) -> float | None:
+        """The price to value a holding at.
+
+        The last trade when it sits inside the current spread, the midpoint when
+        it does not. A last trade outside the spread is stale — the market moved
+        away from it — and valuing at it is how a position is marked to a price
+        nobody would deal at.
+        """
+        mid = self.midpoint()
+        if self.last is not None and (mid is None or self.bid <= self.last <= self.ask):
+            return self.last
+        if mid is not None:
+            return mid
+        return self.close
+
+
+#: Which tick number sets which field, and whether the previous value is kept.
+#: Taken from the enum this client publishes rather than written out again, so
+#: the two cannot drift apart.
+def _tick_fields():
+    from .ibx import TickTypeEnum as T
+
+    return {
+        T.BID: ("bid", "prevBid"),
+        T.ASK: ("ask", "prevAsk"),
+        T.LAST: ("last", "prevLast"),
+        T.BID_SIZE: ("bidSize", None),
+        T.ASK_SIZE: ("askSize", None),
+        T.LAST_SIZE: ("lastSize", None),
+        T.VOLUME: ("volume", None),
+        T.OPEN: ("open", None),
+        T.HIGH: ("high", None),
+        T.LOW: ("low", None),
+        T.CLOSE: ("close", None),
+        T.HALTED: ("halted", None),
+    }
