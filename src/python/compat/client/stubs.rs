@@ -94,13 +94,39 @@ impl EClient {
     }
 
     // ── Server Time ──
-
+    //
+    // The venue's clock, not this machine's. A caller asks for it to find out
+    // how far apart the two are, and answering with the local clock reports
+    // zero skew whatever the truth is — the one answer that cannot be wrong
+    // and cannot be useful.
+    //
+    // Every message the venue sends is stamped with the time it sent it, so
+    // the answer is the stamp on the last one. Before any message has arrived
+    // there is nothing to report but this machine's clock, and that is the
+    // only case where it is used.
     fn req_current_time(&self, py: Python<'_>) -> PyResult<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        self.callback(py, "current_time", (now,))?;
+        let from_venue = self
+            .shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.market.venue_time())
+            .and_then(|stamped| crate::config::ib_datetime_to_unix(&stamped));
+
+        let seconds = match from_venue {
+            Some(secs) => secs,
+            None => {
+                log::warn!(
+                    "current_time: the venue has stamped no message yet, so this \
+                     reports the local clock"
+                );
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64
+            }
+        };
+        self.callback(py, "current_time", (seconds,))?;
         Ok(())
     }
 
