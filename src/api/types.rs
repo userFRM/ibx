@@ -944,6 +944,11 @@ pub struct ContractDetails {
     pub country: String,
     /// The identifier the contract is known by outside this venue.
     pub isin: String,
+    /// The identifier a contract is known by in the American market, taken from
+    /// the identifiers below by its kind — it has no field of its own.
+    pub cusip: String,
+    /// Every identifier the contract is known by, as the kind and the value.
+    pub sec_id_list: Vec<(String, String)>,
     /// The smallest quantity the contract trades in, which is not always one.
     pub min_size: f64,
 }
@@ -1026,6 +1031,8 @@ impl ContractDetails {
             subcategory: def.subcategory.clone(),
             country: def.country.clone(),
             isin: def.isin.clone(),
+            cusip: def.cusip.clone(),
+            sec_id_list: def.sec_id_list.clone(),
             min_size: def.min_size,
         }
     }

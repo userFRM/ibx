@@ -254,6 +254,12 @@ pub struct ContractDefinition {
     pub country: String,
     pub market_name: String,
     pub isin: String,
+    /// The identifier a contract is known by in the American market. It has no
+    /// field of its own on this wire — it is one of the identifiers below,
+    /// picked out by its kind.
+    pub cusip: String,
+    /// Every identifier the contract is known by, as the kind and the value.
+    pub sec_id_list: Vec<(String, String)>,
     pub min_size: f64,
     /// Trading session string. Populated by merging the paired schedule reply.
     pub trading_hours: Option<String>,
@@ -327,6 +333,8 @@ impl Default for ContractDefinition {
             country: String::new(),
             market_name: String::new(),
             isin: String::new(),
+            cusip: String::new(),
+            sec_id_list: Vec::new(),
             min_size: 0.0,
             trading_hours: None,
             liquid_hours: None,
@@ -640,8 +648,14 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&TAG_SCHEDULE_JOIN_KEY) {
         def.join_key = v.clone();
     }
-    // ISIN from SecurityAltID repeating group (tag 455 with source 456=4)
-    // fix_parse only keeps last value per tag, so we parse sequentially
+    // The identifiers a contract is known by elsewhere, each stated as a value
+    // followed by what kind of identifier it is. Read sequentially because a
+    // keyed parse keeps only the last of a repeated tag, and this group repeats.
+    //
+    // A contract's CUSIP has no field of its own anywhere on this wire: it is
+    // one of these, picked out by its kind. Only the ISIN was being picked out,
+    // so a caller asking for a CUSIP got nothing while the CUSIP sat in a list
+    // that was thrown away.
     {
         use crate::protocol::fix::SOH;
         let mut last_alt_id = String::new();
@@ -649,10 +663,14 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
             let text = String::from_utf8_lossy(part);
             if let Some(val) = text.strip_prefix("455=") {
                 last_alt_id = val.to_string();
-            } else if let Some(val) = text.strip_prefix("456=")
-                && val == "4" { // ISIN
-                    def.isin = last_alt_id.clone();
+            } else if let Some(kind) = text.strip_prefix("456=") {
+                def.sec_id_list.push((kind.to_string(), last_alt_id.clone()));
+                match kind {
+                    "1" => def.cusip = std::mem::take(&mut last_alt_id),
+                    "4" => def.isin = last_alt_id.clone(),
+                    _ => {}
                 }
+            }
         }
     }
     if let Some(v) = tags.get(&8598) { // MinSizeIncrement
@@ -2136,6 +2154,20 @@ mod industry_tests {
         assert_eq!(def.industry, "Technology");
         assert_eq!(def.category, "Computers");
         assert_eq!(def.subcategory, "Computers");
+    }
+
+    /// A contract's CUSIP has no field of its own on this wire: it is one of
+    /// the identifiers the contract is known by, picked out by its kind. Only
+    /// the ISIN was picked out, so a caller asking for a CUSIP got nothing
+    /// while the CUSIP sat in a list that was thrown away.
+    #[test]
+    fn the_identifiers_are_kept_and_the_cusip_picked_out_of_them() {
+        let def = parse_secdef_response(&secdef(
+            "455=US0378331005\u{1}456=4\u{1}455=037833100\u{1}456=1\u{1}",
+        )).expect("the definition parses");
+        assert_eq!(def.isin, "US0378331005");
+        assert_eq!(def.cusip, "037833100", "the CUSIP is in the list, by its kind");
+        assert_eq!(def.sec_id_list.len(), 2, "and every identifier is kept");
     }
 
     /// A bond is its terms: what it pays, when it can be called, what it is
