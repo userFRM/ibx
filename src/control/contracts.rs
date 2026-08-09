@@ -38,6 +38,9 @@ pub const TAG_IB_ORDER_TYPES: u32 = 6431;
 pub const TAG_IB_MARKET_RULE_ID: u32 = 6031;
 /// The economic-value rule, stated on the definition as its own field.
 pub const TAG_EV_RULE: u32 = 6858;
+/// The venues SMART routes a contract to, comma separated, in the order whose
+/// positions a quote's exchange bitmask refers to.
+pub const TAG_SMART_VENUES: u32 = 6177;
 pub const TAG_IB_STOCK_TYPE: u32 = 8077;
 
 // Market rule tags.
@@ -276,6 +279,17 @@ pub struct ContractDefinition {
     /// Keeping them costs a short list per contract and means naming a field is
     /// an improvement rather than a prerequisite — the value is already here,
     /// under its number, the day the venue starts sending it.
+    /// The venues SMART routes this contract to, in the order the venue lists
+    /// them.
+    ///
+    /// The order is the point. A quote states which venues are on the bid, the
+    /// ask and the last as a bitmask, and the position of a bit is a position
+    /// in this list. A list written by this client can only guess at that, and
+    /// the guess bore no resemblance to what the venue actually sends.
+    ///
+    /// Sent per contract, and only where SMART routing applies, so it is empty
+    /// for a contract listed on one venue.
+    pub smart_venues: Vec<String>,
     pub unnamed_fields: Vec<(u32, String)>,
     pub min_size: f64,
     /// Trading session string. Populated by merging the paired schedule reply.
@@ -353,6 +367,7 @@ impl Default for ContractDefinition {
             isin: String::new(),
             cusip: String::new(),
             sec_id_list: Vec::new(),
+            smart_venues: Vec::new(),
             unnamed_fields: Vec::new(),
             min_size: 0.0,
             trading_hours: None,
@@ -667,6 +682,14 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&200) { def.contract_month = v.clone(); }
     if let Some(v) = tags.get(&6577) { def.under_sec_type = v.clone(); }
     if let Some(v) = tags.get(&TAG_EV_RULE) { def.ev_rule = v.clone(); }
+    if let Some(v) = tags.get(&TAG_SMART_VENUES) {
+        def.smart_venues = v
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| exchange_from_fix(s).to_string())
+            .collect();
+    }
 
     // Whatever the venue stated that nothing above names. Kept rather than
     // dropped: the fields a client has not got round to naming are still facts
@@ -2410,5 +2433,47 @@ mod unnamed_field_tests {
             .expect("the definition parses");
         assert_eq!(def.ev_rule, "IND-FUT-CASH");
         assert!(!def.unnamed_fields.iter().any(|(t, _)| *t == 6858));
+    }
+}
+
+#[cfg(test)]
+mod smart_venue_tests {
+    use super::*;
+
+    /// The venue states which venues SMART routes a contract to, and the order
+    /// it states them in is the order a quote's exchange bitmask refers to.
+    /// This client had its own list in its own order, which bore no
+    /// resemblance, so every quote's bid, ask and last named the wrong venue.
+    #[test]
+    fn the_venues_own_routing_list_is_read_in_the_order_it_states() {
+        let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01\
+                      6177=AMEX,NYSE,CHX,ARCA,NASDAQ,DRCTEDGE,BEX,BATS,EDGE\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert_eq!(
+            def.smart_venues,
+            vec!["AMEX", "NYSE", "CHX", "ARCA", "NASDAQ", "DRCTEDGE", "BEX", "BATS", "EDGE"],
+        );
+    }
+
+    /// A contract listed on one venue is routed nowhere, and the venue sends
+    /// no list for it. That is empty, not missing.
+    #[test]
+    fn a_contract_that_is_not_smart_routed_lists_no_venues() {
+        let frame = b"35=d\x01320=R1\x016008=1\x0155=VOD\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert!(def.smart_venues.is_empty());
+    }
+
+    /// The letters are this client's knowledge of how each venue is
+    /// abbreviated, and are not taken from the first letter of the name.
+    #[test]
+    fn a_venues_letter_is_not_the_first_letter_of_its_name() {
+        use crate::types::exchange_letter;
+        assert_eq!(exchange_letter("NASDAQ"), "Q");
+        assert_eq!(exchange_letter("ARCA"), "P");
+        assert_eq!(exchange_letter("BATS"), "Z");
+        // A venue with no known abbreviation gets none rather than one that
+        // would collide with a venue that has one.
+        assert_eq!(exchange_letter("SOMEWHERE"), "");
     }
 }

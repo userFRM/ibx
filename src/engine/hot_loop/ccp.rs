@@ -845,6 +845,24 @@ impl CcpState {
                         );
                     }
                     let all = crate::control::contracts::parse_secdef_responses(msg);
+                    // The venue states which venues SMART routes to, in the
+                    // order a quote's exchange bitmask refers to. Taking it
+                    // replaces this client's own list, whose order was its own
+                    // and bore no resemblance to this.
+                    if let Some(venues) = all.iter().map(|d| &d.smart_venues).find(|v| !v.is_empty()) {
+                        shared.reference.set_smart_components(
+                            venues
+                                .iter()
+                                .enumerate()
+                                .map(|(i, exchange)| crate::types::SmartComponent {
+                                    bit_number: i as i32,
+                                    exchange: exchange.clone(),
+                                    exchange_letter: crate::types::exchange_letter(exchange).to_string(),
+                                })
+                                .collect(),
+                        );
+                        shared.reference.note_smart_components_provisional(false);
+                    }
                     if all.len() > 1
                         && let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())
                         && rid < 0xF000_0000
