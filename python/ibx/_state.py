@@ -206,6 +206,23 @@ class LiveState(EWrapper):
                     fill.commissionReport = report
                     return
 
+    def register_order(self, order_id, contract, order) -> Trade:
+        """Record an order as it is sent, so the caller holds the object the
+        venue's answers will land on."""
+        with self._lock:
+            trade = self._trades.setdefault(order_id, Trade())
+            trade.contract = contract
+            trade.order = order
+            trade.orderStatus.orderId = order_id
+            if not trade.log:
+                trade.log.append("PendingSubmit")
+                trade.orderStatus.status = "PendingSubmit"
+            return trade
+
+    def trade_for(self, order_id) -> Trade | None:
+        with self._lock:
+            return self._trades.get(order_id)
+
     # -- quotes ----------------------------------------------------------
 
     def _ticker(self, req_id: int) -> Ticker:
