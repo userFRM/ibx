@@ -310,6 +310,15 @@ rest of the twenty-eight rather than closing them: the measure counts every
 field the counterpart writes, including the ones that exist only because it is
 also a terminal.
 
+A tag number does not carry one meaning across messages, and assuming it does
+is how a plausible wrong reading gets shipped. The economic-value rule is stated
+on a definition under the same number the execution report uses for it, and it
+was read on the report and dropped on the definition; it is read on both now.
+The multiplier beside it uses a number this client already reads as the
+multiplier on the execution report — and on a definition that number is a
+different field entirely. It stays unread until it is established rather than
+inferred from the pair.
+
 The same check run across every named attribute the counterpart carries found
 162 this client does not write, and they read the same way — blotter tickets,
 cross and stock-loan bookkeeping, cost reports, model rebalancing. The one
