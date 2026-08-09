@@ -15,7 +15,7 @@ Counts here are measured, not asserted. Where a number is an estimate it says so
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
 | The asynchronous wrapper's shape | 90 methods | 90 carried |
-| The Rust client's shape | 77 methods | 56 carried, 21 open |
+| The Rust client's shape | 77 methods | 72 carried, 5 named as having none |
 
 ## 1. The wire
 
@@ -112,7 +112,7 @@ What that took, in three parts of very different size:
    `reqTickers()` — subscribe, wait for a quote, unsubscribe — is not carried
    yet.
 
-### The Rust client — 56 of 77
+### The Rust client — 72 of 77, and 5 with no counterpart
 
 `ibx::api::Client`, beside `EClient` rather than instead of it. A call that
 answers returns the answer; a call that only sends returns nothing, because
@@ -137,9 +137,21 @@ volatility, option price, and the advisor pair. They report that rather than
 pretending, which is the honest shape for a request this protocol does not
 carry.
 
-What is open is the part of that shape this client has no equivalent for at all:
-its builder and configuration, the notice and order-update streams, the server's
-own version and clock, and message verification.
+Streams that belong to the session rather than to a request — every change to
+its orders, and everything the venue says that belongs to no request — are
+carried as subscriptions with nothing to withdraw: they end when the caller
+stops reading.
+
+An OCA set is linked before any of it is sent. Sending the orders unlinked and
+linking them afterwards leaves a window in which two can both fill, which is the
+one thing the set exists to prevent.
+
+Five have no counterpart, and are named in `NO_COUNTERPART` with the reason
+rather than left out. A protocol version announced by a local process, and the
+handshake that verifies one, mean nothing when there is no local process; a
+session is identified by its login rather than by a number chosen to share one;
+and a contract lookup answers here instead of streaming, so there is nothing to
+withdraw.
 
 Streams are carried as `Subscription<T>`, which a caller loops over. It does two
 things a bare loop over a queue would not. It **withdraws**: a dropped
@@ -161,8 +173,8 @@ unreachable.
 2. ~~Live quotes.~~ Carried.
 3. ~~The thin wrappers.~~ Carried.
 4. ~~The answering forms beneath the rest.~~ Carried.
-5. The Rust shape. The subscription that decides the rest is built; what is
-   left is coverage.
+5. ~~The Rust shape.~~ Carried, bar five calls that have no counterpart here
+   and say so.
 6. The wire's remaining refusals, which need a live session.
 
 ## What is not claimed
@@ -173,5 +185,7 @@ A program written against the asynchronous wrapper finds every call it uses.
 That is not the same as every call having been proved against a live venue, and
 ROADMAP.md is where that distinction is kept.
 
-The Rust client's shape is 13 of 77. The wire still has eight calls that answer
-they cannot be served, and one capability the venue refuses this session.
+All three client shapes are carried. What is not claimed is live proof: almost
+none of this has been exercised against a trading venue, and ROADMAP.md is where
+that distinction is kept. The wire still has eight calls that answer they cannot
+be served, and one capability the venue refuses this session.
