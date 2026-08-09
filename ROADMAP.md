@@ -301,6 +301,22 @@ order container, an acknowledgement flag, the manual order type, a hedge child's
 parent-price flag, a model flag, and sixteen more that are numbered in the
 counterpart and named nowhere.
 
+Five of them now have names, and the names settle what they are: an order
+container's id, an acknowledgement flag, a hedge child's parent-price flag, a
+manual order type, and a model flag. None is a field this API offers a caller —
+they are the counterpart's own working state, written because it keeps its
+blotter and its tickets on the same wire it sends orders on. That reframes the
+rest of the twenty-eight rather than closing them: the measure counts every
+field the counterpart writes, including the ones that exist only because it is
+also a terminal.
+
+The same check run across every named attribute the counterpart carries found
+162 this client does not write, and they read the same way — blotter tickets,
+cross and stock-loan bookkeeping, cost reports, model rebalancing. The one
+cluster among them that is a published feature is the scale order, and what is
+unwritten there is the counterpart reporting a scale's progress back to itself,
+not the fields that place one. Those this client writes in full.
+
 Writing more than the counterpart is not the same as writing what it writes:
 this client states 163 fields against its 79 because much of what it states
 rides fields the counterpart writes from elsewhere. The number that matters is
