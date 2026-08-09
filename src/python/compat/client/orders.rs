@@ -324,6 +324,7 @@ impl EClient {
             let c_py = Py::new(py, Contract::from_api(&se.contract))?.into_any();
 
             let exec_obj = Execution {
+                unnamed_fields: se.execution.unnamed_fields.clone(),
                 exec_id: se.execution.exec_id.clone(),
                 time: se.execution.time.clone(),
                 acct_number: se.execution.acct_number.clone(),
