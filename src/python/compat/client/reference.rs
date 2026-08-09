@@ -97,7 +97,7 @@ impl EClient {
     }
 
     /// Request contract details.
-    fn req_contract_details(&self, py: Python<'_>, req_id: i64, contract: &Contract) -> PyResult<()> {
+    pub(crate) fn req_contract_details(&self, py: Python<'_>, req_id: i64, contract: &Contract) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchContractDetails {
             req_id: wire_req_id(req_id)?,
