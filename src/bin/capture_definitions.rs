@@ -217,11 +217,12 @@ fn main() {
                 // joins the two.
                 if let Some(d) = richest {
                     println!(
-                        "        named: minSize={} minTick={} issueDate={:?} lastTradeTime={:?}",
+                        "        named: minSize={} minTick={} pricePrec={} sizePrec={} settle={:?}",
                         d.min_size,
                         d.min_tick,
-                        d.issue_date,
-                        d.last_trade_time,
+                        d.last_price_precision,
+                        d.last_size_precision,
+                        d.settlement_method,
                     );
                     for (tag, value) in &d.unnamed_fields {
                         let shown: String = value.chars().take(48).collect();

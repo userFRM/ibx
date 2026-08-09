@@ -40,6 +40,9 @@ pub const TICK_ASK_SIZE: i32 = 3;
 pub const TICK_LAST_SIZE: i32 = 5;
 pub const TICK_VOLUME: i32 = 8;
 pub const TICK_LAST_TIMESTAMP: i32 = 45;
+/// Whether the venue has halted trading. Stated by the venue and delivered as
+/// a generic tick, which is where the reference client puts it.
+pub const TICK_HALTED: i32 = 49;
 pub const TICK_BID_EXCHANGE: i32 = 32;
 pub const TICK_ASK_EXCHANGE: i32 = 33;
 pub const TICK_LAST_EXCHANGE: i32 = 84;
@@ -442,7 +445,7 @@ pub struct ClientCore {
     /// hears them where it hears everything else.
     pending_group_events: Mutex<Vec<GroupEvent>>,
     // Change detection for quote polling
-    pub last_quotes: Mutex<HashMap<InstrumentId, [i64; 15]>>,
+    pub last_quotes: Mutex<HashMap<InstrumentId, [i64; 16]>>,
     // Snapshot req_ids — deliver first ticks then auto-cancel
     pub snapshot_reqs: Mutex<HashSet<i64>>,
 
@@ -1383,12 +1386,12 @@ impl ClientCore {
         let fields = [
             q.bid, q.ask, q.last, q.bid_size, q.ask_size, q.last_size,
             q.high, q.low, q.volume, q.close, q.open, q.timestamp_ns as i64,
-            q.bid_exch_mask, q.ask_exch_mask, q.last_exch_mask,
+            q.bid_exch_mask, q.ask_exch_mask, q.last_exch_mask, q.halted,
         ];
 
         // Single lock acquisition for both read and write of last_quotes.
         let mut map = self.last_quotes.lock().unwrap();
-        let last = map.get(&iid).copied().unwrap_or([0i64; 15]);
+        let last = map.get(&iid).copied().unwrap_or([0i64; 16]);
 
         let mut ticks = Vec::new();
         let mut delivered = false;
@@ -1446,6 +1449,20 @@ impl ClientCore {
                 });
                 delivered = true;
             }
+        }
+
+        // A halt is stated by the venue and changes what every other tick in
+        // this quote means: the prices standing are the ones from before it
+        // stopped, not a market anyone can deal on. Delivered as the reference
+        // client delivers it, so a program watching for it sees it.
+        if fields[15] != last[15] {
+            ticks.push(TickEvent {
+                req_id,
+                tick_type: TICK_HALTED,
+                value: fields[15] as f64,
+                is_price: false,
+            });
+            delivered = true;
         }
 
         map.insert(iid, fields);

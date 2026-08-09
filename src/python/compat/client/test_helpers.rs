@@ -83,6 +83,7 @@ impl EClient {
             low: (low * ps) as i64, close: (close * ps) as i64,
             bid_exch_mask: 0, ask_exch_mask: 0, last_exch_mask: 0,
             timestamp_ns: 1,
+                    halted: 0,
         };
         shared.market.push_quote(instrument, &q);
         Ok(())

@@ -55,6 +55,19 @@ pub const TAG_LAST_TRADE_TIME: u32 = 8584;
 /// contracts that have an issuer — which is why asking about shares never saw
 /// it.
 pub const TAG_ISSUE_DATE: u32 = 225;
+/// The smallest order the venue will take, and the flag that says a contract
+/// can be dealt in fractions at all. Stated together; the size without the flag
+/// is not in force.
+pub const TAG_MIN_SIZE: u32 = 8175;
+pub const TAG_FRACTIONABLE: u32 = 8193;
+/// How many places the venue states a price and a size to.
+pub const TAG_LAST_PRICE_PRECISION: u32 = 8598;
+pub const TAG_LAST_SIZE_PRECISION: u32 = 8599;
+/// The day a contract really stops trading, where that differs from the month
+/// it is named for.
+pub const TAG_REAL_EXPIRATION_DATE: u32 = 6614;
+/// How a contract settles — by delivery or in cash.
+pub const TAG_SETTLEMENT_METHOD: u32 = 6660;
 pub const TAG_IB_STOCK_TYPE: u32 = 8077;
 
 // Market rule tags.
@@ -314,6 +327,9 @@ pub struct ContractDefinition {
     pub last_trade_time: String,
     /// The day a bond was issued.
     pub issue_date: String,
+    pub last_price_precision: f64,
+    pub last_size_precision: f64,
+    pub settlement_method: String,
     pub smart_venues: Vec<String>,
     pub unnamed_fields: Vec<(u32, String)>,
     pub min_size: f64,
@@ -396,6 +412,9 @@ impl Default for ContractDefinition {
             under_symbol: String::new(),
             last_trade_time: String::new(),
             issue_date: String::new(),
+            last_price_precision: 0.0,
+            last_size_precision: 0.0,
+            settlement_method: String::new(),
             smart_venues: Vec::new(),
             unnamed_fields: Vec::new(),
             min_size: 0.0,
@@ -801,6 +820,38 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&8502) { def.fund_distribution_policy_indicator = v.clone(); }
     if let Some(v) = tags.get(&8503) { def.fund_asset_type = v.clone(); }
     if let Some(v) = tags.get(&8383) { def.real_expiration_date = v.clone(); }
+    // The smallest order the venue will take, stated only where a contract can
+    // be dealt in fractions and gated by the flag that says so.
+    //
+    // This used to read 8598, which is the precision a price is stated to, not
+    // a size at all: a share came back claiming its smallest order was a
+    // millionth of a share.
+    if tags.get(&TAG_FRACTIONABLE).map(|v| v.as_str()) == Some("1")
+        && let Some(v) = tags.get(&TAG_MIN_SIZE)
+    {
+        def.min_size = v.parse().unwrap_or(0.0);
+    }
+    // How many places the venue states a price and a size to. Published by the
+    // reference client and recorded here as computed rather than sent, which
+    // was wrong — they are sent.
+    if let Some(v) = tags.get(&TAG_LAST_PRICE_PRECISION) {
+        def.last_price_precision = v.parse().unwrap_or(0.0);
+    }
+    if let Some(v) = tags.get(&TAG_LAST_SIZE_PRECISION) {
+        def.last_size_precision = v.parse().unwrap_or(0.0);
+    }
+    // Only where the field this parser already reads states nothing: that one
+    // was established earlier and is not displaced on the strength of a second
+    // candidate carrying the same value.
+    if def.real_expiration_date.is_empty()
+        && let Some(v) = tags.get(&TAG_REAL_EXPIRATION_DATE)
+    {
+        def.real_expiration_date = v.clone();
+    }
+    if let Some(v) = tags.get(&TAG_SETTLEMENT_METHOD) {
+        def.settlement_method = v.clone();
+    }
+
     // Stated under its own field, or under the shorter one where that is all
     // the venue gives.
     if def.desc_append.is_empty()
@@ -866,10 +917,6 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
             }
         }
     }
-    if let Some(v) = tags.get(&8598) { // MinSizeIncrement
-        def.min_size = v.parse().unwrap_or(0.0);
-    }
-
     Some(def)
 }
 
@@ -2484,12 +2531,14 @@ mod unnamed_field_tests {
     /// it had ever arrived.
     #[test]
     fn a_field_this_client_does_not_name_is_kept_under_its_number() {
-        let def = parse_secdef_response(&frame("8599=something\u{1}6921=42\u{1}"))
+        // Numbers this parser names none of, so the test does not go stale the
+        // day one of them is given a name.
+        let def = parse_secdef_response(&frame("9998=something\u{1}9997=42\u{1}"))
             .expect("the definition parses");
         let kept: Vec<u32> = def.unnamed_fields.iter().map(|(t, _)| *t).collect();
-        assert!(kept.contains(&8599));
-        assert!(kept.contains(&6921));
-        let value = def.unnamed_fields.iter().find(|(t, _)| *t == 8599).unwrap();
+        assert!(kept.contains(&9998));
+        assert!(kept.contains(&9997));
+        let value = def.unnamed_fields.iter().find(|(t, _)| *t == 9998).unwrap();
         assert_eq!(value.1, "something");
     }
 
@@ -2679,5 +2728,42 @@ mod record_boundary_tests {
         let defs = parse_secdef_responses(data);
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].issue_date, "20260101");
+    }
+}
+
+#[cfg(test)]
+mod size_and_precision_tests {
+    use super::*;
+
+    /// The smallest order a venue will take is stated only where a contract can
+    /// be dealt in fractions, and gated by the flag that says so. This used to
+    /// be read from the field stating how many places a price is quoted to, so
+    /// a share came back claiming its smallest order was a millionth of a share.
+    #[test]
+    fn the_smallest_order_is_read_from_the_size_field_not_a_price_precision() {
+        let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01\
+                      8193=1\x018175=0.0001\x018598=0.01\x018599=0.000001\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert_eq!(def.min_size, 0.0001);
+        assert_eq!(def.last_price_precision, 0.01);
+        assert_eq!(def.last_size_precision, 0.000001);
+    }
+
+    /// A contract that cannot be dealt in fractions states no smallest order,
+    /// and the size is not in force without the flag that admits it.
+    #[test]
+    fn a_size_stated_without_the_flag_is_not_in_force() {
+        let frame = b"35=d\x01320=R1\x016008=1\x0155=SPY\x018175=0.0001\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert_eq!(def.min_size, 0.0);
+    }
+
+    /// How a contract settles, and the day it really stops trading.
+    #[test]
+    fn how_a_contract_settles_is_read() {
+        let frame = b"35=d\x01320=R1\x016008=1\x0155=ES\x016660=C\x016614=20260918\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        assert_eq!(def.settlement_method, "C");
+        assert_eq!(def.real_expiration_date, "20260918");
     }
 }

@@ -102,18 +102,18 @@ pub struct SeqQuote {
 /// `Quote` as its fields, in order. Both directions destructure or name every
 /// field, so a field added to `Quote` fails to compile here rather than being
 /// silently dropped from everything the seqlock publishes.
-const QUOTE_WORDS: usize = 15;
+const QUOTE_WORDS: usize = 16;
 
 fn quote_to_words(q: &Quote) -> [i64; QUOTE_WORDS] {
     let Quote {
         bid, ask, last, bid_size, ask_size, last_size, volume,
         open, high, low, close, timestamp_ns,
-        bid_exch_mask, ask_exch_mask, last_exch_mask,
+        bid_exch_mask, ask_exch_mask, last_exch_mask, halted,
     } = *q;
     [
         bid, ask, last, bid_size, ask_size, last_size, volume,
         open, high, low, close, timestamp_ns as i64,
-        bid_exch_mask, ask_exch_mask, last_exch_mask,
+        bid_exch_mask, ask_exch_mask, last_exch_mask, halted,
     ]
 }
 
@@ -124,6 +124,7 @@ fn quote_from_words(w: [i64; QUOTE_WORDS]) -> Quote {
         open: w[7], high: w[8], low: w[9], close: w[10],
         timestamp_ns: w[11] as u64,
         bid_exch_mask: w[12], ask_exch_mask: w[13], last_exch_mask: w[14],
+        halted: w[15],
     }
 }
 
@@ -198,6 +199,7 @@ mod seq_quote_tests {
                         open: i, high: i, low: i, close: i,
                         timestamp_ns: i as u64,
                         bid_exch_mask: i, ask_exch_mask: i, last_exch_mask: i,
+                        halted: i,
                     });
                 }
             })
@@ -1976,6 +1978,9 @@ mod tests {
                 volume: i, open: i, high: i, low: i, close: i,
                 timestamp_ns: i as u64,
                 bid_exch_mask: i, ask_exch_mask: i, last_exch_mask: i,
+                // Every field moves together, so a snapshot mixing two
+                // generations shows as a field disagreeing with the rest.
+                halted: i,
             }
         }
 
@@ -2002,6 +2007,7 @@ mod tests {
                         q.ask, q.last, q.bid_size, q.ask_size, q.last_size,
                         q.volume, q.open, q.high, q.low, q.close,
                         q.timestamp_ns as i64, q.bid_exch_mask, q.ask_exch_mask, q.last_exch_mask,
+                        q.halted,
                     ];
                     assert!(fields.iter().all(|&f| f == v), "torn SeqQuote read: bid={v} fields={fields:?}");
                 }
