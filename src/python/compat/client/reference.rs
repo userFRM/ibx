@@ -12,7 +12,7 @@ use crate::client_core::ClientCore;
 impl EClient {
     /// Request historical bar data.
     #[pyo3(signature = (req_id, contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth, format_date=1, keep_up_to_date=false, chart_options=Vec::new()))]
-    fn req_historical_data(
+    pub(crate) fn req_historical_data(
         &self,
         py: Python<'_>,
         req_id: i64,
@@ -69,7 +69,7 @@ impl EClient {
 
     /// Request head timestamp.
     #[pyo3(signature = (req_id, contract, what_to_show, use_rth, format_date=1))]
-    fn req_head_time_stamp(
+    pub(crate) fn req_head_time_stamp(
         &self,
         py: Python<'_>,
         req_id: i64,
@@ -129,7 +129,7 @@ impl EClient {
     }
 
     /// Search for matching symbols.
-    fn req_matching_symbols(&self, py: Python<'_>, req_id: i64, pattern: &str) -> PyResult<()> {
+    pub(crate) fn req_matching_symbols(&self, py: Python<'_>, req_id: i64, pattern: &str) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchMatchingSymbols {
             req_id: wire_req_id(req_id)?,
@@ -249,7 +249,7 @@ impl EClient {
 
     /// Request fundamental data.
     #[pyo3(signature = (req_id, contract, report_type, fundamental_data_options=Vec::new()))]
-    fn req_fundamental_data(
+    pub(crate) fn req_fundamental_data(
         &self,
         py: Python<'_>,
         req_id: i64,
@@ -326,7 +326,7 @@ impl EClient {
 
     /// Request histogram data.
     #[pyo3(signature = (req_id, contract, use_rth, time_period))]
-    fn req_histogram_data(&self, py: Python<'_>, req_id: i64, contract: &Contract, use_rth: bool, time_period: &str) -> PyResult<()> {
+    pub(crate) fn req_histogram_data(&self, py: Python<'_>, req_id: i64, contract: &Contract, use_rth: bool, time_period: &str) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchHistogramData {
             req_id: wire_req_id(req_id)?,
@@ -346,7 +346,7 @@ impl EClient {
 
     /// Request historical trading schedule.
     #[pyo3(signature = (req_id, contract, end_date_time="", duration_str="1 M", use_rth=true))]
-    fn req_historical_schedule(
+    pub(crate) fn req_historical_schedule(
         &self, py: Python<'_>, req_id: i64, contract: &Contract,
         end_date_time: &str, duration_str: &str, use_rth: bool,
     ) -> PyResult<()> {

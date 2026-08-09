@@ -19,8 +19,12 @@ use std::time::{Duration, Instant};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
+use std::sync::Arc;
+
+use crate::bridge::SharedState;
+
 use super::EClient;
-use super::super::contract::{Contract, ContractDetails};
+use super::super::contract::{BarData, Contract, ContractDescription, ContractDetails};
 
 /// How long a question waits for its answer.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
@@ -46,6 +50,55 @@ pub(crate) fn peek_ask_id() -> i64 {
     NEXT_ASK_ID.load(Ordering::Relaxed)
 }
 
+
+/// Wait for the one answer belonging to a request.
+///
+/// Stops on the answer, on the venue's refusal of that request, or on the
+/// deadline — and says which. A refusal quotes the venue rather than reporting
+/// a timeout, because "the venue said no" and "nothing came" are different
+/// facts and only one of them is worth retrying.
+fn wait_for<T>(
+    py: Python<'_>,
+    shared: &Arc<SharedState>,
+    req_id: i64,
+    what: &str,
+    mut take: impl FnMut(&SharedState) -> Option<T> + Send,
+) -> PyResult<T>
+where
+    T: Send,
+{
+    let deadline = Instant::now() + ANSWER_TIMEOUT;
+    py.detach(|| {
+        loop {
+            if let Some(v) = take(shared) {
+                return Ok(v);
+            }
+            if let Some((code, msg)) = shared.reference.take_error_for(req_id as u32) {
+                return Err(format!("{msg} ({code})"));
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "no answer within {}s to {what}",
+                    ANSWER_TIMEOUT.as_secs()
+                ));
+            }
+            std::thread::sleep(POLL);
+        }
+    })
+    .map_err(PyRuntimeError::new_err)
+}
+
+impl EClient {
+    /// The shared state of a connected client, or a plain refusal.
+    fn connected_shared(&self) -> PyResult<Arc<SharedState>> {
+        self.shared
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| PyRuntimeError::new_err("not connected"))
+    }
+}
+
 #[pymethods]
 impl EClient {
     /// Everything the venue knows about the contracts matching a description.
@@ -61,9 +114,7 @@ impl EClient {
         let req_id = ask_id();
         self.req_contract_details(py, req_id, contract)?;
 
-        let Some(shared) = self.shared.lock().unwrap().clone() else {
-            return Err(PyRuntimeError::new_err("not connected"));
-        };
+        let shared = self.connected_shared()?;
 
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         let collected = py.detach(|| {
@@ -90,6 +141,138 @@ impl EClient {
         .map_err(PyRuntimeError::new_err)?;
 
         Ok(collected.iter().map(|d| ContractDetails::from_definition(py, d)).collect())
+    }
+
+
+    /// Bars for a contract over a period, handed back rather than delivered a
+    /// bar at a time to a callback.
+    #[pyo3(signature = (contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth=1))]
+    fn historical_data(
+        &self,
+        py: Python<'_>,
+        contract: &Contract,
+        end_date_time: &str,
+        duration_str: &str,
+        bar_size_setting: &str,
+        what_to_show: &str,
+        use_rth: i32,
+    ) -> PyResult<Vec<BarData>> {
+        let req_id = ask_id();
+        self.req_historical_data(
+            py, req_id, contract, end_date_time, duration_str, bar_size_setting,
+            what_to_show, use_rth, 1, false, Vec::new(),
+        )?;
+        let shared = self.connected_shared()?;
+
+        // The venue may answer in parts. Keep what each part carries and stop
+        // on the one that says it is the last, rather than on the first: a
+        // series cut at the first part is short and says nothing about it.
+        let mut bars = Vec::new();
+        let mut zone = String::new();
+        let what = format!("a bar request for {} {}", contract.sec_type, contract.symbol);
+        wait_for(py, &shared, req_id, &what, |sh| {
+            for part in sh.reference.take_historical_for(req_id as u32) {
+                if zone.is_empty() {
+                    zone = part.timezone.clone();
+                }
+                let complete = part.is_complete;
+                bars.extend(part.bars.iter().cloned());
+                if complete {
+                    return Some(());
+                }
+            }
+            None
+        })?;
+
+        Ok(bars
+            .into_iter()
+            .map(|b| {
+                BarData::new(
+                    b.time, b.open, b.high, b.low, b.close, b.volume, b.wap,
+                    b.count as i32, zone.clone(),
+                )
+            })
+            .collect())
+    }
+
+    /// The earliest moment the venue holds data for a contract.
+    #[pyo3(signature = (contract, what_to_show="TRADES", use_rth=1))]
+    fn head_timestamp(
+        &self,
+        py: Python<'_>,
+        contract: &Contract,
+        what_to_show: &str,
+        use_rth: i32,
+    ) -> PyResult<String> {
+        let req_id = ask_id();
+        self.req_head_time_stamp(py, req_id, contract, what_to_show, use_rth, 1)?;
+        let shared = self.connected_shared()?;
+        let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
+        let r = wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.take_head_timestamp_for(req_id as u32)
+        })?;
+        Ok(r.head_timestamp)
+    }
+
+    /// Contracts whose symbol or name matches a pattern.
+    fn matching_symbols(
+        &self,
+        py: Python<'_>,
+        pattern: &str,
+    ) -> PyResult<Vec<ContractDescription>> {
+        let req_id = ask_id();
+        self.req_matching_symbols(py, req_id, pattern)?;
+        let shared = self.connected_shared()?;
+        let what = format!("a symbol search for {pattern}");
+        let found = wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.take_matching_symbols_for(req_id as u32)
+        })?;
+        Ok(found
+            .iter()
+            .map(|m| ContractDescription {
+                con_id: m.con_id as i64,
+                symbol: m.symbol.clone(),
+                sec_type: m.sec_type.to_fix().to_string(),
+                currency: m.currency.clone(),
+                primary_exchange: m.primary_exchange.clone(),
+                derivative_sec_types: m.derivative_types.clone(),
+            })
+            .collect())
+    }
+
+    /// How a contract's traded volume is spread across prices over a period.
+    #[pyo3(signature = (contract, use_rth=true, time_period="3 days"))]
+    fn histogram_data(
+        &self,
+        py: Python<'_>,
+        contract: &Contract,
+        use_rth: bool,
+        time_period: &str,
+    ) -> PyResult<Vec<(f64, i64)>> {
+        let req_id = ask_id();
+        self.req_histogram_data(py, req_id, contract, use_rth, time_period)?;
+        let shared = self.connected_shared()?;
+        let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
+        let rows = wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.take_histogram_for(req_id as u32)
+        })?;
+        Ok(rows.iter().map(|e| (e.price, e.count)).collect())
+    }
+
+    /// A fundamental report on a contract, as the venue's own document.
+    fn fundamental_data(
+        &self,
+        py: Python<'_>,
+        contract: &Contract,
+        report_type: &str,
+    ) -> PyResult<String> {
+        let req_id = ask_id();
+        self.req_fundamental_data(py, req_id, contract, report_type, Vec::new())?;
+        let shared = self.connected_shared()?;
+        let what = format!("a {report_type} report for {}", contract.symbol);
+        wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.take_fundamental_for(req_id as u32)
+        })
     }
 
     /// Fill in what the venue knows about a contract, above all its id.
