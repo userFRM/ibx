@@ -176,6 +176,177 @@ class IB:
         self._subscribed.pop(req_id, None)
         self.client.cancel_mkt_data(req_id)
 
+
+    # -- orders ----------------------------------------------------------
+
+    def placeOrder(self, contract, order):
+        """Send an order and hand back the record of it.
+
+        The record is returned before the venue has said anything, and its
+        status moves under the caller as the venue answers. That is what makes
+        it worth holding on to rather than reading a return code.
+        """
+        order_id = getattr(order, "orderId", 0) or self.client.next_order_id()
+        try:
+            order.orderId = order_id
+        except AttributeError:
+            pass
+        trade = self.wrapper.register_order(order_id, contract, order)
+        self.client.place_order(order_id, contract, order)
+        return trade
+
+    def cancelOrder(self, order, manualCancelOrderTime=""):
+        order_id = getattr(order, "orderId", order)
+        self.client.cancel_order(order_id, manualCancelOrderTime)
+        return self.wrapper.trade_for(order_id)
+
+    def reqGlobalCancel(self):
+        self.client.req_global_cancel()
+
+    def reqAutoOpenOrders(self, autoBind=True):
+        self.client.req_auto_open_orders(autoBind)
+
+    def reqCompletedOrders(self, apiOnly=False):
+        self.client.req_completed_orders(apiOnly)
+        return self.trades()
+
+    def exerciseOptions(
+        self, contract, exerciseAction, exerciseQuantity, account="", override=False,
+    ):
+        self.client.exercise_options(
+            self._next_req_id(), contract, exerciseAction, exerciseQuantity,
+            account, 1 if override else 0,
+        )
+
+    # -- streams the caller reads through the live state ------------------
+
+    def reqMktDepth(self, contract, numRows=5, isSmartDepth=False, mktDepthOptions=None):
+        del mktDepthOptions
+        req_id = self._next_req_id()
+        self._subscribed[req_id] = contract
+        self._by_contract[id(contract)] = req_id
+        self.client.req_mkt_depth(req_id, contract, numRows, isSmartDepth, [])
+        return req_id
+
+    def cancelMktDepth(self, contract, isSmartDepth=False):
+        req_id = self._by_contract.pop(id(contract), None)
+        if req_id is not None:
+            self._subscribed.pop(req_id, None)
+            self.client.cancel_mkt_depth(req_id, isSmartDepth)
+
+    def reqRealTimeBars(self, contract, barSize=5, whatToShow="TRADES", useRTH=True, realTimeBarsOptions=None):
+        del realTimeBarsOptions
+        req_id = self._next_req_id()
+        self._subscribed[req_id] = contract
+        self._by_contract[id(contract)] = req_id
+        self.client.req_real_time_bars(req_id, contract, barSize, whatToShow, useRTH, [])
+        return req_id
+
+    def cancelRealTimeBars(self, bars):
+        req_id = bars if isinstance(bars, int) else self._by_contract.pop(id(bars), None)
+        if req_id is not None:
+            self.client.cancel_real_time_bars(req_id)
+
+    def reqTickByTickData(self, contract, tickType="Last", numberOfTicks=0, ignoreSize=False):
+        req_id = self._next_req_id()
+        self._subscribed[req_id] = contract
+        self._by_contract[id(contract)] = req_id
+        self.client.req_tick_by_tick_data(req_id, contract, tickType, numberOfTicks, ignoreSize)
+        return req_id
+
+    def cancelTickByTickData(self, contract, tickType="Last"):
+        del tickType
+        req_id = self._by_contract.pop(id(contract), None)
+        if req_id is not None:
+            self.client.cancel_tick_by_tick_data(req_id)
+
+    def reqMarketDataType(self, marketDataType):
+        self.client.req_market_data_type(marketDataType)
+
+    # -- account ----------------------------------------------------------
+
+    def reqAccountSummary(self, group="All", tags=""):
+        self.client.req_account_summary(self._next_req_id(), group, tags)
+        return self.accountValues()
+
+    def reqPnL(self, account="", modelCode=""):
+        self.client.req_pnl(self._next_req_id(), account, modelCode)
+
+    def reqPnLSingle(self, account, modelCode, conId):
+        self.client.req_pnl_single(self._next_req_id(), account, modelCode, conId)
+
+    def reqAccountUpdatesMulti(self, account="", modelCode="", ledgerAndNLV=False):
+        self.client.req_account_updates_multi(self._next_req_id(), account, modelCode, ledgerAndNLV)
+
+    def reqUserInfo(self):
+        self.client.req_user_info(self._next_req_id())
+
+    # -- reference and news -----------------------------------------------
+
+    def reqCurrentTime(self):
+        self.client.req_current_time()
+
+    def reqMarketRule(self, marketRuleId):
+        self.client.req_market_rule(marketRuleId)
+
+    def reqSecDefOptParams(self, underlyingSymbol, futFopExchange, underlyingSecType, underlyingConId):
+        self.client.req_sec_def_opt_params(
+            self._next_req_id(), underlyingSymbol, futFopExchange,
+            underlyingSecType, underlyingConId,
+        )
+
+    def reqSmartComponents(self, bboExchange):
+        self.client.req_smart_components(self._next_req_id(), bboExchange)
+
+    def reqMktDepthExchanges(self):
+        self.client.req_mkt_depth_exchanges()
+
+    def reqNewsProviders(self):
+        self.client.req_news_providers()
+
+    def reqNewsArticle(self, providerCode, articleId, newsArticleOptions=None):
+        del newsArticleOptions
+        self.client.req_news_article(self._next_req_id(), providerCode, articleId, [])
+
+    def reqHistoricalNews(
+        self, conId, providerCodes, startDateTime, endDateTime,
+        totalResults=100, historicalNewsOptions=None,
+    ):
+        del historicalNewsOptions
+        self.client.req_historical_news(
+            self._next_req_id(), conId, providerCodes, startDateTime,
+            endDateTime, totalResults, [],
+        )
+
+    def reqNewsBulletins(self, allMessages=True):
+        self.client.req_news_bulletins(allMessages)
+
+    def cancelNewsBulletins(self):
+        self.client.cancel_news_bulletins()
+
+    def reqScannerParameters(self):
+        self.client.req_scanner_parameters()
+
+    def reqHistoricalSchedule(self, contract, endDateTime="", durationStr="1 M", useRTH=True):
+        self.client.req_historical_schedule(
+            self._next_req_id(), contract, endDateTime, durationStr, useRTH
+        )
+
+    def reqHistoricalTicks(
+        self, contract, startDateTime="", endDateTime="", numberOfTicks=1000,
+        whatToShow="TRADES", useRth=True, ignoreSize=False, miscOptions=None,
+    ):
+        del miscOptions
+        self.client.req_historical_ticks(
+            self._next_req_id(), contract, startDateTime, endDateTime,
+            numberOfTicks, whatToShow, 1 if useRth else 0, ignoreSize, [],
+        )
+
+    def cancelHistoricalData(self, bars):
+        req_id = bars if isinstance(bars, int) else self._by_contract.pop(id(bars), None)
+        if req_id is not None:
+            self.client.cancel_historical_data(req_id)
+
     # -- asking the venue to start sending it ----------------------------
 
     def reqPositions(self):
@@ -299,20 +470,20 @@ _NOT_YET = frozenset({
     "accountSummary", "pnl", "pnlSingle", 
     
     "realtimeBars", "newsTicks", "newsBulletins",
-    "reqTickers", "bracketOrder", "oneCancelsAll", "whatIfOrder", "placeOrder",
-    "cancelOrder", "reqGlobalCancel", "reqCurrentTime", 
-    "reqAccountUpdatesMulti", "reqAccountSummary", "reqAutoOpenOrders",
-    "reqCompletedOrders", 
-    "reqPnL", "cancelPnL", "reqPnLSingle", "cancelPnLSingle",
-    "reqMarketRule", "reqRealTimeBars", "cancelRealTimeBars",
-    "cancelHistoricalData", "reqHistoricalSchedule", "reqHistoricalTicks",
-    "reqMarketDataType", "reqTickByTickData",
-    "cancelTickByTickData", "reqSmartComponents", "reqMktDepthExchanges",
-    "reqMktDepth", "cancelMktDepth", "reqScannerData", "reqScannerSubscription",
-    "cancelScannerSubscription", "reqScannerParameters",
-    "calculateImpliedVolatility", "calculateOptionPrice", "reqSecDefOptParams",
-    "exerciseOptions", "reqNewsProviders", "reqNewsArticle", "reqHistoricalNews",
-    "reqNewsBulletins", "cancelNewsBulletins", "requestFA", "replaceFA",
+    "reqTickers", "bracketOrder", "oneCancelsAll", "whatIfOrder", 
+    
+    
+    
+    "cancelPnL", "cancelPnLSingle",
+    
+    
+    
+    
+    "reqScannerData", "reqScannerSubscription",
+    "cancelScannerSubscription", 
+    "calculateImpliedVolatility", "calculateOptionPrice", 
+    
+    "requestFA", "replaceFA",
     "reqWshMetaData", "cancelWshMetaData", "reqWshEventData", "cancelWshEventData",
-    "getWshMetaData", "getWshEventData", "reqUserInfo",
+    "getWshMetaData", "getWshEventData", 
 })

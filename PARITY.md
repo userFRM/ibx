@@ -14,7 +14,7 @@ Counts here are measured, not asserted. Where a number is an estimate it says so
 | The gateway's settings | 11 with a counterpart, 7 without | all 11 carried, all 7 named |
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
-| The asynchronous wrapper's shape | 90 methods | 31 carried, 60 open |
+| The asynchronous wrapper's shape | 90 methods | 63 carried, 28 open |
 | The Rust client's shape | 77 methods | not started |
 
 ## 1. The wire
@@ -74,7 +74,7 @@ rather than one being chosen.
 naming conventions resolve, on the client, the wrapper, and every object handed
 to a callback.
 
-### The asynchronous wrapper — 31 of 90
+### The asynchronous wrapper — 63 of 90
 
 `ibx.IB()`. Its names, its argument names, its defaults, and its habit of
 filling a contract in place. The rest raise and name themselves; a
@@ -83,11 +83,13 @@ there.
 
 Three kinds of work sit behind the rest, and they are not the same size:
 
-1. **Thin wrappers** over a call that already answers or already sends. Roughly
-   thirty. Mechanical.
+1. ~~**Thin wrappers** over a call that already answers or already sends.~~
+   Carried, including the order path: `placeOrder` hands back a record whose
+   status moves under the caller rather than a return code.
 2. **Calls needing an answering form first** — the request exists and returns
-   through a callback; the answering version has to be built beneath it.
-   Roughly twenty.
+   through a callback; the answering version has to be built beneath it. This
+   is most of what is left: `reqTickers`, `whatIfOrder`, `reqScannerData`, the
+   P&L pair, the event-data pair, and the advisor pair.
 3. **Live state.** Carried for what the account holds and what its orders are
    doing: `positions()`, `portfolio()`, `accountValues()`, `trades()`,
    `openTrades()`, `orders()`, `openOrders()`, `fills()`, `executions()`,
@@ -116,7 +118,7 @@ idea, so the work is naming and coverage rather than design.
 1. ~~Live state for what the account holds and what its orders are doing.~~
    Carried.
 2. ~~Live quotes.~~ Carried.
-3. The thin wrappers, which are volume rather than difficulty.
+3. ~~The thin wrappers.~~ Carried.
 4. The answering forms beneath the rest.
 5. The Rust shape, once the answering layer is complete enough to name.
 6. The wire's remaining refusals, which need a live session.
@@ -128,5 +130,5 @@ This is not yet a complete replacement, and the parities above say where.
 A program reading `ib.positions()`, watching a `Trade`'s status move as fills
 arrive, or watching quotes through `ib.pendingTickers`, runs here now.
 
-Sixty of the wrapper's ninety calls do not. They raise and name themselves
+Twenty-eight of the wrapper's ninety calls do not. They raise and name themselves
 rather than returning something that looks like an answer.

@@ -59,8 +59,12 @@ def test_the_earliest_data_comes_back_from_the_facade():
 def test_a_call_not_carried_yet_names_itself():
     """Not an AttributeError that reads like a typo, and not a quiet empty list."""
     ib = ibx.IB()
-    with pytest.raises(NotImplementedError, match="placeOrder"):
-        ib.placeOrder()
+    # Picked from the list itself, so this test cannot go stale as the list shrinks.
+    from ibx._ib import _NOT_YET
+
+    name = sorted(_NOT_YET)[0]
+    with pytest.raises(NotImplementedError, match=name):
+        getattr(ib, name)()
 
 
 def test_a_name_that_is_no_method_is_still_refused():
@@ -113,3 +117,41 @@ def test_a_session_that_is_not_read_only_does_not_refuse():
         c.placeOrder(1, spy(), order)
     except RuntimeError as e:
         assert "read-only" not in str(e), "the guard fired on a session that is not read-only"
+
+
+def test_placing_an_order_hands_back_a_record_that_moves():
+    """The record is returned before the venue has answered, and its status
+    moves under the caller. That is what makes it worth holding."""
+    ib = connected_ib()
+    order = ibx.Order()
+    order.orderId = 7
+    order.action = "BUY"
+    order.orderType = "MKT"
+    order.totalQuantity = 5
+
+    try:
+        trade = ib.placeOrder(spy(), order)
+    except RuntimeError:
+        # No venue behind a test session; the record is still registered.
+        trade = ib.wrapper.trade_for(7)
+
+    assert trade is not None
+    assert trade.orderStatus.status == "PendingSubmit"
+    assert trade.isActive()
+
+    ib.wrapper.orderStatus(7, "Filled", 5.0, 0.0, 10.0, 1, 0, 10.0, 1, "")
+    assert trade.isDone() and trade.filled() == 5.0
+    assert trade in ib.trades()
+    assert trade not in ib.openTrades()
+
+
+def test_every_carried_method_is_actually_callable():
+    """A name that resolves but is not a method would pass the honesty test
+    while failing the caller."""
+    from ibx._ib import IB
+
+    for name in dir(IB):
+        if name.startswith("_"):
+            continue
+        attr = getattr(IB, name)
+        assert callable(attr) or isinstance(attr, property), name
