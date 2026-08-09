@@ -74,14 +74,14 @@ rather than one being chosen.
 naming conventions resolve, on the client, the wrapper, and every object handed
 to a callback.
 
-### The asynchronous wrapper — 7 of 90
+### The asynchronous wrapper — 26 of 90
 
 `ibx.IB()`. Its names, its argument names, its defaults, and its habit of
 filling a contract in place. The rest raise and name themselves; a
 test holds that list honest, so it cannot drift into claiming more than is
 there.
 
-Three kinds of work sit behind the 83, and they are not the same size:
+Three kinds of work sit behind the rest, and they are not the same size:
 
 1. **Thin wrappers** over a call that already answers or already sends. Roughly
    thirty. Mechanical.
@@ -111,12 +111,14 @@ idea, so the work is naming and coverage rather than design.
    Carried.
 2. Live quotes, which are the remaining half of live state.
 3. The thin wrappers, which are volume rather than difficulty.
-3. The answering forms beneath the rest.
-4. The Rust shape, once the answering layer is complete enough to name.
-5. The wire's remaining refusals, which need a live session.
+4. The answering forms beneath the rest.
+5. The Rust shape, once the answering layer is complete enough to name.
+6. The wire's remaining refusals, which need a live session.
 
 ## What is not claimed
 
-This is not yet a complete replacement, and the parities above say where. The
-gap that matters most is live state: a program written for the asynchronous
-wrapper that reads `ib.positions()` in a loop does not run here yet.
+This is not yet a complete replacement, and the parities above say where.
+
+A program reading `ib.positions()`, or watching a `Trade`'s status move as fills
+arrive, runs here now. One that watches quotes through `ib.pendingTickers` does
+not: live quotes are the half of live state still open.
