@@ -87,6 +87,48 @@ fn subjects() -> Vec<(&'static str, Contract)> {
             right: "C".to_string(),
             ..Default::default()
         }),
+        ("a currency pair", Contract {
+            symbol: "EUR".to_string(),
+            sec_type: "CASH".to_string(),
+            exchange: "IDEALPRO".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("a contract for difference", Contract {
+            symbol: "AAPL".to_string(),
+            sec_type: "CFD".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("a warrant", Contract {
+            symbol: "ALV".to_string(),
+            sec_type: "WAR".to_string(),
+            exchange: "FWB".to_string(),
+            currency: "EUR".to_string(),
+            ..Default::default()
+        }),
+        ("a commodity", Contract {
+            symbol: "XAUUSD".to_string(),
+            sec_type: "CMDTY".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("a crypto", Contract {
+            symbol: "BTC".to_string(),
+            sec_type: "CRYPTO".to_string(),
+            exchange: "PAXOS".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
+        ("an option on a future", Contract {
+            symbol: "ES".to_string(),
+            sec_type: "FOP".to_string(),
+            exchange: "CME".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
         ("a future", Contract {
             symbol: "ES".to_string(),
             sec_type: "FUT".to_string(),
@@ -139,6 +181,32 @@ fn main() {
                     .iter()
                     .max_by_key(|d| d.unnamed_fields.len());
                 let kept = richest.map(|d| d.unnamed_fields.len()).unwrap_or(0);
+                // How the stated fields are spread across the replies. One
+                // reply holding far more than the rest means records are being
+                // run together, and a field from one contract would then be
+                // read as a field of another.
+                if found.len() > 1 {
+                    for d in found.iter().take(3) {
+                        println!(
+                            "        row: conId={} symbol={:?} secType={:?} fields={}",
+                            d.contract.con_id,
+                            d.contract.symbol,
+                            d.contract.sec_type,
+                            d.unnamed_fields.len(),
+                        );
+                    }
+                    let mut sizes: Vec<usize> =
+                        found.iter().map(|d| d.unnamed_fields.len()).collect();
+                    sizes.sort_unstable();
+                    println!(
+                        "        spread: n={} smallest={} median={} largest={} distinct ids={}",
+                        found.len(),
+                        sizes.first().copied().unwrap_or(0),
+                        sizes[sizes.len() / 2],
+                        sizes.last().copied().unwrap_or(0),
+                        found.iter().map(|d| d.contract.con_id).collect::<std::collections::HashSet<_>>().len(),
+                    );
+                }
                 println!(
                     "  {what:<44} {:>2} definition(s), {kept:>2} field(s) kept unnamed",
                     found.len()
