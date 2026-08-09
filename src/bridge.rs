@@ -739,6 +739,9 @@ impl OrderState {
 pub struct ReferenceState {
     historical_data: Mutex<Vec<(u32, HistoricalResponse)>>,
     head_timestamps: Mutex<Vec<(u32, HeadTimestampResponse)>>,
+    /// Set while the smart-component table is this client's own rather than
+    /// the venue's.
+    smart_components_provisional: std::sync::atomic::AtomicBool,
     contract_details: Mutex<Vec<(u32, ContractDefinition)>>,
     contract_details_end: Mutex<Vec<u32>>,
     matching_symbols: Mutex<Vec<(u32, Vec<SymbolMatch>)>>,
@@ -786,6 +789,7 @@ impl ReferenceState {
         Self {
             historical_data: Mutex::new(Vec::with_capacity(16)),
             head_timestamps: Mutex::new(Vec::with_capacity(8)),
+            smart_components_provisional: std::sync::atomic::AtomicBool::new(false),
             contract_details: Mutex::new(Vec::with_capacity(16)),
             contract_details_end: Mutex::new(Vec::with_capacity(8)),
             matching_symbols: Mutex::new(Vec::with_capacity(8)),
@@ -826,6 +830,22 @@ impl ReferenceState {
 
     pub fn drain_contract_details(&self) -> Vec<(u32, ContractDefinition)> {
         Self::drain_dispatchable(&self.contract_details)
+    }
+
+    /// Whether the smart-component table came from the venue or is this
+    /// client's own list.
+    ///
+    /// The bit numbers in it decide which exchange a quote's bid, ask and last
+    /// are attributed to. The venue assigns them; a list written here can only
+    /// guess, and a guess that renders confidently is indistinguishable from
+    /// knowledge.
+    pub fn smart_components_are_provisional(&self) -> bool {
+        self.smart_components_provisional.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn note_smart_components_provisional(&self, provisional: bool) {
+        self.smart_components_provisional
+            .store(provisional, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The first id this client's own answering calls ask under.

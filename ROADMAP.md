@@ -331,6 +331,21 @@ this client states 163 fields against its 79 because much of what it states
 rides fields the counterpart writes from elsewhere. The number that matters is
 the fifty-one, and the twenty-eight beside it.
 
+### Data this client states without the venue having stated it
+
+One table is written here rather than received, and what depends on it is named
+so that nobody takes it for the venue's own word.
+
+| What | Why it is written here | What depends on it |
+| --- | --- | --- |
+| The venues SMART routes to, and their bit numbers | The session carries no message this can be read from | The exchange a quote's bid, ask and last are attributed to |
+
+The letters are right; the bit numbers are this list's order rather than the
+venue's assignment, and the venue's assignment is what decides the attribution.
+The table is marked provisional at the point it is set, so a caller can ask
+whether what it is reading came from the venue or from here. Settling it needs a
+live session, and it is queued for one.
+
 ### Order fields this client deliberately does not send
 
 Every field on the order this API takes was checked against what reaches the
