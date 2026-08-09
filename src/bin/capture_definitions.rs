@@ -87,10 +87,16 @@ fn main() {
 
     for (what, contract) in subjects() {
         match client.contract_details(&contract) {
-            Ok(found) => println!(
-                "  {what:<48} {} definition(s)",
-                found.len()
-            ),
+            Ok(found) => {
+                let kept = found
+                    .first()
+                    .map(|d| d.unnamed_fields.len())
+                    .unwrap_or(0);
+                println!(
+                    "  {what:<44} {:>2} definition(s), {kept:>2} field(s) kept unnamed",
+                    found.len()
+                );
+            }
             // A contract this account cannot see is not a failure of the
             // capture: the tags come from whichever replies do arrive.
             Err(e) => println!("  {what:<48} {e}"),

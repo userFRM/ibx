@@ -266,6 +266,17 @@ pub struct ContractDefinition {
     pub cusip: String,
     /// Every identifier the contract is known by, as the kind and the value.
     pub sec_id_list: Vec<(String, String)>,
+    /// Every field the venue stated that this parser does not name.
+    ///
+    /// A definition carries more than any one client reads, and what was read
+    /// used to be the whole of what survived: the rest was parsed and dropped,
+    /// so a fact the venue had stated about the contract could not be reached
+    /// by anyone, and there was no way to tell it had been sent.
+    ///
+    /// Keeping them costs a short list per contract and means naming a field is
+    /// an improvement rather than a prerequisite — the value is already here,
+    /// under its number, the day the venue starts sending it.
+    pub unnamed_fields: Vec<(u32, String)>,
     pub min_size: f64,
     /// Trading session string. Populated by merging the paired schedule reply.
     pub trading_hours: Option<String>,
@@ -342,6 +353,7 @@ impl Default for ContractDefinition {
             isin: String::new(),
             cusip: String::new(),
             sec_id_list: Vec::new(),
+            unnamed_fields: Vec::new(),
             min_size: 0.0,
             trading_hours: None,
             liquid_hours: None,
@@ -488,6 +500,14 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
         }
     }
     out
+}
+
+/// Whether a tag belongs to the message envelope rather than to the contract.
+///
+/// These are on every message the venue sends, so counting them among a
+/// contract's own fields overstates what is unread — which it did, by ten.
+fn is_session_field(tag: u32) -> bool {
+    matches!(tag, 8 | 9 | 10 | 34 | 35 | 43 | 49 | 52 | 56 | 115 | 146 | 322 | 320)
 }
 
 /// Every tag this parser reads from a definition.
@@ -647,6 +667,17 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&200) { def.contract_month = v.clone(); }
     if let Some(v) = tags.get(&6577) { def.under_sec_type = v.clone(); }
     if let Some(v) = tags.get(&TAG_EV_RULE) { def.ev_rule = v.clone(); }
+
+    // Whatever the venue stated that nothing above names. Kept rather than
+    // dropped: the fields a client has not got round to naming are still facts
+    // about the contract, and a caller can read them under their number today.
+    let named = tags_read_from_a_definition();
+    def.unnamed_fields = tags
+        .iter()
+        .filter(|(tag, _)| !named.contains(tag) && !is_session_field(**tag))
+        .map(|(tag, value)| (*tag, value.clone()))
+        .collect();
+    def.unnamed_fields.sort_unstable_by_key(|(tag, _)| *tag);
     if let Some(v) = tags.get(&6493) { def.bond_notes = v.clone(); }
     if let Some(v) = tags.get(&6494) { def.desc_append = v.clone(); }
     if let Some(v) = tags.get(&6495) { def.bond_type = v.clone(); }
@@ -2335,5 +2366,49 @@ mod unread_tag_tests {
         let unread = unread_definition_tags(frame);
         assert!(unread.contains(&9999), "an unread tag was not reported");
         assert!(!unread.contains(&6008), "a tag that is read was reported unread");
+    }
+}
+
+#[cfg(test)]
+mod unnamed_field_tests {
+    use super::*;
+
+    fn frame(extra: &str) -> Vec<u8> {
+        format!("35=d\u{1}320=R1\u{1}6008=756733\u{1}55=SPY\u{1}167=CS\u{1}\
+                 207=SMART\u{1}15=USD\u{1}{extra}").into_bytes()
+    }
+
+    /// A field the venue stated and this client does not name is still a fact
+    /// about the contract. Dropping it put it beyond reach with nothing to say
+    /// it had ever arrived.
+    #[test]
+    fn a_field_this_client_does_not_name_is_kept_under_its_number() {
+        let def = parse_secdef_response(&frame("8599=something\u{1}6921=42\u{1}"))
+            .expect("the definition parses");
+        let kept: Vec<u32> = def.unnamed_fields.iter().map(|(t, _)| *t).collect();
+        assert!(kept.contains(&8599));
+        assert!(kept.contains(&6921));
+        let value = def.unnamed_fields.iter().find(|(t, _)| *t == 8599).unwrap();
+        assert_eq!(value.1, "something");
+    }
+
+    /// The message envelope is not part of the contract. Counting those among
+    /// its fields overstated what was unread, by ten.
+    #[test]
+    fn the_messages_own_fields_are_not_counted_as_the_contracts() {
+        let def = parse_secdef_response(&frame("")).expect("the definition parses");
+        let kept: Vec<u32> = def.unnamed_fields.iter().map(|(t, _)| *t).collect();
+        for envelope in [8, 9, 10, 34, 35, 52, 320] {
+            assert!(!kept.contains(&envelope), "{envelope} is the message's, not the contract's");
+        }
+    }
+
+    /// A field that is named is read into its own place, not left as a number.
+    #[test]
+    fn a_field_this_client_names_does_not_also_appear_unnamed() {
+        let def = parse_secdef_response(&frame("6858=IND-FUT-CASH\u{1}"))
+            .expect("the definition parses");
+        assert_eq!(def.ev_rule, "IND-FUT-CASH");
+        assert!(!def.unnamed_fields.iter().any(|(t, _)| *t == 6858));
     }
 }
