@@ -1212,6 +1212,38 @@ pub struct DepthMktDataDescription {
 }
 
 /// A component exchange in a SMART routing map.
+/// The single-letter code a venue is known by on a quote.
+///
+/// The venue states which venues SMART routes a contract to, and in what
+/// order, but names them in full. The letters are the client's own knowledge
+/// of how each is abbreviated, and are not guessed from the name — NASDAQ is
+/// `Q`, not `N`.
+pub fn exchange_letter(exchange: &str) -> &'static str {
+    match exchange {
+        "NASDAQ" => "Q",
+        "NYSE" => "N",
+        "ARCA" => "P",
+        "BATS" | "BZX" => "Z",
+        "IEX" => "V",
+        "BEX" => "B",
+        "BYX" => "Y",
+        "NYSENAT" => "C",
+        "DRCTEDGE" | "EDGE" | "EDGEX" => "J",
+        "MEMX" => "U",
+        "PEARL" => "H",
+        "AMEX" => "A",
+        "CHX" => "M",
+        "LTSE" => "L",
+        "PSX" => "X",
+        "ISE" => "I",
+        "EDGEA" => "K",
+        // A venue this client has no abbreviation for is left without one
+        // rather than given the first letter of its name, which would collide
+        // with venues that do have one.
+        _ => "",
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SmartComponent {
     pub bit_number: i32,

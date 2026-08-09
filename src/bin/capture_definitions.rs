@@ -96,6 +96,23 @@ fn main() {
                     "  {what:<44} {:>2} definition(s), {kept:>2} field(s) kept unnamed",
                     found.len()
                 );
+                // The values are what pair a tag with the field it holds: a
+                // date reads as a date, a contract id as a contract id. The
+                // field list is known; the numbers are not, and a value is what
+                // joins the two.
+                if let Some(d) = found.first() {
+                    println!(
+                        "        named: stockType={:?} validExchanges={:?} marketRule={:?} minSize={:?}",
+                        d.stock_type,
+                        d.valid_exchanges.chars().take(60).collect::<String>(),
+                        d.min_tick,
+                        d.min_size,
+                    );
+                    for (tag, value) in &d.unnamed_fields {
+                        let shown: String = value.chars().take(48).collect();
+                        println!("        {tag:>6} = {shown}");
+                    }
+                }
             }
             // A contract this account cannot see is not a failure of the
             // capture: the tags come from whichever replies do arrive.

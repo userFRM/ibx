@@ -338,13 +338,15 @@ so that nobody takes it for the venue's own word.
 
 | What | Why it is written here | What depends on it |
 | --- | --- | --- |
-| The venues SMART routes to, and their bit numbers | The session carries no message this can be read from | The exchange a quote's bid, ask and last are attributed to |
+| The single letter each venue is known by on a quote | The venue names venues in full and states no abbreviation | Which venue a quote's exchange letter refers to |
 
-The letters are right; the bit numbers are this list's order rather than the
-venue's assignment, and the venue's assignment is what decides the attribution.
-The table is marked provisional at the point it is set, so a caller can ask
-whether what it is reading came from the venue or from here. Settling it needs a
-live session, and it is queued for one.
+Settled since: the venue does state which venues SMART routes a contract to,
+and in what order, on the contract's own definition. It is read from there now,
+and the table this client wrote is used only until a definition arrives. What
+remains written here is the abbreviation each venue is known by, which the venue
+does not state and which cannot be taken from the name — NASDAQ is `Q`, not `N`.
+A venue with no known abbreviation is given none rather than one that would
+collide with a venue that has one.
 
 ### Order fields this client deliberately does not send
 
