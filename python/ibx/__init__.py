@@ -15,5 +15,6 @@ from .ibx import *  # noqa: F401,F403
 from .ibx import __doc__ as _ext_doc  # noqa: F401
 
 from ._ib import IB  # noqa: F401
+from ._settings import UNAVAILABLE, configure, describe, settings  # noqa: F401
 
 __all__ = [n for n in dir() if not n.startswith("_")]
