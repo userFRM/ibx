@@ -36,6 +36,8 @@ pub const TAG_IB_SOURCE: u32 = 6088;
 pub const TAG_IB_PRIMARY_EXCHANGE: u32 = 6470;
 pub const TAG_IB_ORDER_TYPES: u32 = 6431;
 pub const TAG_IB_MARKET_RULE_ID: u32 = 6031;
+/// The economic-value rule, stated on the definition as its own field.
+pub const TAG_EV_RULE: u32 = 6858;
 pub const TAG_IB_STOCK_TYPE: u32 = 8077;
 
 // Market rule tags.
@@ -215,6 +217,10 @@ pub struct ContractDefinition {
     pub coupon: f64,
     pub contract_month: String,
     pub under_sec_type: String,
+    /// The rule the venue evaluates a contract's economic value under. Sent on
+    /// the definition, not derived: a contract whose value follows something
+    /// other than its own price is priced wrongly without it.
+    pub ev_rule: String,
     pub bond_notes: String,
     pub desc_append: String,
     pub bond_type: String,
@@ -296,6 +302,7 @@ impl Default for ContractDefinition {
             coupon: 0.0,
             contract_month: String::new(),
             under_sec_type: String::new(),
+            ev_rule: String::new(),
             bond_notes: String::new(),
             desc_append: String::new(),
             bond_type: String::new(),
@@ -586,6 +593,7 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     }
     if let Some(v) = tags.get(&200) { def.contract_month = v.clone(); }
     if let Some(v) = tags.get(&6577) { def.under_sec_type = v.clone(); }
+    if let Some(v) = tags.get(&TAG_EV_RULE) { def.ev_rule = v.clone(); }
     if let Some(v) = tags.get(&6493) { def.bond_notes = v.clone(); }
     if let Some(v) = tags.get(&6494) { def.desc_append = v.clone(); }
     if let Some(v) = tags.get(&6495) { def.bond_type = v.clone(); }
@@ -2142,6 +2150,16 @@ mod industry_tests {
         format!("35=d\u{1}320=R1\u{1}6008=756733\u{1}55=SPY\u{1}167=CS\u{1}\
                  207=SMART\u{1}15=USD\u{1}{extra}")
             .into_bytes()
+    }
+
+    /// A contract whose economic value follows something other than its own
+    /// price says so on its definition. The field was arriving and going
+    /// nowhere, so a caller pricing such a contract had nothing to price it by.
+    #[test]
+    fn the_economic_value_rule_is_read_from_the_definition() {
+        let def = parse_secdef_response(&secdef("6858=IND-FUT-CASH\u{1}"))
+            .expect("the definition parses");
+        assert_eq!(def.ev_rule, "IND-FUT-CASH");
     }
 
     /// The venue states what the issuer does as one field with bars between,

@@ -2074,6 +2074,8 @@ pub struct ContractDetails {
     #[pyo3(get, set)]
     pub under_sec_type: String,
     #[pyo3(get, set)]
+    pub ev_rule: String,
+    #[pyo3(get, set)]
     pub agg_group: i32,
     #[pyo3(get, set)]
     pub coupon: f64,
@@ -2193,6 +2195,7 @@ impl Clone for ContractDetails {
             price_magnifier: self.price_magnifier,
             contract_month: self.contract_month.clone(),
             under_sec_type: self.under_sec_type.clone(),
+            ev_rule: self.ev_rule.clone(),
             agg_group: self.agg_group,
             coupon: self.coupon,
             bond_type: self.bond_type.clone(),
@@ -2282,6 +2285,7 @@ impl ContractDetails {
             price_magnifier: 0,
             contract_month: String::new(),
             under_sec_type: String::new(),
+            ev_rule: String::new(),
             agg_group: 0,
             coupon: 0.0,
             bond_type: String::new(),
@@ -2365,6 +2369,7 @@ impl ContractDetails {
             price_magnifier: def.price_magnifier,
             contract_month: def.contract_month.clone(),
             under_sec_type: def.under_sec_type.clone(),
+            ev_rule: def.ev_rule.clone(),
             agg_group: def.agg_group,
             coupon: def.coupon,
             bond_type: def.bond_type.clone(),
