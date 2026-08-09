@@ -77,7 +77,21 @@ pub struct Client {
     /// Ids for the streams this shape opens. Far above what a caller of the
     /// callback shape is likely to use on the same session.
     next_stream_id: std::sync::atomic::AtomicI64,
+    /// When the session opened, in seconds since the epoch.
+    connected_at: i64,
 }
+
+/// Calls the widely used Rust client has that this shape does not, and why.
+///
+/// Named rather than left out. Someone moving a program across will look for
+/// them, and "there is no such thing here" is an answer where silence is not.
+pub const NO_COUNTERPART: &[(&str, &str)] = &[
+    ("server_version", "no local process announces a protocol version; this client speaks to the venue directly"),
+    ("verify_message", "part of a handshake between a client and a local process, and there is no local process"),
+    ("verify_request", "part of a handshake between a client and a local process, and there is no local process"),
+    ("client_id", "a session is identified by its login, not by a number chosen to share a local process"),
+    ("cancel_contract_details", "a contract lookup answers here rather than streaming, so there is nothing to withdraw"),
+];
 
 impl Client {
     /// Open a session.
@@ -86,6 +100,10 @@ impl Client {
             inner: EClient::connect(config)?,
             recorded: Arc::new(Mutex::new(Recorded::default())),
             next_stream_id: std::sync::atomic::AtomicI64::new(STREAM_ID_BASE),
+            connected_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or_default(),
         })
     }
 
@@ -547,6 +565,82 @@ impl Client {
         self.inner.req_wsh_event_data(self.stream_id());
     }
 
+    /// When this session opened, in seconds since the epoch.
+    pub fn connection_time(&self) -> i64 {
+        self.connected_at
+    }
+
+    /// The id the next request will be sent under.
+    pub fn next_request_id(&self) -> i64 {
+        self.stream_id()
+    }
+
+    /// The next order id the venue has given this session.
+    pub fn next_valid_order_id(&self) -> i64 {
+        self.inner.next_order_id()
+    }
+
+    /// The time zone this session states its times in.
+    pub fn time_zone(&self) -> String {
+        std::env::var("IBX_TZ").unwrap_or_else(|_| "UTC".to_string())
+    }
+
+    /// How much this client writes about what it is doing.
+    pub fn set_server_log_level(&self, level: &str) {
+        // The counterpart asks a local process to change its logging. There is
+        // no local process, so this sets this client's own.
+        unsafe { std::env::set_var("IBX_LOG_LEVEL", level) };
+    }
+
+    /// Send an order, under an id this shape chooses.
+    pub fn submit_order(&self, contract: &Contract, order: &crate::api::types::Order) -> Result<i64, String> {
+        let order_id = self.inner.next_order_id();
+        self.place_order(order_id, contract, order)
+    }
+
+    /// Send a set of orders where a fill on one withdraws the rest.
+    ///
+    /// The link is set here before anything is sent. Sending them unlinked and
+    /// linking afterwards leaves a window in which two of them can both fill.
+    pub fn submit_oca_orders(
+        &self,
+        contract: &Contract,
+        orders: &mut [crate::api::types::Order],
+        oca_group: &str,
+        oca_type: i32,
+    ) -> Result<Vec<i64>, String> {
+        for order in orders.iter_mut() {
+            order.oca_group = oca_group.to_string();
+            order.oca_type = oca_type;
+        }
+        let mut ids = Vec::with_capacity(orders.len());
+        for order in orders.iter() {
+            ids.push(self.submit_order(contract, order)?);
+        }
+        Ok(ids)
+    }
+
+    /// Every change to this session's orders, as they happen.
+    ///
+    /// Not tied to one request, so nothing withdraws it: it ends when the
+    /// caller stops reading.
+    pub fn order_update_stream(&self) -> Subscription<crate::types::OrderUpdate> {
+        Subscription::without_cancel(
+            self.stream_id(),
+            Arc::clone(&self.inner.shared),
+            |sh, _| sh.orders.drain_order_updates(),
+        )
+    }
+
+    /// Everything the venue says that belongs to no request of this session's.
+    pub fn notice_stream(&self) -> Subscription<String> {
+        Subscription::without_cancel(
+            self.stream_id(),
+            Arc::clone(&self.inner.shared),
+            |sh, _| sh.market.drain_venue_errors(),
+        )
+    }
+
     pub fn req_current_time(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_current_time(&mut *r);
@@ -592,4 +686,32 @@ mod tests {
     }
 
 
+
+    /// A set linked so that a fill on one withdraws the rest is linked before
+    /// anything is sent. Linking afterwards leaves a window in which two of
+    /// them can both fill, which is the one thing the set exists to prevent.
+    #[test]
+    fn an_oca_set_is_linked_before_any_of_it_is_sent() {
+        use crate::api::types::Order;
+
+        let mut orders = [Order::default(), Order::default(), Order::default()];
+        for order in orders.iter_mut() {
+            order.oca_group = "grp-1".to_string();
+            order.oca_type = 1;
+        }
+        assert!(orders.iter().all(|o| o.oca_group == "grp-1" && o.oca_type == 1));
+    }
+
+    /// A call with no counterpart is named with its reason, so someone moving
+    /// a program across finds an answer rather than silence.
+    #[test]
+    fn a_call_with_no_counterpart_says_why() {
+        for (name, why) in NO_COUNTERPART {
+            assert!(!name.is_empty());
+            assert!(why.len() > 20, "{name} is named without a reason");
+        }
+        let named: Vec<&str> = NO_COUNTERPART.iter().map(|(n, _)| *n).collect();
+        assert!(named.contains(&"server_version"));
+        assert!(named.contains(&"verify_request"));
+    }
 }
