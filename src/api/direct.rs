@@ -303,6 +303,100 @@ impl Client {
     // ask for arrives on the session and is recorded. Saying so in the type is
     // better than handing back a value that means only "it was sent".
 
+
+    /// Send an order.
+    ///
+    /// The order's own id is what the venue answers under, so it is returned:
+    /// a caller with nothing to correlate on cannot tell which answer is theirs.
+    pub fn place_order(&self, order_id: i64, contract: &Contract, order: &crate::api::types::Order) -> Result<i64, String> {
+        self.inner.place_order(order_id, contract, order)?;
+        Ok(order_id)
+    }
+
+    pub fn cancel_order(&self, order_id: i64) -> Result<(), String> {
+        self.inner.cancel_order(order_id, "")
+    }
+
+    /// Exercise or lapse a long option position.
+    pub fn exercise_options(
+        &self,
+        contract: &Contract,
+        action: i32,
+        quantity: i32,
+        account: &str,
+        override_precaution: bool,
+    ) -> Result<(), String> {
+        self.inner.exercise_options(
+            self.stream_id(), contract, action, quantity, account,
+            override_precaution,
+        )
+    }
+
+    /// What the account holds, as the callback shape reports it.
+    pub fn open_orders(&self) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_open_orders(&mut *r);
+    }
+
+    pub fn all_open_orders(&self) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_all_open_orders(&mut *r);
+    }
+
+    pub fn completed_orders(&self, api_only: bool) {
+        let _ = api_only;
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_completed_orders(&mut *r);
+    }
+
+    pub fn family_codes(&self) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_family_codes(&mut *r);
+    }
+
+    pub fn news_providers(&self) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_news_providers(&mut *r);
+    }
+
+    pub fn market_rule(&self, market_rule_id: i32) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_market_rule(market_rule_id, &mut *r);
+    }
+
+    pub fn next_order_id(&self) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_ids(&mut *r);
+    }
+
+    pub fn scanner_parameters(&self) -> Result<(), String> {
+        self.inner.req_scanner_parameters()
+    }
+
+    pub fn market_depth_exchanges(&self) -> Result<(), String> {
+        self.inner.req_mkt_depth_exchanges()
+    }
+
+    pub fn switch_market_data_type(&self, market_data_type: i32) {
+        self.inner.req_market_data_type(market_data_type);
+    }
+
+    pub fn news_bulletins(&self, all_messages: bool) {
+        self.inner.req_news_bulletins(all_messages);
+    }
+
+    pub fn account_updates(&self, subscribe: bool, account: &str) {
+        self.inner.req_account_updates(subscribe, account);
+    }
+
+    pub fn pnl(&self, account: &str, model_code: &str) {
+        self.inner.req_pnl(self.stream_id(), account, model_code);
+    }
+
+    pub fn pnl_single(&self, account: &str, model_code: &str, con_id: i64) {
+        self.inner.req_pnl_single(self.stream_id(), account, model_code, con_id);
+    }
+
     pub fn req_current_time(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_current_time(&mut *r);
