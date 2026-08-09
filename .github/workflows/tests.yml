@@ -136,6 +136,10 @@ jobs:
         run: |
           python scripts/gen_api_docs.py
           python scripts/gen_wire_coverage.py
+          # Fails on its own if a request returns as though it acted and did
+          # not, so that kind of call cannot be added without someone deciding
+          # to add it.
+          python scripts/gen_wire_reach.py
           # Staged, so a page a generator has only just started producing
           # counts as a difference rather than as an untracked file nobody sees.
           git add -A docs/

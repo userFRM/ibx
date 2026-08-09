@@ -263,7 +263,6 @@ impl EClient {
         self.req_open_orders(py)
     }
 
-    /// Automatically bind future orders to this client.
     /// Binding an order placed elsewhere to this session.
     ///
     /// The reference client asks a local process to hand over orders a person
