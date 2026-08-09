@@ -28,6 +28,9 @@ fn subjects() -> Vec<(&'static str, Contract)> {
     };
     vec![
         ("a share", stk("SPY")),
+        // A share that is not traded in fractions, so its smallest size and
+        // its size step should differ from one that is.
+        ("a share priced too high to fraction", stk("BRK A")),
         ("a share on a venue outside the United States", Contract {
             symbol: "VOD".to_string(),
             sec_type: "STK".to_string(),
@@ -146,10 +149,10 @@ fn main() {
                 // joins the two.
                 if let Some(d) = richest {
                     println!(
-                        "        named: underConId={} underSymbol={:?} underSecType={:?} lastTradeTime={:?}",
-                        d.under_con_id,
-                        d.under_symbol,
-                        d.under_sec_type,
+                        "        named: minSize={} minTick={} issueDate={:?} lastTradeTime={:?}",
+                        d.min_size,
+                        d.min_tick,
+                        d.issue_date,
                         d.last_trade_time,
                     );
                     for (tag, value) in &d.unnamed_fields {

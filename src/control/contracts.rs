@@ -551,7 +551,10 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
 /// These are on every message the venue sends, so counting them among a
 /// contract's own fields overstates what is unread — which it did, by ten.
 fn is_session_field(tag: u32) -> bool {
-    matches!(tag, 8 | 9 | 10 | 34 | 35 | 43 | 49 | 52 | 56 | 115 | 146 | 322 | 320)
+    // 6344 is how many contracts the reply carries, which is a fact about the
+    // reply and not about any contract in it: it read 1 for a share, 50 for a
+    // bond lookup and 21 for a future's expiries.
+    matches!(tag, 8 | 9 | 10 | 34 | 35 | 43 | 49 | 52 | 56 | 115 | 146 | 322 | 320 | 6344)
 }
 
 /// Every tag this parser reads from a definition.
@@ -740,13 +743,26 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     // Whatever the venue stated that nothing above names. Kept rather than
     // dropped: the fields a client has not got round to naming are still facts
     // about the contract, and a caller can read them under their number today.
+    // Read from the bytes rather than from the parsed map. A definition
+    // repeats tags — a market rule states an increment per price band, an
+    // identifier group states one per identifier — and a map keeps only the
+    // last of each. Keeping only the last is the same loss this field exists to
+    // prevent, one layer down.
     let named = tags_read_from_a_definition();
-    def.unnamed_fields = tags
-        .iter()
-        .filter(|(tag, _)| !named.contains(tag) && !is_session_field(**tag))
-        .map(|(tag, value)| (*tag, value.clone()))
-        .collect();
-    def.unnamed_fields.sort_unstable_by_key(|(tag, _)| *tag);
+    def.unnamed_fields = Vec::new();
+    for part in data.split(|&b| b == fix::SOH) {
+        if part.is_empty() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(part);
+        let Some((tag_str, value)) = text.split_once('=') else { continue };
+        let Ok(tag) = tag_str.parse::<u32>() else { continue };
+        if named.contains(&tag) || is_session_field(tag) {
+            continue;
+        }
+        def.unnamed_fields.push((tag, value.to_string()));
+    }
+    def.unnamed_fields.sort_by_key(|(tag, _)| *tag);
     if let Some(v) = tags.get(&6493) { def.bond_notes = v.clone(); }
     if let Some(v) = tags.get(&6494) { def.desc_append = v.clone(); }
     if let Some(v) = tags.get(&6495) { def.bond_type = v.clone(); }
@@ -2586,5 +2602,27 @@ mod issue_date_tests {
         let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01167=CS\x01";
         let def = parse_secdef_response(frame).expect("the definition parses");
         assert!(def.issue_date.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod repeated_field_tests {
+    use super::*;
+
+    /// A definition repeats tags: a market rule states an increment per price
+    /// band. Keeping only the last of each turns a schedule of tick sizes into
+    /// a single number with no way to tell it was ever a schedule.
+    #[test]
+    fn a_tag_stated_more_than_once_is_kept_more_than_once() {
+        let frame = b"35=d\x01320=R1\x016008=1\x0155=SPY\x01\
+                      9001=alpha\x019001=beta\x019001=gamma\x01";
+        let def = parse_secdef_response(frame).expect("the definition parses");
+        let values: Vec<&str> = def
+            .unnamed_fields
+            .iter()
+            .filter(|(t, _)| *t == 9001)
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(values, vec!["alpha", "beta", "gamma"]);
     }
 }
