@@ -8,14 +8,45 @@ they are tracked separately because they fail separately.
 
 Counts here are measured, not asserted. Where a number is an estimate it says so.
 
+Counting a surface says a program written elsewhere compiles here. It does not
+say a request left the machine, and those are different claims. Both are counted
+below, and the second one is the one that matters.
+
 | Parity | Measure | State |
 | --- | --- | --- |
+| What reaches the venue | 76 caller-facing requests | 35 wire, 26 from the session, 8 withdraw nothing, 4 refuse, 3 missing, 0 silent |
 | The wire | 77 canonical calls | 69 served, 8 answer that they cannot be |
 | The gateway's settings | 11 with a counterpart, 7 without | all 11 carried, all 7 named |
 | The tool that drives the gateway | 51 settings | 12 carried, 33 need no counterpart, 6 open |
 | The reference client's shape | `EClient`/`EWrapper` | carried |
 | The asynchronous wrapper's shape | 90 methods | 90 carried |
 | The Rust client's shape | 77 methods | 72 carried, 5 named as having none |
+
+## 0. What actually reaches the venue
+
+Counted by `scripts/gen_wire_reach.py` into [docs/wire-reach.md](docs/wire-reach.md),
+which CI re-runs, so the number cannot drift away from the code.
+
+A call that exists, takes the right arguments and returns without error is not
+thereby a call that did anything. Every caller-facing request is one of:
+
+- **wire** — sends a command that reaches the venue.
+- **session** — answered from what the venue pushed when the session opened.
+  The counterpart does the same; account values and positions arrive unasked.
+- **withdrawn** — withdraws something that was never running here, and says so
+  in a comment beside it. Correct, not an oversight: reporting an error for
+  stopping a subscription that was never made would be wrong.
+- **refused** — reports that this client cannot serve it, and why.
+- **missing** — should reach the venue and does not. Three: the advisor pair
+  and the event-data metadata. Each needs the request the counterpart sends,
+  and none has been established.
+- **silent** — returns as though it acted, and did not. **Held at zero**, and
+  the generator fails if one appears.
+
+The last kind is the one worth guarding. A call that quietly does nothing is
+worse than one that refuses: a caller waiting on it waits for something that is
+never coming, with nothing to say why. One was found this way — binding orders
+entered outside the session accepted its flag and returned, and now reports.
 
 ## 1. The wire
 

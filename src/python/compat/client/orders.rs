@@ -264,9 +264,26 @@ impl EClient {
     }
 
     /// Automatically bind future orders to this client.
+    /// Binding an order placed elsewhere to this session.
+    ///
+    /// The reference client asks a local process to hand over orders a person
+    /// entered by hand in front of it. There is no such process here and no
+    /// such person, so there is nothing to hand over, and this reports that
+    /// rather than returning as though the binding were in place.
+    ///
+    /// Returning quietly was worse than either alternative: a caller that asked
+    /// to be given those orders and was told nothing waits for orders that are
+    /// never coming, with nothing to say why.
     #[pyo3(signature = (b_auto_bind))]
     fn req_auto_open_orders(&self, b_auto_bind: bool) -> PyResult<()> {
-        let _ = b_auto_bind;
+        if b_auto_bind {
+            crate::python::compat::client::report_unserviceable(
+                self,
+                -1,
+                "binding orders entered outside this session: there is no other \
+                 process holding them",
+            );
+        }
         Ok(())
     }
 

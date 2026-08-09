@@ -7,6 +7,7 @@ mod reference;
 mod ask;
 mod dispatch;
 mod stubs;
+pub(crate) use stubs::report_unserviceable;
 mod test_helpers;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
