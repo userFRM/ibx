@@ -2088,6 +2088,8 @@ pub struct ContractDetails {
     #[pyo3(get, set)]
     pub last_trade_time: String,
     #[pyo3(get, set)]
+    pub issue_date: String,
+    #[pyo3(get, set)]
     pub unnamed_fields: Vec<(u32, String)>,
     #[pyo3(get, set)]
     pub agg_group: i32,
@@ -2213,6 +2215,7 @@ impl Clone for ContractDetails {
             under_con_id: self.under_con_id,
             under_symbol: self.under_symbol.clone(),
             last_trade_time: self.last_trade_time.clone(),
+            issue_date: self.issue_date.clone(),
             unnamed_fields: self.unnamed_fields.clone(),
             agg_group: self.agg_group,
             coupon: self.coupon,
@@ -2307,6 +2310,7 @@ impl ContractDetails {
             under_con_id: 0,
             under_symbol: String::new(),
             last_trade_time: String::new(),
+            issue_date: String::new(),
             unnamed_fields: Vec::new(),
             agg_group: 0,
             coupon: 0.0,
@@ -2395,6 +2399,7 @@ impl ContractDetails {
             under_con_id: def.under_con_id,
             under_symbol: def.under_symbol.clone(),
             last_trade_time: def.last_trade_time.clone(),
+            issue_date: def.issue_date.clone(),
             unnamed_fields: def.unnamed_fields.clone(),
             agg_group: def.agg_group,
             coupon: def.coupon,
