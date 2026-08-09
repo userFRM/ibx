@@ -24,7 +24,7 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
 /// Ids for questions this layer asks on the caller's behalf. Far above what a
 /// caller is likely to use, so an answer to one of these is never mistaken for
 /// an answer to theirs.
-static NEXT_ASK_ID: AtomicI64 = AtomicI64::new(0x3000_0000);
+static NEXT_ASK_ID: AtomicI64 = AtomicI64::new(crate::bridge::ReferenceState::ASK_ID_BASE as i64);
 
 fn ask_id() -> i64 {
     NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed)

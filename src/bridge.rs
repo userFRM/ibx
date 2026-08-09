@@ -777,15 +777,44 @@ impl ReferenceState {
     }
 
     pub fn drain_historical_data(&self) -> Vec<(u32, HistoricalResponse)> {
-        self.historical_data.lock().unwrap().drain(..).collect()
+        Self::drain_dispatchable(&self.historical_data)
     }
 
     pub fn drain_head_timestamps(&self) -> Vec<(u32, HeadTimestampResponse)> {
-        self.head_timestamps.lock().unwrap().drain(..).collect()
+        Self::drain_dispatchable(&self.head_timestamps)
     }
 
     pub fn drain_contract_details(&self) -> Vec<(u32, ContractDefinition)> {
-        self.contract_details.lock().unwrap().drain(..).collect()
+        Self::drain_dispatchable(&self.contract_details)
+    }
+
+    /// The first id this client's own answering calls ask under.
+    ///
+    /// Far above what a caller is likely to use, so an answer to one of these
+    /// is never mistaken for an answer to theirs — and, more importantly, so a
+    /// dispatch loop can tell them apart from a caller's own requests and leave
+    /// them where the waiting call will find them.
+    pub const ASK_ID_BASE: u32 = 0x3000_0000;
+
+    /// Whether a request id belongs to one of this client's answering calls.
+    pub fn is_ask_id(req_id: u32) -> bool {
+        req_id >= Self::ASK_ID_BASE
+    }
+
+    /// Drain what a dispatch loop should deliver, leaving behind what a waiting
+    /// answering call is going to take.
+    ///
+    /// Without this the two compete: whichever ran first emptied the queue, and
+    /// the other reported nothing arrived. A caller never sees an answering
+    /// call's id, so nothing is withheld from them here.
+    fn drain_dispatchable<T>(q: &Mutex<Vec<(u32, T)>>) -> Vec<(u32, T)> {
+        let mut g = q.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < g.len() {
+            if Self::is_ask_id(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
+        }
+        out
     }
 
     /// Take the one answer belonging to a request, leaving the rest.
@@ -860,11 +889,17 @@ impl ReferenceState {
     }
 
     pub fn drain_contract_details_end(&self) -> Vec<u32> {
-        self.contract_details_end.lock().unwrap().drain(..).collect()
+        let mut g = self.contract_details_end.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < g.len() {
+            if Self::is_ask_id(g[i]) { i += 1; } else { out.push(g.remove(i)); }
+        }
+        out
     }
 
     pub fn drain_matching_symbols(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
-        self.matching_symbols.lock().unwrap().drain(..).collect()
+        Self::drain_dispatchable(&self.matching_symbols)
     }
 
     pub fn drain_option_params(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
@@ -888,11 +923,11 @@ impl ReferenceState {
     }
 
     pub fn drain_fundamental_data(&self) -> Vec<(u32, String)> {
-        self.fundamental_data.lock().unwrap().drain(..).collect()
+        Self::drain_dispatchable(&self.fundamental_data)
     }
 
     pub fn drain_histogram_data(&self) -> Vec<(u32, Vec<HistogramEntry>)> {
-        self.histogram_data.lock().unwrap().drain(..).collect()
+        Self::drain_dispatchable(&self.histogram_data)
     }
 
     pub fn drain_historical_ticks(&self) -> Vec<(u32, HistoricalTickData, String, bool)> {
@@ -900,11 +935,17 @@ impl ReferenceState {
     }
 
     pub fn drain_historical_schedules(&self) -> Vec<(u32, HistoricalScheduleResponse)> {
-        self.historical_schedules.lock().unwrap().drain(..).collect()
+        Self::drain_dispatchable(&self.historical_schedules)
     }
 
     pub fn drain_historical_errors(&self) -> Vec<(u32, i32, String)> {
-        self.historical_errors.lock().unwrap().drain(..).collect()
+        let mut g = self.historical_errors.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < g.len() {
+            if Self::is_ask_id(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
+        }
+        out
     }
 
     /// Get cached market rules.

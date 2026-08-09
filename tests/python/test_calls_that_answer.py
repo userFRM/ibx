@@ -134,3 +134,35 @@ def test_a_refusal_quotes_the_venue_rather_than_reporting_a_timeout():
     c._test_push_historical_error(req_id, 162, "Historical Market Data Service error")
     with pytest.raises(RuntimeError, match="Historical Market Data Service error"):
         c.historical_data(spy(), "", "1 D", "1 min", "TRADES")
+
+
+def test_a_dispatch_loop_running_beside_an_ask_does_not_eat_its_answer():
+    """The facade keeps a pump running while its calls ask questions.
+
+    Both read the same queues. Whichever ran first used to empty them, and the
+    other reported that nothing arrived.
+    """
+    c = connected()
+    mine = c._test_peek_ask_id()
+    c._test_push_contract_details(mine, 756733, "SPY")
+    c._test_push_contract_details_end(mine)
+
+    # A full dispatch pass, exactly as a pump would run it.
+    c._test_dispatch_once()
+
+    found = c.contract_details(spy())
+    assert [d.contract.conId for d in found] == [756733]
+
+
+def test_a_dispatch_loop_still_delivers_a_callers_own_request():
+    seen = []
+
+    class W(ibx.EWrapper):
+        def contractDetails(self, reqId, details):
+            seen.append((reqId, details.contract.conId))
+
+    c = ibx.EClient(W())
+    c._test_connect("DU0000000")
+    c._test_push_contract_details(42, 111111, "AAPL")
+    c._test_dispatch_once()
+    assert seen == [(42, 111111)]
