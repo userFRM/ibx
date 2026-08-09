@@ -13,6 +13,7 @@
 //! never has to supply one.
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::api::client::{EClient, EClientConfig};
 use crate::api::types::{BarData, ContractDetails};
@@ -21,6 +22,7 @@ use crate::api::client::{AccountValue, OptionChain, PositionRow};
 use crate::api::subscription::Subscription;
 use crate::types::{DepthUpdate, RealTimeBar};
 use crate::types::ControlCommand;
+use crate::bridge::SharedState;
 
 use super::Contract;
 
@@ -48,6 +50,12 @@ impl Wrapper for Recorded {
         self.managed_accounts = Some(accounts.to_string());
     }
 }
+
+/// How long a question waits for its answer.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long to sleep between looks at the queue.
+const POLL: Duration = Duration::from_millis(5);
 
 /// A session whose calls return what they were asked for.
 pub struct Client {
@@ -136,6 +144,91 @@ impl Client {
     /// Every expiration and strike a venue lists for an underlying.
     pub fn option_chain(&self, underlying: &Contract) -> Result<Vec<OptionChain>, String> {
         self.inner.option_chain(underlying)
+    }
+
+    /// Wait for the one answer belonging to a request.
+    ///
+    /// Ends on the answer, on the venue's refusal of that request, or on the
+    /// deadline, and says which. A refusal quotes the venue rather than
+    /// reporting a timeout, because "the venue said no" and "nothing came" are
+    /// different facts and only one is worth asking again.
+    fn wait_for<T>(
+        &self,
+        req_id: i64,
+        what: &str,
+        take: impl Fn(&SharedState) -> Option<T>,
+    ) -> Result<T, String> {
+        let deadline = Instant::now() + ANSWER_TIMEOUT;
+        loop {
+            if let Some(v) = take(&self.inner.shared) {
+                return Ok(v);
+            }
+            if let Some((code, message)) = self.inner.shared.reference.take_error_for(req_id as u32) {
+                return Err(format!("{message} ({code})"));
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "no answer within {}s to {what}",
+                    ANSWER_TIMEOUT.as_secs()
+                ));
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// The earliest moment the venue holds data for a contract.
+    pub fn head_timestamp(
+        &self,
+        contract: &Contract,
+        what_to_show: &str,
+        use_rth: bool,
+    ) -> Result<String, String> {
+        let req_id = self.stream_id();
+        self.inner.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1)?;
+        let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
+        self.wait_for(req_id, &what, |sh| {
+            sh.reference.take_head_timestamp_for(req_id as u32)
+        })
+        .map(|r| r.head_timestamp)
+    }
+
+    /// Contracts whose symbol or name matches a pattern.
+    pub fn matching_symbols(&self, pattern: &str) -> Result<Vec<crate::control::contracts::SymbolMatch>, String> {
+        let req_id = self.stream_id();
+        self.inner.req_matching_symbols(req_id, pattern)?;
+        let what = format!("a symbol search for {pattern}");
+        self.wait_for(req_id, &what, |sh| {
+            sh.reference.take_matching_symbols_for(req_id as u32)
+        })
+    }
+
+    /// How a contract's traded volume is spread across prices over a period.
+    pub fn histogram_data(
+        &self,
+        contract: &Contract,
+        use_rth: bool,
+        period: &str,
+    ) -> Result<Vec<crate::control::histogram::HistogramEntry>, String> {
+        let req_id = self.stream_id();
+        self.inner.req_histogram_data(req_id, contract, use_rth, period)?;
+        let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
+        self.wait_for(req_id, &what, |sh| {
+            sh.reference.take_histogram_for(req_id as u32)
+        })
+    }
+
+    /// A fundamental report on a contract, as the venue's own document.
+    pub fn fundamental_data(
+        &self,
+        contract: &Contract,
+        report_type: &str,
+    ) -> Result<String, String> {
+        let req_id = self.stream_id();
+        self.inner.req_fundamental_data(req_id, contract, report_type)?;
+        let what = format!("a {report_type} report for {}", contract.symbol);
+        self.wait_for(req_id, &what, |sh| {
+            sh.reference.take_fundamental_for(req_id as u32)
+        })
     }
 
     // -- streams a caller iterates -----------------------------------------
@@ -240,4 +333,20 @@ mod tests {
         let by_req: Vec<i64> = r.errors.iter().map(|(id, _, _)| *id).collect();
         assert_eq!(by_req, vec![1, 2]);
     }
+
+    /// The ids this shape opens streams and questions under do not collide with
+    /// the ones a caller of the callback shape would choose, and they do not
+    /// collide with the ones the answering layer beneath uses either.
+    #[test]
+    fn the_ids_this_shape_uses_sit_apart_from_everyone_elses() {
+        use crate::bridge::ReferenceState;
+
+        // A caller of the callback shape numbers requests from small integers.
+        const WHAT_A_CALLER_USES: i64 = 10_000;
+        assert!(0x2000_0000 > WHAT_A_CALLER_USES);
+        // And the answering layer beneath starts higher again, so a stream id
+        // is never mistaken for one of its answers.
+        assert!(0x2000_0000 < ReferenceState::ASK_ID_BASE as i64);
+    }
+
 }
