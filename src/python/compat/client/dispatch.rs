@@ -102,10 +102,26 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, fill.cum_qty as f64, fill.remaining as f64,
                  avg_price, perm_id, parent_id, price, 0i64, "", 0.0f64));
 
-            // Track execution for req_executions
-            let exec_id = format!("{}.{}", fill.order_id, fill.timestamp_ns);
-            let now_str = format!("{}", fill.timestamp_ns);
+            // Track execution for req_executions.
+            //
+            // The venue states the execution's own id and the time it happened,
+            // and both are already held against the order. They used to be made
+            // up here instead — the id from the order number and a counter, the
+            // time from a monotonic count of nanoseconds since this process
+            // started. Neither is the venue's, and the id is the one thing a
+            // fill is reconciled against a broker's own record by, so no fill
+            // this surface reported could ever be matched to one.
             let rich_info = shared.orders.get_order_info(fill.order_id);
+            let exec_id = rich_info
+                .as_ref()
+                .map(|i| i.last_exec.exec_id.clone())
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| format!("{}.{}", fill.order_id, fill.timestamp_ns));
+            let now_str = rich_info
+                .as_ref()
+                .map(|i| i.last_exec.time.clone())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| format!("{}", fill.timestamp_ns));
             let exec_exchange = rich_info.as_ref()
                 .map(|i| i.last_exec.exchange.as_str()).unwrap_or("").to_string();
             let cum_qty = rich_info.as_ref()

@@ -130,6 +130,14 @@ pub struct Quote {
     pub bid_exch_mask: i64,
     pub ask_exch_mask: i64,
     pub last_exch_mask: i64,
+    /// Whether the venue has halted trading in this contract.
+    ///
+    /// 0 not halted, 1 halted, 2 halted for news pending. The venue states it
+    /// and it was decoded and dropped, so a halted contract read as a live
+    /// market: every surface kept presenting the last price before the halt as
+    /// a current one, and a program pricing against it is pricing against a
+    /// book that is not there.
+    pub halted: i64,
 }
 
 

@@ -2090,6 +2090,12 @@ pub struct ContractDetails {
     #[pyo3(get, set)]
     pub issue_date: String,
     #[pyo3(get, set)]
+    pub last_price_precision: f64,
+    #[pyo3(get, set)]
+    pub last_size_precision: f64,
+    #[pyo3(get, set)]
+    pub settlement_method: String,
+    #[pyo3(get, set)]
     pub unnamed_fields: Vec<(u32, String)>,
     #[pyo3(get, set)]
     pub agg_group: i32,
@@ -2216,6 +2222,9 @@ impl Clone for ContractDetails {
             under_symbol: self.under_symbol.clone(),
             last_trade_time: self.last_trade_time.clone(),
             issue_date: self.issue_date.clone(),
+            last_price_precision: self.last_price_precision,
+            last_size_precision: self.last_size_precision,
+            settlement_method: self.settlement_method.clone(),
             unnamed_fields: self.unnamed_fields.clone(),
             agg_group: self.agg_group,
             coupon: self.coupon,
@@ -2311,6 +2320,9 @@ impl ContractDetails {
             under_symbol: String::new(),
             last_trade_time: String::new(),
             issue_date: String::new(),
+            last_price_precision: 0.0,
+            last_size_precision: 0.0,
+            settlement_method: String::new(),
             unnamed_fields: Vec::new(),
             agg_group: 0,
             coupon: 0.0,
@@ -2400,6 +2412,9 @@ impl ContractDetails {
             under_symbol: def.under_symbol.clone(),
             last_trade_time: def.last_trade_time.clone(),
             issue_date: def.issue_date.clone(),
+            last_price_precision: def.last_price_precision,
+            last_size_precision: def.last_size_precision,
+            settlement_method: def.settlement_method.clone(),
             unnamed_fields: def.unnamed_fields.clone(),
             agg_group: def.agg_group,
             coupon: def.coupon,

@@ -468,6 +468,9 @@ impl FarmState {
             // leaving the previous one standing is the honest failure.
             let scaled = |m: i64| m.checked_mul(mts);
             match tick.tick_type {
+                tick_decoder::O_HALTED => {
+                    q.halted = tick.magnitude;
+                }
                 tick_decoder::O_BID_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.bid = v,
