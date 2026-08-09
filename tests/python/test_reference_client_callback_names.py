@@ -154,3 +154,15 @@ def test_a_payload_still_refuses_a_name_that_is_no_field():
     except AttributeError:
         return
     raise AssertionError("a name that names no field was answered")
+
+
+def test_a_field_the_reference_client_spells_differently_still_resolves():
+    """Three fields carry the same value under a different word there."""
+    import ibx
+
+    d = ibx.ContractDetails()
+    for f in ("putable", "notes", "fundSubsequentMinimumPurchase"):
+        assert hasattr(d, f), f"contract details do not answer to {f}"
+    # And the spelling this crate uses keeps working.
+    for f in ("puttable", "bond_notes", "fund_minimum_subsequent_purchase"):
+        assert hasattr(d, f)

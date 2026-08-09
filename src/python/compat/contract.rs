@@ -1725,23 +1725,7 @@ impl OrderState {
     /// Only reached when the attribute was not found, so it costs nothing on
     /// the names this class defines.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
-        let mut snake = String::with_capacity(name.len() + 4);
-        for (i, c) in name.chars().enumerate() {
-            if c.is_ascii_uppercase() {
-                if i != 0 { snake.push('_'); }
-                snake.extend(c.to_lowercase());
-            } else {
-                snake.push(c);
-            }
-        }
-        if snake != name
-            && let Ok(v) = slf.as_any().getattr(snake.as_str())
-        {
-            return Ok(v.unbind());
-        }
-        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "object has no attribute '{name}'"
-        )))
+        by_reference_name(slf.as_any(), name, &[])
     }
 
     #[new]
@@ -2014,23 +1998,7 @@ impl BarData {
     /// Only reached when the attribute was not found, so it costs nothing on
     /// the names this class defines.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
-        let mut snake = String::with_capacity(name.len() + 4);
-        for (i, c) in name.chars().enumerate() {
-            if c.is_ascii_uppercase() {
-                if i != 0 { snake.push('_'); }
-                snake.extend(c.to_lowercase());
-            } else {
-                snake.push(c);
-            }
-        }
-        if snake != name
-            && let Ok(v) = slf.as_any().getattr(snake.as_str())
-        {
-            return Ok(v.unbind());
-        }
-        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "object has no attribute '{name}'"
-        )))
+        by_reference_name(slf.as_any(), name, &[])
     }
 
     #[new]
@@ -2188,23 +2156,18 @@ impl ContractDetails {
     /// Only reached when the attribute was not found, so it costs nothing on
     /// the names this class defines.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
-        let mut snake = String::with_capacity(name.len() + 4);
-        for (i, c) in name.chars().enumerate() {
-            if c.is_ascii_uppercase() {
-                if i != 0 { snake.push('_'); }
-                snake.extend(c.to_lowercase());
-            } else {
-                snake.push(c);
-            }
-        }
-        if snake != name
-            && let Ok(v) = slf.as_any().getattr(snake.as_str())
-        {
-            return Ok(v.unbind());
-        }
-        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "object has no attribute '{name}'"
-        )))
+        by_reference_name(
+            slf.as_any(),
+            name,
+            &[
+                // Same field, different word: the reference client writes one
+                // `t`, calls the bond remark a plain note, and orders the words
+                // of the fund's follow-on minimum the other way round.
+                ("putable", "puttable"),
+                ("notes", "bond_notes"),
+                ("fundSubsequentMinimumPurchase", "fund_minimum_subsequent_purchase"),
+            ],
+        )
     }
 
     #[new]
@@ -2499,23 +2462,7 @@ impl Execution {
     /// Only reached when the attribute was not found, so it costs nothing on
     /// the names this class defines.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
-        let mut snake = String::with_capacity(name.len() + 4);
-        for (i, c) in name.chars().enumerate() {
-            if c.is_ascii_uppercase() {
-                if i != 0 { snake.push('_'); }
-                snake.extend(c.to_lowercase());
-            } else {
-                snake.push(c);
-            }
-        }
-        if snake != name
-            && let Ok(v) = slf.as_any().getattr(snake.as_str())
-        {
-            return Ok(v.unbind());
-        }
-        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "object has no attribute '{name}'"
-        )))
+        by_reference_name(slf.as_any(), name, &[])
     }
 
     #[new]
@@ -2697,6 +2644,41 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SoftDollarTierPy>()?;
     m.add_class::<DepthMktDataDescriptionPy>()?;
     Ok(())
+}
+
+/// The reference client spells a field by running its words together, and for a
+/// few of them it also chose a different word than this crate did. Code written
+/// against that client reads those spellings, so they resolve here too — while a
+/// name that names no field is still refused.
+fn by_reference_name(
+    obj: &Bound<'_, PyAny>,
+    name: &str,
+    aliases: &[(&str, &str)],
+) -> PyResult<Py<PyAny>> {
+    if let Some((_, ours)) = aliases.iter().find(|(theirs, _)| *theirs == name)
+        && let Ok(v) = obj.getattr(*ours)
+    {
+        return Ok(v.unbind());
+    }
+    let mut snake = String::with_capacity(name.len() + 4);
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i != 0 {
+                snake.push('_');
+            }
+            snake.extend(c.to_lowercase());
+        } else {
+            snake.push(c);
+        }
+    }
+    if snake != name
+        && let Ok(v) = obj.getattr(snake.as_str())
+    {
+        return Ok(v.unbind());
+    }
+    Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+        "object has no attribute '{name}'"
+    )))
 }
 
 #[cfg(test)]
