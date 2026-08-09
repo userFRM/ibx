@@ -97,6 +97,10 @@ impl EClient {
     }
 
     /// Cancel positions.
+    // nothing to withdraw: the venue pushes what the account holds when the
+    // session opens and keeps it current. Nothing was subscribed, so nothing
+    // stops, and reporting an error for withdrawing a subscription that was
+    // never made would be wrong.
     fn cancel_positions(&self) -> PyResult<()> {
         Ok(())
     }
@@ -148,6 +152,8 @@ impl EClient {
     }
 
     /// Cancel multi-account updates.
+    // nothing to withdraw: account values arrive with the session rather than
+    // by subscription.
     fn cancel_account_updates_multi(&self, req_id: i64) -> PyResult<()> {
         let _ = req_id;
         Ok(())
@@ -176,6 +182,7 @@ impl EClient {
     }
 
     /// Cancel multi-account positions.
+    // nothing to withdraw: as for cancel_positions.
     fn cancel_positions_multi(&self, req_id: i64) -> PyResult<()> {
         let _ = req_id;
         Ok(())

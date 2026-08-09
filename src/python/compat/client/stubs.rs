@@ -68,11 +68,14 @@ impl EClient {
         Ok(())
     }
 
+    // nothing to withdraw: the request it would withdraw is refused, so none
+    // is ever outstanding.
     fn cancel_calculate_implied_volatility(&self, req_id: i64) -> PyResult<()> {
         let _ = req_id;
         Ok(())
     }
 
+    // nothing to withdraw: as above.
     fn cancel_calculate_option_price(&self, req_id: i64) -> PyResult<()> {
         let _ = req_id;
         Ok(())
@@ -287,6 +290,12 @@ impl EClient {
 /// it will not act on.
 fn unserviceable(client: &EClient, req_id: i64, call: &str) {
     report_reason(client, req_id, &format!("{call} is not served by this client"));
+}
+
+/// Answer a request this client cannot serve the way the reference client
+/// does: on the error callback, returning normally.
+pub(crate) fn report_unserviceable(client: &EClient, req_id: i64, reason: &str) {
+    report_reason(client, req_id, reason);
 }
 
 /// Answer a request this client cannot serve the way the reference client
