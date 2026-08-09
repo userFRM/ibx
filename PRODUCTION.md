@@ -31,7 +31,7 @@ number. A field is never dropped because nothing has got round to reading it.
 | Every field a contract's definition states | **kept, proved** — 49 unnamed fields on a share, 85 on a foreign share, kept under their numbers |
 | Fields repeated in one message (rule bands, identifier groups) | **kept, proved** — the parsed map held one value per tag and lost the rest |
 | Fields stated after a contract's identifier block | **kept** — every contract in a multi-contract reply was truncated there |
-| A trading halt | **wired** — decoded and dropped; carried on the quote now |
+| A trading halt | **open** — the opcode it was read from was named for a halt on no evidence; the venue states it as a generic tick carrying a status mask (open / regulatory / volatility / short-sale restriction / none). Withdrawn rather than reported wrongly |
 | Every field an execution report states | **kept** — what the handler does not name is kept under its number, read from the bytes so repeats survive |
 | Every field an order status states | **open** — same, not yet measured |
 | Account values outside a whitelist of ~18 | **open** — everything else the venue states is dropped with no trace |
@@ -63,7 +63,7 @@ having. This is where the worst defects have been.
 | 26 answered from what the venue pushes on login | **wired, proved** |
 | Financial advisor pair, event-data metadata | **open** — should reach the venue and do not; the request has not been established |
 | Implied volatility, option price | **refused** — this protocol carries no request taking a caller's price or volatility |
-| Tick-by-tick | **blocked** — the venue acknowledges the subscription and sends nothing; the Rust surface refuses it, the Python surface still accepts it |
+| Tick-by-tick | **diagnosed, ours to fix** — not an entitlement and not the subscription, both of which are right. The decoder expects marker bytes and a per-record timestamp; the wire is bit-packed, field-count delimited, with a frame-level timestamp and prices as a signed delta in units of the contract's own tick |
 | Tick-by-tick attributed to the right subscription | **open** — every record is attributed to the first subscription |
 
 ## 4. A contract's fields
