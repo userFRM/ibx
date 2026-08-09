@@ -904,6 +904,10 @@ pub struct ContractDetails {
     pub coupon: f64,
     pub contract_month: String,
     pub under_sec_type: String,
+    /// Every field the venue stated about this contract that this client does
+    /// not yet name, as (tag, value). Kept rather than dropped: what is not
+    /// named is still a fact the venue stated.
+    pub unnamed_fields: Vec<(u32, String)>,
     pub bond_notes: String,
     pub desc_append: String,
     pub bond_type: String,
@@ -995,6 +999,7 @@ impl ContractDetails {
             coupon: def.coupon,
             contract_month: def.contract_month.clone(),
             under_sec_type: def.under_sec_type.clone(),
+            unnamed_fields: def.unnamed_fields.clone(),
             bond_notes: def.bond_notes.clone(),
             desc_append: def.desc_append.clone(),
             bond_type: def.bond_type.clone(),

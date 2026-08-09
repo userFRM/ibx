@@ -2075,6 +2075,14 @@ pub struct ContractDetails {
     pub under_sec_type: String,
     #[pyo3(get, set)]
     pub ev_rule: String,
+    /// Every field the venue stated about this contract that this client does
+    /// not yet name, as (tag, value).
+    ///
+    /// A definition carries more than any one client reads. What is not named
+    /// is kept here rather than dropped, so a fact the venue stated can be
+    /// reached today under its number instead of waiting to be named.
+    #[pyo3(get, set)]
+    pub unnamed_fields: Vec<(u32, String)>,
     #[pyo3(get, set)]
     pub agg_group: i32,
     #[pyo3(get, set)]
@@ -2196,6 +2204,7 @@ impl Clone for ContractDetails {
             contract_month: self.contract_month.clone(),
             under_sec_type: self.under_sec_type.clone(),
             ev_rule: self.ev_rule.clone(),
+            unnamed_fields: self.unnamed_fields.clone(),
             agg_group: self.agg_group,
             coupon: self.coupon,
             bond_type: self.bond_type.clone(),
@@ -2286,6 +2295,7 @@ impl ContractDetails {
             contract_month: String::new(),
             under_sec_type: String::new(),
             ev_rule: String::new(),
+            unnamed_fields: Vec::new(),
             agg_group: 0,
             coupon: 0.0,
             bond_type: String::new(),
@@ -2370,6 +2380,7 @@ impl ContractDetails {
             contract_month: def.contract_month.clone(),
             under_sec_type: def.under_sec_type.clone(),
             ev_rule: def.ev_rule.clone(),
+            unnamed_fields: def.unnamed_fields.clone(),
             agg_group: def.agg_group,
             coupon: def.coupon,
             bond_type: def.bond_type.clone(),
