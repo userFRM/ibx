@@ -49,6 +49,45 @@ pub struct GatewaySettings {
     pub log_dir: Option<String>,
     /// Whether it buffered what it wrote.
     pub log_queue: Option<bool>,
+
+    // ── What the gateway did with what it received ──
+    /// How many messages may go out per slice, and how long a slice is.
+    ///
+    /// The gateway ships with both at zero, which is no pacing at all. Stated
+    /// here so a client that paces can be made to pace the same, and so that
+    /// pacing more than the gateway did is a choice rather than an accident.
+    pub messages_per_slice: Option<u32>,
+    pub time_slice_ms: Option<u32>,
+    /// Which executions arrive when a session opens: today's, or every one
+    /// the venue still holds. The gateway asks for every one.
+    pub execution_reports: Option<ExecutionReportScope>,
+    /// What a delivered timestamp is stated in. The gateway states the
+    /// operator's own time zone.
+    pub timestamp_zone: Option<TimestampZone>,
+    /// Whether a US stock trading on Nasdaq is handed back under the older
+    /// spelling. The gateway does, so a program written against it compares
+    /// against that spelling.
+    pub island_for_nasdaq: Option<bool>,
+}
+
+/// Which executions a session asks for when it opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionReportScope {
+    /// Today's only.
+    Today,
+    /// Every one the venue still holds, which is what the gateway asks for.
+    All,
+}
+
+/// What a delivered timestamp is stated in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampZone {
+    /// The time zone this client runs in, which is what the gateway used.
+    Operator,
+    /// The one the instrument trades in.
+    Instrument,
+    /// Universal time.
+    Utc,
 }
 
 /// Each setting, and the variable it is read from.
@@ -70,6 +109,18 @@ const VARIABLES: &[Setting] = &[
     ("IBX_LOG_LEVEL", |s| s.log_level.clone()),
     ("IBX_LOG_DIR", |s| s.log_dir.clone()),
     ("IBX_LOG_QUEUE", |s| s.log_queue.map(|q| q.to_string())),
+    ("IBX_MSGS_PER_SLICE", |s| s.messages_per_slice.map(|n| n.to_string())),
+    ("IBX_TIME_SLICE_MS", |s| s.time_slice_ms.map(|n| n.to_string())),
+    ("IBX_EXECUTION_REPORTS", |s| s.execution_reports.map(|scope| match scope {
+        ExecutionReportScope::Today => "today".to_string(),
+        ExecutionReportScope::All => "all".to_string(),
+    })),
+    ("IBX_TIMESTAMP_ZONE", |s| s.timestamp_zone.map(|zone| match zone {
+        TimestampZone::Operator => "operator".to_string(),
+        TimestampZone::Instrument => "instrument".to_string(),
+        TimestampZone::Utc => "utc".to_string(),
+    })),
+    ("IBX_ISLAND_FOR_NASDAQ", |s| s.island_for_nasdaq.map(|on| on.to_string())),
 ];
 
 /// Gateway settings with nothing to stand in for here, and why.
@@ -162,6 +213,11 @@ mod tests {
             log_level: Some("debug".into()),
             log_dir: Some("d".into()),
             log_queue: Some(true),
+            messages_per_slice: Some(50),
+            time_slice_ms: Some(1000),
+            execution_reports: Some(ExecutionReportScope::All),
+            timestamp_zone: Some(TimestampZone::Utc),
+            island_for_nasdaq: Some(true),
         };
         let carried = VARIABLES.iter().filter(|(_, read)| read(&all).is_some()).count();
         assert_eq!(carried, VARIABLES.len(), "a setting is stated and not carried");
@@ -171,6 +227,8 @@ mod tests {
             timezone: _, locale: _, build: _, version: _, encoded: _, hardware_id: _,
             market_data_host: _, port: _, registration_timeout_ms: _,
             log_level: _, log_dir: _, log_queue: _,
+            messages_per_slice: _, time_slice_ms: _, execution_reports: _,
+            timestamp_zone: _, island_for_nasdaq: _,
         } = all;
     }
 }

@@ -44,6 +44,20 @@ _SETTINGS: dict[str, tuple[str, str]] = {
     "version": ("IBX_VERSION", "the version the gateway announced itself as"),
     "encoded": ("IBX_ENCODED", "the longer string it announced with them"),
     "hardware_id": ("IBX_HWID", "the machine identity the gateway presented"),
+    "messages_per_slice": ("IBX_MSGS_PER_SLICE", "how many messages the gateway let out per slice"),
+    "time_slice_ms": ("IBX_TIME_SLICE_MS", "how long one of its slices was"),
+    "execution_reports": (
+        "IBX_EXECUTION_REPORTS",
+        "which executions arrive when a session opens: 'today' or 'all'",
+    ),
+    "timestamp_zone": (
+        "IBX_TIMESTAMP_ZONE",
+        "what a delivered timestamp is stated in: 'operator', 'instrument' or 'utc'",
+    ),
+    "island_for_nasdaq": (
+        "IBX_ISLAND_FOR_NASDAQ",
+        "whether a US stock on Nasdaq is handed back under the older spelling",
+    ),
 }
 
 #: Gateway settings with nothing to stand in for here, and why. Named rather
