@@ -118,6 +118,39 @@ fn build_greeks_subscribe_tags(req_id: u32, con_id: i64, sec_type: &str, ts: &st
     ]
 }
 
+/// Whether a venue is trading a contract, subscribed to the same way the option
+/// model is — its own tick where a price subscription names a request type.
+///
+/// Unlike the model, this names the contract's **own** exchange rather than a
+/// stand-in: the model and the news feed are the exceptions that go by a name of
+/// their own, and everything else is asked for where it trades.
+fn build_trading_status_subscribe_tags(
+    req_id: u32,
+    con_id: i64,
+    sec_type: &str,
+    exchange: &str,
+    ts: &str,
+) -> Vec<(u32, String)> {
+    let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type);
+    vec![
+        (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
+        (fix::TAG_SENDING_TIME, ts.to_string()),
+        (263, "1".to_string()),
+        (146, "1".to_string()),
+        (262, req_id.to_string()),
+        (6008, (con_id as u32).to_string()),
+        (207, exchange.to_string()),
+        (167, fix_sec_type.to_string()),
+        (264, TRADING_STATUS_REQUEST_TYPE.to_string()),
+        (6088, "Socket".to_string()),
+        (9830, "1".to_string()),
+        (9839, "1".to_string()),
+    ]
+}
+
+/// The trading-status tick's own number, in place of a request type.
+const TRADING_STATUS_REQUEST_TYPE: &str = "437";
+
 /// What the option model goes by where an exchange would be named.
 const GREEKS_VENUE: &str = "IBVOL";
 
@@ -796,6 +829,20 @@ impl FarmState {
                         tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
                     let _ = conn.send_fixcomp(&refs);
                 }
+
+                // Whether the venue is trading the contract at all. A halt
+                // changes what every price on this subscription means — the
+                // ones standing are from before it stopped — so it is asked for
+                // alongside them rather than left to a caller to think of.
+                //
+                // Asked for under the same request as the prices, so a caller
+                // reading a halt reads it against the quote it belongs to.
+                let tags = build_trading_status_subscribe_tags(
+                    bid_ask_id, con_id, sec_type, exchange, &ts,
+                );
+                let refs: Vec<(u32, &str)> =
+                    tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
+                let _ = conn.send_fixcomp(&refs);
             } else {
                 // No con_id — send descriptive fields
                 let strike_str = if strike > 0.0 { strike.to_string() } else { String::new() };
@@ -2160,5 +2207,31 @@ mod price_scaling_tests {
             instrument, 0, &mut None, &mut HeartbeatState::new(),
         );
         assert!(farm.greeks_subs.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod trading_status_subscribe_tests {
+    use super::build_trading_status_subscribe_tags;
+
+    /// The trading status is its own subscription, named by its own tick where
+    /// a price subscription names a request type.
+    #[test]
+    fn the_status_is_asked_for_by_its_own_tick() {
+        let tags = build_trading_status_subscribe_tags(7, 756733, "STK", "SMART", "20260810-12:00:00");
+        let get = |t: u32| tags.iter().find(|(k, _)| *k == t).map(|(_, v)| v.as_str());
+        assert_eq!(get(264), Some("437"), "its own tick, not a request type");
+        assert_eq!(get(262), Some("7"), "under the request the prices came under");
+        assert_eq!(get(6008), Some("756733"));
+    }
+
+    /// It names the contract's own exchange. The option model and the news feed
+    /// go by names of their own; everything else is asked for where it trades,
+    /// and naming a stand-in here asks a venue that does not list the contract.
+    #[test]
+    fn it_names_the_exchange_the_contract_trades_on() {
+        let tags = build_trading_status_subscribe_tags(1, 1, "STK", "ARCA", "t");
+        let venue = tags.iter().find(|(k, _)| *k == 207).map(|(_, v)| v.as_str());
+        assert_eq!(venue, Some("ARCA"), "not a stand-in");
     }
 }
