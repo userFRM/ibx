@@ -87,7 +87,16 @@ def classify(name: str, all_bodies: dict[str, str], seen: set[str] | None = None
 
     if "send_control" in body or "ControlCommand" in body:
         return "wire"
-    if "report_unserviceable" in body or "unserviceable(" in body:
+    # A refusal is a refusal whether it names the call or states a reason of
+    # its own. Recognising only the first shape reported a call that answers
+    # on the error channel as one that answered nothing.
+    #
+    # Stating a reason on a failure path is not refusing: a call that serves
+    # the request and reports why it could not this once still serves it, and
+    # counting it as refused understates what reaches the venue.
+    refuses_outright = "report_unserviceable" in body or "unserviceable(" in body
+    states_a_reason = "report_reason(" in body and "if let Err" not in body
+    if refuses_outright or states_a_reason:
         return "refused"
     if "not yet implemented" in body:
         return "missing"
