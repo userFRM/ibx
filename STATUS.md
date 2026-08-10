@@ -25,7 +25,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Depth of book | ✅ | |
 | Historical bars, ticks, schedules | ✅ | |
 | Tick-by-tick | ✅ | Trades, quotes, midpoint. Several subscriptions at once |
-| Trading halts | 🔬 | Subscribed and arriving; the payload's layout is not settled |
+| Trading halts | ✅ | Live: contracts trading are reported trading |
 | Tick attributes | 🔬 | Past-limit, unreported, past-low/high |
 
 ## Orders
@@ -89,16 +89,14 @@ though it acted when it did not.
 Settled only by a live capture, recorded so nobody re-derives them:
 
 - The combo side convention — live evidence and the counterpart's own encoding disagree
-- The trading-status timestamp's unit
-- The trading status payload's field layout
+- The trading-status timestamp's unit, and the fourth number the venue sends with it
 
 ---
 
 ## Before 1.0
 
-1. Read the trading-status payload — turns halts and tick attributes from 🔬 to ✅
-2. Live sessions at market hours until one finds nothing
+1. Live sessions at market hours until one finds nothing
 
-Step 2 is the constraint. Live sessions have, every time, found defects the
+That step is the constraint. Live sessions have, every time, found defects the
 offline suite could not — including a regression that broke every answering
 call while 1,391 tests stayed green.
