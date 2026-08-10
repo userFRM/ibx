@@ -1185,10 +1185,10 @@ def req_current_time()
 
 #### `request_fa`
 
-Request FA data. Not yet implemented.
+Ask the venue for a partition of the advisor's own configuration.  The reference client names the partition by a number: its groups, its allocation profiles, its aliases. The venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition.
 
 ```python
-def request_fa(_fa_data_type)
+def request_fa(fa_data_type)
 ```
 
 | Parameter | Type | Description |
@@ -1199,7 +1199,7 @@ def request_fa(_fa_data_type)
 
 #### `replace_fa`
 
-Replace FA data. Not yet implemented.
+Replace a partition of the advisor's configuration with the one given.
 
 ```python
 def replace_fa(req_id, fa_data_type, cxml))

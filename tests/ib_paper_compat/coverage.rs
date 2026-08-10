@@ -51,6 +51,12 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
 
 const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[
     (
+        "AdvisorConfig",
+        "Built from the counterpart's own encoding, and not verifiable here: an \
+         account that is not an advisor's holds no groups, profiles or models, \
+         so the venue answers that it has none whatever is asked",
+    ),
+    (
         "FetchNewsProviders",
         "Gateway-local response path, no CCP round-trip in hot loop yet",
     ),

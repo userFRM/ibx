@@ -7,10 +7,10 @@ did anything. This counts what leaves the machine.
 
 | Kind | Count | Meaning |
 | --- | ---: | --- |
-| wire | 35 | sends a command that reaches the venue |
+| wire | 37 | sends a command that reaches the venue |
 | session | 26 | answered from what the venue pushed to this session |
 | refused | 4 | reports that this client cannot serve it |
-| missing | 3 | should reach the venue and does not |
+| missing | 1 | should reach the venue and does not |
 | withdrawn | 8 | withdraws something that was never running, and says so |
 | silent | 0 | returns as though it acted, and did not |
 
@@ -20,7 +20,7 @@ never coming, with nothing to say why.
 
 ## Should reach the venue and does not
 
-`replace_fa`, `req_wsh_meta_data`, `request_fa`
+`req_wsh_meta_data`
 
 ## Reports that it cannot be served
 

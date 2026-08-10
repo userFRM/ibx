@@ -2521,6 +2521,44 @@ impl CcpState {
         }
     }
 
+    /// Ask for, or replace, the advisor's own configuration.
+    ///
+    /// An advisor's groups, allocation profiles and models are held by the
+    /// venue, not by this client, and are asked for one partition at a time.
+    /// The command says which of asking, replacing or removing is meant; a
+    /// replacement carries the configuration as its own document.
+    ///
+    /// An account that is not an advisor's holds none of this, and the venue
+    /// says so rather than answering with an empty one.
+    pub(crate) fn send_advisor_config(
+        &mut self,
+        command: i32,
+        partition: &str,
+        document: Option<&str>,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        if let Some(conn) = ccp_conn.as_mut() {
+            let ts = chrono_free_timestamp();
+            let command = command.to_string();
+            let mut fields: Vec<(u32, &str)> = vec![
+                (fix::TAG_MSG_TYPE, "U"),
+                (fix::TAG_SENDING_TIME, &ts),
+                (6040, "116"),
+                (6905, &command),
+                (6158, partition),
+            ];
+            // Only a replacement carries a document; asking for one that states
+            // a document would be asking and telling at once.
+            if let Some(xml) = document {
+                fields.push((6118, xml));
+            }
+            let _ = conn.send_fix(&fields);
+            hb.last_ccp_sent = Instant::now();
+            log::info!("Sent advisor configuration request: command={command} partition={partition}");
+        }
+    }
+
     /// Send P&L subscribe: 6040=142 with 6529=PLR.{N}|1={account}|
     pub(crate) fn send_pnl_subscribe(
         &mut self,

@@ -839,6 +839,12 @@ impl HotLoop {
                 ControlCommand::SubscribePnl { req_id, account } => {
                     self.ccp.send_pnl_subscribe(req_id, &account, &mut self.ccp_conn, &mut self.hb);
                 }
+                ControlCommand::AdvisorConfig { command, partition, document } => {
+                    self.ccp.send_advisor_config(
+                        command, &partition, document.as_deref(),
+                        &mut self.ccp_conn, &mut self.hb,
+                    );
+                }
                 ControlCommand::CancelPnl { req_id } => {
                     let _ = req_id; // Server auto-cancels on disconnect; no explicit cancel message needed
                 }

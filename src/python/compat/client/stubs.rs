@@ -1,5 +1,7 @@
 //! Gateway-local fakes and pure no-op stubs.
 
+use pyo3::exceptions::PyRuntimeError;
+use crate::types::ControlCommand;
 use pyo3::prelude::*;
 
 use super::EClient;
@@ -135,16 +137,43 @@ impl EClient {
 
     // ── FA (Financial Advisor) ──
 
-    fn request_fa(&self, _fa_data_type: i32) -> PyResult<()> {
-        log::warn!("request_fa: not yet implemented — needs FIX capture");
-        Ok(())
+    /// Ask the venue for a partition of the advisor's own configuration.
+    ///
+    /// The reference client names the partition by a number: its groups, its
+    /// allocation profiles, its aliases. The venue names it by a word, so the
+    /// number is turned into the word it stands for. A number that stands for
+    /// nothing is refused rather than sent as an empty partition.
+    fn request_fa(&self, py: Python<'_>, fa_data_type: i32) -> PyResult<()> {
+        let Some(partition) = advisor_partition(fa_data_type) else {
+            return Err(PyRuntimeError::new_err(format!(
+                "no advisor configuration is named by {fa_data_type}"
+            )));
+        };
+        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
+        Self::send_control(py, &tx, ControlCommand::AdvisorConfig {
+            // Asking for it by name.
+            command: 5,
+            partition: partition.to_string(),
+            document: None,
+        })
     }
 
     #[pyo3(signature = (req_id, fa_data_type, cxml))]
-    fn replace_fa(&self, req_id: i64, fa_data_type: i32, cxml: &str) -> PyResult<()> {
-        let _ = (req_id, fa_data_type, cxml);
-        log::warn!("replace_fa: not yet implemented — needs FIX capture");
-        Ok(())
+    /// Replace a partition of the advisor's configuration with the one given.
+    fn replace_fa(&self, py: Python<'_>, req_id: i64, fa_data_type: i32, cxml: &str) -> PyResult<()> {
+        let _ = req_id;
+        let Some(partition) = advisor_partition(fa_data_type) else {
+            return Err(PyRuntimeError::new_err(format!(
+                "no advisor configuration is named by {fa_data_type}"
+            )));
+        };
+        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
+        Self::send_control(py, &tx, ControlCommand::AdvisorConfig {
+            // Replacing it with what is carried.
+            command: 3,
+            partition: partition.to_string(),
+            document: Some(cxml.to_string()),
+        })
     }
 
     // ── Display Groups ──
@@ -303,5 +332,42 @@ pub(crate) fn report_unserviceable(client: &EClient, req_id: i64, reason: &str) 
 fn report_reason(client: &EClient, req_id: i64, reason: &str) {
     if let Ok(shared) = client.shared_state() {
         shared.reference.push_historical_error(req_id.max(0) as u32, 321, reason.to_string());
+    }
+}
+
+/// The word the venue names a partition of an advisor's configuration by.
+///
+/// The reference client names it by a number. The two vocabularies are not the
+/// same, and sending the number would ask for a partition that does not exist.
+fn advisor_partition(fa_data_type: i32) -> Option<&'static str> {
+    match fa_data_type {
+        1 => Some("Aliases"),
+        2 => Some("Group"),
+        3 => Some("Profile"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod advisor_partition_tests {
+    use super::advisor_partition;
+
+    /// The reference client names a partition of an advisor's configuration by
+    /// a number; the venue names it by a word. Sending the number would ask for
+    /// a partition that does not exist.
+    #[test]
+    fn a_number_is_turned_into_the_word_the_venue_uses() {
+        assert_eq!(advisor_partition(1), Some("Aliases"));
+        assert_eq!(advisor_partition(2), Some("Group"));
+        assert_eq!(advisor_partition(3), Some("Profile"));
+    }
+
+    /// A number standing for nothing is refused rather than sent as an empty
+    /// partition, which the venue would answer for something else or not at all.
+    #[test]
+    fn a_number_standing_for_nothing_names_nothing() {
+        for unknown in [0, 4, -1, 99] {
+            assert_eq!(advisor_partition(unknown), None, "{unknown}");
+        }
     }
 }
