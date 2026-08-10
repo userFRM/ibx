@@ -147,6 +147,7 @@ impl BenchSession {
     pub fn subscribe_tbt(&self, con_id: i64, symbol: &str, sec_type: &str, exchange: &str, tbt_type: TbtType) {
         self.control_tx
             .send(ControlCommand::SubscribeTbt {
+                req_id: 1,
                 con_id,
                 symbol: symbol.to_string(),
                 sec_type: sec_type.to_string(),

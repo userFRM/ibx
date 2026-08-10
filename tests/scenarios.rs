@@ -394,6 +394,7 @@ fn market_data_tbt_trades_and_quotes() {
 
     // TBT trade
     shared.market.push_tbt_trade(TbtTrade {
+        req_id: 1,
         instrument: 0, price: 150 * PRICE_SCALE, size: 100,
         timestamp: 1700000001, exchange: "ARCA".into(), conditions: "".into(),
         past_limit: false,
@@ -401,6 +402,7 @@ fn market_data_tbt_trades_and_quotes() {
     });
     // TBT quote
     shared.market.push_tbt_quote(TbtQuote {
+        req_id: 1,
         instrument: 0, bid: 149 * PRICE_SCALE, ask: 151 * PRICE_SCALE,
         bid_size: 500, ask_size: 300, timestamp: 1700000002,
         bid_past_low: false,
@@ -408,6 +410,7 @@ fn market_data_tbt_trades_and_quotes() {
     });
     // Second trade
     shared.market.push_tbt_trade(TbtTrade {
+        req_id: 1,
         instrument: 0, price: 151 * PRICE_SCALE, size: 200,
         timestamp: 1700000003, exchange: "NYSE".into(), conditions: "".into(),
         past_limit: false,
@@ -904,6 +907,7 @@ fn mixed_all_data_types_single_process() {
 
     // TBT trade
     shared.market.push_tbt_trade(TbtTrade {
+        req_id: 1,
         instrument: 0, price: 150 * PRICE_SCALE, size: 50,
         timestamp: 0, exchange: "".into(), conditions: "".into(),
         past_limit: false,

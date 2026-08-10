@@ -647,13 +647,13 @@ impl HotLoop {
                     }
                     self.try_reclaim_instrument(instrument);
                 }
-                ControlCommand::SubscribeTbt { con_id, symbol, sec_type, exchange, tbt_type, reply_tx } => {
+                ControlCommand::SubscribeTbt { req_id, con_id, symbol, sec_type, exchange, tbt_type, reply_tx } => {
                     // Registered with what the contract is, so the slot carries
                     // it and the subscription can state it.
                     if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", &reply_tx) {
                         let mts = self.context.market.min_tick_scaled(id);
                         self.hmds.send_tbt_subscribe(
-                            con_id, id, tbt_type, &sec_type, &exchange, mts,
+                            req_id, con_id, id, tbt_type, &sec_type, &exchange, mts,
                             &mut self.hmds_conn, &mut self.hb,
                         );
                     }
@@ -2625,6 +2625,7 @@ mod tests {
             instrument: id,
             query_id: "AAPL".to_string(),
             kind: TbtType::Last,
+            caller_req_id: 0,
             venue_id: 0,
             min_tick: 0,
             size_tick: 0.0,

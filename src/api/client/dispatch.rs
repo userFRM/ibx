@@ -248,7 +248,10 @@ impl EClient {
 
         // TBT trades → tick_by_tick_all_last
         for trade in self.shared.market.drain_tbt_trades() {
-            let req_id = self.core.req_id_for_instrument(trade.instrument);
+            // As the caller numbered it, from the record itself: a contract
+            // can carry several streams and the contract alone does not say
+            // which one this came from.
+            let req_id = trade.req_id;
             // What the venue said about this print, not what a default says.
             let attrib_last = TickAttribLast {
                 past_limit: trade.past_limit,
@@ -264,7 +267,7 @@ impl EClient {
 
         // TBT quotes → tick_by_tick_bid_ask
         for quote in self.shared.market.drain_tbt_quotes() {
-            let req_id = self.core.req_id_for_instrument(quote.instrument);
+            let req_id = quote.req_id;
             let attrib_ba = TickAttribBidAsk {
                 bid_past_low: quote.bid_past_low,
                 ask_past_high: quote.ask_past_high,
