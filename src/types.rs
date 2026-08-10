@@ -970,6 +970,12 @@ pub struct ComboLegSpec {
     pub short_sale_slot: u8,
     pub designated_location: String,
     pub exempt_code: i32,
+    /// What this leg is to be done at, where the caller priced the legs
+    /// separately rather than pricing the combination (tag 6879).
+    ///
+    /// Held with the leg it belongs to. Kept in a list of its own, one price
+    /// would go out against another leg the moment the legs were reordered.
+    pub price: Option<Price>,
 }
 
 /// The hedge an order carries: what to trade against the position, and at what.

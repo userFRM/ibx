@@ -2297,8 +2297,13 @@ impl ClientCore {
 
         // The legs live on the contract, not the order, so they are attached
         // here rather than in `attrs()`.
+        // The caller may price the legs separately rather than pricing the
+        // combination. The prices are given as their own list, in leg order,
+        // so each is put on the leg it belongs to here — kept apart, one would
+        // go out against another leg the moment the legs were reordered.
+        let leg_prices = order.order_combo_legs.as_slice();
         let leg_specs: Vec<crate::types::ComboLegSpec> =
-            contract.map(|c| c.combo_legs.as_slice()).unwrap_or(&[]).iter().map(|l| {
+            contract.map(|c| c.combo_legs.as_slice()).unwrap_or(&[]).iter().enumerate().map(|(at, l)| {
             crate::types::ComboLegSpec {
                 con_id: l.con_id,
                 ratio: l.ratio.max(0) as u32,
@@ -2312,6 +2317,11 @@ impl ClientCore {
                 short_sale_slot: l.shorting_policy.clamp(0, 255) as u8,
                 designated_location: l.designated_location.clone(),
                 exempt_code: l.exempt_code,
+                price: leg_prices
+                    .get(at)
+                    .copied()
+                    .filter(|p| *p != f64::MAX)
+                    .map(|p| (p * PRICE_SCALE_F) as Price),
             }
         }).collect();
         let ex = |kind: OrderKind| OrderRequest::SubmitEx {
