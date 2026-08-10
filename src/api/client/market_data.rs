@@ -73,33 +73,41 @@ impl EClient {
         Ok(())
     }
 
-    /// Subscribe to tick-by-tick data. Matches `reqTickByTickData` in C++.
+    /// Subscribe to every trade or every quote change on a contract.
     ///
-    /// **Not implemented.** Tick-by-tick is carried by a service of its own,
-    /// which this client does not yet speak: the historical service serves
-    /// chart, fundamentals, news and scanner requests, and nothing else. A
-    /// subscription sent there is accepted and assigned a ticker id, and then
-    /// no tick ever follows — verified against a paper account, where three
-    /// subscriptions on two contracts were all acknowledged and all silent
-    /// (ibx#404).
+    /// This used to refuse outright, on the reasoning that the feed rode a
+    /// service of its own which this client could not reach. That reasoning was
+    /// wrong. The feed rides the historical farm this client already reaches —
+    /// the counterpart registers it there under the name "TickByTick" beside
+    /// the five-second bars that already stream — and no list of services is
+    /// involved. The account is entitled; a missing entitlement arrives as the
+    /// venue's own refusal, not as silence.
     ///
-    /// Refused here rather than accepted, because a subscription that is taken
-    /// and never delivers is worse than one that says so.
+    /// What was actually wrong was reading what came back. The subscription was
+    /// always right, which is why the venue acknowledged it and assigned a
+    /// ticker id, and then nothing could be made of the frames that followed.
     pub fn req_tick_by_tick_data(
-        &self, _req_id: i64, _contract: &Contract, _tick_type: &str,
-        _number_of_ticks: i32, _ignore_size: bool,
+        &self, req_id: i64, contract: &Contract, tick_type: &str,
+        number_of_ticks: i32, ignore_size: bool,
     ) -> Result<(), String> {
-        // The feed rides a service of its own, and which services a session may
-        // reach is stated in a service list. This session is never sent one:
-        // the logon response carries no service list, and a request for it is
-        // answered "Request not supported". A subscription addressed to the
-        // historical service instead is acknowledged and then delivers
-        // nothing, which is the one outcome worth refusing outright (ibx#404).
-        Err("tick-by-tick data is not served to this session: the feed rides a \
-             service of its own, this session is sent no list of the services it \
-             may reach, and a request for that list is refused. A subscription \
-             addressed to the historical service is acknowledged and never \
-             delivers, so it is refused here rather than left waiting".to_string())
+        let _ = (number_of_ticks, ignore_size);
+        let kind = match tick_type {
+            "Last" | "AllLast" => TbtType::Last,
+            "BidAsk" => TbtType::BidAsk,
+            other => return Err(format!("no such kind of tick: {other}")),
+        };
+        self.core
+            .register_tbt(
+                &self.shared,
+                &self.control_tx,
+                req_id,
+                contract.con_id,
+                &contract.symbol,
+                &contract.sec_type,
+                &contract.exchange,
+                kind,
+            )
+            .map(|_| ())
     }
 
 
