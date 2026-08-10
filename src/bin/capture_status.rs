@@ -31,6 +31,20 @@ fn subjects() -> Vec<(&'static str, Contract)> {
         // Small and volatile, where a venue is likeliest to have stopped
         // trading at some point in the session.
         ("a volatile small cap", stock("SIRI", "SMART")),
+        // An option, which is the one contract the venue models a volatility
+        // for. Its model arrives on the same envelope as the trading status,
+        // so the two together say whether that envelope's leading number is a
+        // kind or a length.
+        ("an option", Contract {
+            symbol: "SPY".to_string(),
+            sec_type: "OPT".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            last_trade_date_or_contract_month: "20260918".to_string(),
+            strike: 600.0,
+            right: "C".to_string(),
+            ..Default::default()
+        }),
         // A contract whose size increment is not one. The acknowledgement
         // carries an increment for sizes beside the one for prices, and on
         // every American listing both read as ordinary numbers, so nothing
