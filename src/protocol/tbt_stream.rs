@@ -91,23 +91,29 @@ impl<'a> Bits<'a> {
         }
     }
 
-    /// A string, one character per octet, as long as its own length says.
+    /// A string, one character per octet, ending where it says it ends.
+    ///
+    /// There is no length in front of it. The last character carries the top
+    /// bit, exactly as the last octet of a number does — one convention for
+    /// the whole format rather than two.
+    ///
+    /// Read as though a length came first, the first character of a venue's
+    /// name was taken for one: `ARCA` announced sixty-five characters where
+    /// four followed, and every field after it was read from the wrong place.
     pub fn text(&mut self) -> Option<String> {
-        let len = self.unsigned()?;
-        // A length is a number the venue sent, not a promise. Nothing in a
-        // frame can be longer than what is left of it, so a length past that
-        // is a misread — and a misread length taken as a size to reserve asks
-        // the machine for whatever number the bits happened to spell. Read off
-        // a live trade stream it asked for two and a half terabytes, and the
-        // process died on the spot.
-        if len > (self.remaining() / 8) as u64 {
-            return None;
+        let mut out = String::new();
+        loop {
+            let octet = self.octet()?;
+            out.push((octet & 0x7F) as char);
+            if octet & 0x80 != 0 {
+                return Some(out);
+            }
+            // A string that never ends is a misread, not a string: nothing in
+            // a frame outlives the frame.
+            if out.len() * 8 > self.bytes.len() * 8 {
+                return None;
+            }
         }
-        let mut out = String::with_capacity(len as usize);
-        for _ in 0..len {
-            out.push(self.octet()? as char);
-        }
-        Some(out)
     }
 }
 
@@ -590,29 +596,37 @@ mod scale_tests {
 
 }
 
+
 #[cfg(test)]
-mod length_tests {
+mod text_tests {
     use super::Bits;
 
-    /// A length longer than the frame is a misread, and refused. Taken as a
-    /// size to reserve it asks the machine for whatever the bits spelled: off
-    /// a live trade stream that was two and a half terabytes, and the process
-    /// died rather than dropping one frame.
+    /// A venue's name, from a real trade on a real listing: four characters,
+    /// the last carrying the top bit. Read as though a length came first, the
+    /// `A` was taken for one and sixty-five characters were expected where
+    /// four followed.
     #[test]
-    fn a_length_past_the_end_of_the_frame_is_refused() {
-        // A number whose continuation says it is large, in a frame of a few
-        // bytes: whatever it says, there is not that much left to read.
-        let frame = [0x7f, 0x7f, 0x7f, 0x81, 0x41, 0x42];
-        let mut bits = Bits::new(&frame);
-        assert!(bits.text().is_none(), "a length past the frame was taken");
+    fn a_name_ends_where_it_says_it_ends() {
+        let wire = [0x41, 0x52, 0x43, 0xc1];
+        let mut bits = Bits::new(&wire);
+        assert_eq!(bits.text().as_deref(), Some("ARCA"));
+        assert_eq!(bits.remaining(), 0, "it read exactly its own length");
     }
 
-    /// A length that fits is read.
+    /// The conditions on that same trade, which follow the name.
     #[test]
-    fn a_length_within_the_frame_is_read() {
-        // Two octets of text, stated as a length of two.
-        let frame = [0x82, 0x41, 0x42];
-        let mut bits = Bits::new(&frame);
-        assert_eq!(bits.text().as_deref(), Some("AB"));
+    fn one_string_follows_another() {
+        let wire = [0x41, 0x52, 0x43, 0xc1, 0x20, 0x46, 0x20, 0xc9];
+        let mut bits = Bits::new(&wire);
+        assert_eq!(bits.text().as_deref(), Some("ARCA"));
+        assert_eq!(bits.text().as_deref(), Some(" F I"));
+    }
+
+    /// A string that never ends is a misread, not a string.
+    #[test]
+    fn a_string_that_never_ends_is_refused() {
+        let wire = [0x41; 8];
+        let mut bits = Bits::new(&wire);
+        assert!(bits.text().is_none());
     }
 }

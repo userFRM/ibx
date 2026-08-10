@@ -17,6 +17,15 @@ use ibx::api::types::Contract;
 /// Contracts that trade outside the American session, so this can be run
 /// before the New York open. Both are entitled on this account.
 fn subjects() -> Vec<(&'static str, &'static str, Contract)> {
+    if std::env::var("IBX_TRADES_ONLY").is_ok() {
+        return vec![("a busy listing", "AllLast", Contract {
+            symbol: "SPY".to_string(),
+            sec_type: "STK".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        })];
+    }
     vec![
         // A currency pair has quotes and no trades, so asking for trades is
         // asking for something that does not exist — and the venue says so.
@@ -226,7 +235,7 @@ fn main() {
                     .map(|i| u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).unwrap_or(0))
                     .collect();
                 String::from_utf8_lossy(&bytes).contains("35=E")
-            }).take(4) {
+            }).take(40) {
                 println!("        E {hex}");
             }
             // The acknowledgement, which is where the venue says what number
