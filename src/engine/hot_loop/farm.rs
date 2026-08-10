@@ -389,6 +389,13 @@ impl FarmState {
             Some(t) => t,
             None => return,
         };
+        // Every message this connection carries, kept whole when asked. What a
+        // subscription answers with is a question the wire answers; a reading
+        // of it is not evidence of it.
+        if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+            let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
+            shared.market.note_unread_wire("farm-msg", hex);
+        }
         match msg_type {
             b"P" => self.handle_tick_data(msg, context, shared, event_tx),
             b"Q" => {
