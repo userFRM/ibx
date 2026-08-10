@@ -139,10 +139,13 @@ fn subjects() -> Vec<(&'static str, Contract)> {
     ]
 }
 
-/// The account is shared with a daemon that trades it during the session, and
-/// that daemon must not be interrupted. A session may only be opened before the
-/// open or after the close.
-fn window_is_open() -> bool {
+/// Whether a session may be opened on the *live* account right now.
+///
+/// The live account is shared with a daemon that trades it during the session,
+/// and that daemon must not be interrupted — so the live account is reachable
+/// only before the open and after the close. The paper account is a different
+/// account with nothing trading it, and is reachable at any hour.
+fn live_window_is_open() -> bool {
     let out = std::process::Command::new("date")
         .env("TZ", "America/New_York")
         .arg("+%H%M")
@@ -159,10 +162,14 @@ fn window_is_open() -> bool {
 fn main() {
     let _ = env_logger::try_init();
 
-    if !window_is_open() && std::env::var("IBX_IGNORE_WINDOW").is_err() {
+    // This binary logs in with the paper credentials, which nothing else is
+    // using. Only a run against the live account has to wait for a window.
+    let against_live = std::env::var("IB_PAPER").as_deref() == Ok("0");
+    if against_live && !live_window_is_open() {
         eprintln!(
-            "the session is open and the account is in use — a live capture waits \
-             for the premarket window or for after the close"
+            "the live account is in use by the daemon that trades it — a live run \
+             waits for the premarket window or for after the close. The paper \
+             account is reachable now."
         );
         std::process::exit(3);
     }
