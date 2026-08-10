@@ -108,24 +108,42 @@ fn main() {
             }
         };
         println!("  {what:<24} conId={} {}", resolved.con_id, resolved.exchange);
-        if let Err(e) = client.req_mkt_data(req, &resolved, "", false, false) {
+        // 292 is the news tick. Asked for here because what is being checked
+        // is which connection the venue answers a generic tick on, and news is
+        // the one this client asks for over the trading connection.
+        if let Err(e) = client.req_mkt_data(req, &resolved, "292", false, false) {
             println!("  {what:<24} the subscription was refused: {e}");
             continue;
         }
     }
 
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Long enough to span whatever is being watched for. A status changes
+    // when the venue's day does, so a run that wants to see one change has to
+    // still be listening when it does.
+    let seconds: u64 = std::env::var("IBX_CAPTURE_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(250));
     }
 
     // What the connection carried, by message type, so the shape of the traffic
     // is visible rather than a wall of bytes.
-    let frames: Vec<String> = client
-        .unread_wire()
-        .into_iter()
+    let all = client.unread_wire();
+    for connection in ["farm-msg", "trading-msg", "hmds-msg"] {
+        let count = all.iter().filter(|(kind, _)| *kind == connection).count();
+        let generic = all
+            .iter()
+            .filter(|(kind, hex)| *kind == connection && hex.contains("33353d4701"))
+            .count();
+        println!("  {connection:<14} {count} message(s), {generic} generic tick(s)");
+    }
+    let frames: Vec<String> = all
+        .iter()
         .filter(|(kind, _)| *kind == "farm-msg")
-        .map(|(_, hex)| hex)
+        .map(|(_, hex)| hex.clone())
         .collect();
     let bytes_of = |hex: &str| -> Vec<u8> {
         (0..hex.len() / 2)

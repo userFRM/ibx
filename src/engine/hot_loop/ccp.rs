@@ -649,6 +649,10 @@ impl CcpState {
             Some(t) => t.as_str(),
             None => return,
         };
+        if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+            let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
+            shared.market.note_unread_wire("trading-msg", hex);
+        }
         match msg_type {
             fix::MSG_EXEC_REPORT => self.handle_exec_report(&parsed, msg, context, shared, event_tx, account_id),
             fix::MSG_CANCEL_REJECT => self.handle_cancel_reject(&parsed, context, shared, event_tx),
