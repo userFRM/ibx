@@ -312,7 +312,7 @@ impl EClient {
             let req_id = self.core.instrument_to_req.lock().unwrap()
                 .get(&trade.instrument).copied().unwrap_or(-1);
             let price = trade.price as f64 / PRICE_SCALE_F;
-            let size = trade.size as f64;
+            let size = trade.size as f64 / crate::types::QTY_SCALE as f64;
             // What the venue said about this print, not what a default says.
             let attrib = super::super::tick_types::TickAttribLast {
                 past_limit: trade.past_limit,
@@ -335,7 +335,8 @@ impl EClient {
             let attrib_obj = Py::new(py, attrib)?.into_any();
             call_wrapper!(self.wrapper, py, "tick_by_tick_bid_ask", (req_id, quote.timestamp as i64,
                  quote.bid as f64 / PRICE_SCALE_F, quote.ask as f64 / PRICE_SCALE_F,
-                 quote.bid_size as f64, quote.ask_size as f64, &attrib_obj));
+                 quote.bid_size as f64 / crate::types::QTY_SCALE as f64,
+                 quote.ask_size as f64 / crate::types::QTY_SCALE as f64, &attrib_obj));
         }
 
         // Drain depth updates -> updateMktDepth / updateMktDepthL2

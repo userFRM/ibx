@@ -104,6 +104,12 @@ impl<'a> Bits<'a> {
         let mut out = String::new();
         loop {
             let octet = self.octet()?;
+            // A string with nothing in it is the end marker alone. Appending
+            // its low bits regardless gave callers a name one character long
+            // that was not a character.
+            if octet == 0x80 {
+                return Some(out);
+            }
             out.push((octet & 0x7F) as char);
             if octet & 0x80 != 0 {
                 return Some(out);
@@ -620,6 +626,17 @@ mod text_tests {
         let mut bits = Bits::new(&wire);
         assert_eq!(bits.text().as_deref(), Some("ARCA"));
         assert_eq!(bits.text().as_deref(), Some(" F I"));
+    }
+
+    /// A trade with no conditions on it carries the end marker alone, and
+    /// that is a string with nothing in it. Read as a character it gave
+    /// callers a name one character long that was not a character.
+    #[test]
+    fn a_string_with_nothing_in_it_is_empty() {
+        let wire = [0x80, 0x41, 0xc2];
+        let mut bits = Bits::new(&wire);
+        assert_eq!(bits.text().as_deref(), Some(""));
+        assert_eq!(bits.text().as_deref(), Some("AB"), "and the next one follows it");
     }
 
     /// A string that never ends is a misread, not a string.

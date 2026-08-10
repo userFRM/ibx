@@ -6,6 +6,8 @@ use crate::api::types::{
 };
 use crate::api::wrapper::Wrapper;
 use crate::client_core::order_status_str;
+const QTY_SCALE_F: f64 = crate::types::QTY_SCALE as f64;
+
 use crate::types::*;
 
 use super::{Contract, EClient};
@@ -254,7 +256,8 @@ impl EClient {
             };
             wrapper.tick_by_tick_all_last(
                 req_id, 1, trade.timestamp as i64,
-                trade.price as f64 / PRICE_SCALE_F, trade.size as f64,
+                trade.price as f64 / PRICE_SCALE_F,
+                trade.size as f64 / QTY_SCALE_F,
                 &attrib_last, &trade.exchange, &trade.conditions,
             );
         }
@@ -269,7 +272,9 @@ impl EClient {
             wrapper.tick_by_tick_bid_ask(
                 req_id, quote.timestamp as i64,
                 quote.bid as f64 / PRICE_SCALE_F, quote.ask as f64 / PRICE_SCALE_F,
-                quote.bid_size as f64, quote.ask_size as f64, &attrib_ba,
+                quote.bid_size as f64 / QTY_SCALE_F,
+                quote.ask_size as f64 / QTY_SCALE_F,
+                &attrib_ba,
             );
         }
 
@@ -534,5 +539,25 @@ impl EClient {
             }
             wrapper.account_summary_end(batch.req_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod delivered_size_tests {
+    use crate::types::QTY_SCALE;
+
+    /// A size reaches a caller as the number of shares it is. Prices are
+    /// divided by their scale on the way out and sizes were not, so a hundred
+    /// shares arrived as ten thousand million.
+    #[test]
+    fn a_size_reaches_a_caller_as_itself() {
+        let hundred_shares = 100 * QTY_SCALE;
+        assert_eq!(hundred_shares as f64 / super::QTY_SCALE_F, 100.0);
+    }
+
+    /// And the smallest size a venue counts in survives the trip.
+    #[test]
+    fn the_smallest_size_survives_the_trip() {
+        assert_eq!(1_f64 / super::QTY_SCALE_F, 1e-8);
     }
 }

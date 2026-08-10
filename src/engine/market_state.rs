@@ -400,6 +400,12 @@ impl MarketState {
             }
             other => other.to_string(),
         };
+        // Under the name the venue routes by, not the one a caller was handed.
+        // A US stock on Nasdaq is handed back under its older spelling, and a
+        // caller that passes that contract straight back would otherwise be
+        // routed to a name that reaches nothing.
+        let destination =
+            crate::control::contracts::exchange_to_fix(&destination).to_string();
         (sec_type, destination)
     }
 
@@ -994,5 +1000,23 @@ mod tests {
         assert!(!m.adopt_con_id(other, 756733), "and an id is not taken from the slot holding it");
         assert_eq!(m.instrument_by_con_id(756733), Some(id));
         assert!(!m.adopt_con_id(other, 0), "nothing is not an identity");
+    }
+}
+
+#[cfg(test)]
+mod routing_name_tests {
+    use super::MarketState;
+
+    /// A contract is handed to a caller under the name the counterpart uses,
+    /// and a caller passing it straight back must still be routed under the
+    /// name the venue knows. Routed under the one it was handed, a request for
+    /// a Nasdaq listing reaches nothing.
+    #[test]
+    fn a_contract_is_routed_under_the_name_the_venue_knows() {
+        let mut market = MarketState::new();
+        let instrument = market.register(265598);
+        market.set_routing(instrument, "STK", "ISLAND");
+        let (_, destination) = market.order_routing(instrument);
+        assert_eq!(destination, "NASDAQ", "routed under a name that reaches nothing");
     }
 }
