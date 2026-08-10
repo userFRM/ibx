@@ -13,6 +13,22 @@ pub type Price = i64;
 /// Example: 100 shares = 1_000_000
 pub type Qty = i64;
 
+/// How a price is held here: a whole number of hundred-millionths.
+///
+/// This is not how the venue sends one. The venue sends a price as a whole
+/// number of the CONTRACT'S OWN smallest increment — the counterpart holds a
+/// price as that count beside the increment it counts, and converts only when
+/// something needs a decimal. That representation has no floor: a contract
+/// quoted in millionths works exactly as well as one quoted in pennies, because
+/// the count is relative to the contract rather than to a fixed scale.
+///
+/// Holding a price against one fixed scale instead buys simple arithmetic
+/// between contracts and costs a floor. A contract whose increment is finer
+/// than a hundred-millionth cannot be held at all, and its increment scales to
+/// nothing — which is caught rather than silently rounded, but caught is not
+/// carried. Matching the venue would mean holding the count and the increment
+/// together and converting at the edge, which is a change to every price this
+/// client touches.
 pub const PRICE_SCALE: i64 = 100_000_000; // 10^8
 pub const QTY_SCALE: i64 = 10_000; // 10^4
 
