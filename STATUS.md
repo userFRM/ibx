@@ -25,9 +25,9 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Depth of book | ✅ | |
 | Historical bars, ticks, schedules | ✅ | |
 | Tick-by-tick quotes | ✅ | Live: several subscriptions at once, each attributed |
-| Tick-by-tick trades | 🚧 | Arrive and are attributed; the record's own layout is not right yet — sizes come back saturated |
+| Tick-by-tick trades | ✅ | Live: a thousand trades on a busy listing, priced and sized as the venue printed them |
 | Trading halts | ✅ | Live: contracts trading are reported trading |
-| Tick attributes | 🚧 | Read from the trade record, whose layout is not right yet |
+| Tick attributes | ✅ | Live: reported-away-from-the-exchange varies trade by trade |
 
 ## Orders
 
