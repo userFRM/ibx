@@ -313,7 +313,11 @@ impl EClient {
                 .get(&trade.instrument).copied().unwrap_or(-1);
             let price = trade.price as f64 / PRICE_SCALE_F;
             let size = trade.size as f64;
-            let attrib = super::super::tick_types::TickAttribLast::default();
+            // What the venue said about this print, not what a default says.
+            let attrib = super::super::tick_types::TickAttribLast {
+                past_limit: trade.past_limit,
+                unreported: trade.unreported,
+            };
             let attrib_obj = Py::new(py, attrib)?.into_any();
             call_wrapper!(self.wrapper, py, "tick_by_tick_all_last", (req_id, 1i32, trade.timestamp as i64, price, size,
                  &attrib_obj, trade.exchange.as_str(), trade.conditions.as_str()));
@@ -324,7 +328,10 @@ impl EClient {
         for quote in tbt_quotes {
             let req_id = self.core.instrument_to_req.lock().unwrap()
                 .get(&quote.instrument).copied().unwrap_or(-1);
-            let attrib = super::super::tick_types::TickAttribBidAsk::default();
+            let attrib = super::super::tick_types::TickAttribBidAsk {
+                bid_past_low: quote.bid_past_low,
+                ask_past_high: quote.ask_past_high,
+            };
             let attrib_obj = Py::new(py, attrib)?.into_any();
             call_wrapper!(self.wrapper, py, "tick_by_tick_bid_ask", (req_id, quote.timestamp as i64,
                  quote.bid as f64 / PRICE_SCALE_F, quote.ask as f64 / PRICE_SCALE_F,

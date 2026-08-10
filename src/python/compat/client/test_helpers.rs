@@ -281,6 +281,8 @@ impl EClient {
         shared.market.push_tbt_trade(TbtTrade {
             instrument, price: (price * ps) as i64, size,
             exchange: exchange.to_string(), conditions: String::new(), timestamp: 12345,
+            past_limit: false,
+            unreported: false,
         });
         Ok(())
     }
@@ -296,6 +298,8 @@ impl EClient {
             instrument,
             bid: (bid * ps) as i64, ask: (ask * ps) as i64,
             bid_size, ask_size, timestamp: 12345,
+            bid_past_low: false,
+            ask_past_high: false,
         });
         Ok(())
     }
