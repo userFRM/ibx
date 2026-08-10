@@ -9,10 +9,10 @@ did anything. This counts what leaves the machine.
 | --- | ---: | --- |
 | wire | 39 | sends a command that reaches the venue |
 | session | 26 | answered from what the venue pushed to this session |
-| refused | 1 | reports that this client cannot serve it |
+| refused | 3 | reports that this client cannot serve it |
 | missing | 0 | should reach the venue and does not |
-| withdrawn | 9 | withdraws something that was never running, and says so |
-| silent | 1 | returns as though it acted, and did not |
+| withdrawn | 8 | withdraws something that was never running, and says so |
+| silent | 0 | returns as though it acted, and did not |
 
 `silent` is held at zero. A call that quietly does nothing is worse than
 one that refuses: a caller waiting on it waits for something that is
@@ -24,8 +24,8 @@ None.
 
 ## Reports that it cannot be served
 
-`req_auto_open_orders`
+`calculate_implied_volatility`, `calculate_option_price`, `req_auto_open_orders`
 
 ## Returns as though it acted
 
-`calculate_implied_volatility`
+None.
