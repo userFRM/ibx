@@ -1,6 +1,7 @@
 pub mod farm;
 pub mod ccp;
 pub mod hmds;
+pub mod secdef;
 pub mod order_builder;
 pub(crate) mod retry;
 
@@ -27,7 +28,7 @@ use std::io;
 use crate::bridge::{Event, SharedState};
 use crate::engine::context::Context;
 use crate::config::chrono_free_timestamp;
-use crate::gateway::{connect_farm, reconnect_ccp, ReconnectAuth, FARM_SLOT_HMDS, FARM_SLOT_TRADING};
+use crate::gateway::{connect_farm, reconnect_ccp, Farm, ReconnectAuth};
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
 use crate::types::{ControlCommand, Fill, InstrumentId, Price, Qty, TbtQuote, TbtTrade, PRICE_SCALE, QTY_SCALE};
@@ -90,6 +91,11 @@ pub struct HotLoop {
     pub ccp_conn: Option<Connection>,
     /// Historical farm connection for historical data (optional).
     pub hmds_conn: Option<Connection>,
+    /// Contract definitions and the calendar that rides with them. Absent
+    /// where the venue stated no route for it at logon, which is a fact about
+    /// the session rather than a failure.
+    pub secdef_conn: Option<Connection>,
+    pub secdef: secdef::SecDefState,
     /// SPSC channel receiver for control plane commands.
     control_rx: Option<Receiver<ControlCommand>>,
     /// Whether the hot loop should keep running.
@@ -136,6 +142,8 @@ pub struct HeartbeatState {
     pub last_farm_recv: Instant,
     pub last_hmds_sent: Instant,
     pub last_hmds_recv: Instant,
+    pub last_secdef_sent: Instant,
+    pub last_secdef_recv: Instant,
     /// Pending test request for auth: (test_req_id, sent_at).
     pub pending_ccp_test: Option<(String, Instant)>,
     /// When each connection (re)connected — liveness is not enforced during
@@ -160,6 +168,8 @@ impl HeartbeatState {
             last_farm_sent: now,
             last_farm_recv: now,
             last_hmds_sent: now,
+            last_secdef_sent: now,
+            last_secdef_recv: now,
             last_hmds_recv: now,
             pending_ccp_test: None,
             ccp_up_since: Instant::now(),
@@ -187,6 +197,8 @@ impl HotLoop {
             farm_conn: None,
             ccp_conn: None,
             hmds_conn: None,
+            secdef_conn: None,
+            secdef: secdef::SecDefState::new(),
             control_rx: None,
             running: true,
             account_id: String::new(),
@@ -401,6 +413,12 @@ impl HotLoop {
             // 1b. Busy-poll historical socket for tick-by-tick data
             self.hmds.poll(
                 &mut self.hmds_conn, &self.shared,
+                &self.event_tx, &mut self.hb,
+            );
+
+            // 1c. The security definition farm, which carries the calendar.
+            self.secdef.poll(
+                &mut self.secdef_conn, &self.shared,
                 &self.event_tx, &mut self.hb,
             );
 
@@ -731,13 +749,13 @@ impl HotLoop {
                     self.ccp.send_matching_symbols_request(req_id, &pattern, &mut self.ccp_conn, &mut self.hb);
                 }
                 ControlCommand::FetchCalendarMetaData { req_id } => {
-                    self.ccp.send_calendar_meta_data_request(
-                        req_id, &mut self.ccp_conn, &mut self.hb, &self.shared,
+                    self.secdef.send_calendar_meta_data_request(
+                        req_id, &mut self.secdef_conn, &mut self.hb, &self.shared,
                     );
                 }
                 ControlCommand::FetchCalendarEvents { req_id, query } => {
-                    self.ccp.send_calendar_events_request(
-                        req_id, &query, &mut self.ccp_conn, &mut self.hb, &self.shared,
+                    self.secdef.send_calendar_events_request(
+                        req_id, &query, &mut self.secdef_conn, &mut self.hb, &self.shared,
                     );
                 }
                 ControlCommand::FetchOptionParams { req_id, symbol, fut_fop_exchange, underlying_sec_type, underlying_con_id } => {
@@ -1214,7 +1232,7 @@ impl HotLoop {
                     &farm_host, &farm_name,
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
-                    &auth.hw_info, &auth.encoded, FARM_SLOT_TRADING,
+                    &auth.hw_info, &auth.encoded, Farm::MarketData,
                 );
                 let _ = tx.send(result);
             })
@@ -1410,7 +1428,7 @@ impl HotLoop {
                     &auth.hmds_host, &auth.hmds_farm,
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
-                    &auth.hw_info, &auth.encoded, FARM_SLOT_HMDS,
+                    &auth.hw_info, &auth.encoded, Farm::Historical,
                 );
                 let _ = tx.send(result);
             })

@@ -21,7 +21,7 @@ fn config() -> GatewayConfig {
 #[ignore]
 fn raw_farm_subscribe_test() {
     let cfg = config();
-    let (_gw, mut farm, _ccp, _hmds) =
+    let ibx::gateway::Session { gateway: _gw, market_data: mut farm, trading: _ccp, historical: _hmds, .. } =
         Gateway::connect(&cfg).expect("Gateway connect failed");
 
     eprintln!("Farm connected, seq={}", farm.seq);

@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("== Initial Gateway::connect ({}, host={})", if live { "LIVE" } else { "PAPER" }, host);
     let t0 = Instant::now();
-    let (gw, farm_conn, _ccp_conn, hmds) = Gateway::connect(&cfg)?;
+    let ibx::gateway::Session { gateway: gw, market_data: farm_conn, trading: _ccp_conn, historical: hmds, .. } = Gateway::connect(&cfg)?;
     let initial_ms = t0.elapsed().as_millis();
     println!("   initial connect: {} ms (account={})", initial_ms, gw.account_id);
 
@@ -85,13 +85,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t_a1 = Instant::now();
     let trading_a = connect_farm(
         &host, "usfarm", &cfg.username, &cfg.password, cfg.paper,
-        &server_session_id, &session_token, &hw_info, &encoded, 18,
+        &server_session_id, &session_token, &hw_info, &encoded, ibx::gateway::Farm::MarketData,
     );
     let trading_a_ms = t_a1.elapsed().as_millis();
     let t_a2 = Instant::now();
     let mktdata_a = connect_farm(
         &host, "ushmds", &cfg.username, &cfg.password, cfg.paper,
-        &server_session_id, &session_token, &hw_info, &encoded, 17,
+        &server_session_id, &session_token, &hw_info, &encoded, ibx::gateway::Farm::Historical,
     );
     let mktdata_a_ms = t_a2.elapsed().as_millis();
     let serial_total_ms = t_a.elapsed().as_millis();
@@ -128,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         thread::spawn(move || {
             let t = Instant::now();
             let r = connect_farm(&host, "usfarm", &user, &pass, paper_b,
-                &ssid, &token, &hw, &enc, 18);
+                &ssid, &token, &hw, &enc, ibx::gateway::Farm::MarketData);
             (t.elapsed().as_millis(), r)
         })
     };
@@ -143,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         thread::spawn(move || {
             let t = Instant::now();
             let r = connect_farm(&host, "ushmds", &user, &pass, paper_b,
-                &ssid, &token, &hw, &enc, 17);
+                &ssid, &token, &hw, &enc, ibx::gateway::Farm::Historical);
             (t.elapsed().as_millis(), r)
         })
     };

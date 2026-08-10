@@ -52,12 +52,16 @@ pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut 
         // inside the window, and the attempt itself is what blocks.
         ccp_keepalive(ccp);
         let start = Instant::now();
-        let slot: u32 = if *farm == "ushmds" { 17 } else { 18 };
+        let kind = if *farm == "ushmds" {
+            ibx::gateway::Farm::Historical
+        } else {
+            ibx::gateway::Farm::MarketData
+        };
         match ibx::gateway::connect_farm(
             &config.host, farm,
             &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token,
-            &gw.hw_info, &gw.encoded, slot,
+            &gw.hw_info, &gw.encoded, kind,
         ) {
             Ok(_conn) => {
                 connected += 1;
@@ -158,7 +162,7 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
 
     // Reconnect real farm for remaining tests
     let (farm, ccp, hmds) = match Gateway::connect(config) {
-        Ok((_gw2, f, c, h)) => {
+        Ok(gateway::Session { gateway: _gw2, market_data: f, trading: c, historical: h, .. }) => {
             println!("  Reconnected to IB for remaining tests");
             (f, c, h)
         }
@@ -401,7 +405,7 @@ pub(super) fn phase_farm_recovers_with_credentials(
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = gw.into_hot_loop_with_farms(
-        shared.clone(), Some(event_tx), conns.farm, conns.ccp, conns.hmds, None,
+        shared.clone(), Some(event_tx), conns.farm, conns.ccp, conns.hmds, None, None,
         gateway::CallerAuth {
             host: config.host.clone(),
             username: config.username.clone(),

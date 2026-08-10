@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("== Connecting LIVE ({host}). Waiting for the second-factor challenge...");
     let t0 = Instant::now();
-    let (gw, _farm, _ccp, _hmds) = Gateway::connect(&config)?;
+    let ibx::gateway::Session { gateway: gw, market_data: _farm, trading: _ccp, historical: _hmds, .. } = Gateway::connect(&config)?;
     let elapsed = t0.elapsed().as_secs_f64();
     println!();
     println!("PASS — issue #176 verified: second-factor login succeeded in {:.1}s (account_id={})",

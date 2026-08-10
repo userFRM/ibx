@@ -44,7 +44,7 @@ fn farm_reconnect_with_cached_credentials() {
 
     // Phase 1: Full auth
     let t0 = Instant::now();
-    let (gw, farm_conn, _ccp_conn, _hmds) =
+    let ibx::gateway::Session { gateway: gw, market_data: farm_conn, trading: _ccp_conn, historical: _hmds, .. } =
         Gateway::connect(&cfg).expect("Initial connect failed");
     let full_auth_ms = t0.elapsed().as_millis();
 
@@ -64,7 +64,7 @@ fn farm_reconnect_with_cached_credentials() {
     let new_farm = connect_farm(
         &cfg.host, "usfarm",
         &cfg.username, &cfg.password, cfg.paper,
-        &server_session_id, &session_key, &hw_info, &encoded, 18,
+        &server_session_id, &session_key, &hw_info, &encoded, ibx::gateway::Farm::MarketData,
     ).expect("Farm reconnect with cached credentials FAILED");
     let reconnect_ms = t1.elapsed().as_millis();
 
@@ -77,7 +77,7 @@ fn farm_reconnect_with_cached_credentials() {
 fn hotloop_auto_reconnect_on_farm_disconnect() {
     let Some(cfg) = config() else { return };
 
-    let (gw, farm_conn, ccp_conn, hmds) =
+    let ibx::gateway::Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds, .. } =
         Gateway::connect(&cfg).expect("Initial connect failed");
 
     let shared = Arc::new(SharedState::new());
@@ -85,7 +85,7 @@ fn hotloop_auto_reconnect_on_farm_disconnect() {
 
     let (mut hot_loop, _control_tx) = gw.into_hot_loop_with_farms(
         shared.clone(), Some(event_tx),
-        farm_conn, ccp_conn, hmds, None,
+        farm_conn, ccp_conn, hmds, None, None,
         ibx::gateway::CallerAuth {
             host: cfg.host.clone(),
             username: cfg.username.clone(),
@@ -139,7 +139,7 @@ fn ccp_reconnect_with_cached_credentials() {
     let Some(cfg) = config() else { return };
 
     let t0 = Instant::now();
-    let (gw, _farm_conn, ccp_conn, _hmds) =
+    let ibx::gateway::Session { gateway: gw, market_data: _farm_conn, trading: ccp_conn, historical: _hmds, .. } =
         Gateway::connect(&cfg).expect("Initial connect failed");
     let full_auth_ms = t0.elapsed().as_millis();
 

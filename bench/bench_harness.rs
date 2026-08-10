@@ -88,15 +88,20 @@ impl BenchSession {
         };
 
         let connect_start = Instant::now();
-        let (gw, farm_conn, ccp_conn, hmds_conn) =
-            Gateway::connect(&gw_config).expect("Gateway::connect() failed");
+        let ibx::gateway::Session {
+            gateway: gw,
+            market_data: farm_conn,
+            trading: ccp_conn,
+            historical: hmds_conn,
+            security_definition: secdef_conn,
+        } = Gateway::connect(&gw_config).expect("Gateway::connect() failed");
         let connect_time = connect_start.elapsed();
         let account_id = gw.account_id.clone();
 
         let shared = Arc::new(SharedState::new());
         let (event_tx, event_rx) = sync_channel::<Event>(65536);
         let (mut hot_loop, control_tx) =
-            gw.into_hot_loop(shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, None,
+            gw.into_hot_loop(shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
                 ibx::gateway::CallerAuth {
                     host: gw_config.host.clone(),
                     username: gw_config.username.clone(),
