@@ -324,6 +324,13 @@ impl HmdsState {
             Some(t) => t.as_str(),
             None => return,
         };
+        // Every message this connection carries, kept whole when asked. What a
+        // subscription actually answers with is a question the answer to which
+        // is on the wire, not in anyone's reading of it.
+        if std::env::var("IBX_CAPTURE_TBT").is_ok() {
+            let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
+            shared.market.note_unread_wire("hmds-msg", hex);
+        }
         match msg_type {
             "E" => self.handle_tbt_data(msg, shared, event_tx),
             "0" => {}

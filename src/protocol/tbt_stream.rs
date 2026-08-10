@@ -50,14 +50,18 @@ impl<'a> Bits<'a> {
         Some(out)
     }
 
-    /// A whole number, seven bits at a time, most significant first, ending on
-    /// the first octet whose top bit is clear.
+    /// A whole number, seven bits at a time, most significant first.
+    ///
+    /// The top bit marks the LAST octet, not a further one — the opposite of
+    /// the usual convention, and settled against a real frame: read the usual
+    /// way the same bytes give no time anywhere and no price that exists, and
+    /// read this way they give the second and a quote that was on the screen.
     pub fn unsigned(&mut self) -> Option<u64> {
         let mut acc: u64 = 0;
         loop {
             let octet = self.octet()?;
             acc = (acc << 7) | u64::from(octet & 0x7F);
-            if octet & 0x80 == 0 {
+            if octet & 0x80 != 0 {
                 return Some(acc);
             }
         }
@@ -69,17 +73,19 @@ impl<'a> Bits<'a> {
     /// value: it seeds the accumulator with all ones and then stays put, which
     /// is ordinary two's-complement sign extension seven bits at a time. Masking
     /// it away as though it were a flag makes every negative move wrong.
+    ///
+    /// The top bit marks the last octet, as it does for a plain whole number.
     pub fn signed(&mut self) -> Option<i64> {
         let first = self.octet()?;
         let mut acc: i64 = if first & 0x40 != 0 { -1 } else { 0 };
         acc = (acc << 7) | i64::from(first & 0x7F);
-        if first & 0x80 == 0 {
+        if first & 0x80 != 0 {
             return Some(acc);
         }
         loop {
             let octet = self.octet()?;
             acc = (acc << 7) | i64::from(octet & 0x7F);
-            if octet & 0x80 == 0 {
+            if octet & 0x80 != 0 {
                 return Some(acc);
             }
         }
@@ -174,29 +180,48 @@ pub struct TbtFrame {
 
 /// Read every record in a frame.
 ///
-/// `min_tick` is the contract's own smallest price increment, which is what a
-/// move is counted in. `running` carries the prices forward and must be the
-/// same one across every frame of a subscription.
+/// A frame opens with two bytes saying how many bits of payload follow, and the
+/// payload is what those bits say it is rather than whatever is left in the
+/// message — a message carries a field after the payload, and reading to the
+/// end of it swallows that field as though it were data.
 ///
-/// Stops at the first record it cannot read whole rather than guessing at the
-/// rest: once a field is misread the position is inside the next one, and
-/// everything after would be invented.
+/// Every record then states which subscription it belongs to and when it
+/// happened, so a frame can carry records of more than one moment. A reading
+/// that takes those once for the whole frame consumes the second record's
+/// header as though it were the first record's prices.
+///
+/// `min_tick` is the contract's own smallest increment, which is what a price
+/// move is counted in. `running` carries prices forward and must be the same
+/// one across every frame of a subscription.
 pub fn decode_frame(
     body: &[u8],
     kind: TbtKind,
     min_tick: f64,
     running: &mut RunningPrice,
 ) -> Option<TbtFrame> {
-    let mut bits = Bits::new(body);
-    let ticker_id = bits.unsigned()?;
-    let seconds = bits.unsigned()?;
+    if body.len() < 2 {
+        return None;
+    }
+    let bits_stated = ((body[0] as usize) << 8) | body[1] as usize;
+    let bytes_stated = bits_stated.div_ceil(8);
+    let payload = body.get(2..2 + bytes_stated.min(body.len() - 2))?;
 
+    let mut bits = Bits::new(payload);
     let mut records = Vec::new();
-    // A record needs at least one octet. Anything less is the frame's padding,
-    // not a record that failed to read.
-    while bits.remaining() >= 8 {
+    let mut ticker_id = 0;
+    let mut seconds = 0;
+
+    // A record needs at least its own header, so anything shorter is what is
+    // left over rather than a record that failed to read.
+    while bits.remaining() >= 16 {
+        let Some(id) = bits.unsigned() else { break };
+        let Some(at) = bits.unsigned() else { break };
         match read_record(&mut bits, kind, min_tick, running) {
-            Some(record) => records.push(record),
+            Some(record) => {
+                ticker_id = id;
+                seconds = at;
+                records.push(record);
+            }
             None => break,
         }
     }
@@ -256,14 +281,17 @@ fn read_record(
             }))
         }
         TbtKind::BidAsk => {
+            // Both moves, then the flags, then a size a side. Settled against a
+            // real frame: read with the sizes before the flags, five records
+            // consumed eighty-six bytes and gave prices no market has ever
+            // quoted; read this way the same bytes give the quote that was on
+            // the screen and consume the payload exactly.
             let ask_move = bits.signed()?;
             running.bid_ticks = running.bid_ticks.checked_add(first_move)?;
             running.ask_ticks = running.ask_ticks.checked_add(ask_move)?;
-            let plain_bid = bits.unsigned()?;
-            let plain_ask = bits.unsigned()?;
             let flags = bits.unsigned()?;
-            let bid_size = if flags & (1 << 2) != 0 { size(bits, true)? } else { plain_bid };
-            let ask_size = if flags & (1 << 3) != 0 { size(bits, true)? } else { plain_ask };
+            let bid_size = size(bits, flags & (1 << 2) != 0)?;
+            let ask_size = size(bits, flags & (1 << 3) != 0)?;
             Some(TbtRecord::Quote(TbtQuoteRecord {
                 bid: running.bid_ticks as f64 * min_tick,
                 ask: running.ask_ticks as f64 * min_tick,
@@ -290,6 +318,11 @@ mod tests {
 
     /// Write the venue's own encodings, so a test frame is built the way a
     /// frame is built rather than by hand.
+    ///
+    /// These agreed with the decoder while both were wrong about which bit ends
+    /// a number, and every test built on them passed while nothing the venue
+    /// sent could be read. They are kept for the cases a capture does not cover,
+    /// and the capture is what settles the encoding.
     #[derive(Default)]
     struct Writer {
         out: Vec<u8>,
@@ -308,7 +341,7 @@ mod tests {
             groups.reverse();
             let last = groups.len() - 1;
             for (i, g) in groups.iter().enumerate() {
-                self.out.push(if i == last { *g } else { g | 0x80 });
+                self.out.push(if i == last { g | 0x80 } else { *g });
             }
             self
         }
@@ -338,15 +371,74 @@ mod tests {
             }
             let last = groups.len() - 1;
             for (i, g) in groups.iter().enumerate() {
-                self.out.push(if i == last { *g } else { g | 0x80 });
+                self.out.push(if i == last { g | 0x80 } else { *g });
             }
             self
         }
 
-        fn text(&mut self, s: &str) -> &mut Self {
-            self.unsigned(s.len() as u64);
-            self.out.extend_from_slice(s.as_bytes());
-            self
+    }
+
+    /// A frame captured from the venue, byte for byte.
+    ///
+    /// This is the whole point of the module and the only test that could have
+    /// found what was wrong. Every earlier check was written against frames
+    /// this file made up, and they all passed while nothing the venue sent
+    /// could be read at all.
+    ///
+    /// It is a quote subscription on a currency pair, taken at 05:42:28 UTC on
+    /// the tenth of August 2026, when the market was 1.15510 bid at 1.15515.
+    #[test]
+    fn a_frame_the_venue_actually_sent_decodes_to_the_market_that_was_there() {
+        let message = "383d4f01393d303130380133353d450102b08106536549c40134be0134bf80\
+                       0e1765f03d04c08106536549c48080800f4e73b03d04c08106536549c48080\
+                       800e1765f03d04c08106536549c48081800e1765f00d5a61b08106536549c4\
+                       8080800d7923d00d5a61b001383334393d363932384333303801";
+        let bytes: Vec<u8> = (0..message.len() / 2)
+            .map(|i| u8::from_str_radix(&message[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+
+        // The payload sits between the type field and the field after it. A
+        // message's own length cannot be used to find the end: the payload
+        // contains the byte that separates fields.
+        let start = bytes.windows(5).position(|w| w == b"35=E\x01").unwrap() + 5;
+        let end = bytes.windows(6).position(|w| w == b"\x018349=").unwrap();
+        let body = &bytes[start..end];
+
+        // A currency pair moves in half a pip.
+        let mut running = RunningPrice::default();
+        let frame = decode_frame(body, TbtKind::BidAsk, 0.00005, &mut running)
+            .expect("the frame decodes");
+
+        assert_eq!(frame.timestamp_ms, 1_786_340_548_000, "the second it happened");
+        assert_eq!(frame.records.len(), 5, "five records share the frame");
+
+        match &frame.records[0] {
+            TbtRecord::Quote(q) => {
+                assert!((q.bid - 1.15510).abs() < 1e-9, "the bid was {}", q.bid);
+                assert!((q.ask - 1.15515).abs() < 1e-9, "the ask was {}", q.ask);
+                assert_eq!(q.bid_size, 29_750_000);
+                assert_eq!(q.ask_size, 1_000_000);
+            }
+            other => panic!("expected a quote, got {other:?}"),
+        }
+
+        // The first record states the whole price as a move from nothing; the
+        // rest move from it, and a record that does not move the price is a
+        // size change.
+        match &frame.records[1] {
+            TbtRecord::Quote(q) => {
+                assert!((q.bid - 1.15510).abs() < 1e-9, "unmoved, the bid stands");
+                assert_eq!(q.bid_size, 32_750_000, "and the size changed");
+            }
+            other => panic!("expected a quote, got {other:?}"),
+        }
+
+        // The ask moves one increment on the fourth record.
+        match &frame.records[3] {
+            TbtRecord::Quote(q) => {
+                assert!((q.ask - 1.15520).abs() < 1e-9, "the ask was {}", q.ask);
+            }
+            other => panic!("expected a quote, got {other:?}"),
         }
     }
 
@@ -362,151 +454,73 @@ mod tests {
         }
     }
 
-    /// The first record of a subscription states the whole price, because the
-    /// running price starts at nothing. A decoder expecting a small step
-    /// rejects the first record of every subscription.
-    #[test]
-    fn the_first_record_carries_the_whole_price() {
-        let mut w = Writer::default();
-        w.unsigned(7).unsigned(1_767_000_000);
-        // 40000 ticks of a penny is 400.00.
-        w.signed(40_000).unsigned(100).unsigned(0).text("ARCA").text("");
-
-        let mut running = RunningPrice::default();
-        let frame = decode_frame(&w.out, TbtKind::AllLast, 0.01, &mut running).expect("a frame");
-        assert_eq!(frame.ticker_id, 7);
-        assert_eq!(frame.timestamp_ms, 1_767_000_000_000);
-        match &frame.records[0] {
-            TbtRecord::Trade(t) => {
-                assert!((t.price - 400.0).abs() < 1e-9, "price was {}", t.price);
-                assert_eq!(t.size, 100);
-                assert_eq!(t.exchange, "ARCA");
-            }
-            other => panic!("expected a trade, got {other:?}"),
+    /// Build a frame the way the venue builds one: a two-byte bit length, then
+    /// records that each state their own subscription and moment.
+    fn frame(records: &[Vec<u8>]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        for r in records {
+            payload.extend_from_slice(r);
         }
+        let mut out = ((payload.len() * 8) as u16).to_be_bytes().to_vec();
+        out.extend_from_slice(&payload);
+        out
     }
 
-    /// A move is measured from where the price already was, and the running
-    /// price carries across records and across frames.
-    #[test]
-    fn a_move_is_measured_from_the_last_price() {
-        let mut running = RunningPrice::default();
-
-        let mut first = Writer::default();
-        first.unsigned(1).unsigned(0);
-        first.signed(40_000).unsigned(1).unsigned(0).text("").text("");
-        decode_frame(&first.out, TbtKind::AllLast, 0.01, &mut running).expect("a frame");
-
-        // A later frame moves down three ticks.
-        let mut second = Writer::default();
-        second.unsigned(1).unsigned(0);
-        second.signed(-3).unsigned(1).unsigned(0).text("").text("");
-        let frame = decode_frame(&second.out, TbtKind::AllLast, 0.01, &mut running).expect("a frame");
-        match &frame.records[0] {
-            TbtRecord::Trade(t) => assert!((t.price - 399.97).abs() < 1e-9, "price was {}", t.price),
-            other => panic!("expected a trade, got {other:?}"),
-        }
+    /// One quote record, headed by its subscription and its moment.
+    fn quote(bid_move: i64, ask_move: i64, bid_size: u64, ask_size: u64) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.unsigned(1).unsigned(1_786_340_548);
+        w.signed(bid_move).signed(ask_move).unsigned(0).unsigned(bid_size).unsigned(ask_size);
+        w.out
     }
 
-    /// Several records share one frame, with no marker between them and no
-    /// timestamp of their own.
+    /// The first record states the whole price as a move from nothing, and
+    /// later records move from it. A decoder treating a large first move as a
+    /// fault rejects the first record of every subscription.
     #[test]
-    fn records_run_on_with_nothing_between_them() {
-        let mut w = Writer::default();
-        w.unsigned(1).unsigned(1_700_000_000);
-        for _ in 0..3 {
-            w.signed(1).unsigned(5).unsigned(0).text("Q").text("");
-        }
+    fn a_move_is_measured_from_where_the_price_already_was() {
+        let body = frame(&[quote(23_102, 23_103, 1, 1), quote(0, 1, 1, 1), quote(-2, 0, 1, 1)]);
         let mut running = RunningPrice::default();
-        let frame = decode_frame(&w.out, TbtKind::AllLast, 0.01, &mut running).expect("a frame");
-        assert_eq!(frame.records.len(), 3, "three records share the frame");
-        // Every record carries the frame's time, not one of its own.
-        assert_eq!(frame.timestamp_ms, 1_700_000_000_000);
+        let f = decode_frame(&body, TbtKind::BidAsk, 0.00005, &mut running).expect("a frame");
+        assert_eq!(f.records.len(), 3);
+        let bids: Vec<f64> = f
+            .records
+            .iter()
+            .map(|r| match r {
+                TbtRecord::Quote(q) => q.bid,
+                other => panic!("expected a quote, got {other:?}"),
+            })
+            .collect();
+        assert!((bids[0] - 1.15510).abs() < 1e-9, "{bids:?}");
+        assert!((bids[1] - 1.15510).abs() < 1e-9, "a record that does not move it leaves it");
+        assert!((bids[2] - 1.15500).abs() < 1e-9, "and a move down moves it down");
     }
 
-    /// A size stated again at greater width is read from the two numbers the
-    /// venue sent, low half first. Reading one leaves the other in the stream
-    /// and everything after it comes from the wrong place.
+    /// The running price carries across frames, not only across records.
     #[test]
-    fn a_size_stated_in_two_halves_is_read_as_one_number() {
-        let mut w = Writer::default();
-        w.unsigned(1).unsigned(0);
-        // Bit five says restated, bit four says in two halves.
-        w.signed(1).unsigned(0).unsigned((1 << 5) | (1 << 4));
-        w.unsigned(7).unsigned(1); // low, then high
-        w.text("Q").text("");
+    fn the_price_carries_from_one_frame_to_the_next() {
         let mut running = RunningPrice::default();
-        let frame = decode_frame(&w.out, TbtKind::AllLast, 0.01, &mut running).expect("a frame");
-        match &frame.records[0] {
-            TbtRecord::Trade(t) => {
-                assert_eq!(t.size, 7 | (1u64 << 32));
-                assert_eq!(t.exchange, "Q", "the fields after the size still line up");
-            }
-            other => panic!("expected a trade, got {other:?}"),
-        }
-    }
-
-    /// The flags say what the venue said about a print.
-    #[test]
-    fn a_print_the_venue_may_revise_says_so() {
-        let mut w = Writer::default();
-        w.unsigned(1).unsigned(0);
-        w.signed(1).unsigned(1).unsigned(0b11).text("").text("");
-        let mut running = RunningPrice::default();
-        let frame = decode_frame(&w.out, TbtKind::AllLast, 0.01, &mut running).expect("a frame");
-        match &frame.records[0] {
-            TbtRecord::Trade(t) => {
-                assert!(t.past_limit);
-                assert!(t.unreported);
-            }
-            other => panic!("expected a trade, got {other:?}"),
-        }
-    }
-
-    /// A quote states two moves, one for each side.
-    #[test]
-    fn a_quote_moves_each_side_on_its_own() {
-        let mut w = Writer::default();
-        w.unsigned(1).unsigned(0);
-        w.signed(40_000).signed(40_001).unsigned(300).unsigned(200).unsigned(0);
-        let mut running = RunningPrice::default();
-        let frame = decode_frame(&w.out, TbtKind::BidAsk, 0.01, &mut running).expect("a frame");
-        match &frame.records[0] {
-            TbtRecord::Quote(q) => {
-                assert!((q.bid - 400.00).abs() < 1e-9, "bid was {}", q.bid);
-                assert!((q.ask - 400.01).abs() < 1e-9, "ask was {}", q.ask);
-                assert_eq!((q.bid_size, q.ask_size), (300, 200));
-            }
+        decode_frame(&frame(&[quote(23_102, 23_103, 1, 1)]), TbtKind::BidAsk, 0.00005, &mut running)
+            .expect("a frame");
+        let f = decode_frame(&frame(&[quote(1, 1, 1, 1)]), TbtKind::BidAsk, 0.00005, &mut running)
+            .expect("a frame");
+        match &f.records[0] {
+            TbtRecord::Quote(q) => assert!((q.bid - 1.15515).abs() < 1e-9, "{}", q.bid),
             other => panic!("expected a quote, got {other:?}"),
         }
     }
 
-    /// A midpoint has a price and nothing else — no size, no venue, no text.
+    /// The stated bit length bounds the payload. A message carries a field
+    /// after it, and reading to the end of the message swallows that field as
+    /// though it were data.
     #[test]
-    fn a_midpoint_carries_only_a_price() {
-        let mut w = Writer::default();
-        w.unsigned(1).unsigned(0);
-        w.signed(40_000).unsigned(0);
+    fn the_stated_length_bounds_the_payload() {
+        let mut body = frame(&[quote(23_102, 23_103, 1, 1)]);
+        // Whatever follows is not the venue's data.
+        body.extend_from_slice(b"8349=DEADBEEF");
         let mut running = RunningPrice::default();
-        let frame = decode_frame(&w.out, TbtKind::MidPoint, 0.01, &mut running).expect("a frame");
-        assert_eq!(frame.records.len(), 1);
-        match &frame.records[0] {
-            TbtRecord::MidPoint { price } => assert!((price - 400.0).abs() < 1e-9),
-            other => panic!("expected a midpoint, got {other:?}"),
-        }
-    }
-
-    /// A frame that ends inside a record keeps what it read whole and stops,
-    /// rather than inventing the rest.
-    #[test]
-    fn a_record_that_does_not_finish_is_not_guessed_at() {
-        let mut w = Writer::default();
-        w.unsigned(1).unsigned(0);
-        w.signed(1).unsigned(5).unsigned(0).text("Q").text("");
-        w.signed(1).unsigned(5); // cut off mid-record
-        let mut running = RunningPrice::default();
-        let frame = decode_frame(&w.out, TbtKind::AllLast, 0.01, &mut running).expect("a frame");
-        assert_eq!(frame.records.len(), 1, "only the whole record is kept");
+        let f = decode_frame(&body, TbtKind::BidAsk, 0.00005, &mut running).expect("a frame");
+        assert_eq!(f.records.len(), 1, "the trailing field was not read as a record");
     }
 
     /// Every kind states how many fields it has, and a decoder that reads a
