@@ -789,10 +789,10 @@ pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), String>
 
 #### `req_tick_by_tick_data`
 
-Subscribe to tick-by-tick data. **Not implemented.** Tick-by-tick is carried by a service of its own, which this client does not yet speak: the historical service serves chart, fundamentals, news and scanner requests, and nothing else. A subscription sent there is accepted and assigned a ticker id, and then no tick ever follows — verified against a paper account, where three subscriptions on two contracts were all acknowledged and all silent (ibx#404). Refused here rather than accepted, because a subscription that is taken and never delivers is worse than one that says so.
+Subscribe to every trade or every quote change on a contract. This used to refuse outright, on the reasoning that the feed rode a service of its own which this client could not reach. That reasoning was wrong. The feed rides the historical farm this client already reaches — the counterpart registers it there under the name "TickByTick" beside the five-second bars that already stream — and no list of services is involved. The account is entitled; a missing entitlement arrives as the venue's own refusal, not as silence. What was actually wrong was reading what came back. The subscription was always right, which is why the venue acknowledged it and assigned a ticker id, and then nothing could be made of the frames that followed.
 
 ```rust
-pub fn req_tick_by_tick_data( &self, _req_id: i64, _contract: &Contract, _tick_type: &str, _number_of_ticks: i32, _ignore_size: bool, ) -> Result<(), String>
+pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type: &str, number_of_ticks: i32, ignore_size: bool, ) -> Result<(), String>
 ```
 
 | Parameter | Type | Description |

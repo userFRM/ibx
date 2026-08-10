@@ -633,6 +633,17 @@ impl HmdsState {
             Some(b) => b,
             None => return,
         };
+        // Keep the frame as the venue sent it when asked to. The layout was
+        // read from the counterpart rather than from a capture, and a decoder
+        // checked only against frames it made up proves nothing about the ones
+        // the venue sends.
+        if std::env::var("IBX_CAPTURE_TBT").is_ok() {
+            // The whole message, not the part after the type tag: the binary
+            // payload sits among fields, and where it starts and ends is part
+            // of what has to be established.
+            let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
+            shared.market.note_unread_wire("tbt-frame", hex);
+        }
         let entries = tick_decoder::decode_ticks_35e(body);
         for entry in &entries {
             let instrument = match self.tbt_subscriptions.first() {

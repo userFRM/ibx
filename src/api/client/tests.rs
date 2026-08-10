@@ -848,18 +848,24 @@ fn a_session_from_another_account_is_not_offered() {
     assert!(!offered(&cfg("someone-else", false)), "nor a session of the other kind");
 }
 
-/// Tick-by-tick is carried by a service this client does not speak. A
-/// subscription sent to the historical service is acknowledged and then never
-/// delivers, so the surface says so rather than taking a request it cannot
-/// serve (ibx#404).
+/// Tick-by-tick used to be refused outright, on the reasoning that its feed
+/// rode a service this client could not reach. That reasoning was wrong: it
+/// rides the historical farm this client already reaches, and the account is
+/// entitled. The subscription is sent now, and what could not be made sense of
+/// was the reply rather than the request.
 #[test]
-fn req_tick_by_tick_data_refuses_rather_than_going_silent() {
-    let (client, rx, _shared) = test_client();
-    let err = client.req_tick_by_tick_data(10, &spy(), "BidAsk", 0, false)
-        .expect_err("the caller is told");
-    assert!(err.contains("not served to this session"), "{err}");
-    assert!(err.contains("refused"), "and says what stands in the way: {err}");
-    assert!(rx.try_recv().is_err(), "and nothing is sent that cannot be served");
+fn req_tick_by_tick_data_is_sent_rather_than_refused() {
+    let (client, _rx, _shared) = test_client();
+    // A kind the venue does not name is still refused, and refused for saying
+    // so rather than for the feed being unreachable.
+    let err = client
+        .req_tick_by_tick_data(10, &spy(), "Sideways", 0, false)
+        .expect_err("a kind that is not a kind is refused");
+    assert!(err.contains("no such kind"), "{err}");
+    assert!(
+        !err.contains("not served to this session"),
+        "the old reasoning is gone: {err}"
+    );
 }
 
 #[test]
