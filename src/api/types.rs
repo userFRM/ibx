@@ -106,12 +106,40 @@ pub struct Order {
     pub advanced_error_override: String,
     pub algo_id: String,
     pub allow_pre_open: bool,
+    /// Which auction an order competes in.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub auction_strategy: i32,
     pub auto_cancel_date: String,
     pub auto_cancel_parent: bool,
+    /// An offset stated in basis points, and what it is measured against.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub basis_points: f64,
+    /// See `basis_points`.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub basis_points_type: i32,
     pub block_order: bool,
+    /// Interest accrued on a bond since its last coupon.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub bond_accrued_interest: String,
     pub clearing_account: String,
     pub clearing_intent: String,
@@ -124,9 +152,30 @@ pub struct Order {
     pub deactivate_on_disconnect: bool,
     pub delta: f64,
     pub delta_neutral_aux_price: f64,
+    /// Where the hedging leg clears.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub delta_neutral_clearing_account: String,
+    /// How the hedging leg clears.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub delta_neutral_clearing_intent: String,
     pub delta_neutral_con_id: i32,
+    /// Where the hedging leg's shares are held.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub delta_neutral_designated_location: String,
     /// Whether the hedging leg opens or closes a position.
     ///
@@ -136,11 +185,39 @@ pub struct Order {
     /// against another client still reads back what it set.
     pub delta_neutral_open_close: String,
     pub delta_neutral_order_type: String,
+    /// Who settles the hedging leg.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub delta_neutral_settling_firm: String,
+    /// Whether the hedging leg is a short sale.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub delta_neutral_short_sale: bool,
+    /// Which short-sale slot the hedging leg uses.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub delta_neutral_short_sale_slot: i32,
     pub designated_location: String,
     pub discretionary_up_to_limit_price: bool,
+    /// Whether the hedge is priced automatically.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub dont_use_auto_price_for_hedge: bool,
     pub duration: i32,
     pub exempt_code: i32,
@@ -171,12 +248,47 @@ pub struct Order {
     pub not_held: bool,
     pub oca_type: i32,
     pub open_close: String,
+    /// Whether smart routing is declined.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub opt_out_smart_routing: bool,
     pub order_combo_legs: Vec<f64>,
+    /// Free-form options carried alongside an order.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub order_misc_options: Vec<TagValue>,
     pub order_ref: String,
+    /// Who originated the order.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub origin: i32,
+    /// Whether percentage limits are set aside.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub override_percentage_constraints: bool,
+    /// The venue's own id for a parent order.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub parent_perm_id: i64,
     pub pegged_change_amount: f64,
     pub percent_offset: f64,
@@ -184,8 +296,29 @@ pub struct Order {
     pub post_only: bool,
     pub post_to_ats: i32,
     pub professional_customer: bool,
+    /// The profit-taking leg's id.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub pt_order_id: i32,
+    /// The profit-taking leg's type.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub pt_order_type: String,
+    /// Whether a ladder's prices are varied.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub randomize_price: bool,
     pub randomize_size: bool,
     pub ref_futures_con_id: i32,
@@ -213,10 +346,38 @@ pub struct Order {
     pub scale_table: String,
     pub seek_price_improvement: bool,
     pub settling_firm: String,
+    /// The shareholder an order is placed for.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub shareholder: String,
     pub short_sale_slot: i32,
+    /// The stop-loss leg's id.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub sl_order_id: i32,
+    /// The stop-loss leg's type.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub sl_order_type: String,
+    /// Routing parameters for a smart-routed combination.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub smart_combo_routing_params: Vec<TagValue>,
     pub soft_dollar_tier_name: String,
     pub soft_dollar_tier_val: String,
@@ -235,6 +396,13 @@ pub struct Order {
     pub use_price_mgmt_algo: i32,
     pub volatility: f64,
     pub volatility_type: i32,
+    /// Which kind of preview is being asked for.
+    ///
+    /// **Not carried by this protocol.** No field of the counterpart's declares
+    /// a tag for it, among the three hundred and fifty-one that do. Its
+    /// siblings are among them, which is what makes the absence a finding
+    /// rather than a search that came up short. Taken here and kept, so an
+    /// order built against another client reads back what it set.
     pub what_if_type: i32,
 }
 
@@ -466,6 +634,8 @@ impl Order {
             soft_dollar_tier_name: self.soft_dollar_tier_name.clone(),
             soft_dollar_tier_val: self.soft_dollar_tier_val.clone(),
             algo_id: self.algo_id.clone(),
+            settling_firm: self.settling_firm.clone(),
+            discretionary_up_to_limit: self.discretionary_up_to_limit_price,
             display_size: self.display_size.max(0) as u32,
             min_qty: self.min_qty.max(0) as u32,
             hidden: self.hidden,
@@ -599,7 +769,10 @@ impl Order {
             || self.scale_auto_reset
             || self.scale_random_percent
             || self.scale_init_position != i32::MAX
-            || self.scale_init_fill_qty != i32::MAX;
+            || self.scale_init_fill_qty != i32::MAX
+            // The public name for varying a ladder's component sizes, which
+            // is the same thing the counterpart carries under one tag.
+            || self.randomize_size;
         if !asked {
             return None;
         }
@@ -613,7 +786,7 @@ impl Order {
             price_adjust_value: px(self.scale_price_adjust_value),
             price_adjust_interval: n(self.scale_price_adjust_interval),
             auto_reset: self.scale_auto_reset,
-            random_percent: self.scale_random_percent,
+            random_percent: self.scale_random_percent || self.randomize_size,
             init_position: if self.scale_init_position == i32::MAX { 0 } else { self.scale_init_position },
             init_fill_qty: if self.scale_init_fill_qty == i32::MAX { 0 } else { self.scale_init_fill_qty },
         }))
@@ -638,7 +811,10 @@ impl Order {
     /// order, and its own tests are what check the attribute block stays
     /// complete as fields are added.
     pub fn has_extended_attrs(&self) -> bool {
-        !self.soft_dollar_tier_name.is_empty()
+        !self.settling_firm.is_empty()
+            || self.discretionary_up_to_limit_price
+            || self.randomize_size
+            || !self.soft_dollar_tier_name.is_empty()
             || !self.soft_dollar_tier_val.is_empty()
             || !self.algo_id.is_empty()
             || self.display_size > 0
@@ -1448,6 +1624,9 @@ mod tests {
             ("soft_dollar_tier_name", |o| o.soft_dollar_tier_name = "Tier A".into()),
             ("soft_dollar_tier_val", |o| o.soft_dollar_tier_val = "45.5".into()),
             ("algo_id", |o| o.algo_id = "my-algo".into()),
+            ("settling_firm", |o| o.settling_firm = "FIRM".into()),
+            ("discretionary_up_to_limit_price", |o| o.discretionary_up_to_limit_price = true),
+            ("randomize_size", |o| o.randomize_size = true),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1481,6 +1660,7 @@ mod tests {
             block_order: _, auto_cancel_date: _, clearing_account: _, clearing_intent: _,
             primary_exchange: _, delta_neutral_contract: _,
             soft_dollar_tier_name: _, soft_dollar_tier_val: _, algo_id: _,
+            settling_firm: _, discretionary_up_to_limit: _,
             // Reached by `exercise_options` rather than by an order, so there is
             // no setter to list above and nothing for the predicate to name.
             exercise_action: _,
@@ -1498,5 +1678,32 @@ mod tests {
                 "{name} is carried by attrs() but does not route through the extended encoder",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod varying_a_ladder_tests {
+    use super::Order;
+
+    /// Varying a ladder's component sizes is one thing on the wire, and this
+    /// API has two names for it. Either one asks for it.
+    #[test]
+    fn either_name_varies_the_ladder() {
+        for set in [
+            (|o: &mut Order| o.randomize_size = true) as fn(&mut Order),
+            |o: &mut Order| o.scale_random_percent = true,
+        ] {
+            let mut order = Order { scale_init_level_size: 100, ..Default::default() };
+            set(&mut order);
+            let scale = order.attrs().scale.expect("a ladder was asked for");
+            assert!(scale.random_percent, "the ladder's sizes are not varied");
+        }
+    }
+
+    /// And an order that asks for neither leaves them alone.
+    #[test]
+    fn neither_name_leaves_the_ladder_even() {
+        let order = Order { scale_init_level_size: 100, ..Default::default() };
+        assert!(!order.attrs().scale.expect("a ladder").random_percent);
     }
 }
