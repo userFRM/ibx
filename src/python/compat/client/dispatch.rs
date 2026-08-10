@@ -309,8 +309,10 @@ impl EClient {
         // Drain TBT trades -> tickByTickAllLast
         let tbt_trades = shared.market.drain_tbt_trades();
         for trade in tbt_trades {
-            let req_id = self.core.instrument_to_req.lock().unwrap()
-                .get(&trade.instrument).copied().unwrap_or(-1);
+            // As the caller numbered it, from the record itself: a contract
+            // can carry several streams and the contract alone does not say
+            // which one this came from.
+            let req_id = trade.req_id;
             let price = trade.price as f64 / PRICE_SCALE_F;
             let size = trade.size as f64 / crate::types::QTY_SCALE as f64;
             // What the venue said about this print, not what a default says.
@@ -326,8 +328,7 @@ impl EClient {
         // Drain TBT quotes -> tickByTickBidAsk
         let tbt_quotes = shared.market.drain_tbt_quotes();
         for quote in tbt_quotes {
-            let req_id = self.core.instrument_to_req.lock().unwrap()
-                .get(&quote.instrument).copied().unwrap_or(-1);
+            let req_id = quote.req_id;
             let attrib = super::super::tick_types::TickAttribBidAsk {
                 bid_past_low: quote.bid_past_low,
                 ask_past_high: quote.ask_past_high,

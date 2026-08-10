@@ -160,6 +160,8 @@ fn main() {
         // Only this contract's. Draining everything and printing it reports
         // one contract's market under another's name, which is the very thing
         // being checked for.
+        // Which request each record says it arrived under. A contract can
+        // carry several streams, and the contract alone does not say which.
         let all_quotes = client.shared_state().market.drain_tbt_quotes();
         let all_trades = client.shared_state().market.drain_tbt_trades();
         let mine = client.instrument_of(resolved.con_id);
@@ -171,9 +173,13 @@ fn main() {
             .iter()
             .filter(|t| Some(t.instrument) == mine)
             .collect();
+        let requests: std::collections::BTreeSet<i64> = quotes
+            .iter()
+            .map(|q| q.req_id)
+            .chain(trades.iter().map(|t| t.req_id))
+            .collect();
         println!(
-            "        instrument={mine:?}  others in the drain: {} quote(s)",
-            all_quotes.len() - quotes.len()
+            "        instrument={mine:?}  asked as req {req}  records say {requests:?}",
         );
         println!(
             "  {what:<20} delivered: {} quote(s), {} trade(s)",

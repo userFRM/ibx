@@ -862,6 +862,7 @@ impl ClientCore {
     ) -> Result<InstrumentId, String> {
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::SubscribeTbt {
+            req_id,
             con_id,
             symbol: symbol.to_string(),
             sec_type: sec_type.to_string(),

@@ -33,6 +33,10 @@ pub(crate) struct TbtSubscription {
     pub(crate) query_id: String,
     /// Which of the streams it is, and so which layout its records have.
     pub(crate) kind: TbtType,
+    /// What the caller numbered this request. Stamped on every record, since
+    /// a contract can carry several streams and the contract alone does not
+    /// say which one a record came from.
+    pub(crate) caller_req_id: i64,
     /// The venue's own number for it, stated on every frame.
     pub(crate) venue_id: u64,
     /// The increment its prices move in.
@@ -231,7 +235,8 @@ impl HmdsState {
                     let (stype, venue) = market.order_routing(instrument);
                     let mts = market.min_tick_scaled(instrument);
                     self.send_tbt_subscribe(
-                        con_id, instrument, tbt_type, &stype, &venue, mts, hmds_conn, hb,
+                        dead.caller_req_id, con_id, instrument, tbt_type, &stype, &venue,
+                        mts, hmds_conn, hb,
                     )
                 }
                 None => log::warn!(
@@ -726,6 +731,10 @@ impl HmdsState {
             return;
         };
         let instrument = self.tbt_subscriptions[at].instrument;
+        // Which request this arrived under, as the caller numbered it. A
+        // contract can carry several streams, so the contract alone does not
+        // say which one a record belongs to.
+        let caller_req_id = self.tbt_subscriptions[at].caller_req_id;
         // The layout of a record is the layout of the stream it arrived on,
         // which is a property of the subscription and not of the contract.
         let kind = match self.tbt_subscriptions[at].kind {
@@ -760,6 +769,7 @@ impl HmdsState {
                 TbtRecord::Trade(t) => {
                     let trade = crate::types::TbtTrade {
                         instrument,
+                        req_id: caller_req_id,
                         price: (t.price as i64).saturating_mul(mts),
                         // A size is a count of what the venue said sizes move
                         // in for this contract — whole ones for a share,
@@ -778,6 +788,7 @@ impl HmdsState {
                 TbtRecord::Quote(q) => {
                     let quote = crate::types::TbtQuote {
                         instrument,
+                        req_id: caller_req_id,
                         bid: (q.bid as i64).saturating_mul(mts),
                         ask: (q.ask as i64).saturating_mul(mts),
                         bid_size: scaled_size(q.bid_size, size_tick),
@@ -825,6 +836,9 @@ impl HmdsState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_tbt_subscribe(
         &mut self,
+        // What the caller numbered this request, which every record it
+        // delivers is stamped with.
+        caller_req_id: i64,
         con_id: i64,
         instrument: InstrumentId,
         tbt_type: TbtType,
@@ -878,6 +892,7 @@ impl HmdsState {
             instrument,
             query_id: ticker_id,
             kind: tbt_type,
+            caller_req_id,
             venue_id: 0,
             // A move means nothing without the increment it is counted in.
             // The acknowledgement states the venue's own; this stands until it
@@ -1535,10 +1550,10 @@ mod tests {
         let mut hmds = HmdsState::new();
         let mut market = crate::engine::market_state::MarketState::new();
         let instrument = market.try_register(756733).expect("slot");
-        hmds.tbt_subscriptions.push(TbtSubscription { instrument, query_id: "tbt_0".to_string(), kind: TbtType::Last, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
+        hmds.tbt_subscriptions.push(TbtSubscription { instrument, query_id: "tbt_0".to_string(), kind: TbtType::Last, caller_req_id: 0, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
         // One with no contract behind it: it must be reported, not resubscribed
         // against a contract id the engine does not have.
-        hmds.tbt_subscriptions.push(TbtSubscription { instrument: 7, query_id: "tbt_1".to_string(), kind: TbtType::BidAsk, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
+        hmds.tbt_subscriptions.push(TbtSubscription { instrument: 7, query_id: "tbt_1".to_string(), kind: TbtType::BidAsk, caller_req_id: 0, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();

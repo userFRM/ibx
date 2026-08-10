@@ -3049,6 +3049,7 @@ fn process_msgs_dispatches_tbt_trade() {
     let (client, _rx, shared) = test_client();
     client.core.instrument_to_req.lock().unwrap().insert(0, 10);
     shared.market.push_tbt_trade(TbtTrade {
+        req_id: 10,
         // A hundred shares, held the way every quantity is held.
         instrument: 0, price: 150 * PRICE_SCALE, size: 100 * crate::types::QTY_SCALE,
         timestamp: 1700000000, exchange: "ARCA".into(), conditions: "".into(),
@@ -3065,6 +3066,7 @@ fn process_msgs_dispatches_tbt_quote() {
     let (client, _rx, shared) = test_client();
     client.core.instrument_to_req.lock().unwrap().insert(0, 10);
     shared.market.push_tbt_quote(TbtQuote {
+        req_id: 10,
         instrument: 0, bid: 150 * PRICE_SCALE, ask: 151 * PRICE_SCALE,
         bid_size: 1000 * crate::types::QTY_SCALE,
         ask_size: 2000 * crate::types::QTY_SCALE,
@@ -3078,18 +3080,40 @@ fn process_msgs_dispatches_tbt_quote() {
 }
 
 #[test]
-fn process_msgs_tbt_unknown_instrument_uses_neg1() {
+fn process_msgs_tbt_records_carry_the_request_they_arrived_under() {
     let (client, _rx, shared) = test_client();
-    // No mapping for instrument 5
+    // One contract, two streams: every trade, and every quote change. Looked
+    // up by contract, both would be handed whichever request was made last.
+    client.core.instrument_to_req.lock().unwrap().insert(0, 99);
     shared.market.push_tbt_trade(TbtTrade {
-        instrument: 5, price: 150 * PRICE_SCALE, size: 100,
+        req_id: 10,
+        instrument: 0, price: 150 * PRICE_SCALE, size: 100 * crate::types::QTY_SCALE,
         timestamp: 0, exchange: "".into(), conditions: "".into(),
         past_limit: false,
         unreported: false,
     });
+    shared.market.push_tbt_quote(TbtQuote {
+        req_id: 11,
+        instrument: 0, bid: 150 * PRICE_SCALE, ask: 151 * PRICE_SCALE,
+        bid_size: crate::types::QTY_SCALE, ask_size: crate::types::QTY_SCALE,
+        timestamp: 0,
+        bid_past_low: false,
+        ask_past_high: false,
+    });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
-    assert!(w.events.iter().any(|e| e.starts_with("tbt_last:-1:")));
+    assert!(
+        w.events.iter().any(|e| e.starts_with("tbt_last:10:")),
+        "the trade did not carry its own request: {:?}", w.events,
+    );
+    assert!(
+        w.events.iter().any(|e| e.starts_with("tbt_bidask:11:")),
+        "the quote did not carry its own request: {:?}", w.events,
+    );
+    assert!(
+        !w.events.iter().any(|e| e.contains(":99:")),
+        "a record was attributed by contract rather than by request",
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════

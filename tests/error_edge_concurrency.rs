@@ -714,10 +714,10 @@ fn shared_state_all_drains_empty_after_first_call() {
         status: OrderStatus::Filled, filled_qty: 1.0, remaining_qty: 0.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0 });
     ss.orders.push_cancel_reject(CancelReject { order_id: 1, instrument: 0,
         reject_type: 1, reason_code: 0, timestamp_ns: 0 });
-    ss.market.push_tbt_trade(TbtTrade { instrument: 0, price: PRICE_SCALE,
+    ss.market.push_tbt_trade(TbtTrade { req_id: 1, instrument: 0, price: PRICE_SCALE,
         size: 1, timestamp: 0, exchange: String::new(), conditions: String::new(),
         past_limit: false, unreported: false });
-    ss.market.push_tbt_quote(TbtQuote { instrument: 0, bid: PRICE_SCALE, ask: PRICE_SCALE,
+    ss.market.push_tbt_quote(TbtQuote { req_id: 1, instrument: 0, bid: PRICE_SCALE, ask: PRICE_SCALE,
         bid_size: 1, ask_size: 1, timestamp: 0,
         bid_past_low: false, ask_past_high: false });
 

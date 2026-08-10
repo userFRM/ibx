@@ -1236,6 +1236,13 @@ pub enum TbtType {
 #[derive(Debug, Clone)]
 pub struct TbtTrade {
     pub instrument: InstrumentId,
+    /// The request this arrived under, as the caller numbered it.
+    ///
+    /// Carried on the record rather than looked up from the contract: a
+    /// contract can have several tick streams at once — every trade, and
+    /// every quote change — and looking up by contract hands both of them
+    /// whichever request was made last.
+    pub req_id: i64,
     pub price: Price,
     pub size: i64,
     pub timestamp: u64,
@@ -1255,6 +1262,13 @@ pub struct TbtTrade {
 #[derive(Debug, Clone, Copy)]
 pub struct TbtQuote {
     pub instrument: InstrumentId,
+    /// The request this arrived under, as the caller numbered it.
+    ///
+    /// Carried on the record rather than looked up from the contract: a
+    /// contract can have several tick streams at once — every trade, and
+    /// every quote change — and looking up by contract hands both of them
+    /// whichever request was made last.
+    pub req_id: i64,
     pub bid: Price,
     pub ask: Price,
     pub bid_size: i64,
@@ -1488,7 +1502,7 @@ pub enum ControlCommand {
     /// Unsubscribe from market data for an instrument.
     Unsubscribe { instrument: InstrumentId },
     /// Subscribe to tick-by-tick data via historical data connection.
-    SubscribeTbt { con_id: i64, symbol: String, sec_type: String, exchange: String, tbt_type: TbtType, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
+    SubscribeTbt { req_id: i64, con_id: i64, symbol: String, sec_type: String, exchange: String, tbt_type: TbtType, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
     /// Unsubscribe from tick-by-tick data.
     UnsubscribeTbt { instrument: InstrumentId },
     /// Subscribe to per-contract news ticks via CCP (264=292).
