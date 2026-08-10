@@ -24,6 +24,8 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
     "FetchContractDetails",
     "CancelHeadTimestamp",
     "FetchMatchingSymbols",
+    "FetchCalendarMetaData",
+    "FetchCalendarEvents",
     "FetchScannerParams",
     "SubscribeScanner",
     "CancelScanner",

@@ -1112,6 +1112,39 @@ pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Str
 
 ---
 
+#### `req_wsh_meta_data`
+
+Ask what event types the corporate-events calendar carries. Has to be asked before events can be: the counterpart holds the answer and will not build an event request without it.
+
+```rust
+pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+
+**Returns:** `Result<(), String>`
+
+---
+
+#### `req_wsh_event_data`
+
+Ask the corporate-events calendar for events. A caller either names a contract or writes its own filter. The filter goes to the venue as written: the venue validates it, and rewriting it here would change what was asked.
+
+```rust
+pub fn req_wsh_event_data( &self, req_id: i64, query: crate::control::calendar::CalendarQuery, ) -> Result<(), String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `query` | `crate::control::calendar::CalendarQuery` |  |
+
+**Returns:** `Result<(), String>`
+
+---
+
 #### `req_sec_def_opt_params`
 
 Request option chain parameters. `fut_fop_exchange` names the venue for a futures option chain and is empty for an equity or index one.
@@ -1639,34 +1672,6 @@ pub fn req_user_info(&self, req_id: i64, wrapper: &mut impl Wrapper)
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `wrapper` | `&mut impl Wrapper` | Wrapper callback receiver for synchronous delivery. |
-
----
-
-#### `req_wsh_meta_data`
-
-Request WSH metadata. Not yet implemented.
-
-```rust
-pub fn req_wsh_meta_data(&self, req_id: i64)
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
-
----
-
-#### `req_wsh_event_data`
-
-Request WSH event data. Not yet implemented.
-
-```rust
-pub fn req_wsh_event_data(&self, req_id: i64)
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
 ---
 

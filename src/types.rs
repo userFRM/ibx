@@ -1537,6 +1537,10 @@ pub enum ControlCommand {
     CancelHeadTimestamp { req_id: u32 },
     /// Search for matching symbols via auth connection.
     FetchMatchingSymbols { req_id: u32, pattern: String },
+    /// Ask what corporate-event types the calendar carries.
+    FetchCalendarMetaData { req_id: u32 },
+    /// Ask the calendar for events, under a filter or for one contract.
+    FetchCalendarEvents { req_id: u32, query: Box<crate::control::calendar::CalendarQuery> },
     /// Request the option chain of an underlying via auth connection.
     FetchOptionParams {
         req_id: u32,

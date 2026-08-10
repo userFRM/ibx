@@ -391,6 +391,14 @@ impl EClient {
             wrapper.mkt_depth_exchanges(&depth_exchanges);
         }
 
+        // The calendar's answers, as the venue wrote them.
+        for (req_id, json) in self.shared.reference.drain_calendar_meta_data() {
+            wrapper.wsh_meta_data(req_id as i64, &json);
+        }
+        for (req_id, json) in self.shared.reference.drain_calendar_events() {
+            wrapper.wsh_event_data(req_id as i64, &json);
+        }
+
         // Matching symbols → symbol_samples
         for (req_id, matches) in self.shared.reference.drain_matching_symbols() {
             let descriptions: Vec<ContractDescription> = matches.iter().map(|m| {

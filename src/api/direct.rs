@@ -557,12 +557,25 @@ impl Client {
         self.inner.replace_fa(self.stream_id(), fa_data_type, cxml);
     }
 
-    pub fn wsh_metadata(&self) {
-        self.inner.req_wsh_meta_data(self.stream_id());
+    /// What event types the corporate-events calendar carries.
+    pub fn wsh_metadata(&self) -> Result<(), String> {
+        self.inner.req_wsh_meta_data(self.stream_id())
     }
 
-    pub fn wsh_event_data_by_contract(&self) {
-        self.inner.req_wsh_event_data(self.stream_id());
+    /// The calendar's events for one contract.
+    pub fn wsh_event_data_by_contract(&self, con_id: i64) -> Result<(), String> {
+        self.inner.req_wsh_event_data(
+            self.stream_id(),
+            crate::control::calendar::CalendarQuery { con_id: Some(con_id), ..Default::default() },
+        )
+    }
+
+    /// The calendar's events under a filter the caller writes.
+    pub fn wsh_event_data(
+        &self,
+        query: crate::control::calendar::CalendarQuery,
+    ) -> Result<(), String> {
+        self.inner.req_wsh_event_data(self.stream_id(), query)
     }
 
     /// When this session opened, in seconds since the epoch.

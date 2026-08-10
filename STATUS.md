@@ -55,8 +55,8 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Contract definitions | ✅ | Share, foreign share, index, bond, fund, option, future |
 | Option chains, symbol search | ✅ | |
 | Scanners, news, fundamentals | ✅ | |
-| Wall Street Horizon events | 🔬 | Needs a separate subscription to verify |
-| Implied volatility, option price | ⛔ | This protocol carries no request for either |
+| Corporate-events calendar | 🔬 | Both requests built and sent; the venue answers `Request not supported #155` on this connection and serves it on one this client does not yet open |
+| Implied volatility, option price | ⛔ | Not carried by this protocol at all: the counterpart solves both in its own process from a pricing model it ships |
 
 ---
 

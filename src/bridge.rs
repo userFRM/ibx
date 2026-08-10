@@ -747,6 +747,11 @@ pub struct ReferenceState {
     contract_details: Mutex<Vec<(u32, ContractDefinition)>>,
     contract_details_end: Mutex<Vec<u32>>,
     matching_symbols: Mutex<Vec<(u32, Vec<SymbolMatch>)>>,
+    /// The calendar's answers, as the venue wrote them. Two shapes on one
+    /// envelope — what event types exist, and the events themselves — kept
+    /// apart so a caller waiting on one is not handed the other.
+    calendar_meta_data: Mutex<Vec<(u32, String)>>,
+    calendar_events: Mutex<Vec<(u32, String)>>,
     /// A whole option chain answer: the underlying's conId, and one entry per
     /// scope the venue listed. The list is what the dispatcher reports before
     /// ending the request, so an empty one still ends it.
@@ -795,6 +800,8 @@ impl ReferenceState {
             contract_details: Mutex::new(Vec::with_capacity(16)),
             contract_details_end: Mutex::new(Vec::with_capacity(8)),
             matching_symbols: Mutex::new(Vec::with_capacity(8)),
+            calendar_meta_data: Mutex::new(Vec::new()),
+            calendar_events: Mutex::new(Vec::new()),
             option_params: Mutex::new(Vec::with_capacity(4)),
             scanner_params: Mutex::new(Vec::new()),
             scanner_data: Mutex::new(Vec::with_capacity(8)),
@@ -862,6 +869,14 @@ impl ReferenceState {
 
     pub fn drain_head_timestamps_for_dispatch(&self) -> Vec<(u32, HeadTimestampResponse)> {
         Self::drain_dispatchable(&self.head_timestamps)
+    }
+
+    pub fn drain_calendar_meta_data_for_dispatch(&self) -> Vec<(u32, String)> {
+        Self::drain_dispatchable(&self.calendar_meta_data)
+    }
+
+    pub fn drain_calendar_events_for_dispatch(&self) -> Vec<(u32, String)> {
+        Self::drain_dispatchable(&self.calendar_events)
     }
 
     pub fn drain_matching_symbols_for_dispatch(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
@@ -1006,6 +1021,14 @@ impl ReferenceState {
         self.contract_details_end.lock().unwrap().drain(..).collect()
     }
 
+    pub fn drain_calendar_meta_data(&self) -> Vec<(u32, String)> {
+        self.calendar_meta_data.lock().unwrap().drain(..).collect()
+    }
+
+    pub fn drain_calendar_events(&self) -> Vec<(u32, String)> {
+        self.calendar_events.lock().unwrap().drain(..).collect()
+    }
+
     pub fn drain_matching_symbols(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
         self.matching_symbols.lock().unwrap().drain(..).collect()
     }
@@ -1081,6 +1104,14 @@ impl ReferenceState {
 
     #[doc(hidden)] pub fn push_contract_details_end(&self, req_id: u32) {
         self.contract_details_end.lock().unwrap().push(req_id);
+    }
+
+    #[doc(hidden)] pub fn push_calendar_meta_data(&self, req_id: u32, json: String) {
+        self.calendar_meta_data.lock().unwrap().push((req_id, json));
+    }
+
+    #[doc(hidden)] pub fn push_calendar_events(&self, req_id: u32, json: String) {
+        self.calendar_events.lock().unwrap().push((req_id, json));
     }
 
     #[doc(hidden)] pub fn push_matching_symbols(&self, req_id: u32, matches: Vec<SymbolMatch>) {

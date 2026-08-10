@@ -1,5 +1,6 @@
 //! Gateway-local fakes and pure no-op stubs.
 
+use crate::python::compat::client::wire_req_id;
 use pyo3::exceptions::PyRuntimeError;
 use crate::types::ControlCommand;
 use pyo3::prelude::*;
@@ -56,7 +57,7 @@ impl EClient {
         under_price: f64, implied_vol_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = (req_id, contract, option_price, under_price, implied_vol_options);
-        unserviceable(self, req_id, "calculate_implied_volatility");
+        report_reason(self, req_id, MODELLED_IN_PROCESS);
         Ok(())
     }
 
@@ -66,7 +67,7 @@ impl EClient {
         under_price: f64, opt_prc_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = (req_id, contract, volatility, under_price, opt_prc_options);
-        unserviceable(self, req_id, "calculate_option_price");
+        report_reason(self, req_id, MODELLED_IN_PROCESS);
         Ok(())
     }
 
@@ -299,27 +300,76 @@ impl EClient {
 
     // ── WSH ──
 
-    fn req_wsh_meta_data(&self, req_id: i64) -> PyResult<()> {
-        let _ = req_id;
-        log::warn!("req_wsh_meta_data: not yet implemented — needs FIX capture");
-        Ok(())
+    /// What event types the corporate-events calendar carries. Answered on
+    /// `wshMetaData`.
+    fn req_wsh_meta_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        Self::send_control(py, &tx, ControlCommand::FetchCalendarMetaData {
+            req_id: wire_req_id(req_id)?,
+        })
     }
 
+    /// The calendar's events. Answered on `wshEventData`.
+    ///
+    /// `wsh_event_data` is the object the public API takes: a contract id, or
+    /// a filter the caller writes, plus the window and what to fill from.
     #[pyo3(signature = (req_id, wsh_event_data=None))]
-    fn req_wsh_event_data(&self, req_id: i64, wsh_event_data: Option<Py<PyAny>>) -> PyResult<()> {
-        let _ = (req_id, wsh_event_data);
-        log::warn!("req_wsh_event_data: not yet implemented — needs FIX capture");
-        Ok(())
+    fn req_wsh_event_data(&self, py: Python<'_>, req_id: i64, wsh_event_data: Option<Py<PyAny>>) -> PyResult<()> {
+        let mut query = crate::control::calendar::CalendarQuery::default();
+        if let Some(asked) = wsh_event_data.as_ref() {
+            let asked = asked.bind(py);
+            let text = |name: &str| -> String {
+                asked
+                    .getattr(name)
+                    .ok()
+                    .and_then(|v| v.extract::<String>().ok())
+                    .unwrap_or_default()
+            };
+            let flag = |name: &str| -> bool {
+                asked.getattr(name).ok().and_then(|v| v.extract::<bool>().ok()).unwrap_or(false)
+            };
+            let con_id = asked
+                .getattr("conId")
+                .ok()
+                .and_then(|v| v.extract::<i64>().ok())
+                .filter(|id| *id > 0);
+            query.con_id = con_id;
+            query.filter = text("filter");
+            query.start_date = text("startDate");
+            query.end_date = text("endDate");
+            query.fill_watchlist = flag("fillWatchlist");
+            query.fill_portfolio = flag("fillPortfolio");
+            query.fill_competitors = flag("fillCompetitors");
+            query.total_limit = asked
+                .getattr("totalLimit")
+                .ok()
+                .and_then(|v| v.extract::<i64>().ok())
+                .filter(|n| *n > 0 && *n < i64::MAX);
+        }
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        Self::send_control(py, &tx, ControlCommand::FetchCalendarEvents {
+            req_id: wire_req_id(req_id)?,
+            query: Box::new(query),
+        })
     }
 }
 
-/// A request this client cannot serve is answered, not ignored. The caller is
-/// waiting on a callback that will never come otherwise, and silence looks
-/// exactly like a slow gateway. Code 321 is what the venue answers a request
-/// it will not act on.
-fn unserviceable(client: &EClient, req_id: i64, call: &str) {
-    report_reason(client, req_id, &format!("{call} is not served by this client"));
-}
+/// Why solving an option for its volatility, or for its price, is not served.
+///
+/// Not for want of finding it on the wire: there is nothing on the wire to
+/// find. The counterpart solves both in its own process, with a pricing model
+/// it carries, seeded by the caller's number and the market data it already
+/// holds. No request leaves the machine and no answer comes back, so serving
+/// these means shipping a pricing model and the curves it needs, which is a
+/// different undertaking from carrying a message.
+///
+/// What the venue will model, it models on its own terms, and this client
+/// already asks for it: the option model arrives as its own tick.
+const MODELLED_IN_PROCESS: &str = "solving an option for its volatility or its price is not a \
+     request this protocol carries: the counterpart computes both in its own process from a \
+     pricing model it ships. The venue's own model is available as a market-data subscription \
+     instead";
+
 
 /// Answer a request this client cannot serve the way the reference client
 /// does: on the error callback, returning normally.
