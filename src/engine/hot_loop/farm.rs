@@ -7,7 +7,7 @@ use crate::protocol::connection::{Connection, Frame};
 use crate::protocol::fix;
 use crate::protocol::fixcomp;
 use crate::protocol::tick_decoder;
-use crate::types::{qty_from_wire, InstrumentId};
+use crate::types::{qty_from_counted, InstrumentId};
 use std::sync::mpsc::SyncSender;
 
 use super::{HeartbeatState, ReplayPacing, emit, fast_extract_msg_type, find_body_after_tag};
@@ -81,7 +81,7 @@ pub(crate) struct FarmState {
     /// Active depth subscriptions: (req_id, is_smart_depth).
     pub(crate) depth_subs: Vec<(u32, bool)>,
     /// Maps server_tag → (depth_req_id, is_smart_depth, min_tick) for active depth subscriptions.
-    pub(crate) depth_tag_to_req: Vec<(u32, u32, bool, f64)>,
+    pub(crate) depth_tag_to_req: Vec<(u32, u32, bool, f64, f64)>,
     /// SmartDepth fan-out: maps internal sub_req → user's original req_id.
     depth_fanout_map: Vec<(u32, u32)>,
     /// Primary depth subscription params for reconnect: (req_id, con_id, exchange, sec_type, num_rows, is_smart_depth).
@@ -150,6 +150,19 @@ fn build_trading_status_subscribe_tags(
 
 /// The trading-status tick's own number, in place of a request type.
 const TRADING_STATUS_REQUEST_TYPE: &str = "437";
+
+/// What the venue counts an instrument's sizes in, as its acknowledgement
+/// states it: the last field, after the increment prices move in.
+///
+/// A size on the wire is a count of these. Whole ones for a share, and
+/// hundred-millionths for a crypto — so a count taken as whole ones reports
+/// one of the two a hundred million times over. An acknowledgement that
+/// states none is counted in whole ones, which is what stating none means.
+fn trailing_size_increment(parts: &[&str]) -> Option<f64> {
+    let stated: f64 = parts.last()?.trim().parse().ok()?;
+    (stated > 0.0).then_some(stated)
+}
+
 
 /// What the option model goes by where an exchange would be named.
 const GREEKS_VENUE: &str = "IBVOL";
@@ -462,7 +475,7 @@ impl FarmState {
             while off + 3 < body.len() {
                 if body[off] == 0x00 {
                     let stag = ((body[off+1] as u32) << 16) | ((body[off+2] as u32) << 8) | (body[off+3] as u32);
-                    if self.depth_tag_to_req.iter().any(|(s, _, _, _)| *s == stag) {
+                    if self.depth_tag_to_req.iter().any(|(s, ..)| *s == stag) {
                         has_depth = true;
                         break;
                     }
@@ -498,6 +511,9 @@ impl FarmState {
             };
 
             let mts = context.market.min_tick_scaled(instrument);
+            // A size is a count of what the venue said sizes move in for this
+            // contract, the same way a price is a count of what prices move in.
+            let size_tick = context.market.size_tick(instrument);
             let q = context.market.quote_mut(instrument);
 
             // The extended 35=P format carries a full 8-bit byte width, so a
@@ -558,10 +574,10 @@ impl FarmState {
                 }
                 // Quantities are fixed-point, the same way prices are; every
                 // reader divides by `QTY_SCALE` on the way out (ibx#287).
-                tick_decoder::O_BID_SIZE => { q.bid_size = qty_from_wire(tick.magnitude); }
-                tick_decoder::O_ASK_SIZE => { q.ask_size = qty_from_wire(tick.magnitude); }
-                tick_decoder::O_LAST_SIZE => { q.last_size = qty_from_wire(tick.magnitude); }
-                tick_decoder::O_VOLUME => { q.volume = qty_from_wire(tick.magnitude); }
+                tick_decoder::O_BID_SIZE => { q.bid_size = qty_from_counted(tick.magnitude, size_tick); }
+                tick_decoder::O_ASK_SIZE => { q.ask_size = qty_from_counted(tick.magnitude, size_tick); }
+                tick_decoder::O_LAST_SIZE => { q.last_size = qty_from_counted(tick.magnitude, size_tick); }
+                tick_decoder::O_VOLUME => { q.volume = qty_from_counted(tick.magnitude, size_tick); }
                 // Type 20 carries Unix seconds. Guarded because the same
                 // type also carried a `yyyymmdd` value in capture, and a date
                 // read as an epoch is worse than no timestamp. Type 21 is a
@@ -634,7 +650,13 @@ impl FarmState {
                 .find(|(sub, _)| *sub == req_id)
                 .map(|(_, user)| *user)
                 .unwrap_or(req_id);
-            self.depth_tag_to_req.push((server_tag, user_req, is_smart, min_tick));
+            self.depth_tag_to_req.push((
+                server_tag,
+                user_req,
+                is_smart,
+                min_tick,
+                trailing_size_increment(&parts).unwrap_or(1.0),
+            ));
             log::info!("Depth ack: server_tag {server_tag} -> req_id {user_req} (levels={depth_levels}, smart={is_smart}, min_tick={min_tick})");
             return;
         }
@@ -652,6 +674,9 @@ impl FarmState {
 
         context.market.register_server_tag(server_tag, instrument);
         context.market.set_min_tick(instrument, min_tick);
+        if let Some(size_tick) = trailing_size_increment(&parts) {
+            context.market.set_size_tick(instrument, size_tick);
+        }
         log::info!("Subscribed instrument {instrument} -> server_tag {server_tag}, minTick {min_tick}");
     }
 
@@ -730,6 +755,9 @@ impl FarmState {
         if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
             context.market.register_server_tag(server_tag, instrument);
             context.market.set_min_tick(instrument, min_tick);
+            if let Some(size_tick) = trailing_size_increment(&parts) {
+                context.market.set_size_tick(instrument, size_tick);
+            }
             log::info!("Ticker setup: con_id {con_id} -> server_tag {server_tag}, minTick {min_tick}");
         }
     }
@@ -1060,7 +1088,7 @@ impl FarmState {
         self.depth_fanout_map.retain(|(_, user)| *user != req_id);
 
         // Clear server_tag mappings for this req_id
-        self.depth_tag_to_req.retain(|(_, rid, _, _)| *rid != req_id);
+        self.depth_tag_to_req.retain(|(_, rid, ..)| *rid != req_id);
 
         if let Some(conn) = farm_conn.as_mut() {
             // Send unsub for each fan-out sub_req (SmartDepth per-exchange)
@@ -1123,14 +1151,18 @@ impl FarmState {
             let stag = ((body[pos] as u32) << 16) | ((body[pos+1] as u32) << 8) | (body[pos+2] as u32);
             pos += 3;
 
-            let (req_id, is_smart, min_tick) = match self.depth_tag_to_req.iter()
-                .find(|(s, _, _, _)| *s == stag)
-                .map(|(_, r, sm, mt)| (*r, *sm, *mt))
+            let (req_id, is_smart, min_tick, size_tick) = match self.depth_tag_to_req.iter()
+                .find(|(s, ..)| *s == stag)
+                .map(|(_, r, sm, mt, st)| (*r, *sm, *mt, *st))
             {
                 Some(v) => v,
                 None => { continue; }
             };
 
+            // What the venue counts this contract's sizes in, the same way
+            // min_tick is what it counts its prices in. Stating none means
+            // whole ones.
+            let counted_in = if size_tick > 0.0 { size_tick } else { 1.0 };
             // Parse field tags, pushing a depth update each time we complete a price+size pair.
             let mut price: f64 = 0.0;
             let mut size: f64 = 0.0;
@@ -1172,13 +1204,13 @@ impl FarmState {
                     if pos + 2 > body.len() { break; }
                     let val = ((body[pos] as u16) << 8) | (body[pos+1] as u16);
                     pos += 2;
-                    if is_size_field { size = val as f64; has_size = true; }
+                    if is_size_field { size = val as f64 * counted_in; has_size = true; }
                     else { price = val as f64 * min_tick; has_price = true; }
                 } else {
                     if pos >= body.len() { break; }
                     let val = body[pos];
                     pos += 1;
-                    if is_size_field { size = val as f64 * 100.0; has_size = true; }
+                    if is_size_field { size = val as f64 * 100.0 * counted_in; has_size = true; }
                     else { price = val as f64 * min_tick; has_price = true; }
                 }
 
@@ -1222,13 +1254,15 @@ impl FarmState {
         let mut req_id: u32 = 0;
         let mut is_smart = false;
         let mut min_tick: f64 = 0.01;
+        let mut size_tick: f64 = 1.0;
         let mut pos = 2;
 
         let hdr_stag = ((body[2] as u32) << 8) | (body[3] as u32);
-        if let Some((r, sm, mt)) = self.lookup_depth_stag(hdr_stag) {
+        if let Some((r, sm, mt, st)) = self.lookup_depth_stag(hdr_stag) {
             req_id = r;
             is_smart = sm;
             min_tick = mt;
+            size_tick = st;
             pos = 4;
         }
         // If header stag didn't match, start scanning from pos=2;
@@ -1241,10 +1275,11 @@ impl FarmState {
             // Also detect 00 00 [2B stag] (3-byte stag with high byte 0x00, at message boundaries).
             if (b == 0x80 || b == 0x00) && pos + 4 <= body.len() && body[pos + 1] == 0x00 {
                 let candidate = ((body[pos + 2] as u32) << 8) | (body[pos + 3] as u32);
-                if let Some((r, sm, mt)) = self.lookup_depth_stag(candidate) {
+                if let Some((r, sm, mt, st)) = self.lookup_depth_stag(candidate) {
                     req_id = r;
                     is_smart = sm;
                     min_tick = mt;
+                    size_tick = st;
                     pos += 4;
                     continue;
                 }
@@ -1259,7 +1294,7 @@ impl FarmState {
                 let book_position = body[pos] as i32;
                 pos += 1;
 
-                if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick) {
+                if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick, size_tick) {
                     shared.market.push_depth_update(DepthUpdate {
                         req_id, position: book_position, market_maker: mm,
                         operation: if is_snapshot { 0 } else { 1 },
@@ -1282,7 +1317,7 @@ impl FarmState {
                     let book_position = body[pos] as i32;
                     pos += 1;
 
-                    if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick) {
+                    if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick, size_tick) {
                         shared.market.push_depth_update(DepthUpdate {
                             req_id, position: book_position, market_maker: String::new(),
                             operation: if is_snapshot { 0 } else { 1 },
@@ -1298,16 +1333,16 @@ impl FarmState {
         }
     }
 
-    /// Look up a depth server_tag → (req_id, is_smart, min_tick).
-    fn lookup_depth_stag(&self, stag: u32) -> Option<(u32, bool, f64)> {
+    /// Look up a depth server_tag → (req_id, is_smart, min_tick, size_tick).
+    fn lookup_depth_stag(&self, stag: u32) -> Option<(u32, bool, f64, f64)> {
         self.depth_tag_to_req.iter()
-            .find(|(s, _, _, _)| *s == stag)
-            .map(|(_, r, sm, mt)| (*r, *sm, *mt))
+            .find(|(s, ..)| *s == stag)
+            .map(|(_, r, sm, mt, st)| (*r, *sm, *mt, *st))
     }
 
     /// Parse one price + one size field tag pair. Returns (price, size, side, is_snapshot).
     /// Advances `pos` past consumed bytes.
-    fn parse_depth_fields(&self, body: &[u8], pos: &mut usize, min_tick: f64) -> Option<(f64, f64, i32, bool)> {
+    fn parse_depth_fields(&self, body: &[u8], pos: &mut usize, min_tick: f64, size_tick: f64) -> Option<(f64, f64, i32, bool)> {
         let mut price: f64 = 0.0;
         let mut size: f64 = 0.0;
         let mut side: i32 = 1; // default bid
@@ -1349,7 +1384,11 @@ impl FarmState {
             };
 
             if is_size_field {
-                size = val as f64;
+                // A size is a count of what the venue said sizes move in for
+                // this contract, the same way a price is a count of what
+                // prices move in. Counted as whole ones, a crypto's depth
+                // reads a hundred million times over.
+                size = val as f64 * if size_tick > 0.0 { size_tick } else { 1.0 };
                 has_size = true;
             } else {
                 price = val as f64 * min_tick;

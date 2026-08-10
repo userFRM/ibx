@@ -1976,8 +1976,7 @@ pub(crate) fn parse_tick_subscription_ack(xml: &str) -> Option<TickSubscriptionA
 /// A subscription the venue stated no size increment for is counted in whole
 /// ones, which is what it means to state none.
 fn scaled_size(counted: u64, size_tick: f64) -> i64 {
-    let per_unit = if size_tick > 0.0 { size_tick } else { 1.0 };
-    (counted as f64 * per_unit * crate::types::QTY_SCALE as f64).round() as i64
+    crate::types::qty_from_counted(counted as i64, size_tick)
 }
 
 #[cfg(test)]

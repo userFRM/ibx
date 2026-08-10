@@ -55,6 +55,12 @@ pub struct MarketState {
     min_ticks: [f64; MAX_INSTRUMENTS],
     /// Pre-computed min_tick * PRICE_SCALE as integer for hot-path price conversion.
     min_tick_scaled: [i64; MAX_INSTRUMENTS],
+    /// Per-instrument size increment, stated on the same acknowledgement as
+    /// the price increment. A size on the wire is a count of these, whole ones
+    /// for a share and hundred-millionths for a crypto, so a fixed count
+    /// reports one of the two wrongly. Zero means the venue stated none, which
+    /// is what counting in whole ones means.
+    size_ticks: [f64; MAX_INSTRUMENTS],
     /// Per-instrument symbol name. Flat array indexed by InstrumentId.
     symbols: [Option<String>; MAX_INSTRUMENTS],
     /// Per-instrument security type (API string, e.g. "STK"/"CASH"). Empty
@@ -89,6 +95,7 @@ impl MarketState {
             server_tag_to_instrument: HashMap::new(),
             min_ticks: [0.0; MAX_INSTRUMENTS],
             min_tick_scaled: [0; MAX_INSTRUMENTS],
+            size_ticks: [0.0; MAX_INSTRUMENTS],
             symbols: std::array::from_fn(|_| None),
             sec_types: std::array::from_fn(|_| None),
             exchanges: std::array::from_fn(|_| None),
@@ -250,6 +257,7 @@ impl MarketState {
         self.exchanges[instrument as usize] = None;
         self.min_ticks[instrument as usize] = 0.0;
         self.min_tick_scaled[instrument as usize] = 0;
+        self.size_ticks[instrument as usize] = 0.0;
         // The contract identity goes with the rest of the slot: a call left
         // behind here would match the put that reused it.
         self.option_keys[instrument as usize] = None;
@@ -410,6 +418,17 @@ impl MarketState {
     #[inline(always)]
     pub fn min_tick(&self, id: InstrumentId) -> f64 {
         self.min_ticks[id as usize]
+    }
+
+    /// What the venue counts this instrument's sizes in.
+    #[inline(always)]
+    pub fn size_tick(&self, id: InstrumentId) -> f64 {
+        self.size_ticks[id as usize]
+    }
+
+    /// Record what the venue counts this instrument's sizes in.
+    pub fn set_size_tick(&mut self, id: InstrumentId, size_tick: f64) {
+        self.size_ticks[id as usize] = size_tick;
     }
 
     /// Get pre-computed min_tick * PRICE_SCALE for integer price conversion.

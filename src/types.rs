@@ -42,6 +42,22 @@ pub fn qty_from_wire(magnitude: i64) -> Qty {
     magnitude.saturating_mul(QTY_SCALE)
 }
 
+/// Convert a counted size into the `QTY_SCALE` fixed-point form, where the
+/// venue stated what it counts this instrument's sizes in.
+///
+/// A size on the wire is a count of the increment the venue named on the
+/// subscription acknowledgement: whole ones for a share, hundred-millionths
+/// for a crypto. Counting every one as whole ones reports a crypto's size a
+/// hundred million times over. An instrument the venue stated no increment
+/// for is counted in whole ones, which is what stating none means.
+#[inline]
+pub fn qty_from_counted(counted: i64, size_tick: f64) -> Qty {
+    if size_tick <= 0.0 || size_tick == 1.0 {
+        return qty_from_wire(counted);
+    }
+    (counted as f64 * size_tick * QTY_SCALE as f64).round() as Qty
+}
+
 /// Snap a fixed-point price to the nearest multiple of `tick` (ties round
 /// away from zero). A non-positive tick means the grid is unknown and the
 /// price is returned unchanged. Pure integer math — exact on the fixed-point
@@ -2263,5 +2279,34 @@ mod tests {
     fn order_attrs_cash_qty_default_zero() {
         let attrs = OrderAttrs::default();
         assert_eq!(attrs.cash_qty, 0);
+    }
+}
+
+#[cfg(test)]
+mod counted_size_tests {
+    use super::{qty_from_counted, qty_from_wire, QTY_SCALE};
+
+    /// A share is counted in whole ones, and reads the way it always did.
+    #[test]
+    fn a_share_is_counted_in_whole_ones() {
+        assert_eq!(qty_from_counted(300, 1.0), qty_from_wire(300));
+        assert_eq!(qty_from_counted(300, 1.0), 300 * QTY_SCALE);
+    }
+
+    /// An instrument the venue stated no increment for is counted in whole
+    /// ones, which is what stating none means.
+    #[test]
+    fn no_stated_increment_is_whole_ones() {
+        assert_eq!(qty_from_counted(300, 0.0), qty_from_wire(300));
+    }
+
+    /// A crypto is counted in hundred-millionths. Taken as whole ones, a
+    /// hundredth of a coin reads as a million of them.
+    #[test]
+    fn a_crypto_is_counted_in_hundred_millionths() {
+        let hundredth_of_a_coin = 1_000_000;
+        let scaled = qty_from_counted(hundredth_of_a_coin, 1e-8);
+        assert_eq!(scaled, (0.01 * QTY_SCALE as f64) as i64);
+        assert_ne!(scaled, qty_from_wire(hundredth_of_a_coin));
     }
 }

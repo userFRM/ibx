@@ -31,7 +31,23 @@ fn subjects() -> Vec<(&'static str, Contract)> {
         // Small and volatile, where a venue is likeliest to have stopped
         // trading at some point in the session.
         ("a volatile small cap", stock("SIRI", "SMART")),
+        // A contract whose size increment is not one. The acknowledgement
+        // carries an increment for sizes beside the one for prices, and on
+        // every American listing both read as ordinary numbers, so nothing
+        // there tells the two apart.
+        ("a crypto", Contract {
+            symbol: "BTC".to_string(),
+            sec_type: "CRYPTO".to_string(),
+            exchange: "PAXOS".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
     ]
+}
+
+/// What every reader divides a quantity by.
+fn qty_scale() -> f64 {
+    ibx::types::QTY_SCALE as f64
 }
 
 fn main() {
@@ -140,9 +156,11 @@ fn main() {
         if let Some(instrument) = client.instrument_of(con_id) {
             let quote = client.shared_state().market.quote(instrument);
             println!(
-                "  {what:<24} bid {:.4} ask {:.4} halted={:?}",
+                "  {what:<24} bid {:.4} x {:.8}   ask {:.4} x {:.8}  halted={:?}",
                 quote.bid as f64 / 1e8,
+                quote.bid_size as f64 / qty_scale(),
                 quote.ask as f64 / 1e8,
+                quote.ask_size as f64 / qty_scale(),
                 quote.halted
             );
         }
