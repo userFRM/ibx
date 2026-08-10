@@ -163,22 +163,6 @@ impl EClient {
         wrapper.user_info(req_id, &id);
     }
 
-    // ── WSH ──
-
-    /// Request WSH metadata. Not yet implemented.
-    pub fn req_wsh_meta_data(&self, req_id: i64) {
-        self.report_reason(req_id, "req_wsh_meta_data is not wired. The event calendar has a \
-             path to the venue, but it is a separately subscribed data product and this \
-             session has no subscription to exercise it against");
-    }
-
-    /// Request WSH event data. Not yet implemented.
-    pub fn req_wsh_event_data(&self, req_id: i64) {
-        self.report_reason(req_id, "req_wsh_event_data is not wired. The event calendar has a \
-             path to the venue, but it is a separately subscribed data product and this \
-             session has no subscription to exercise it against");
-    }
-
     /// A request this client cannot serve is answered, not ignored. A caller
     /// waiting on a callback that will never come cannot tell that apart from
     /// a slow gateway, so it is told on the channel a venue uses to say it

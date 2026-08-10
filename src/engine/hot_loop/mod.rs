@@ -730,6 +730,16 @@ impl HotLoop {
                 ControlCommand::FetchMatchingSymbols { req_id, pattern } => {
                     self.ccp.send_matching_symbols_request(req_id, &pattern, &mut self.ccp_conn, &mut self.hb);
                 }
+                ControlCommand::FetchCalendarMetaData { req_id } => {
+                    self.ccp.send_calendar_meta_data_request(
+                        req_id, &mut self.ccp_conn, &mut self.hb, &self.shared,
+                    );
+                }
+                ControlCommand::FetchCalendarEvents { req_id, query } => {
+                    self.ccp.send_calendar_events_request(
+                        req_id, &query, &mut self.ccp_conn, &mut self.hb, &self.shared,
+                    );
+                }
                 ControlCommand::FetchOptionParams { req_id, symbol, fut_fop_exchange, underlying_sec_type, underlying_con_id } => {
                     self.ccp.send_option_params_request(
                         req_id, &symbol, &fut_fop_exchange, &underlying_sec_type, underlying_con_id,

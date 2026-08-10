@@ -462,6 +462,14 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "contract_details_end", (req_id as i64,));
         }
 
+        // The calendar's answers, as the venue wrote them.
+        for (req_id, json) in shared.reference.drain_calendar_meta_data_for_dispatch() {
+            call_wrapper!(self.wrapper, py, "wsh_meta_data", (req_id as i64, json.as_str()));
+        }
+        for (req_id, json) in shared.reference.drain_calendar_events_for_dispatch() {
+            call_wrapper!(self.wrapper, py, "wsh_event_data", (req_id as i64, json.as_str()));
+        }
+
         // Drain matching symbols -> symbolSamples
         let symbol_results = shared.reference.drain_matching_symbols_for_dispatch();
         for (req_id, matches) in symbol_results {

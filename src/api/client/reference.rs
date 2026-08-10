@@ -88,6 +88,30 @@ impl EClient {
         })
     }
 
+    /// Ask what event types the corporate-events calendar carries.
+    ///
+    /// Has to be asked before events can be: the counterpart holds the answer
+    /// and will not build an event request without it.
+    pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), String> {
+        self.send(ControlCommand::FetchCalendarMetaData { req_id: wire_req_id(req_id)? })
+    }
+
+    /// Ask the corporate-events calendar for events.
+    ///
+    /// A caller either names a contract or writes its own filter. The filter
+    /// goes to the venue as written: the venue validates it, and rewriting it
+    /// here would change what was asked.
+    pub fn req_wsh_event_data(
+        &self,
+        req_id: i64,
+        query: crate::control::calendar::CalendarQuery,
+    ) -> Result<(), String> {
+        self.send(ControlCommand::FetchCalendarEvents {
+            req_id: wire_req_id(req_id)?,
+            query: Box::new(query),
+        })
+    }
+
     /// Request option chain parameters. Matches `reqSecDefOptParams` in C++.
     ///
     /// `fut_fop_exchange` names the venue for a futures option chain and is

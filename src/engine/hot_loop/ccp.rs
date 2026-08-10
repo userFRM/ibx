@@ -353,6 +353,13 @@ pub(crate) struct CcpState {
     /// which one is given up on. Recorded only for a request that actually went
     /// out, and expired so a stale head cannot absorb a later reply (ibx#369).
     pub(crate) pending_matching_symbols: Vec<(u32, Instant)>,
+    /// Calendar requests waiting on an answer: the name this client gave the
+    /// request, which the answer echoes, and which of the two it was.
+    pub(crate) pending_calendar: Vec<(String, u32, bool, Instant)>,
+    /// Whether the metadata has been asked for. The counterpart holds it and
+    /// will not build an event request without it, so an event request sent
+    /// before it is one the venue is never asked in ordinary operation.
+    pub(crate) calendar_meta_asked: bool,
     /// In-flight option chain requests: (req_id, symbol, underlying conId,
     /// deadline). The request states no id of its own, so the symbol is what
     /// ties a reply back to it, and the conId is held because the callback
@@ -504,6 +511,8 @@ impl CcpState {
             hydrated_any: false,
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
+            pending_calendar: Vec::new(),
+            calendar_meta_asked: false,
             pending_option_params: Vec::new(),
             pending_kut_historical: Vec::new(),
             kut_ticker_map: std::collections::HashMap::new(),
@@ -674,6 +683,26 @@ impl CcpState {
                 let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 let ref_tag = parsed.get(&371).map(|s| s.as_str()).unwrap_or("?");
                 log::warn!("SessionReject: reason='{reason}' refTag={ref_tag}");
+                // A rejection naming a sub-protocol belongs to whatever was
+                // asked under it. The venue writes the number into the words,
+                // and it is the only thing on the message that says what was
+                // refused — there is no request id on a reject.
+                let names_the_calendar = reason
+                    .contains(&format!("#{}", crate::control::calendar::CALENDAR_SUB_PROTOCOL));
+                if names_the_calendar && !self.pending_calendar.is_empty() {
+                    for (_, req_id, ..) in self.pending_calendar.drain(..) {
+                        shared.reference.push_historical_error(
+                            req_id, 321,
+                            format!("the venue refused the calendar request: {reason}"),
+                        );
+                    }
+                    // Asked and refused is not asked and answered: an event
+                    // request after this would be built on metadata that never
+                    // arrived.
+                    self.calendar_meta_asked = false;
+                    return;
+                }
+
                 // ibx#229: a rejection of an in-flight contract-details
                 // request was warn-only — the caller saw neither error()
                 // nor end (a hang until the ibx#227 sweep, and before that
@@ -709,6 +738,12 @@ impl CcpState {
                             handle_pnl_response(msg, shared);
                         }
                         "152" => handle_pnl_prices(msg, shared),
+                        crate::control::calendar::CALENDAR_ANSWER => {
+                            self.handle_calendar_reply(&parsed, false, shared)
+                        }
+                        crate::control::calendar::CALENDAR_REFUSAL => {
+                            self.handle_calendar_reply(&parsed, true, shared)
+                        }
                         "186" => {
                             if let Some(matches) = crate::control::contracts::parse_matching_symbols_response(msg) {
                                 // A 186 frame is the real answer only when it
@@ -2833,6 +2868,130 @@ impl CcpState {
                 (6004, exchange),
             ]);
             hb.last_ccp_sent = Instant::now();
+        }
+    }
+
+    /// Ask what event types the corporate-events calendar carries.
+    ///
+    /// The answer is the same for everybody, so the request narrows nothing.
+    /// It has to be asked before events can be: the counterpart holds the
+    /// answer and will not build an event request without it.
+    pub(crate) fn send_calendar_meta_data_request(
+        &mut self,
+        req_id: u32,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+        shared: &SharedState,
+    ) {
+        use crate::control::calendar as cal;
+        let Some(conn) = ccp_conn.as_mut() else {
+            log::warn!("Calendar metadata req_id={req_id} not sent: no CCP transport");
+            shared.reference.push_historical_error(req_id, 504, "not connected".to_string());
+            return;
+        };
+        let key = format!("MetaDataRequest{req_id}");
+        let ts = chrono_free_timestamp();
+        let kind = cal::CALENDAR_META_DATA.to_string();
+        let json = cal::meta_data_request();
+        if let Err(e) = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, &cal::CALENDAR_SUB_PROTOCOL.to_string()),
+            (cal::TAG_CALENDAR_KEY, &key),
+            (cal::TAG_CALENDAR_REQUEST_KIND, &kind),
+            (cal::TAG_CALENDAR_JSON, &json),
+        ]) {
+            log::warn!("Calendar metadata req_id={req_id} not sent: {e}");
+            shared.reference.push_historical_error(req_id, 504, format!("not sent: {e}"));
+            return;
+        }
+        hb.last_ccp_sent = Instant::now();
+        self.calendar_meta_asked = true;
+        self.pending_calendar.push((key, req_id, true, Instant::now() + SECDEF_TIMEOUT));
+        log::info!("Sent calendar metadata request: req_id={req_id}");
+    }
+
+    /// Ask the calendar for events.
+    pub(crate) fn send_calendar_events_request(
+        &mut self,
+        req_id: u32,
+        query: &crate::control::calendar::CalendarQuery,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+        shared: &SharedState,
+    ) {
+        use crate::control::calendar as cal;
+        if !self.calendar_meta_asked {
+            // Not this client's rule. The counterpart holds the metadata and
+            // refuses to build an event request without it, so a request sent
+            // here anyway is one the venue is never asked in the counterpart's
+            // own operation.
+            shared.reference.push_historical_error(
+                req_id,
+                321,
+                "the calendar's event types have not been asked for; request them first"
+                    .to_string(),
+            );
+            return;
+        }
+        let json = match cal::event_data_request(query) {
+            Ok(json) => json,
+            Err(why) => {
+                shared.reference.push_historical_error(req_id, 321, why);
+                return;
+            }
+        };
+        let Some(conn) = ccp_conn.as_mut() else {
+            log::warn!("Calendar events req_id={req_id} not sent: no CCP transport");
+            shared.reference.push_historical_error(req_id, 504, "not connected".to_string());
+            return;
+        };
+        let key = format!("CalendarRequest{req_id}");
+        let ts = chrono_free_timestamp();
+        let kind = cal::CALENDAR_EVENT_DATA.to_string();
+        if let Err(e) = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, &cal::CALENDAR_SUB_PROTOCOL.to_string()),
+            (cal::TAG_CALENDAR_KEY, &key),
+            (cal::TAG_CALENDAR_REQUEST_KIND, &kind),
+            (cal::TAG_CALENDAR_JSON, &json),
+        ]) {
+            log::warn!("Calendar events req_id={req_id} not sent: {e}");
+            shared.reference.push_historical_error(req_id, 504, format!("not sent: {e}"));
+            return;
+        }
+        hb.last_ccp_sent = Instant::now();
+        self.pending_calendar.push((key, req_id, false, Instant::now() + SECDEF_TIMEOUT));
+        log::info!("Sent calendar events request: req_id={req_id}");
+    }
+
+    /// The calendar's answer, or its refusal.
+    ///
+    /// Both come back on the envelope the request went out on and name the
+    /// request this client gave them, which is the only thing that says which
+    /// caller is waiting: the answer carries nothing else of the request.
+    fn handle_calendar_reply(&mut self, parsed: &std::collections::HashMap<u32, String>, refused: bool, shared: &SharedState) {
+        use crate::control::calendar as cal;
+        let Some(key) = parsed.get(&cal::TAG_CALENDAR_KEY) else {
+            log::warn!("A calendar answer arrived naming no request; dropping it");
+            return;
+        };
+        let Some(at) = self.pending_calendar.iter().position(|(k, ..)| k == key) else {
+            log::warn!("A calendar answer named '{key}', which nothing here asked for");
+            return;
+        };
+        let (_, req_id, is_meta, _) = self.pending_calendar.remove(at);
+        if refused {
+            let said = parsed.get(&58).cloned().unwrap_or_else(|| "refused".to_string());
+            shared.reference.push_historical_error(req_id, 321, said);
+            return;
+        }
+        let json = parsed.get(&96).cloned().unwrap_or_default();
+        if is_meta {
+            shared.reference.push_calendar_meta_data(req_id, json);
+        } else {
+            shared.reference.push_calendar_events(req_id, json);
         }
     }
 
@@ -6741,5 +6900,112 @@ mod stated_account_value_tests {
         let stated = shared.portfolio.stated_account_values();
         assert_eq!(stated.len(), 1);
         assert_eq!(stated[0].1, "200");
+    }
+}
+
+#[cfg(test)]
+mod calendar_frame_tests {
+    use super::*;
+    use crate::bridge::SharedState;
+    use std::io::Read;
+
+    fn sent(of: impl FnOnce(&mut CcpState, &mut Option<Connection>, &mut HeartbeatState, &SharedState)) -> String {
+        let (conn, mut peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let mut ccp = CcpState::new();
+        of(&mut ccp, &mut conn, &mut hb, &shared);
+        let mut buf = [0u8; 8192];
+        let n = peer.read(&mut buf).unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|")
+    }
+
+    /// The metadata request, whole. Both calendar requests ride one message
+    /// type and one sub-protocol and are told apart by a number, so that
+    /// number is the whole of what says which was asked.
+    #[test]
+    fn the_metadata_request_goes_out_whole() {
+        let msg = sent(|ccp, conn, hb, shared| {
+            ccp.send_calendar_meta_data_request(7, conn, hb, shared)
+        });
+        assert!(msg.contains("35=U|"), "{msg}");
+        assert!(msg.contains("|6040=155|"), "the sub-protocol: {msg}");
+        assert!(msg.contains("|8081=100|"), "which of the two: {msg}");
+        assert!(msg.contains("|6556=MetaDataRequest7|"), "its own name, echoed back: {msg}");
+        assert!(msg.contains(r#""T":100"#), "{msg}");
+    }
+
+    /// Events cannot be asked for before the event types are. The counterpart
+    /// holds the metadata and will not build the request without it, so a
+    /// request sent anyway is one the venue is never asked in ordinary use.
+    #[test]
+    fn events_before_metadata_are_refused_here() {
+        let shared = SharedState::new();
+        let mut ccp = CcpState::new();
+        let query = crate::control::calendar::CalendarQuery {
+            con_id: Some(265598),
+            ..Default::default()
+        };
+        ccp.send_calendar_events_request(9, &query, &mut None, &mut HeartbeatState::new(), &shared);
+        let told = shared.reference.drain_historical_errors_for_dispatch();
+        assert_eq!(told.len(), 1, "the caller was left waiting");
+        assert!(told[0].2.contains("event types"), "{:?}", told[0]);
+    }
+
+    /// Once the event types have been asked for, the events go out.
+    #[test]
+    fn the_event_request_goes_out_after_the_metadata() {
+        let msg = sent(|ccp, conn, hb, shared| {
+            ccp.send_calendar_meta_data_request(7, conn, hb, shared);
+            let query = crate::control::calendar::CalendarQuery {
+                con_id: Some(265598),
+                ..Default::default()
+            };
+            ccp.send_calendar_events_request(8, &query, conn, hb, shared);
+        });
+        assert!(msg.contains("|8081=101|"), "the events request: {msg}");
+        assert!(msg.contains("|6556=CalendarRequest8|"), "{msg}");
+        assert!(msg.contains(r#""watchlist":["265598"]"#), "{msg}");
+    }
+
+    /// The answer names the request this client gave it, which is the only
+    /// thing that says which caller is waiting: it carries nothing else of
+    /// the request.
+    #[test]
+    fn an_answer_reaches_the_caller_that_asked() {
+        let shared = SharedState::new();
+        let mut ccp = CcpState::new();
+        let mut conn = Some(Connection::for_test().0);
+        ccp.send_calendar_meta_data_request(7, &mut conn, &mut HeartbeatState::new(), &shared);
+
+        let mut reply = std::collections::HashMap::new();
+        reply.insert(6556, "MetaDataRequest7".to_string());
+        reply.insert(96, r#"{"meta_data":{"event_types":[]}}"#.to_string());
+        ccp.handle_calendar_reply(&reply, false, &shared);
+
+        let answered = shared.reference.drain_calendar_meta_data_for_dispatch();
+        assert_eq!(answered.len(), 1, "the answer did not reach the caller");
+        assert_eq!(answered[0].0, 7);
+        assert!(answered[0].1.contains("event_types"));
+    }
+
+    /// A refusal is delivered too. Dropped, a caller waits on an answer the
+    /// venue has already said is not coming.
+    #[test]
+    fn a_refusal_reaches_the_caller_that_asked() {
+        let shared = SharedState::new();
+        let mut ccp = CcpState::new();
+        let mut conn = Some(Connection::for_test().0);
+        ccp.send_calendar_meta_data_request(7, &mut conn, &mut HeartbeatState::new(), &shared);
+
+        let mut reply = std::collections::HashMap::new();
+        reply.insert(6556, "MetaDataRequest7".to_string());
+        reply.insert(58, "not subscribed".to_string());
+        ccp.handle_calendar_reply(&reply, true, &shared);
+
+        let told = shared.reference.drain_historical_errors_for_dispatch();
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0].2, "not subscribed");
     }
 }

@@ -1350,7 +1350,7 @@ def req_user_info(req_id)
 
 #### `req_wsh_meta_data`
 
-Request Wall Street Horizon metadata. Not yet implemented.
+What event types the corporate-events calendar carries. Answered on `wshMetaData`.
 
 ```python
 def req_wsh_meta_data(req_id)
@@ -1364,7 +1364,7 @@ def req_wsh_meta_data(req_id)
 
 #### `req_wsh_event_data`
 
-Request Wall Street Horizon event data. Not yet implemented.
+The calendar's events. Answered on `wshEventData`.  `wsh_event_data` is the object the public API takes: a contract id, or a filter the caller writes, plus the window and what to fill from.
 
 ```python
 def req_wsh_event_data(req_id, wsh_event_data=None))
