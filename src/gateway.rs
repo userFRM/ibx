@@ -538,6 +538,14 @@ pub struct Gateway {
     pub raw_news_providers: String,
     /// Raw per-security-type order permissions from CCP logon tag 6652.
     pub raw_order_permissions: String,
+    /// What the venue says it has turned on for this session, as it states
+    /// them at logon (tag 6542).
+    ///
+    /// Several of the counterpart's behaviours are conditioned on these rather
+    /// than on any setting: whether it hands a Nasdaq listing back under its
+    /// older spelling is one. Kept so that what this client does can be told
+    /// apart from what it was permitted to do.
+    pub enabled_features: String,
     /// Raw enabled-feature token list from CCP logon tag 6542.
     pub raw_enabled_features: String,
     /// White branding ID from CCP logon (empty for standard accounts).
@@ -1731,6 +1739,7 @@ impl Gateway {
         let mut raw_family_codes = String::new();
         let mut raw_news_providers = String::new();
         let mut raw_order_permissions = String::new();
+        let mut enabled_features = String::new();
         let mut raw_enabled_features = String::new();
         let mut white_branding_id = String::new();
         let mut raw_misc_urls = String::new();
@@ -1837,6 +1846,10 @@ impl Gateway {
             if let Some(v) = fields.get(&6823) { keep_first(&mut raw_family_codes, v, "6823"); }
             if let Some(v) = fields.get(&6830) { keep_first(&mut raw_news_providers, v, "6830"); }
             if let Some(v) = fields.get(&6652) { keep_first(&mut raw_order_permissions, v, "6652"); }
+            if let Some(v) = fields.get(&6542) {
+                keep_first(&mut enabled_features, v, "6542");
+                log::info!("Enabled features: {v}");
+            }
             if let Some(v) = fields.get(&6542) { keep_first(&mut raw_enabled_features, v, "6542"); }
             if let Some(v) = fields.get(&6571) { keep_first(&mut white_branding_id, v, "6571"); }
             // Tag 6321: PRIV_LAB_MISC_URLS — try parsed fields first, then raw byte search.
@@ -2208,6 +2221,7 @@ impl Gateway {
             raw_family_codes,
             raw_news_providers,
             raw_order_permissions,
+            enabled_features,
             raw_enabled_features,
             white_branding_id,
             misc_urls: parse_misc_urls(&raw_misc_urls),

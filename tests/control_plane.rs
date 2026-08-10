@@ -54,7 +54,8 @@ fn contract_request_response_roundtrip() {
     assert_eq!(def.con_id, 265598);
     assert_eq!(def.symbol, "AAPL");
     assert_eq!(def.sec_type, SecurityType::Stock);
-    assert_eq!(def.primary_exchange, "NASDAQ");
+    // Handed back under the name the counterpart hands it back under.
+    assert_eq!(def.primary_exchange, "ISLAND");
     assert_eq!(def.currency, "USD");
     assert_eq!(def.min_tick, 0.01);
 

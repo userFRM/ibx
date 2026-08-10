@@ -707,6 +707,13 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&TAG_CURRENCY) {
         def.currency = v.clone();
     }
+    // The name a US stock on Nasdaq is handed back under. Set here, where the
+    // definition is read, so every path that hands one to a caller carries it
+    // rather than each remembering to. What goes back out routes under the
+    // venue's own name regardless: `exchange_to_fix` translates it.
+    let sec_type = def.sec_type.to_api_str();
+    def.exchange = delivered_exchange(&def.exchange, sec_type, &def.currency);
+    def.primary_exchange = delivered_exchange(&def.primary_exchange, sec_type, &def.currency);
     if let Some(v) = tags.get(&TAG_IB_LOCAL_SYMBOL) {
         def.local_symbol = v.clone();
     }
@@ -1674,12 +1681,15 @@ mod tests {
         assert_eq!(def.con_id, 265598);
         assert_eq!(def.symbol, "AAPL");
         assert_eq!(def.sec_type, SecurityType::Stock);
-        assert_eq!(def.exchange, "NASDAQ");
+        // Handed back under the name the counterpart hands it back under. What
+        // goes out still routes under the venue's own name.
+        assert_eq!(def.exchange, "ISLAND");
+        assert_eq!(exchange_to_fix(&def.exchange), "NASDAQ");
         assert_eq!(def.currency, "USD");
         assert_eq!(def.long_name, "APPLE INC");
         assert_eq!(def.min_tick, 0.01);
         assert_eq!(def.valid_exchanges, vec!["SMART", "NYSE", "ARCA"]);
-        assert_eq!(def.primary_exchange, "NASDAQ");
+        assert_eq!(def.primary_exchange, "ISLAND");
     }
 
     #[test]
@@ -2879,5 +2889,71 @@ mod size_table_tests {
         let def = parse_secdef_response(data).expect("the definition parses");
         assert_eq!(def.min_tick, 0.05);
         assert_eq!(def.size_increment, 0.0);
+    }
+}
+
+/// The name a US stock trading on Nasdaq is handed back under.
+///
+/// The counterpart hands it back under the older spelling, and a program
+/// written against it compares against that spelling. It does so when the
+/// venue has turned the translation on for the session — which it does — and
+/// when its own setting says to, which is its default.
+///
+/// Only US stocks: the older name means nothing for a future, and nothing
+/// outside the United States trades under it.
+pub fn delivered_exchange(exchange: &str, sec_type: &str, currency: &str) -> String {
+    let stock = sec_type.eq_ignore_ascii_case("STK");
+    let american = currency.eq_ignore_ascii_case("USD");
+    if stock && american && exchange.eq_ignore_ascii_case("NASDAQ") && island_for_nasdaq() {
+        return "ISLAND".to_string();
+    }
+    exchange.to_string()
+}
+
+/// Whether that older spelling is used, as the client was configured.
+fn island_for_nasdaq() -> bool {
+    // The counterpart's own default, and this client's: matching it is the
+    // point. Stated otherwise on the client to get the venue's own name.
+    std::env::var("IBX_ISLAND_FOR_NASDAQ")
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(true)
+}
+
+
+#[cfg(test)]
+mod delivered_name_tests {
+    use super::delivered_exchange;
+
+    /// A US stock on Nasdaq is handed back under the older spelling, the way
+    /// the counterpart hands it back — so a program written against that one
+    /// compares the same here.
+    #[test]
+    fn a_us_stock_on_nasdaq_is_handed_back_as_island() {
+        assert_eq!(delivered_exchange("NASDAQ", "STK", "USD"), "ISLAND");
+    }
+
+    /// Nothing else is. The older name means nothing for a future, and
+    /// nothing outside the United States trades under it.
+    #[test]
+    fn nothing_else_is_renamed() {
+        assert_eq!(delivered_exchange("NASDAQ", "FUT", "USD"), "NASDAQ");
+        assert_eq!(delivered_exchange("NASDAQ", "STK", "CAD"), "NASDAQ");
+        assert_eq!(delivered_exchange("ARCA", "STK", "USD"), "ARCA");
+        assert_eq!(delivered_exchange("", "STK", "USD"), "");
+    }
+
+    /// A caller that wants the venue's own name says so.
+    #[test]
+    fn the_venues_own_name_can_be_asked_for() {
+        unsafe { std::env::set_var("IBX_ISLAND_FOR_NASDAQ", "false") };
+        assert_eq!(delivered_exchange("NASDAQ", "STK", "USD"), "NASDAQ");
+        unsafe { std::env::remove_var("IBX_ISLAND_FOR_NASDAQ") };
+    }
+
+    /// And what goes out still routes under the venue's own name, whatever a
+    /// caller was handed: the older spelling reaches nothing.
+    #[test]
+    fn what_goes_out_still_routes_as_nasdaq() {
+        assert_eq!(super::exchange_to_fix("ISLAND"), "NASDAQ");
     }
 }
