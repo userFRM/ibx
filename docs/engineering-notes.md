@@ -1,4 +1,9 @@
-# Roadmap
+# Engineering notes
+
+Detail behind [STATUS.md](../STATUS.md): the per-call matrix, the wire coverage
+measurements, what was measured against the counterpart, and the reasoning
+behind fields this client does not send. Kept for whoever works on the protocol;
+the status board is the summary.
 
 Scope: a Rust client that connects to Interactive Brokers directly, with Python bindings. No Java runtime, no desktop application, no local gateway process.
 

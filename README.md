@@ -256,7 +256,7 @@ Jupyter notebooks adapted from [ib_async's examples](https://ib-api-reloaded.git
 
 ## Status
 
-[ROADMAP.md](ROADMAP.md) carries the capability matrix, the API surface status per call, asset class coverage, and the exit criteria for each milestone. Status is assigned from evidence: verified requires a passing live session phase.
+[STATUS.md](STATUS.md) carries the capability status. Status comes from evidence: a capability counts as working only once a live session has shown it, and one that is built but unproved says so. [docs/engineering-notes.md](docs/engineering-notes.md) holds the per-call matrix and the wire measurements behind it.
 
 ## License
 
