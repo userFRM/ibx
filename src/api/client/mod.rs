@@ -418,6 +418,11 @@ impl EClient {
     /// it, and the only way to check that claim rather than take it. A message
     /// deliberately not read — one carrying nothing a caller could use — is
     /// not listed here; those are named in the source with the reason.
+    /// Which slot a contract holds on this session, if it holds one.
+    pub fn instrument_of(&self, con_id: i64) -> Option<crate::types::InstrumentId> {
+        self.core.con_id_to_instrument.lock().unwrap().get(&con_id).copied()
+    }
+
     /// The session's own state, for reading what has arrived.
     pub fn shared_state(&self) -> &Arc<SharedState> {
         &self.shared

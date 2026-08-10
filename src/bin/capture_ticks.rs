@@ -115,14 +115,9 @@ fn main() {
         };
         println!("  {what:<20} conId={}", resolved.con_id);
 
-        // The increment a price moves in arrives with a market-data
-        // subscription, and a move on the tick stream is stated in whole ones
-        // of it — so without this the ticks decode to nothing usable.
-        if let Err(e) = client.req_mkt_data(100 + req, &resolved, "", false, false) {
-            println!("  {what:<20} market data refused: {e}");
-        }
-        std::thread::sleep(Duration::from_secs(3));
-
+        // No market-data subscription. The venue states the increments when it
+        // takes the tick subscription on, so asking for market data as well was
+        // only ever a way of learning something already on the way.
         if let Err(e) = client.req_tick_by_tick_data(req, &resolved, kind, 0, false) {
             println!("  {what:<20} the subscription was refused: {e}");
             continue;
@@ -136,8 +131,24 @@ fn main() {
         }
 
         // What actually reached a caller, which is the only thing that counts.
-        let quotes = client.shared_state().market.drain_tbt_quotes();
-        let trades = client.shared_state().market.drain_tbt_trades();
+        // Only this contract's. Draining everything and printing it reports
+        // one contract's market under another's name, which is the very thing
+        // being checked for.
+        let all_quotes = client.shared_state().market.drain_tbt_quotes();
+        let all_trades = client.shared_state().market.drain_tbt_trades();
+        let mine = client.instrument_of(resolved.con_id);
+        let quotes: Vec<_> = all_quotes
+            .iter()
+            .filter(|q| Some(q.instrument) == mine)
+            .collect();
+        let trades: Vec<_> = all_trades
+            .iter()
+            .filter(|t| Some(t.instrument) == mine)
+            .collect();
+        println!(
+            "        instrument={mine:?}  others in the drain: {} quote(s)",
+            all_quotes.len() - quotes.len()
+        );
         println!(
             "  {what:<20} delivered: {} quote(s), {} trade(s)",
             quotes.len(),
@@ -193,6 +204,22 @@ fn main() {
                 String::from_utf8_lossy(&bytes).contains("35=E")
             }).take(4) {
                 println!("        E {hex}");
+            }
+            // The acknowledgement, which is where the venue says what number
+            // it has given this subscription.
+            for hex in &frames {
+                let bytes: Vec<u8> = (0..hex.len() / 2)
+                    .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0))
+                    .collect();
+                let text = String::from_utf8_lossy(&bytes);
+                if text.contains("35=W") && !text.contains("<error>") {
+                    // Whole, on one line, with the separators made visible.
+                    let shown: String = text
+                        .chars()
+                        .map(|c| if c == '\u{1}' { '|' } else if c == '\n' { ' ' } else { c })
+                        .collect();
+                    println!("        ack: {shown}");
+                }
             }
             // The venue states refusals in plain words. Show them.
             for hex in &frames {

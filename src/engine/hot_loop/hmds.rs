@@ -24,6 +24,13 @@ pub(crate) struct HmdsState {
     /// Where each subscription's prices have got to. A move is stated from the
     /// last price, so this is carried for the life of the subscription.
     pub(crate) tbt_running: Vec<crate::protocol::tbt_stream::RunningPrice>,
+    /// The number the venue refers to each subscription by, as it stated when
+    /// it took the subscription on. Its numbering is its own and has nothing to
+    /// do with the id this client asked under.
+    pub(crate) tbt_venue_id: Vec<u64>,
+    /// What a size moves in, as the venue stated it for this subscription. A
+    /// share deals in whole ones; a crypto deals in hundred-millionths.
+    pub(crate) tbt_size_tick: Vec<f64>,
     /// The smallest increment each instrument's price moves in, already scaled.
     /// A move is stated in whole increments, so without this a move cannot be
     /// turned into a price at all.
@@ -144,6 +151,8 @@ impl HmdsState {
             tbt_subscriptions: Vec::new(),
             tbt_running: vec![Default::default(); MAX_INSTRUMENTS],
             tbt_min_tick: vec![0; MAX_INSTRUMENTS],
+            tbt_venue_id: vec![0; MAX_INSTRUMENTS],
+            tbt_size_tick: vec![0.0; MAX_INSTRUMENTS],
             tbt_price_state: [(0, 0, 0); MAX_INSTRUMENTS],
             next_hmds_query_id: 1000,
             disconnected: false,
@@ -369,6 +378,33 @@ impl HmdsState {
                         // aborts the hot loop exactly when debug logging is on.
                         xml_tag.get(..200).unwrap_or(xml_tag),
                     );
+                    // The venue answers a tick subscription by saying what it
+                    // has called it and, on the same breath, the increments its
+                    // prices and sizes move in. Everything needed to read what
+                    // follows is here, and none of it had been read: the
+                    // increment was being taken from a market-data
+                    // subscription that a caller need not have made, and the
+                    // number the venue gave was never learned at all.
+                    if let Some(ack) = parse_tick_subscription_ack(xml_tag) {
+                        if let Some(pos) = self
+                            .tbt_subscriptions
+                            .iter()
+                            .position(|(_, query_id, _)| *query_id == ack.query_id)
+                        {
+                            let instrument = self.tbt_subscriptions[pos].0;
+                            self.tbt_venue_id[instrument as usize] = ack.venue_id;
+                            self.tbt_min_tick[instrument as usize] =
+                                (ack.min_tick * crate::types::PRICE_SCALE as f64).round() as i64;
+                            self.tbt_size_tick[instrument as usize] = ack.size_min_tick;
+                            self.tbt_running[instrument as usize] = Default::default();
+                            log::info!(
+                                "tick subscription {} is number {} to the venue, moving in {} \
+                                 with sizes in {}",
+                                ack.query_id, ack.venue_id, ack.min_tick, ack.size_min_tick,
+                            );
+                        }
+                        return;
+                    }
                     if let Some(resp) = crate::control::historical::parse_bar_response(xml_tag) {
                         if let Some(pos) = self.pending_historical.iter().position(|(qid, _, _)| resp.query_id.starts_with(qid.as_str())) {
                             let (_, req_id, _) = self.pending_historical[pos];
@@ -664,9 +700,9 @@ impl HmdsState {
         // first contract's name — visibly, once two were running at once.
         let stated = crate::protocol::tbt_stream::frame_ticker_id(body);
         let found = stated.and_then(|id| {
-            self.tbt_subscriptions.iter().find(|(_, query_id, _)| {
-                query_id.rsplit('_').next().and_then(|n| n.parse::<u64>().ok()) == Some(id)
-            })
+            self.tbt_subscriptions
+                .iter()
+                .find(|(instrument, _, _)| self.tbt_venue_id[*instrument as usize] == id)
         });
         // A frame naming a subscription this session does not hold is not
         // attributed to another one.
@@ -692,6 +728,10 @@ impl HmdsState {
             return;
         }
 
+        // What sizes move in for this contract. Stated once, when the venue
+        // took the subscription on.
+        let size_tick = self.tbt_size_tick[instrument as usize];
+
         // Decoded in whole increments and scaled by whole numbers afterwards,
         // so a session of moves cannot drift the way adding fractions would.
         let running = &mut self.tbt_running[instrument as usize];
@@ -705,9 +745,11 @@ impl HmdsState {
                     let trade = crate::types::TbtTrade {
                         instrument,
                         price: (t.price as i64).saturating_mul(mts),
-                        // Every reader divides by the quantity scale, so a size
-                        // handed over unscaled reads ten thousand times too small.
-                        size: crate::types::qty_from_wire(t.size as i64),
+                        // A size is a count of what the venue said sizes move
+                        // in for this contract — whole ones for a share,
+                        // hundred-millionths for a crypto — and is then held in
+                        // the form every reader divides by.
+                        size: scaled_size(t.size, size_tick),
                         timestamp: frame.timestamp_ms,
                         exchange: t.exchange.clone(),
                         conditions: t.conditions.clone(),
@@ -722,8 +764,8 @@ impl HmdsState {
                         instrument,
                         bid: (q.bid as i64).saturating_mul(mts),
                         ask: (q.ask as i64).saturating_mul(mts),
-                        bid_size: crate::types::qty_from_wire(q.bid_size as i64),
-                        ask_size: crate::types::qty_from_wire(q.ask_size as i64),
+                        bid_size: scaled_size(q.bid_size, size_tick),
+                        ask_size: scaled_size(q.ask_size, size_tick),
                         timestamp: frame.timestamp_ms,
                         bid_past_low: q.bid_past_low,
                         ask_past_high: q.ask_past_high,
@@ -1880,5 +1922,111 @@ mod tests {
             }
         }
         acc
+    }
+}
+
+/// What the venue says when it takes on a tick subscription.
+///
+/// It names the subscription back, states the number it will refer to it by on
+/// every frame, and states the increments its prices and its sizes move in.
+/// Those increments are the contract's own and are not stated anywhere else on
+/// this connection.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TickSubscriptionAck {
+    /// The name this client asked under.
+    pub query_id: String,
+    /// The number the venue will use on every frame.
+    pub venue_id: u64,
+    /// What a price moves in.
+    pub min_tick: f64,
+    /// What a size moves in. A share deals in whole ones; a crypto deals in
+    /// hundred-millionths.
+    pub size_min_tick: f64,
+}
+
+/// Read that acknowledgement, or nothing if the reply is some other answer.
+pub(crate) fn parse_tick_subscription_ack(xml: &str) -> Option<TickSubscriptionAck> {
+    if !xml.contains("<ResultSetTickerId>") {
+        return None;
+    }
+    let field = |name: &str| -> Option<&str> {
+        let open = format!("<{name}>");
+        let close = format!("</{name}>");
+        let at = xml.find(&open)? + open.len();
+        let end = xml[at..].find(&close)? + at;
+        Some(xml[at..end].trim())
+    };
+    Some(TickSubscriptionAck {
+        query_id: field("id")?.to_string(),
+        venue_id: field("rtTickerId")?.parse().ok()?,
+        min_tick: field("minTick")?.parse().ok()?,
+        // A reply stating no size increment states none rather than one.
+        size_min_tick: field("sizeMinTick").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+    })
+}
+
+/// Turn a counted size into the form every reader divides by.
+///
+/// The venue counts a size in whatever it said sizes move in for the contract:
+/// whole ones for a share, hundred-millionths for a crypto. Treating every
+/// count as whole ones reports a crypto's size a hundred million times too
+/// large; treating it as anything fixed is the same mistake in another
+/// direction.
+///
+/// A subscription the venue stated no size increment for is counted in whole
+/// ones, which is what it means to state none.
+fn scaled_size(counted: u64, size_tick: f64) -> i64 {
+    let per_unit = if size_tick > 0.0 { size_tick } else { 1.0 };
+    (counted as f64 * per_unit * crate::types::QTY_SCALE as f64).round() as i64
+}
+
+#[cfg(test)]
+mod tick_ack_tests {
+    use super::{parse_tick_subscription_ack, scaled_size};
+
+    /// The venue's own answer, taken from a live session. It names the
+    /// subscription back, states the number it will use on every frame, and
+    /// states the increments prices and sizes move in — none of which is
+    /// stated anywhere else on this connection.
+    #[test]
+    fn the_acknowledgement_states_the_number_and_both_increments() {
+        let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\t<ResultSetTickerId>\n\
+                   \t\t<id>tbt_1</id>\n\t\t<rtTickerId>1</rtTickerId>\n\
+                   \t\t<minTick>0.00005</minTick>\n\t\t<sizeMinTick>1</sizeMinTick>\n\
+                   \t\t<eoq>false</eoq>\n\t</ResultSetTickerId>";
+        let ack = parse_tick_subscription_ack(xml).expect("the acknowledgement reads");
+        assert_eq!(ack.query_id, "tbt_1");
+        assert_eq!(ack.venue_id, 1);
+        assert_eq!(ack.min_tick, 0.00005);
+        assert_eq!(ack.size_min_tick, 1.0);
+    }
+
+    /// A crypto deals in hundred-millionths, and says so.
+    #[test]
+    fn a_contract_dealt_in_fractions_states_a_fractional_size_increment() {
+        let xml = "<ResultSetTickerId><id>tbt_2</id><rtTickerId>2</rtTickerId>\
+                   <minTick>0.25</minTick><sizeMinTick>0.00000001</sizeMinTick></ResultSetTickerId>";
+        let ack = parse_tick_subscription_ack(xml).expect("the acknowledgement reads");
+        assert_eq!(ack.venue_id, 2, "and its number is its own, not the one asked under");
+        assert_eq!(ack.size_min_tick, 0.00000001);
+    }
+
+    /// Some other reply on the same connection is not an acknowledgement.
+    #[test]
+    fn another_reply_is_not_read_as_an_acknowledgement() {
+        assert!(parse_tick_subscription_ack("<QueryError><id>tbt_1</id></QueryError>").is_none());
+        assert!(parse_tick_subscription_ack("<ResultSetBar><id>h_1</id></ResultSetBar>").is_none());
+    }
+
+    /// A size is a count of what the venue said sizes move in. Counting a
+    /// crypto's size in whole ones reports it a hundred million times too large.
+    #[test]
+    fn a_size_is_counted_in_what_the_venue_said_it_moves_in() {
+        // A share: whole ones, held in the form readers divide by.
+        assert_eq!(scaled_size(100, 1.0), 100 * crate::types::QTY_SCALE);
+        // A crypto: a hundred million counts is one whole unit.
+        assert_eq!(scaled_size(100_000_000, 0.00000001), crate::types::QTY_SCALE);
+        // Stating no increment means whole ones.
+        assert_eq!(scaled_size(5, 0.0), 5 * crate::types::QTY_SCALE);
     }
 }
