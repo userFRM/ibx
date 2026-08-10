@@ -4,6 +4,10 @@ A gateway is a process, and a process is configured by a file next to it and a
 window in front of it. This client is a library, so the same settings belong on
 the client where a caller can set them in code and read them back.
 
+The same settings are stated on the Rust client as ``EClientConfig.gateway``.
+This is the same list, reached the other way: both put the values where the
+code that needs them reads them, and both take effect for the whole process.
+
 Each setting below names the one it stands in for. A few of the gateway's have
 no meaning without a gateway — a port to listen on, the addresses allowed to
 reach it, how much heap the runtime may take — and those are named at the bottom
@@ -38,6 +42,7 @@ _SETTINGS: dict[str, tuple[str, str]] = {
     "locale": ("IBX_LOCALE", "the gateway's locale"),
     "build": ("IBX_BUILD", "the build the gateway announced itself as"),
     "version": ("IBX_VERSION", "the version the gateway announced itself as"),
+    "encoded": ("IBX_ENCODED", "the longer string it announced with them"),
     "hardware_id": ("IBX_HWID", "the machine identity the gateway presented"),
 }
 
@@ -94,3 +99,13 @@ def describe() -> str:
     for name, why in sorted(UNAVAILABLE.items()):
         lines.append(f"  {name:24s} {why}")
     return "\n".join(lines)
+
+
+def _names_match_the_rust_client() -> list[str]:
+    """The settings this module carries, for the test that checks both lists.
+
+    Two lists of the same settings drift the moment one is added to. The test
+    beside this compares them, so a setting added on one side and not the other
+    fails rather than being quietly available in one language.
+    """
+    return sorted(_SETTINGS)
