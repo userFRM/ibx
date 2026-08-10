@@ -1029,6 +1029,11 @@ impl FarmState {
         // slot — prices for the new contract then scale by the old one's tick
         // size, which reads as plausible rather than broken (ibx#289).
         self.md_req_to_instrument.retain(|(req_id, _)| !reqs.contains(req_id));
+        // And what was asked for under those requests, for the same reason: a
+        // number the venue hands to the next subscription would otherwise
+        // still be read as the tick this one asked for.
+        self.generic_tick_reqs.retain(|(req_id, _)| !reqs.contains(req_id));
+        self.generic_tick_tags.retain(|(_, _, held)| *held != instrument);
 
         // Take the option-model records before the connection is checked. With
         // the farm down there is nothing to send, and a record left behind
@@ -1488,6 +1493,11 @@ impl FarmState {
         self.depth_subs.clear();
         self.depth_tag_to_req.clear();
         self.depth_fanout_map.clear();
+        // The venue's numbers do not survive the connection that issued them,
+        // and one left behind would read the next subscription's frames as the
+        // tick the last one asked for.
+        self.generic_tick_reqs.clear();
+        self.generic_tick_tags.clear();
         context.market.clear_server_tags();
         context.market.zero_all_quotes();
         // Don't emit Event::Disconnected — auto-reconnect handles farm drops transparently.
@@ -1757,6 +1767,30 @@ mod news_tests {
         let at = msg.len() - article.len() - 1;
         msg[at] += 1;
         assert!(GenericTickFrame::read(&msg[5..]).is_none(), "the two lengths disagree");
+    }
+
+    /// The venue's numbers do not survive the connection that issued them. A
+    /// number left behind over a reconnect reads the next subscription's
+    /// frames as the tick the last one asked for — an article, say, delivered
+    /// as an option model, on a contract that never had one.
+    #[test]
+    fn a_dropped_connection_forgets_what_it_was_told() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        farm.generic_tick_tags.push((7, NEWS_REQUEST_TYPE, 0));
+        farm.generic_tick_reqs.push((1, NEWS_REQUEST_TYPE));
+
+        farm.handle_disconnect(&mut context, &None);
+
+        assert!(farm.generic_tick_tags.is_empty(), "a number from a dead connection is kept");
+        assert!(farm.generic_tick_reqs.is_empty());
+
+        let shared = SharedState::new();
+        farm.handle_generic_tick(&framed_generic_tick(7, &one_article()), &shared, &None);
+        assert!(
+            shared.market.drain_tick_news().is_empty(),
+            "a frame under the old number still delivered",
+        );
     }
 
     /// A payload too long to state in one byte states its length in two, and
