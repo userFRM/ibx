@@ -107,7 +107,10 @@ fn main() {
                 continue;
             }
         };
-        println!("  {what:<24} conId={} {}", resolved.con_id, resolved.exchange);
+        println!(
+            "  {what:<24} conId={} routed={} listed={}",
+            resolved.con_id, resolved.exchange, resolved.primary_exchange,
+        );
         // 292 is the news tick. Asked for here because what is being checked
         // is which connection the venue answers a generic tick on, and news is
         // the one this client asks for over the trading connection.
