@@ -14,7 +14,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | --- | :---: | --- |
 | `EClient` / `EWrapper` | ✅ | Reference-client shape. Both naming conventions resolve |
 | `ibx.IB` | ✅ | 90 / 90 calls of the async wrapper's surface |
-| `ibx::api::Client` | ✅ | 72 / 77; 5 have no counterpart here |
+| `ibx::api::Client` | ✅ | 77 / 77 callable; 3 report that they belong to a local process this client does not have |
 | `ibx.configure()` | ✅ | Gateway settings; 11 carried, 7 named as N/A |
 
 ## Market data

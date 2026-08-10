@@ -81,15 +81,15 @@ pub struct Client {
     connected_at: i64,
 }
 
-/// Calls the widely used Rust client has that this shape does not, and why.
+/// Calls the widely used Rust client has whose answer here is a different
+/// thing, and what they answer instead.
 ///
-/// Named rather than left out. Someone moving a program across will look for
-/// them, and "there is no such thing here" is an answer where silence is not.
+/// Named rather than left out. Every one of them can be called: a program
+/// moved across compiles and runs, and the two that cannot be answered say so
+/// on the spot rather than by not existing.
 pub const NO_COUNTERPART: &[(&str, &str)] = &[
-    ("server_version", "no local process announces a protocol version; this client speaks to the venue directly"),
     ("verify_message", "part of a handshake between a client and a local process, and there is no local process"),
     ("verify_request", "part of a handshake between a client and a local process, and there is no local process"),
-    ("client_id", "a session is identified by its login, not by a number chosen to share a local process"),
     ("cancel_contract_details", "a contract lookup answers here rather than streaming, so there is nothing to withdraw"),
 ];
 
@@ -105,6 +105,63 @@ impl Client {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or_default(),
         })
+    }
+
+    // ── Calls that exist because the other client talks to a local process ──
+
+    /// What this client speaks.
+    ///
+    /// In a client that talks to a local process, this is the version that
+    /// process announced. There is no local process here, so what it can
+    /// honestly report is the build this client states to the venue at logon
+    /// and is accepted under.
+    ///
+    /// It is not a negotiated protocol version and is on a different scale
+    /// from one. A program gating a feature on it will find every feature
+    /// available, which is the right answer: this client speaks the current
+    /// protocol, not an older one it has to ask permission for.
+    pub fn server_version(&self) -> i32 {
+        crate::config::ib_build().parse().unwrap_or(0)
+    }
+
+    /// Which client this is, of several sharing one local process.
+    ///
+    /// Nothing is shared here: a session is one login, and the venue knows it
+    /// by that. Zero is what a program with a single connection uses, and what
+    /// the reports coming back carry.
+    pub fn client_id(&self) -> i32 {
+        0
+    }
+
+    /// Withdraw a contract lookup.
+    ///
+    /// A lookup answers here rather than streaming, so by the time this can be
+    /// called there is nothing left running. It reports that rather than
+    /// pretending to stop something.
+    pub fn cancel_contract_details(&self, _req_id: i64) -> Result<(), String> {
+        Err(NO_COUNTERPART
+            .iter()
+            .find(|(name, _)| *name == "cancel_contract_details")
+            .map(|(_, why)| (*why).to_string())
+            .unwrap_or_default())
+    }
+
+    /// Begin the handshake a third-party program makes with a local process.
+    pub fn verify_request(&self, _api_name: &str, _api_version: &str) -> Result<(), String> {
+        Err(Self::no_local_process("verify_request"))
+    }
+
+    /// Continue that handshake.
+    pub fn verify_message(&self, _api_data: &str) -> Result<(), String> {
+        Err(Self::no_local_process("verify_message"))
+    }
+
+    fn no_local_process(call: &str) -> String {
+        NO_COUNTERPART
+            .iter()
+            .find(|(name, _)| *name == call)
+            .map(|(_, why)| (*why).to_string())
+            .unwrap_or_default()
     }
 
     /// The session underneath, for anything this shape does not carry.
@@ -715,16 +772,32 @@ mod tests {
         assert!(orders.iter().all(|o| o.oca_group == "grp-1" && o.oca_type == 1));
     }
 
-    /// A call with no counterpart is named with its reason, so someone moving
-    /// a program across finds an answer rather than silence.
+    /// A call whose answer here is a different thing says what it is, so
+    /// someone moving a program across finds an answer rather than silence.
     #[test]
-    fn a_call_with_no_counterpart_says_why() {
+    fn a_call_without_an_answer_says_why() {
         for (name, why) in NO_COUNTERPART {
             assert!(!name.is_empty());
             assert!(why.len() > 20, "{name} is named without a reason");
         }
         let named: Vec<&str> = NO_COUNTERPART.iter().map(|(n, _)| *n).collect();
-        assert!(named.contains(&"server_version"));
         assert!(named.contains(&"verify_request"));
+        // These two are answered now, so neither belongs on the list.
+        assert!(!named.contains(&"server_version"));
+        assert!(!named.contains(&"client_id"));
+    }
+
+    /// What this client speaks is a real number, and it is the build the venue
+    /// accepts it under. A program gating a feature on it finds every feature
+    /// available, which is the right answer for a client speaking the current
+    /// protocol.
+    #[test]
+    fn the_version_this_client_speaks_is_the_build_it_logs_on_with() {
+        let stated: i32 = crate::config::ib_build().parse().expect("a number");
+        assert!(stated > 0, "the build states nothing");
+        assert!(
+            stated > 176,
+            "a program gating on a protocol version would find features missing",
+        );
     }
 }
