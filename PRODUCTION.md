@@ -1,136 +1,186 @@
-# The road to production
+# Replacing the gateway: state and plan
 
-What "production ready" means here: a program that today runs against IB Gateway
-runs against this client instead, gets the same answers, and nothing it is told
-is invented. No Java runtime, no gateway process, no tool driving a window.
+**Goal.** A program that runs against IB Gateway today runs against this client
+instead, gets the same answers, and is told nothing that IBKR did not say. No
+Java runtime, no gateway process, no tool driving a window.
 
-Everything below is a state, not an intention. A line moves when a check passes,
-not when the code is written.
+**Scope of "1:1".** Four separate claims, kept apart because they fail apart:
 
-## How a line gets marked done
+| Claim | Meaning | State |
+| --- | --- | --- |
+| **Compiles** | Every call a program uses exists, under the right name, with the right arguments | Met |
+| **Reaches** | The request leaves the machine and the reply is read | 35 reach the venue, 26 answered from what it pushed, 3 missing, 4 unserviceable |
+| **True** | Nothing reported was invented, defaulted, or dropped | 11 inventions removed, 1 class of dropping left |
+| **Proved** | A live session showed it working | Partial — §5 |
 
-| Mark | Means |
-| --- | --- |
-| **wired** | The request reaches IBKR's servers and the reply is read into named fields |
-| **kept** | The venue states it and this client stores it, named or under its number |
-| **proved** | A live session against real servers showed it working |
-
-`wired` without `proved` is the usual state after an offline change, and is not
-finished. Three defects shipped this month passed fifteen hundred offline checks
-and were only found against real servers.
+A line moves when a check passes, not when code is written.
 
 ---
 
-## 1. Losing nothing the venue sends
+## 1. What is finished
 
-The rule: what the venue states is kept. A field with no name is kept under its
-number. A field is never dropped because nothing has got round to reading it.
+### 1.1 Nothing the venue sends is discarded
 
-| Item | State |
+The governing rule. A field with no name is kept under its number; a field is
+never dropped because nothing has got round to reading it.
+
+| Message | State | Evidence |
+| --- | --- | --- |
+| Contract definition | **kept, proved** | 49 unnamed fields on a share, 85 on a foreign share, 46 on a bond — from real replies |
+| Execution report | **kept** | ~132 of 173 tags were dropped; all kept under their numbers |
+| Account values | **kept** | A whitelist of ~18 keys survived; the rest went with no trace |
+| Repeated fields in one message | **kept, proved** | The parsed map held one value per tag — a share's definition carries 51 stated fields where it appeared to carry 37 |
+| Fields after a contract's identifier block | **kept** | Every contract in a multi-contract reply was truncated there |
+| Tick attributes | **kept** | Decoded off the wire, then replaced with `false` |
+
+### 1.2 Nothing is reported that IBKR did not state
+
+Eleven inventions found and removed. Each was reported with the same confidence
+as a real figure.
+
+| What was invented | What it broke |
 | --- | --- |
-| Every field a contract's definition states | **kept, proved** — 49 unnamed fields on a share, 85 on a foreign share, kept under their numbers |
-| Fields repeated in one message (rule bands, identifier groups) | **kept, proved** — the parsed map held one value per tag and lost the rest |
-| Fields stated after a contract's identifier block | **kept** — every contract in a multi-contract reply was truncated there |
-| A trading halt | **decoder written** — read from the venue's status mask, not the name it gives. Not yet subscribed: this arrives as a generic tick, and nothing here subscribes those yet |
-| Every field an execution report states | **kept** — what the handler does not name is kept under its number, read from the bytes so repeats survive |
-| Every field an order status states | **open** — same, not yet measured |
-| Account values outside a whitelist of ~18 | **kept** — every figure the venue states is kept under its own name and currency, whether or not anything names it |
-| Tick attributes on a trade or quote | **open** — decoded off the wire, then replaced with defaults presented as the venue's word |
-| Option greeks the reference client has no slot for | **kept** — decoded and dropped, matching the terminal's own surface; listed so the choice is visible |
+| Execution id and time | No fill could be reconciled against a broker statement — the id was the order number plus a process-local counter |
+| Smallest order size | Read from a price-precision field; a share claimed a millionth of a share |
+| Current time | The local clock, so skew always measured zero |
+| Exchange attribution | A venue list written here; every quote named the wrong exchange |
+| News providers | Eight invented entitlements the account may not hold |
+| Soft-dollar tiers | An invented list — itself a transcription of the venue's own reply, so it looked right |
+| Account currency | Dollars whatever the venue said |
+| Commission currency | Dollars, so a fill was costed in a currency it was not charged in |
+| Smallest price increment | A penny where the venue stated none — wrong for most futures |
+| Tick attributes | `false` for past-limit and unreported, whatever the venue set |
+| A request that silently did nothing | Binding externally-entered orders took its flag and returned |
 
-## 2. Saying nothing the venue did not say
+**Guarded.** `scripts/gen_wire_reach.py` runs in CI and fails if any request
+returns as though it acted when it did not. That category is held at zero.
 
-The rule: a value handed to a caller came from the venue, or is marked as not
-having. This is where the worst defects have been.
+### 1.3 Tick-by-tick
 
-| Item | State |
+Marked blocked for months on the belief that its feed rode an unreachable
+service. It did not. **Working end to end against real servers:** a currency
+pair at 1.15555 bid, 1.15560 ask, in real sizes, hundreds of quotes a minute,
+reaching a caller.
+
+Three assumptions were wrong, none visible from frames written here:
+
+- The continuation bit is **inverted** — a set high bit ends a number.
+- A **two-byte bit-length header** bounds the payload.
+- **Every record carries its own subscription id and timestamp**, not one per frame.
+
+The first cause was not the frame at all: asking for trades on a currency pair
+returns, in plain words, `No historical market data for EUR/CASH@IDEALPRO
+AllLast 0`. A currency pair has quotes and no trades.
+
+### 1.4 Client surfaces
+
+| Surface | State |
 | --- | --- |
-| An execution's id and time | **fixed** — were made up from the order number and a process-local counter; the id is what reconciles a fill against a broker statement |
-| The smallest order a venue will take | **fixed** — read from a price-precision field; a share claimed a millionth of a share |
-| The current time | **fixed** on both surfaces — answered from the local clock, which reports zero skew whatever the truth |
-| Which venue a quote's bid, ask and last came from | **fixed** — attributed through a table written in this client; the venue states the list itself |
-| A request that returns as though it acted | **fixed and guarded** — held at zero by a generator CI runs |
-| Account and commission currency | **fixed** — both as the venue states them, and empty where it stated none |
-| Soft-dollar tiers, news providers | **fixed** — both are stated on the logon and only there. The tier parser looked for a shape the venue does not send, so every entry failed and a list written here stood in |
-| A contract's tick size when the venue states none | **fixed** — unset rather than a penny, on a definition and on a subscription's acknowledgement alike |
-| The single letter a venue is known by | **accepted** — the venue names venues in full and states no abbreviation; this is client knowledge, and is recorded as such |
-| How a price is held | **diverges from the venue, knowingly** — see below |
+| `EClient` / `EWrapper` (reference client) | Carried; both naming conventions resolve on the client, the wrapper, and every object handed to a callback |
+| `ibx.IB` (asynchronous wrapper) | 90 of 90 public calls, checked against a written-out list rather than this client's own bookkeeping |
+| `ibx::api::Client` (Rust client) | 72 of 77; 5 have no counterpart here and say why |
+| Gateway settings | `ibx.configure()`; 11 carried, 7 named as having no counterpart |
 
-### How a price is held, and where that differs from the venue
+---
 
-The venue sends a price as a whole number of the contract's own smallest
-increment. The counterpart holds it that way too: the count, beside the
-increment it counts. That has no floor — a contract quoted in millionths works
-as well as one quoted in pennies, because the count is relative to the contract.
+## 2. What remains
 
-This client converts into one fixed scale of a hundred-millionth. That buys
-arithmetic between contracts without carrying an increment around, and costs a
-floor: a contract whose increment is finer than a hundred-millionth cannot be
-held, and a satoshi sits exactly on the limit. The limit is guarded at build
-time rather than discovered later.
+### 2.1 Data still dropped — 1
 
-Nothing about the scale is guessed from the currency or the kind of contract —
-the increment always comes from the venue, per contract. What is fixed is only
-the form a worked-out price is stored in.
-
-Closing the gap means holding the count and the increment together and
-converting at the edge, which touches every price this client handles. It is
-recorded here rather than done quietly, and is not urgent while no entitled
-contract quotes finer than the limit.
-
-## 3. The wire
-
-| Item | State |
+| Item | Work |
 | --- | --- |
-| 35 requests that reach the venue | **wired, proved** |
-| 26 answered from what the venue pushes on login | **wired, proved** |
-| Financial advisor pair, event-data metadata | **open** — should reach the venue and do not; the request has not been established |
-| Implied volatility, option price | **refused** — this protocol carries no request taking a caller's price or volatility |
-| Tick-by-tick | **wired, proved** — a live subscription delivers the market that is there: a currency pair at 1.15555 bid, 1.15560 ask, hundreds of quotes a minute, reaching a caller |
-| Tick-by-tick attributed to the right subscription | **fixed** — every frame states which subscription it belongs to, and that is what it is attributed to |
+| Order status | The same keep-everything change already made three times. ~½ session |
 
-## 4. A contract's fields
+### 2.2 Requests that do not reach IBKR — 3
 
-Settled against real replies for a share, a foreign share, an index, a bond, a
-fund, an option and a future.
+The wires are established from the counterpart, tag by tag. None is guessed.
 
-| Item | State |
+| Item | Wire |
 | --- | --- |
-| Underlying id, symbol, kind | **wired, proved** |
-| Last trade time, issue date, economic-value rule | **wired, proved** |
-| Settlement method, price and size precision | **wired** |
-| Size increment, suggested size increment | **wired** — a rule states two tables under the same tags; reading stopped at the count that opens the second |
-| Market rule ids | **open** — assembled per venue, not stated as a list |
-| Economic-value multiplier | **open** — no field for it on a definition; it arrives by another path |
+| `requestFA` | MsgType `U`, 6040=116, command in 6905, partition in 6158, XML in 6118 |
+| `replaceFA` | Same, command 3 |
+| `reqWshMetaData` / event data | MsgType `U`, 6040=155, name in 6556, type in 8081, JSON in 8082 |
+
+~½ session to build. **Neither can be verified on this account** — the advisor
+pair needs an advisor account, event data a separate subscription.
+
+### 2.3 Fields without names — 3
+
+All reachable today under their tag numbers; naming moves them from a number to
+a word.
+
+- `evMultiplier` — no field for it on a definition; it arrives by another path
+- `marketRuleIds` — assembled per venue, not stated as a list
+- Order-status fields, not yet measured
+
+### 2.4 Unserviceable — 4, correctly
+
+Implied volatility and option price take a caller-supplied price or volatility
+for the venue to work back from, and this protocol carries no such request. They
+report that rather than pretending. The advisor pair reports the same until §2.2
+lands.
+
+---
+
+## 3. Known divergences, accepted and recorded
+
+| Divergence | Why |
+| --- | --- |
+| A price is held against one fixed scale of a hundred-millionth | The venue holds a price as a count of the contract's own increment, which has no floor. Ours has one, and a satoshi sits exactly on it. Guarded at build time. Closing it touches every price in the client |
+| The single letter a venue is known by | The venue names venues in full and states no abbreviation. Client knowledge, not derivable from the name — NASDAQ is `Q`, not `N` |
+
+---
+
+## 4. What could not be established offline
+
+Recorded so nobody re-derives them.
+
+- **The combo side convention.** This client writes 6082 as the side on live
+  evidence — sent the other way, a long call spread was refused as
+  "Guaranteed-to-Lose". A static reading of the counterpart disagrees and is
+  incoherent with itself. One live capture of a two-leg spread settles it.
+- **The trading-status timestamp's unit.** Nothing in the counterpart reads it.
+- **Whether a size carries an implied decimal** for fractional instruments.
+
+---
 
 ## 5. Proving it
 
-Nothing here is finished until a live session shows it. The account permits one
-session at a time.
+**This is the binding constraint, not the code.**
+
+Live sessions have found, every time, defects no offline test could:
+
+| Found live | Would offline tests have caught it? |
+| --- | --- |
+| Every Rust answering call broken by a queue change | No — 1391 tests passed while a contract lookup could not complete |
+| Tick-by-tick's real cause, in the venue's own words | No |
+| Frames attributed to the first subscription | No — invisible with one subscription |
+| The soft-dollar format, in a log line | No |
+| Sizes handed over unscaled | No |
 
 | Item | State |
 | --- | --- |
-| Contract definitions across seven kinds | **proved** |
-| Session, login, reconnect, orders, fills, market data, historical | **proved** — earlier sessions |
-| Second factor | **one confirmation, no repeat coverage** |
-| Futures options, bond/warrant/fund/commodity market data | **open** — unit tested, never live |
-| Everything fixed today | **open** — offline only; needs a session at market hours |
+| Session, login, reconnect, orders, fills, market data, historical | Proved |
+| Contract definitions across seven kinds | Proved |
+| Tick-by-tick | Proved |
+| Second factor | One confirmation, no repeat coverage |
+| Futures options; bond, warrant, fund, commodity market data | Unit tested, never live |
+| Everything else fixed today | Offline only |
 
 ---
 
-## Order of work
+## 6. Plan
 
-1. **Keep everything on the remaining messages.** Executions are done. Order
-   status and account values still need what a definition and an execution now
-   have: nothing dropped, unnamed fields kept under their numbers. This closes a
-   whole class rather than a field, and it is how the definition's own gaps were
-   found.
-2. **Finish the market-rule block.** The grammar is established; the parser
-   stops at the size tables. This settles two published fields.
-3. **Stop the remaining invented values.** Currency, tick-size default, the
-   entitlement fallbacks, tick attributes.
-4. **Fix tick-by-tick attribution**, and make the Python surface refuse what
-   the Rust surface refuses rather than accepting a subscription that never
-   delivers.
-5. **Establish the advisor and event-data requests** from the gateway.
-6. **Prove it live**, at market hours, in one session.
+| # | Work | Size |
+| --- | --- | --- |
+| 1 | Order status keeps everything | ½ session |
+| 2 | Build the advisor and event-data wires | ½ session |
+| 3 | Name the remaining fields | ½ session |
+| 4 | **Live session at market hours** — prove everything since the last one | 1 session, then fixes |
+| 5 | Repeat 4 until a session finds nothing | 2–4 sessions |
+
+Steps 1–3 are days. Step 5 decides the date and cannot be compressed: today's
+rate was roughly four real defects per live round.
+
+**Not reachable on this account, ever:** the advisor pair and event data can be
+built correctly but never verified here.
