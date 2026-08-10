@@ -53,7 +53,7 @@ UNAVAILABLE: dict[str, str] = {
     "LocalServerPort": "no local socket to listen on; this client is the client",
     "LocalApiPort": "no local socket to listen on; this client is the client",
     "TrustedIPs": "nothing connects to this client, so nothing needs trusting",
-    "ApiOnly": "carried as connect(readonly=True), which is per session",
+    "ApiOnly": "stated per session: connect(readonly=True), or `readonly` on the Rust client",
     "MainWindow.Width": "no window",
     "MainWindow.Height": "no window",
     "vmoptions": "no runtime to size",
