@@ -127,7 +127,13 @@ fn is_plausible_sec_type(s: &str) -> bool {
 
 /// Exchange for a historical query, defaulting to the previous constant.
 fn hist_exchange(exchange: &str) -> String {
-    if exchange.is_empty() { "SMART".to_string() } else { exchange.to_string() }
+    if exchange.is_empty() {
+        return "SMART".to_string();
+    }
+    // Under the name the venue routes by. A caller passing back a contract it
+    // was handed carries the older spelling for a Nasdaq listing, which
+    // reaches nothing.
+    crate::control::contracts::exchange_to_fix(exchange).to_string()
 }
 
 /// A live five-second bar stream, in the shape its request needs to go again.

@@ -3049,7 +3049,8 @@ fn process_msgs_dispatches_tbt_trade() {
     let (client, _rx, shared) = test_client();
     client.core.instrument_to_req.lock().unwrap().insert(0, 10);
     shared.market.push_tbt_trade(TbtTrade {
-        instrument: 0, price: 150 * PRICE_SCALE, size: 100,
+        // A hundred shares, held the way every quantity is held.
+        instrument: 0, price: 150 * PRICE_SCALE, size: 100 * crate::types::QTY_SCALE,
         timestamp: 1700000000, exchange: "ARCA".into(), conditions: "".into(),
         past_limit: false,
         unreported: false,
@@ -3065,7 +3066,9 @@ fn process_msgs_dispatches_tbt_quote() {
     client.core.instrument_to_req.lock().unwrap().insert(0, 10);
     shared.market.push_tbt_quote(TbtQuote {
         instrument: 0, bid: 150 * PRICE_SCALE, ask: 151 * PRICE_SCALE,
-        bid_size: 1000, ask_size: 2000, timestamp: 1700000000,
+        bid_size: 1000 * crate::types::QTY_SCALE,
+        ask_size: 2000 * crate::types::QTY_SCALE,
+        timestamp: 1700000000,
         bid_past_low: false,
         ask_past_high: false,
     });
