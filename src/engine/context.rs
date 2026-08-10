@@ -788,8 +788,12 @@ impl Context {
         id
     }
 
-    /// Submit a fractional shares limit order. Qty is fixed-point, `QTY_SCALE`.
-    /// E.g., 0.5 shares = 5000, 1.25 shares = 12500.
+    /// Submit a fractional shares limit order.
+    ///
+    /// The quantity is fixed-point: shares multiplied by `QTY_SCALE`. Half a
+    /// share is `QTY_SCALE / 2`. Written out as a number, an example goes
+    /// stale the day the scale changes and quietly teaches a caller to submit
+    /// a fraction of what it meant.
     pub fn submit_limit_fractional(
         &mut self,
         instrument: InstrumentId,
