@@ -7,7 +7,7 @@
 //!
 //! Reads only. It places nothing.
 //!
-//!     IB_USERNAME=… IB_PASSWORD=… IBX_CAPTURE_TBT=1 cargo run --bin capture_ticks
+//!     IB_USERNAME=… IB_PASSWORD=… IBX_CAPTURE_WIRE=1 cargo run --bin capture_ticks
 
 use std::time::{Duration, Instant};
 
@@ -81,7 +81,7 @@ fn main() {
     }
     // Safety: set before anything reads it, and this binary is single-threaded
     // until the engine starts.
-    unsafe { std::env::set_var("IBX_CAPTURE_TBT", "1") };
+    unsafe { std::env::set_var("IBX_CAPTURE_WIRE", "1") };
 
     let username = std::env::var("IB_USERNAME").unwrap_or_default();
     let password = std::env::var("IB_PASSWORD").unwrap_or_default();
