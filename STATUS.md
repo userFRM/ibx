@@ -81,7 +81,7 @@ though it acted when it did not.
 | Limit | Detail |
 | --- | --- |
 | Price precision | Prices are held to a hundred-millionth. The venue holds a price as a count of the contract's own increment, which has no floor — a satoshi sits exactly on ours. Guarded at build time |
-| Venue letters | The venue names venues in full and states no abbreviation, so the single-letter codes are this client's knowledge |
+
 | Advisor and event data | Buildable, not verifiable without an advisor account and a WSH subscription |
 
 ## Open questions
