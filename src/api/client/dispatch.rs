@@ -120,7 +120,12 @@ impl EClient {
             let report = CommissionAndFeesReport {
                 exec_id: exec.exec_id.clone(),
                 commission_and_fees: commission_and_fees_f,
-                currency: "USD".into(),
+                // The currency the venue stated on this execution. It used to
+                // be the dollar whatever the venue said, so a fill on a
+                // contract denominated in anything else reported its cost in a
+                // currency it was not charged in. Empty where the venue stated
+                // none: a currency nobody stated is not the dollar by default.
+                currency: c.currency.clone(),
                 realized_pnl: f64::MAX,
                 yield_amount: f64::MAX,
                 yield_redemption_date: String::new(),
