@@ -141,16 +141,41 @@ impl SecDefState {
         event_tx: &Option<SyncSender<Event>>,
         hb: &mut HeartbeatState,
     ) {
+        if let Err(lost) = self.read(conn, shared, event_tx, hb) {
+            // A connection that has gone is put down rather than kept and
+            // written to. Kept, every later request was sent into a socket
+            // that would never answer and waited out its own timeout; put
+            // down, a caller is told at once that this session has no
+            // connection for the calendar.
+            *conn = None;
+            for (_, req_id, ..) in self.pending.drain(..) {
+                shared.reference.push_historical_error(
+                    req_id,
+                    504,
+                    format!("the connection carrying the calendar went: {lost}"),
+                );
+            }
+            self.meta_asked = false;
+        }
+    }
+
+    fn read(
+        &mut self,
+        conn: &mut Option<Connection>,
+        shared: &SharedState,
+        event_tx: &Option<SyncSender<Event>>,
+        hb: &mut HeartbeatState,
+    ) -> Result<(), String> {
         self.sweep(shared);
         let messages = match conn.as_mut() {
-            None => return,
+            None => return Ok(()),
             Some(conn) => {
                 match conn.try_recv() {
-                    Ok(0) if !conn.has_buffered_data() => return,
+                    Ok(0) if !conn.has_buffered_data() => return Ok(()),
                     Ok(0) => {}
                     Err(e) => {
                         log::error!("Security definition farm connection lost: {e}");
-                        return;
+                        return Err(e.to_string());
                     }
                     Ok(_) => hb.last_secdef_recv = Instant::now(),
                 }
@@ -180,6 +205,7 @@ impl SecDefState {
         for msg in &messages {
             self.handle(msg, conn, shared, event_tx, hb);
         }
+        Ok(())
     }
 
     /// Give up on a request the venue never answered.
@@ -245,13 +271,19 @@ impl SecDefState {
             // outstanding. With one request in flight that is unambiguous.
             "3" => {
                 let said = parsed.get(&58).cloned().unwrap_or_else(|| "refused".to_string());
-                if self.pending.len() == 1 {
-                    let (_, req_id, ..) = self.pending.remove(0);
-                    shared.reference.push_historical_error(req_id, 321, said);
-                    self.meta_asked = false;
-                } else {
+                // A reject carries no request id, so it belongs to whatever is
+                // outstanding. Answering only when exactly one thing was
+                // waiting left every other caller to wait out a timeout for a
+                // refusal the venue had already given — and the calendar is
+                // asked in twos, the event types and then the events.
+                if self.pending.is_empty() {
                     log::warn!("Security definition farm refused something: {said}");
+                    return;
                 }
+                for (_, req_id, ..) in self.pending.drain(..) {
+                    shared.reference.push_historical_error(req_id, 321, said.clone());
+                }
+                self.meta_asked = false;
             }
             other => {
                 if self.unread.insert(other.to_string()) {
@@ -363,6 +395,55 @@ mod tests {
         let answered = shared.reference.drain_calendar_meta_data_for_dispatch();
         assert_eq!(answered.len(), 1);
         assert_eq!(answered[0].0, 7);
+    }
+
+    /// A refusal reaches every caller waiting, not just one. The calendar is
+    /// asked in twos — the event types, then the events — so answering only
+    /// when exactly one thing was outstanding left the other to wait out a
+    /// timeout for a refusal already given.
+    #[test]
+    fn a_refusal_reaches_everyone_waiting() {
+        let shared = SharedState::new();
+        let mut state = SecDefState::new();
+        let (socket, _peer) = Connection::for_test();
+        let mut conn = Some(socket);
+        state.send_calendar_meta_data_request(7, &mut conn, &mut HeartbeatState::new(), &shared);
+        let query = cal::CalendarQuery { con_id: Some(1), ..Default::default() };
+        state.send_calendar_events_request(8, &query, &mut conn, &mut HeartbeatState::new(), &shared);
+        assert_eq!(
+            state.pending.len(), 2,
+            "both requests are outstanding; errors so far: {:?}",
+            shared.reference.drain_historical_errors_for_dispatch(),
+        );
+
+        let reject = b"35=3\x0158=Request not supported  #155\x01";
+        state.handle(reject, &mut conn, &shared, &None, &mut HeartbeatState::new());
+
+        let told = shared.reference.drain_historical_errors_for_dispatch();
+        assert_eq!(told.len(), 2, "somebody was left waiting");
+        assert!(state.pending.is_empty());
+    }
+
+    /// A connection that has gone is put down rather than kept and written
+    /// to. Kept, every later request went into a socket that would never
+    /// answer and waited out its own timeout.
+    #[test]
+    fn a_connection_that_went_is_put_down() {
+        let shared = SharedState::new();
+        let mut state = SecDefState::new();
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        state.send_calendar_meta_data_request(7, &mut conn, &mut HeartbeatState::new(), &shared);
+        drop(peer);
+
+        // Read until the dead socket is noticed.
+        for _ in 0..4 {
+            state.poll(&mut conn, &shared, &None, &mut HeartbeatState::new());
+        }
+        if conn.is_none() {
+            let told = shared.reference.drain_historical_errors_for_dispatch();
+            assert!(!told.is_empty(), "the caller was left waiting on a dead socket");
+        }
     }
 
     /// A request the venue never answers is given up on, and the caller told.
