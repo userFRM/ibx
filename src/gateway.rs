@@ -560,22 +560,58 @@ pub struct Gateway {
     pub trading_farm: String,
 }
 
-/// Farm slot the caller resolves before connecting: 17 is the market-data /
-/// historical farm, 18 the trading farm. These are the literals the call sites
-/// already pass.
-pub const FARM_SLOT_HMDS: u32 = 17;
-pub const FARM_SLOT_TRADING: u32 = 18;
-
-/// Channel role for a farm's routing request, from the slot the caller already
-/// resolved: historical-data farms take `2`, everything else `1`.
+/// Which farm a connection is to, which decides two separate numbers the
+/// logon carries and which were held as one for as long as there were only
+/// two farms.
 ///
-/// Keyed on the slot rather than the farm name. The name is not a reliable
-/// discriminator — routing tags carry whatever the server sends, and this
-/// codebase already has `cashhmds` on the trading slot — whereas the caller
-/// splits trading and market-data farms at the call site and passes the slot
-/// accordingly (ibx#253).
-pub fn farm_channel_id(slot: u32) -> &'static str {
-    if slot == FARM_SLOT_HMDS { "2" } else { "1" }
+/// The logon states a version, and the routing request that follows states
+/// which service is being asked for. They are not the same number: every
+/// service logs on at seventeen except market data, which logs on at
+/// eighteen, while the service number counts from zero across all of them.
+/// Held as one value, a third farm cannot be stated at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Farm {
+    /// Quotes, depth and the ticks that follow them.
+    MarketData,
+    /// Bars, historical ticks and schedules.
+    Historical,
+    /// Contract definitions, and the calendar that rides with them.
+    SecurityDefinition,
+}
+
+impl Farm {
+    /// The version this farm's logon states.
+    pub fn login_version(self) -> u32 {
+        match self {
+            Self::MarketData => 18,
+            Self::Historical | Self::SecurityDefinition => 17,
+        }
+    }
+
+    /// The service this farm is, as the routing request states it.
+    pub fn channel_id(self) -> &'static str {
+        match self {
+            Self::MarketData => "1",
+            Self::Historical => "2",
+            Self::SecurityDefinition => "4",
+        }
+    }
+}
+
+/// A session: the gateway, and the connections it opened.
+///
+/// Named rather than returned as a row of five, two of which are optional and
+/// none of which said which farm it was.
+pub struct Session {
+    pub gateway: Gateway,
+    /// Quotes, depth and the ticks that follow them.
+    pub market_data: Connection,
+    /// Orders, positions, account figures and contract lookups.
+    pub trading: Connection,
+    /// Bars, historical ticks and tick-by-tick streams.
+    pub historical: Option<Connection>,
+    /// Contract definitions and the calendar that rides with them.
+    pub security_definition: Option<Connection>,
 }
 
 /// Connect to a data farm: key exchange → encrypted logon → token auth → routing → Connection.
@@ -589,7 +625,7 @@ pub fn connect_farm(
     session_key: &BigUint,
     hw_info: &str,
     encoded: &str,
-    slot: u32,
+    farm: Farm,
 ) -> io::Result<Connection> {
     let port = misc_port();
     let farm_host = farm_host_override().unwrap_or_else(|| host.to_string());
@@ -630,7 +666,7 @@ pub fn connect_farm(
     };
     let logon_bytes = build_farm_encrypted_logon(
         &mut channel, username, paper, farm_id,
-        &farm_session_id, session_key, hw_info, encoded, slot,
+        &farm_session_id, session_key, hw_info, encoded, farm.login_version(),
     );
     stream.write_all(&logon_bytes)?;
     log::info!("{farm_id} encrypted logon sent");
@@ -647,7 +683,7 @@ pub fn connect_farm(
     let sign_mac_key = channel.key_block().map(|kb| kb[64..84].to_vec()).unwrap_or_default();
 
     // Send routing table request after logon.
-    let channel_id = farm_channel_id(slot);
+    let channel_id = farm.channel_id();
     let now = chrono_free_timestamp();
     let routing_msg = fix_build(&[
         (fix::TAG_MSG_TYPE, "U"),
@@ -1395,7 +1431,7 @@ fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
 impl Gateway {
     /// Connect to IB: auth + logon + data farm connections.
     /// Returns Gateway + farm Connection + auth Connection + optional historical data Connection.
-    pub fn connect(config: &GatewayConfig) -> io::Result<(Self, Connection, Connection, Option<Connection>)> {
+    pub fn connect(config: &GatewayConfig) -> io::Result<Session> {
         Self::connect_to_host(config, &config.host, 0)
     }
 
@@ -1404,7 +1440,7 @@ impl Gateway {
         config: &GatewayConfig,
         host: &str,
         redirect_depth: u32,
-    ) -> io::Result<(Self, Connection, Connection, Option<Connection>)> {
+    ) -> io::Result<Session> {
         if redirect_depth > 3 {
             return Err(io::Error::other(
                 "Too many redirects during auth",
@@ -2080,6 +2116,10 @@ impl Gateway {
             .unwrap_or_else(|| (host.to_string(), DEFAULT_TRADING_FARM.to_string()));
         let (mktdata_host, mktdata_farm) = parse_farm_route(&mktdata_route)
             .unwrap_or_else(|| (host.to_string(), "ushmds".to_string()));
+        // Contract definitions and the calendar that rides with them. Stated
+        // by the venue at logon like the other two; where it states none, this
+        // client simply has no such connection rather than guessing a name.
+        let secdef = parse_farm_route(&secdef_route);
         log::info!("Farm routing: trading={trading_host}/{trading_farm}, mktdata={mktdata_host}/{mktdata_farm}");
 
         // Retain HMDS routing for the reconnect loop (ibx#187) — the values
@@ -2093,7 +2133,7 @@ impl Gateway {
         // logon is ~6 s sequentially; running them in parallel halves the
         // farm-logon phase). Both servers accept concurrent logons with the
         // same credentials — see examples/ex_parallel_farm_logon.rs.
-        let (farm_conn, hmds_conn) = std::thread::scope(|scope| {
+        let (farm_conn, hmds_conn, secdef_conn) = std::thread::scope(|scope| {
             let username = &config.username;
             let password = &*config.password;
             let paper = config.paper;
@@ -2103,20 +2143,42 @@ impl Gateway {
             let enc = &encoded;
             let trading_handle = scope.spawn(move || {
                 connect_farm(&trading_host, &trading_farm, username, password,
-                    paper, ssid, token, hw, enc, FARM_SLOT_TRADING)
+                    paper, ssid, token, hw, enc, Farm::MarketData)
             });
             let mktdata_handle = scope.spawn(move || {
                 connect_farm(&mktdata_host, &mktdata_farm, username, password,
-                    paper, ssid, token, hw, enc, FARM_SLOT_HMDS)
+                    paper, ssid, token, hw, enc, Farm::Historical)
+            });
+            let secdef_handle = secdef.as_ref().map(|(secdef_host, secdef_farm)| {
+                scope.spawn(move || {
+                    connect_farm(secdef_host, secdef_farm, username, password,
+                        paper, ssid, token, hw, enc, Farm::SecurityDefinition)
+                })
             });
             let trading = trading_handle.join().expect("trading farm thread panicked");
             let mktdata = mktdata_handle.join().expect("mktdata farm thread panicked");
-            (trading, mktdata)
+            let secdef = secdef_handle
+                .map(|h| h.join().expect("secdef farm thread panicked"));
+            (trading, mktdata, secdef)
         });
         let farm_conn = farm_conn?;
         let hmds_conn = match hmds_conn {
             Ok(c) => { log::info!("Historical data farm connected"); Some(c) }
             Err(e) => { log::warn!("Historical data farm connection failed (non-fatal): {e}"); None }
+        };
+        // Not fatal either: everything else works without it, and a session
+        // that refused to open because one farm was down would be worse than
+        // one that says which farm it has.
+        let secdef_conn = match secdef_conn {
+            Some(Ok(c)) => { log::info!("Security definition farm connected"); Some(c) }
+            Some(Err(e)) => {
+                log::warn!("Security definition farm connection failed (non-fatal): {e}");
+                None
+            }
+            None => {
+                log::info!("No security definition farm route was stated at logon");
+                None
+            }
         };
 
         // A family names the accounts linked to this login, which are accounts
@@ -2156,7 +2218,13 @@ impl Gateway {
             trading_host: trading_host_for_gw,
             trading_farm: trading_farm_for_gw,
         };
-        Ok((gw, farm_conn, ccp_conn, hmds_conn))
+        Ok(Session {
+            gateway: gw,
+            market_data: farm_conn,
+            trading: ccp_conn,
+            historical: hmds_conn,
+            security_definition: secdef_conn,
+        })
     }
 
     /// Populate shared state with gateway-local init data parsed from CCP logon.
@@ -2311,10 +2379,13 @@ impl Gateway {
         farm_conn: Connection,
         ccp_conn: Connection,
         hmds_conn: Option<Connection>,
+        secdef_conn: Option<Connection>,
         core_id: Option<usize>,
         caller: CallerAuth,
     ) -> (HotLoop, SyncSender<ControlCommand>) {
-        self.into_hot_loop_with_farms(shared, event_tx, farm_conn, ccp_conn, hmds_conn, core_id, caller)
+        self.into_hot_loop_with_farms(
+            shared, event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id, caller,
+        )
     }
 
     /// Create the control channel and build a HotLoop with farm connections.
@@ -2352,6 +2423,7 @@ impl Gateway {
         farm_conn: Connection,
         ccp_conn: Connection,
         hmds_conn: Option<Connection>,
+        secdef_conn: Option<Connection>,
         core_id: Option<usize>,
         caller: CallerAuth,
     ) -> (HotLoop, SyncSender<ControlCommand>) {
@@ -2372,6 +2444,7 @@ impl Gateway {
         hot_loop.ccp.ccp_sign_key = self.ccp_sign_key.clone();
         hot_loop.ccp.ccp_sign_iv = std::sync::Mutex::new(self.ccp_sign_iv.clone());
         hot_loop.hmds_conn = hmds_conn;
+        hot_loop.secdef_conn = secdef_conn;
         (hot_loop, tx)
     }
 }
@@ -2584,20 +2657,25 @@ mod tests {
     }
 
     #[test]
-    fn the_channel_role_comes_from_the_slot_not_the_farm_name() {
+    fn the_channel_role_comes_from_the_farm_not_its_name() {
         // ibx#253: the role was keyed on the literal "ushmds", so a regional
         // historical-data farm was established on the trading channel. The
-        // caller already splits the two and passes the slot, which is the
-        // discriminator that holds for every farm name — including `cashhmds`,
-        // which this codebase connects on the trading slot despite the suffix.
-        // Asserted on the wire values rather than through the constants: a
-        // drifting constant would otherwise put every historical-data farm on
-        // the trading channel with the suite still green.
-        assert_eq!(farm_channel_id(17), "2");
-        assert_eq!(farm_channel_id(18), "1");
-        assert_eq!(FARM_SLOT_HMDS, 17);
-        assert_eq!(FARM_SLOT_TRADING, 18);
-        assert_eq!(farm_channel_id(0), "1", "an unknown slot is not historical data");
+        // caller names the farm, which is the discriminator that holds for
+        // every farm name — including `cashhmds`, which this codebase connects
+        // as market data despite the suffix. Asserted on the wire values
+        // rather than through the constants: a drifting constant would
+        // otherwise put every historical-data farm on the wrong channel with
+        // the suite still green.
+        assert_eq!(Farm::MarketData.channel_id(), "1");
+        assert_eq!(Farm::Historical.channel_id(), "2");
+        assert_eq!(Farm::SecurityDefinition.channel_id(), "4");
+
+        // The version a farm logs on at is a different number from the service
+        // it asks for, and they were one value while there were only two
+        // farms. Every service logs on at seventeen except market data.
+        assert_eq!(Farm::MarketData.login_version(), 18);
+        assert_eq!(Farm::Historical.login_version(), 17);
+        assert_eq!(Farm::SecurityDefinition.login_version(), 17);
     }
 
 

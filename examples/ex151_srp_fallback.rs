@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("== Connecting to paper {host} ...");
     let t0 = Instant::now();
-    let (gw, _farm, ccp, _hmds) = Gateway::connect(&cfg)?;
+    let ibx::gateway::Session { gateway: gw, market_data: _farm, trading: ccp, historical: _hmds, .. } = Gateway::connect(&cfg)?;
     println!(
         "== Connected in {:.1}s account={} session_id={}",
         t0.elapsed().as_secs_f64(),

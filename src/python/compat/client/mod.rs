@@ -24,7 +24,7 @@ use crate::client_core::ClientCore;
 
 /// What the reference client reports for a request made before connecting.
 const NOT_CONNECTED_CODE: i64 = 504;
-use crate::gateway::{Gateway, GatewayConfig};
+use crate::gateway::{Gateway, GatewayConfig, Session};
 use crate::types::*;
 use super::contract::Contract;
 
@@ -218,7 +218,7 @@ impl EClient {
         };
 
         let result = py.detach(|| Gateway::connect(&config));
-        let (gw, farm_conn, ccp_conn, hmds_conn) = result
+        let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = result
             .map_err(|e| PyRuntimeError::new_err(format!("Connection failed: {e}")))?;
 
         *self.account_id.lock().unwrap() = Some(gw.account_id.clone());
@@ -232,7 +232,7 @@ impl EClient {
         let connect_paper = config.paper;
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
         let (hot_loop, control_tx) = gw.into_hot_loop_with_farms(
-            shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, core_id,
+            shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id,
             crate::gateway::CallerAuth {
                 host: connect_host,
                 username: connect_username,

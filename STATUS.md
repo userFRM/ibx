@@ -55,7 +55,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Contract definitions | ✅ | Share, foreign share, index, bond, fund, option, future |
 | Option chains, symbol search | ✅ | |
 | Scanners, news, fundamentals | ✅ | |
-| Corporate-events calendar | 🔬 | Both requests built and sent; the venue answers `Request not supported #155` on this connection and serves it on one this client does not yet open |
+| Corporate-events calendar | ✅ | Live: the event types arrive, 179 KB of them, and an events query is answered |
 | Implied volatility, option price | ⛔ | Not carried by this protocol at all: the counterpart solves both in its own process from a pricing model it ships |
 
 ---

@@ -70,7 +70,7 @@ fn compat_suite() {
     let suite_start = Instant::now();
 
     let start = Instant::now();
-    let (mut gw, farm_conn, mut ccp_conn, hmds_conn) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: mut ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
     common::remember_recovery_auth(&gw, &config);
     let connect_time = start.elapsed();
@@ -161,7 +161,7 @@ fn compat_suite() {
         match ibx::gateway::connect_farm(
             &config.host, "usfarm", &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        18,
+        ibx::gateway::Farm::MarketData,
         ) {
             Ok(c) => { conns.farm = c; println!("  farm reconnected"); }
             Err(e) => { println!("  farm reconnect failed (may already be fresh): {e}"); }
@@ -169,7 +169,7 @@ fn compat_suite() {
         match ibx::gateway::connect_farm(
             &config.host, "ushmds", &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        17,
+        ibx::gateway::Farm::Historical,
         ) {
             Ok(c) => { conns.hmds = Some(c); println!("  hmds reconnected"); }
             Err(e) => { println!("  hmds reconnect failed (may already be fresh): {e}"); }
@@ -457,7 +457,7 @@ fn query_error_phase_live() {
     };
 
     println!("=== ibx#186 focused live test ===\n");
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
 
     let conns = Conns {
@@ -483,7 +483,7 @@ fn peg_bench_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
     let conns = Conns {
         farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -504,7 +504,7 @@ fn peg_bench_phase_live() {
 fn non_usd_order_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let mut conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     conns = multi_asset::phase_non_usd_order(conns);
@@ -518,7 +518,7 @@ fn non_usd_order_phase_live() {
 fn non_stock_order_phases_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let mut conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     conns = multi_asset::phase_forex_order(conns);
@@ -533,7 +533,7 @@ fn non_stock_order_phases_live() {
 fn options_order_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     let conns = multi_asset::phase_options_order(conns);
@@ -546,7 +546,7 @@ fn options_order_phase_live() {
 fn farm_recovery_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
-    let (gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let ibx::gateway::Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     let (data_resumed, healthy) = connection::phase_farm_recovers_with_credentials(gw, conns, &config);
@@ -559,7 +559,7 @@ fn farm_recovery_phase_live() {
 fn multi_condition_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     let conns = orders::phase_multi_condition_order(conns);
@@ -572,7 +572,7 @@ fn multi_condition_phase_live() {
 fn carried_instructions_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     let conns = orders::phase_carried_instructions_order(conns);
@@ -585,7 +585,7 @@ fn carried_instructions_phase_live() {
 fn iceberg_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     let conns = orders::phase_iceberg_order(conns);
@@ -598,7 +598,7 @@ fn iceberg_phase_live() {
 fn time_condition_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config).expect("connect");
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     let conns = orders::phase_time_condition_order(conns);
@@ -615,7 +615,7 @@ fn vwap_algo_phase_live() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
     };
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
     let conns = Conns {
         farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -647,7 +647,7 @@ fn box_top_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    let (mut gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
     let mut conns = Conns {
         farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -686,7 +686,7 @@ fn cross_session_recovery_phase_live() {
 
     // ─── Session A: place resting GTC LMT BUY 1 SPY @ $1 (far below market) ───
     println!("Session A: connecting + placing resting LMT GTC BUY 1 SPY @ $1");
-    let (gw_a, farm_a, ccp_a, hmds_a) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw_a, market_data: farm_a, trading: ccp_a, historical: hmds_a, .. } = Gateway::connect(&config)
         .expect("Session A: Gateway::connect failed");
     let account_id = gw_a.account_id.clone();
     drop(gw_a); // gateway state not needed after sockets are out
@@ -741,7 +741,7 @@ fn cross_session_recovery_phase_live() {
 
     // ─── Session B: fresh connect → expect 35=8 recovery push → cancel orderId ───
     println!("Session B: fresh Gateway::connect → expect recovery push for orderId={order_id}");
-    let (gw_b, farm_b, ccp_b, hmds_b) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw_b, market_data: farm_b, trading: ccp_b, historical: hmds_b, .. } = Gateway::connect(&config)
         .expect("Session B: Gateway::connect failed");
     assert_eq!(account_id, gw_b.account_id, "Account ID changed between sessions");
     drop(gw_b);
@@ -814,7 +814,7 @@ fn routing_table_probe() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
     };
-    let (gw, farm, mut ccp, hmds) = Gateway::connect(&config).expect("Gateway::connect failed");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: mut ccp, historical: hmds, .. } = Gateway::connect(&config).expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
     drop(gw);
 
@@ -954,7 +954,7 @@ fn cancel_by_perm_id_phase_live() {
     };
 
     println!("=== ibx#191 PR B: cancel_order_by_perm_id ===\n");
-    let (gw, farm, ccp, hmds) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
     drop(gw);
@@ -1074,7 +1074,7 @@ fn submit_ex_bracket_child_phase_live() {
     };
 
     println!("=== ibx#224/ibx#215: SubmitEx bracket child ===\n");
-    let (gw, farm, ccp, hmds) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
     drop(gw);
@@ -1191,7 +1191,7 @@ fn snap_to_tick_phase_live() {
     };
 
     println!("=== ibx#216: snap-to-tick ===\n");
-    let (gw, farm, ccp, hmds) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
     drop(gw);
@@ -1286,7 +1286,7 @@ fn timeout_sweeps_phase_live() {
     };
 
     println!("=== ibx#231/ibx#227: happy paths under the deadline sweeps ===\n");
-    let (gw, farm, ccp, hmds) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
     drop(gw);
@@ -1388,7 +1388,7 @@ fn reclaim_and_symbol_search_phase_live() {
     };
 
     println!("=== ibx#233/ibx#228: slot reclaim + symbol search ===\n");
-    let (gw, farm, ccp, hmds) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
     drop(gw);
@@ -1477,7 +1477,7 @@ fn rtt_ping_phase_live() {
 
     println!("=== ibx#158: RTT ping ===
 ");
-    let (gw, farm, ccp, hmds) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
     drop(gw);

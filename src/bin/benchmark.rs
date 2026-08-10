@@ -175,7 +175,7 @@ fn main() {
     // 1. Connection time
     println!("Connecting to IB...");
     let connect_start = Instant::now();
-    let (gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&config)
+    let ibx::gateway::Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
     let connect_time = connect_start.elapsed();
     println!("Connected in {:.3}s (account: {})", connect_time.as_secs_f64(), gw.account_id);
@@ -184,7 +184,7 @@ fn main() {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = sync_channel::<Event>(65536);
     let (mut hot_loop, control_tx) = gw.into_hot_loop(
-        shared, Some(event_tx), farm_conn, ccp_conn, hmds_conn, None,
+        shared, Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
         ibx::gateway::CallerAuth {
             host: config.host.clone(),
             username: config.username.clone(),

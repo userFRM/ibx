@@ -55,7 +55,7 @@ use crate::api::types::{
 };
 use crate::bridge::{Event, SharedState};
 use crate::client_core::ClientCore;
-use crate::gateway::{Gateway, GatewayConfig};
+use crate::gateway::{Gateway, GatewayConfig, Session};
 use crate::types::*;
 
 // Re-export as public type names for the API surface
@@ -92,6 +92,12 @@ pub use orders::parse_algo_params;
 pub struct EClientConfig {
     pub username: String,
     pub password: String,
+    /// Where to start the session.
+    ///
+    /// Leave it empty. A login is enough: the venue answers the first message
+    /// by naming which server this account belongs on, and the session moves
+    /// there — so what is named here is only where to knock. Name one for a
+    /// test, or to knock at a particular region.
     pub host: String,
     /// `false` enters the live second-factor approval gate on connect (blocking).
     /// `true` skips it. See the type-level docs.
@@ -208,7 +214,16 @@ fn gateway_config(config: &EClientConfig) -> GatewayConfig {
     GatewayConfig {
         username: config.username.clone(),
         password: zeroize::Zeroizing::new(config.password.clone()),
-        host: config.host.clone(),
+        // A caller with a login should not have to know a hostname. The one
+        // it would name is where every session starts anyway, and the venue
+        // answers the first message by naming which server to go to — every
+        // session in this codebase's logs is redirected within a second of
+        // connecting. Naming one stays possible, for a test or a region.
+        host: if config.host.trim().is_empty() {
+            crate::config::CCP_HOSTS[0].to_string()
+        } else {
+            config.host.clone()
+        },
         paper: config.paper,
         accept_invalid_certs: false,
         ib_key_timeout_secs: crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
@@ -263,7 +278,7 @@ impl EClient {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let gw_config = gateway_config(config);
 
-        let (gw, farm_conn, ccp_conn, hmds_conn) = Gateway::connect(&gw_config)?;
+        let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = Gateway::connect(&gw_config)?;
         let account_id = gw.account_id.clone();
         let accounts = gw.accounts.clone();
         let session_token_bytes = crate::auth::crypto::strip_leading_zeros(
@@ -291,7 +306,7 @@ impl EClient {
         gw.populate_init_data(&shared);
 
         let (mut hot_loop, control_tx) = gw.into_hot_loop_with_farms(
-            shared.clone(), event_tx, farm_conn, ccp_conn, hmds_conn, config.core_id,
+            shared.clone(), event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn, config.core_id,
             crate::gateway::CallerAuth {
                 host: config.host.clone(),
                 username: config.username.clone(),
@@ -465,5 +480,37 @@ impl EClient {
     /// or empty for the SRP-only path). Sent verbatim in SSO authenticator bodies.
     pub fn token_type(&self) -> &str {
         &self.token_type
+    }
+}
+
+#[cfg(test)]
+mod host_default_tests {
+    use super::*;
+
+    /// A caller with a login and nothing else gets a session. The hostname it
+    /// would otherwise have to name is where every session starts anyway, and
+    /// the venue redirects from there.
+    #[test]
+    fn a_config_without_a_host_still_knows_where_to_knock() {
+        let config = EClientConfig {
+            username: "someone".to_string(),
+            password: "secret".to_string(),
+            ..Default::default()
+        };
+        assert!(config.host.is_empty(), "a caller stated none");
+        let resolved = gateway_config(&config);
+        assert_eq!(resolved.host, crate::config::CCP_HOSTS[0]);
+    }
+
+    /// One that is named is used as given.
+    #[test]
+    fn a_host_that_is_named_is_used() {
+        let config = EClientConfig {
+            username: "someone".to_string(),
+            password: "secret".to_string(),
+            host: "ndc1.ibllc.com".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(gateway_config(&config).host, "ndc1.ibllc.com");
     }
 }
