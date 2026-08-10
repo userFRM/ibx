@@ -3153,11 +3153,20 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
         Err(_) => return,
     };
     let mut key: Option<&str> = None;
+    // The venue states which currency a figure is in, and it is not always the
+    // account's own. Read per group, and carried rather than assumed.
+    let mut currency: &str = "";
     for part in text.split('\x01') {
-        if let Some(val) = part.strip_prefix("8001=") {
+        if let Some(val) = part.strip_prefix("15=") {
+            currency = val;
+        } else if let Some(val) = part.strip_prefix("8001=") {
             key = Some(val);
         } else if let Some(val) = part.strip_prefix("8004=")
             && let Some(k) = key {
+                // Kept whether or not anything below names it. A figure nobody
+                // named is still a figure about the account, and dropping it
+                // left no trace that the venue had stated it.
+                shared.portfolio.note_account_value(k, val, currency);
                 match k {
                     "NetLiquidation" => { if let Ok(v) = val.parse::<f64>() { context.account.net_liquidation = (v * PRICE_SCALE as f64) as Price; } }
                     "BuyingPower" => { if let Ok(v) = val.parse::<f64>() { context.account.buying_power = (v * PRICE_SCALE as f64) as Price; } }
@@ -6638,5 +6647,46 @@ mod unnamed_execution_tests {
         let read = tags_read_from_an_execution();
         assert!(read.len() > 30, "only {} tags reported as read", read.len());
         assert!(read.contains(&17), "the execution id is read");
+    }
+}
+
+#[cfg(test)]
+mod stated_account_value_tests {
+    use crate::bridge::SharedState;
+
+    /// The venue states a great many more figures than any client names, and a
+    /// figure nobody named is still a figure about the account. They used to be
+    /// dropped where they arrived with nothing to say they had come.
+    #[test]
+    fn a_figure_nothing_names_is_still_kept() {
+        let shared = SharedState::new();
+        shared.portfolio.note_account_value("NetLiquidation", "12345.67", "USD");
+        shared.portfolio.note_account_value("SomethingNobodyNames", "42", "EUR");
+
+        let stated = shared.portfolio.stated_account_values();
+        assert_eq!(stated.len(), 2);
+        assert!(stated.iter().any(|(k, v, c)| k == "SomethingNobodyNames" && v == "42" && c == "EUR"));
+    }
+
+    /// The same figure in two currencies is two figures. Collapsing them would
+    /// report one account's worth in a currency it is not held in.
+    #[test]
+    fn the_same_figure_in_two_currencies_is_two_figures() {
+        let shared = SharedState::new();
+        shared.portfolio.note_account_value("TotalCashValue", "100", "USD");
+        shared.portfolio.note_account_value("TotalCashValue", "90", "EUR");
+        assert_eq!(shared.portfolio.stated_account_values().len(), 2);
+    }
+
+    /// A figure restated in the same currency replaces the earlier statement
+    /// rather than piling up beside it.
+    #[test]
+    fn a_figure_restated_replaces_what_it_restates() {
+        let shared = SharedState::new();
+        shared.portfolio.note_account_value("BuyingPower", "100", "USD");
+        shared.portfolio.note_account_value("BuyingPower", "200", "USD");
+        let stated = shared.portfolio.stated_account_values();
+        assert_eq!(stated.len(), 1);
+        assert_eq!(stated[0].1, "200");
     }
 }

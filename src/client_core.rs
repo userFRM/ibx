@@ -233,7 +233,9 @@ pub struct AccountSummaryBatch {
 pub struct AccountSummaryEntry {
     pub tag: &'static str,
     pub value: String,
-    pub currency: &'static str,
+    /// As the venue stated it for this figure. Owned rather than borrowed
+    /// because it is the venue's word, not one of a fixed set known here.
+    pub currency: String,
 }
 
 /// A single portfolio position update.
@@ -1732,12 +1734,25 @@ impl ClientCore {
         let mut fields = Vec::new();
         let mut delivered = false;
 
+        // The currency a figure is in is stated by the venue, per figure, and is
+        // not always the account's own. It used to be reported as dollars
+        // whatever the venue said, so an account held in euros was described in
+        // a currency it does not hold.
+        let stated = shared.portfolio.stated_account_values();
+        let currency_of = |key: &str| -> String {
+            stated
+                .iter()
+                .find(|(k, _, c)| k == key && !c.is_empty())
+                .map(|(_, _, c)| c.clone())
+                .unwrap_or_default()
+        };
+
         for (i, &key) in ACCOUNT_UPDATE_FIELDS.iter().enumerate() {
             if is_first || cur_vals[i] != prev_vals[i] {
                 fields.push(AccountFieldUpdate {
                     key: key.to_string(),
                     value: format!("{:.2}", cur_vals[i] as f64 / PRICE_SCALE_F),
-                    currency: "USD".to_string(),
+                    currency: currency_of(key),
                 });
                 delivered = true;
             }
@@ -1831,7 +1846,16 @@ impl ClientCore {
             entries.push(AccountSummaryEntry {
                 tag,
                 value: format!("{:.2}", values[i]),
-                currency: "USD",
+                // As stated by the venue for this figure. Empty where it stated
+                // none, which is honest: a currency nobody stated is not the
+                // dollar by default.
+                currency: shared
+                    .portfolio
+                    .stated_account_values()
+                    .iter()
+                    .find(|(k, _, c)| k == tag && !c.is_empty())
+                    .map(|(_, _, c)| c.clone())
+                    .unwrap_or_default(),
             });
         }
 

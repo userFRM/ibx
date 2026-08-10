@@ -694,7 +694,7 @@ impl EClient {
                     call_wrapper!(self.wrapper, py, "account_summary", (batch.req_id, acct_name.as_str(), "AccountType", "INDIVIDUAL", ""));
                 }
                 for entry in &batch.entries {
-                    call_wrapper!(self.wrapper, py, "account_summary", (batch.req_id, acct_name.as_str(), entry.tag, entry.value.as_str(), entry.currency));
+                    call_wrapper!(self.wrapper, py, "account_summary", (batch.req_id, acct_name.as_str(), entry.tag, entry.value.as_str(), entry.currency.as_str()));
                 }
                 call_wrapper!(self.wrapper, py, "account_summary_end", (batch.req_id,));
             }
