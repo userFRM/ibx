@@ -80,7 +80,7 @@ pub const UNAVAILABLE: &[(&str, &str)] = &[
     ("LocalServerPort", "no local socket to listen on; this client is the client"),
     ("LocalApiPort", "no local socket to listen on; this client is the client"),
     ("TrustedIPs", "nothing connects to this client, so nothing needs trusting"),
-    ("ApiOnly", "stated per session on connect, not once for a process"),
+    ("ApiOnly", "stated per session as `readonly` on the client config, not once for a process"),
     ("MainWindow.Width", "no window"),
     ("MainWindow.Height", "no window"),
     ("vmoptions", "no runtime to size"),

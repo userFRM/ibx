@@ -99,6 +99,12 @@ pub struct EClientConfig {
     /// there — so what is named here is only where to knock. Name one for a
     /// test, or to knock at a particular region.
     pub host: String,
+    /// Refuse to send anything that places, changes or withdraws an order.
+    ///
+    /// The gateway had this as a setting of its own, and the other client here
+    /// takes it on connect. A Rust caller could not state it at all, so a
+    /// session meant to only look could still trade.
+    pub readonly: bool,
     /// What the gateway's own file used to hold.
     ///
     /// A gateway is a process configured by a file beside it; this client is a
@@ -338,6 +344,11 @@ impl EClient {
             .unwrap_or_default()
             .as_secs() * 1000;
 
+        let core = ClientCore::new();
+        // Stated before the client is handed back, so a caller cannot place
+        // anything between the session opening and the setting taking hold.
+        core.set_readonly(config.readonly);
+
         Ok(Self {
             shared,
             control_tx,
@@ -347,7 +358,7 @@ impl EClient {
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
             next_order_id: AtomicU64::new(start_id),
-            core: ClientCore::new(),
+            core,
             session_token_bytes,
             session,
             token_type,
@@ -522,5 +533,36 @@ mod host_default_tests {
             ..Default::default()
         };
         assert_eq!(gateway_config(&config).host, "ndc1.ibllc.com");
+    }
+}
+
+#[cfg(test)]
+mod readonly_tests {
+    use super::*;
+
+    /// A session meant only to look refuses to place, change or withdraw an
+    /// order. The other client here has taken this on connect all along; a
+    /// Rust caller could not state it, so a read-only session could still
+    /// trade.
+    #[test]
+    fn a_read_only_session_refuses_to_trade() {
+        let core = ClientCore::new();
+        core.set_readonly(true);
+        assert!(core.refuse_if_readonly("place an order").is_err());
+        assert!(
+            core.refuse_if_readonly("place an order")
+                .unwrap_err()
+                .to_lowercase()
+                .contains("read"),
+            "the refusal does not say why",
+        );
+    }
+
+    /// And one that was not asked for does not.
+    #[test]
+    fn an_ordinary_session_is_not_refused() {
+        let core = ClientCore::new();
+        core.set_readonly(false);
+        assert!(core.refuse_if_readonly("place an order").is_ok());
     }
 }
