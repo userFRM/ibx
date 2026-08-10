@@ -1907,7 +1907,21 @@ impl Gateway {
         send_init(&[(35, "U"), (52, &now), (6040, "193"), (6556, "OPR.2"), (8166, "L"), (8176, "1")])?;
         send_init(&[(35, "U"), (52, &now), (6040, "101")])?;
         send_init(&[(35, "U"), (52, &now), (6040, "209"), (1, &account), (6556, "AcctConfig3")])?;
-        send_init(&[(35, "U"), (52, &now), (6040, "72"), (6536, &today_start), (6537, &now), (6556, "today4")])?;
+        // Which executions a session opens with. The counterpart asks for
+        // every one the venue still holds; asking only for today's leaves a
+        // caller that had history under the counterpart with none here.
+        //
+        // The window is what narrows it: stated, the venue answers within it;
+        // left off, it answers with what it has. The counterpart writes the
+        // window only under its own condition, so leaving it off is a path the
+        // venue takes rather than one invented here.
+        let executions_today_only =
+            std::env::var("IBX_EXECUTION_REPORTS").as_deref() == Ok("today");
+        if executions_today_only {
+            send_init(&[(35, "U"), (52, &now), (6040, "72"), (6536, &today_start), (6537, &now), (6556, "today4")])?;
+        } else {
+            send_init(&[(35, "U"), (52, &now), (6040, "72"), (6556, "today4")])?;
+        }
         send_init(&[(35, "U"), (52, &now), (6040, "74"), (1, ""), (6544, "2")])?;
         send_init(&[(35, "U"), (52, &now), (6040, "76"), (1, ""), (6565, "1")])?;
         for _ in 0..92 {
