@@ -811,7 +811,11 @@ class TestAccountDispatch:
         assert len(events) >= 1
         nlv_event = [e for e in events if e[1] == "NetLiquidation"][0]
         assert nlv_event[2] == "100000.00"
-        assert nlv_event[3] == "USD"
+        # The currency is whatever the venue stated for this figure. Nothing
+        # stated one here, so nothing is claimed: this used to assert dollars,
+        # which the client said whatever the venue reported, and an account held
+        # in euros was described in a currency it does not hold.
+        assert nlv_event[3] == ""
         assert nlv_event[4] == "DU12345"
 
     def test_pnl_dispatch(self):

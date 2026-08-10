@@ -1308,6 +1308,14 @@ impl ReferenceState {
 /// Account snapshot, per-position info, and atomic instrument positions.
 pub struct PortfolioState {
     account: Mutex<AccountState>,
+    /// Every figure the venue states about the account, under the name it
+    /// states it by and in the currency it states it in.
+    ///
+    /// A named few were read into fields and the rest were dropped where they
+    /// arrived, with nothing to say they had come. The venue states a great
+    /// many more than any client names, and a figure nobody named is still a
+    /// figure about the account.
+    stated_account_values: Mutex<Vec<(String, String, String)>>,
     /// True once the first gateway account message ("UT"/"UM"/"RL") has been received.
     account_data_received: AtomicBool,
     /// True once the CCP init burst has been fully processed.
@@ -1336,6 +1344,7 @@ impl PortfolioState {
     fn new() -> Self {
         Self {
             account: Mutex::new(AccountState::default()),
+            stated_account_values: Mutex::new(Vec::new()),
             account_data_received: AtomicBool::new(false),
             account_download_complete: AtomicBool::new(false),
             position_infos: Mutex::new(HashMap::new()),
@@ -1402,6 +1411,22 @@ impl PortfolioState {
     /// True once at least one gateway account message has been processed.
     pub fn account_data_received(&self) -> bool {
         self.account_data_received.load(Ordering::Acquire)
+    }
+
+    /// Record a figure the venue stated, replacing any earlier statement of
+    /// the same name in the same currency.
+    #[doc(hidden)]
+    pub fn note_account_value(&self, key: &str, value: &str, currency: &str) {
+        let mut all = self.stated_account_values.lock().unwrap();
+        match all.iter_mut().find(|(k, _, c)| k == key && c == currency) {
+            Some(slot) => slot.1 = value.to_string(),
+            None => all.push((key.to_string(), value.to_string(), currency.to_string())),
+        }
+    }
+
+    /// Every figure the venue has stated about the account, as it stated them.
+    pub fn stated_account_values(&self) -> Vec<(String, String, String)> {
+        self.stated_account_values.lock().unwrap().clone()
     }
 
     #[doc(hidden)] pub fn set_account(&self, account: &AccountState) {

@@ -34,7 +34,7 @@ number. A field is never dropped because nothing has got round to reading it.
 | A trading halt | **decoder written** — read from the venue's status mask, not the name it gives. Not yet subscribed: this arrives as a generic tick, and nothing here subscribes those yet |
 | Every field an execution report states | **kept** — what the handler does not name is kept under its number, read from the bytes so repeats survive |
 | Every field an order status states | **open** — same, not yet measured |
-| Account values outside a whitelist of ~18 | **open** — everything else the venue states is dropped with no trace |
+| Account values outside a whitelist of ~18 | **kept** — every figure the venue states is kept under its own name and currency, whether or not anything names it |
 | Tick attributes on a trade or quote | **open** — decoded off the wire, then replaced with defaults presented as the venue's word |
 | Option greeks the reference client has no slot for | **kept** — decoded and dropped, matching the terminal's own surface; listed so the choice is visible |
 
@@ -50,7 +50,7 @@ having. This is where the worst defects have been.
 | The current time | **fixed** on both surfaces — answered from the local clock, which reports zero skew whatever the truth |
 | Which venue a quote's bid, ask and last came from | **fixed** — attributed through a table written in this client; the venue states the list itself |
 | A request that returns as though it acted | **fixed and guarded** — held at zero by a generator CI runs |
-| Commission and account currency | **open** — hardcoded USD; the contract's currency is parsed and not carried |
+| Account currency | **fixed** — as the venue states it, per figure. Commission currency: **open** |
 | Soft-dollar tiers, news providers | **fixed** — both are stated on the logon and only there. The tier parser looked for a shape the venue does not send, so every entry failed and a list written here stood in |
 | A contract's tick size when the venue states none | **open** — 0.01 is invented, wrong for most futures |
 | The single letter a venue is known by | **accepted** — the venue names venues in full and states no abbreviation; this is client knowledge, and is recorded as such |

@@ -510,7 +510,7 @@ impl EClient {
         // Account summary → account_summary + account_summary_end (one-shot via ClientCore)
         if let Some(batch) = self.core.prepare_account_summary(&self.shared, &self.account_id) {
             for entry in &batch.entries {
-                wrapper.account_summary(batch.req_id, &self.account_id, entry.tag, &entry.value, entry.currency);
+                wrapper.account_summary(batch.req_id, &self.account_id, entry.tag, &entry.value, &entry.currency);
             }
             wrapper.account_summary_end(batch.req_id);
         }
