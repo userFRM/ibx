@@ -633,7 +633,11 @@ impl HotLoop {
                     // Registered with what the contract is, so the slot carries
                     // it and the subscription can state it.
                     if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", &reply_tx) {
-                        self.hmds.send_tbt_subscribe(con_id, id, tbt_type, &sec_type, &exchange, &mut self.hmds_conn, &mut self.hb);
+                        let mts = self.context.market.min_tick_scaled(id);
+                        self.hmds.send_tbt_subscribe(
+                            con_id, id, tbt_type, &sec_type, &exchange, mts,
+                            &mut self.hmds_conn, &mut self.hb,
+                        );
                     }
                 }
                 ControlCommand::UnsubscribeTbt { instrument } => {

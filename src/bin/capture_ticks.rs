@@ -88,6 +88,14 @@ fn main() {
         };
         println!("  {what:<20} conId={}", resolved.con_id);
 
+        // The increment a price moves in arrives with a market-data
+        // subscription, and a move on the tick stream is stated in whole ones
+        // of it — so without this the ticks decode to nothing usable.
+        if let Err(e) = client.req_mkt_data(2, &resolved, "", false, false) {
+            println!("  {what:<20} market data refused: {e}");
+        }
+        std::thread::sleep(Duration::from_secs(3));
+
         if let Err(e) = client.req_tick_by_tick_data(1, &resolved, kind, 0, false) {
             println!("  {what:<20} the subscription was refused: {e}");
             continue;
@@ -98,6 +106,27 @@ fn main() {
         let deadline = Instant::now() + Duration::from_secs(25);
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(200));
+        }
+
+        // What actually reached a caller, which is the only thing that counts.
+        let quotes = client.shared_state().market.drain_tbt_quotes();
+        let trades = client.shared_state().market.drain_tbt_trades();
+        println!(
+            "  {what:<20} delivered: {} quote(s), {} trade(s)",
+            quotes.len(),
+            trades.len()
+        );
+        for q in quotes.iter().take(3) {
+            println!(
+                "        bid {:.5} x {}   ask {:.5} x {}",
+                q.bid as f64 / 1e8,
+                q.bid_size,
+                q.ask as f64 / 1e8,
+                q.ask_size
+            );
+        }
+        for t in trades.iter().take(3) {
+            println!("        traded {:.2} x {} on {}", t.price as f64 / 1e8, t.size, t.exchange);
         }
 
         let frames: Vec<String> = client

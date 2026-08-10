@@ -63,8 +63,8 @@ having. This is where the worst defects have been.
 | 26 answered from what the venue pushes on login | **wired, proved** |
 | Financial advisor pair, event-data metadata | **open** — should reach the venue and do not; the request has not been established |
 | Implied volatility, option price | **refused** — this protocol carries no request taking a caller's price or volatility |
-| Tick-by-tick | **decoded, proved** — a frame captured from the venue decodes to the quote that was on the screen, consuming the payload exactly. Not yet joined to the client's own surfaces |
-| Tick-by-tick attributed to the right subscription | **open** — every record is attributed to the first subscription. Each record states which subscription it belongs to, so the id to use is on the wire |
+| Tick-by-tick | **wired, proved** — a live subscription delivers the market that is there: a currency pair at 1.15555 bid, 1.15560 ask, hundreds of quotes a minute, reaching a caller |
+| Tick-by-tick attributed to the right subscription | **fixed** — every frame states which subscription it belongs to, and that is what it is attributed to |
 
 ## 4. A contract's fields
 

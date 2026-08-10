@@ -5,8 +5,7 @@ use crate::config::chrono_free_timestamp;
 use crate::protocol::connection::{Connection, Frame};
 use crate::protocol::fix;
 use crate::protocol::fixcomp;
-use crate::protocol::tick_decoder;
-use crate::types::{InstrumentId, TbtType, PRICE_SCALE, MAX_INSTRUMENTS};
+use crate::types::{InstrumentId, TbtType, MAX_INSTRUMENTS};
 use std::sync::mpsc::SyncSender;
 
 use super::{HeartbeatState, emit, clone_for_event, find_body_after_tag, extract_raw_tag};
@@ -22,6 +21,13 @@ pub(crate) struct HmdsState {
     pub(crate) next_tbt_req_id: u32,
     pub(crate) tbt_subscriptions: Vec<(InstrumentId, String, TbtType)>,
     pub(crate) tbt_price_state: [(i64, i64, i64); MAX_INSTRUMENTS],
+    /// Where each subscription's prices have got to. A move is stated from the
+    /// last price, so this is carried for the life of the subscription.
+    pub(crate) tbt_running: Vec<crate::protocol::tbt_stream::RunningPrice>,
+    /// The smallest increment each instrument's price moves in, already scaled.
+    /// A move is stated in whole increments, so without this a move cannot be
+    /// turned into a price at all.
+    pub(crate) tbt_min_tick: Vec<i64>,
     pub(crate) next_hmds_query_id: u32,
     pub(crate) disconnected: bool,
     /// In-flight historical bar queries: (query_id, req_id, idle deadline).
@@ -136,6 +142,8 @@ impl HmdsState {
         Self {
             next_tbt_req_id: 1,
             tbt_subscriptions: Vec::new(),
+            tbt_running: vec![Default::default(); MAX_INSTRUMENTS],
+            tbt_min_tick: vec![0; MAX_INSTRUMENTS],
             tbt_price_state: [(0, 0, 0); MAX_INSTRUMENTS],
             next_hmds_query_id: 1000,
             disconnected: false,
@@ -197,7 +205,10 @@ impl HmdsState {
             match market.con_id(instrument) {
                 Some(con_id) => {
                     let (stype, venue) = market.order_routing(instrument);
-                    self.send_tbt_subscribe(con_id, instrument, tbt_type, &stype, &venue, hmds_conn, hb)
+                    let mts = market.min_tick_scaled(instrument);
+                    self.send_tbt_subscribe(
+                        con_id, instrument, tbt_type, &stype, &venue, mts, hmds_conn, hb,
+                    )
                 }
                 None => log::warn!(
                     "HMDS reconnect: instrument {instrument} has no contract id, \
@@ -636,76 +647,87 @@ impl HmdsState {
     }
 
     fn handle_tbt_data(&mut self, msg: &[u8], shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
+        use crate::protocol::tbt_stream::{self, TbtKind, TbtRecord};
+
         let body = match find_body_after_tag(msg, b"35=E\x01") {
             Some(b) => b,
             None => return,
         };
-        // Keep the frame as the venue sent it when asked to. The layout was
-        // read from the counterpart rather than from a capture, and a decoder
-        // checked only against frames it made up proves nothing about the ones
-        // the venue sends.
         if std::env::var("IBX_CAPTURE_TBT").is_ok() {
-            // The whole message, not the part after the type tag: the binary
-            // payload sits among fields, and where it starts and ends is part
-            // of what has to be established.
             let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
             shared.market.note_unread_wire("tbt-frame", hex);
         }
-        let entries = tick_decoder::decode_ticks_35e(body);
-        for entry in &entries {
-            let instrument = match self.tbt_subscriptions.first() {
-                Some((id, _, _)) => *id,
-                None => return,
-            };
-            match entry {
-                tick_decoder::TbtEntry::Trade { timestamp, price_cents_delta, size, exchange, conditions } => {
-                    // Drop the tick rather than publish a wrapped price: the
-                    // previous one standing is the honest failure (ibx#272).
-                    let Some(cents) = self.update_tbt_price(instrument, *price_cents_delta, 0)
-                    else {
-                        log::warn!("35=E trade price out of range (delta={price_cents_delta}), tick dropped");
-                        continue;
-                    };
-                    let Some(price) = cents.checked_mul(PRICE_SCALE / 100) else {
-                        log::warn!("35=E trade price out of range (cents={cents}), tick dropped");
-                        continue;
-                    };
+
+        // Which subscription a frame belongs to is stated on the frame. Taking
+        // the first subscription instead attributed every record to whichever
+        // was made first, so a second contract's trades were reported under the
+        // first contract's name — visibly, once two were running at once.
+        let stated = crate::protocol::tbt_stream::frame_ticker_id(body);
+        let found = stated.and_then(|id| {
+            self.tbt_subscriptions.iter().find(|(_, query_id, _)| {
+                query_id.rsplit('_').next().and_then(|n| n.parse::<u64>().ok()) == Some(id)
+            })
+        });
+        // A frame naming a subscription this session does not hold is not
+        // attributed to another one.
+        let Some(&(instrument, _, kind)) = found else {
+            if stated.is_some() {
+                log::warn!("a tick names a subscription this session does not hold; dropped");
+            }
+            return;
+        };
+        let kind = match kind {
+            TbtType::BidAsk => TbtKind::BidAsk,
+            _ => TbtKind::AllLast,
+        };
+
+        // A move is stated in whole increments of the contract's own smallest
+        // one, so without that increment a move cannot be turned into a price.
+        let mts = self.tbt_min_tick[instrument as usize];
+        if mts <= 0 {
+            log::warn!(
+                "a tick arrived for an instrument whose smallest increment is not \
+                 known, so its price cannot be worked out; dropped rather than guessed"
+            );
+            return;
+        }
+
+        // Decoded in whole increments and scaled by whole numbers afterwards,
+        // so a session of moves cannot drift the way adding fractions would.
+        let running = &mut self.tbt_running[instrument as usize];
+        let Some(frame) = tbt_stream::decode_frame(body, kind, 1.0, running) else {
+            return;
+        };
+
+        for record in &frame.records {
+            match record {
+                TbtRecord::Trade(t) => {
                     let trade = crate::types::TbtTrade {
                         instrument,
-                        price,
-                        size: *size as i64,
-                        timestamp: *timestamp,
-                        exchange: exchange.clone(),
-                        conditions: conditions.clone(),
+                        price: (t.price as i64).saturating_mul(mts),
+                        size: t.size as i64,
+                        timestamp: frame.timestamp_ms,
+                        exchange: t.exchange.clone(),
+                        conditions: t.conditions.clone(),
                     };
                     shared.market.push_tbt_trade(trade.clone());
                     emit(event_tx, Event::TbtTrade(trade));
                 }
-                tick_decoder::TbtEntry::Quote { timestamp, bid_cents_delta, ask_cents_delta, bid_size, ask_size } => {
-                    let Some((bid_cents, ask_cents)) =
-                        self.update_tbt_bid_ask(instrument, *bid_cents_delta, *ask_cents_delta)
-                    else {
-                        log::warn!("35=E quote price out of range, tick dropped");
-                        continue;
-                    };
-                    let (Some(bid), Some(ask)) = (
-                        bid_cents.checked_mul(PRICE_SCALE / 100),
-                        ask_cents.checked_mul(PRICE_SCALE / 100),
-                    ) else {
-                        log::warn!("35=E quote price out of range (bid={bid_cents} ask={ask_cents}), tick dropped");
-                        continue;
-                    };
+                TbtRecord::Quote(q) => {
                     let quote = crate::types::TbtQuote {
                         instrument,
-                        bid,
-                        ask,
-                        bid_size: *bid_size as i64,
-                        ask_size: *ask_size as i64,
-                        timestamp: *timestamp,
+                        bid: (q.bid as i64).saturating_mul(mts),
+                        ask: (q.ask as i64).saturating_mul(mts),
+                        bid_size: q.bid_size as i64,
+                        ask_size: q.ask_size as i64,
+                        timestamp: frame.timestamp_ms,
                     };
                     shared.market.push_tbt_quote(quote);
                     emit(event_tx, Event::TbtQuote(quote));
                 }
+                // A midpoint has no place on either of the two shapes a caller
+                // reads, so it is not invented into one.
+                TbtRecord::MidPoint { .. } => {}
             }
         }
     }
@@ -734,32 +756,7 @@ impl HmdsState {
         }
     }
 
-    #[inline]
-    /// Accumulate a wire-controlled delta into the running price.
-    ///
-    /// Returns `None` when the sum would leave the range, rather than trapping
-    /// in debug and wrapping in release — the same rule the 35=P price path
-    /// follows (ibx#272). The running state is left untouched, so the previous
-    /// price stands rather than becoming an arbitrary one.
-    fn update_tbt_price(&mut self, instrument: InstrumentId, delta: i64, _: i64) -> Option<i64> {
-        let entry = &mut self.tbt_price_state[instrument as usize];
-        entry.0 = entry.0.checked_add(delta)?;
-        Some(entry.0)
-    }
 
-    #[inline]
-    /// As `update_tbt_price`, for the two sides of the book. Neither side is
-    /// advanced unless both fit, so the pair stays consistent.
-    fn update_tbt_bid_ask(
-        &mut self, instrument: InstrumentId, bid_delta: i64, ask_delta: i64,
-    ) -> Option<(i64, i64)> {
-        let entry = &mut self.tbt_price_state[instrument as usize];
-        let bid = entry.1.checked_add(bid_delta)?;
-        let ask = entry.2.checked_add(ask_delta)?;
-        entry.1 = bid;
-        entry.2 = ask;
-        Some((bid, ask))
-    }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_tbt_subscribe(
@@ -769,6 +766,9 @@ impl HmdsState {
         tbt_type: TbtType,
         sec_type: &str,
         exchange: &str,
+        // The smallest increment this contract's price moves in, scaled. A
+        // move on this stream is stated in whole ones of these.
+        min_tick_scaled: i64,
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
@@ -811,6 +811,9 @@ impl HmdsState {
         }
         let ticker_id = format!("tbt_{req_id}");
         self.tbt_subscriptions.push((instrument, ticker_id, tbt_type));
+        // A move means nothing without the increment it is counted in.
+        self.tbt_min_tick[instrument as usize] = min_tick_scaled;
+        self.tbt_running[instrument as usize] = Default::default();
     }
 
     pub(crate) fn send_tbt_unsubscribe(
@@ -1571,41 +1574,6 @@ mod tests {
         assert!(
             lossy.len() > 200 || head.len() <= lossy.len(),
             "and it never exceeds the value it came from",
-        );
-    }
-
-    /// The tick-by-tick price path had the same unchecked arithmetic this
-    /// change removes from the primary path: a wire-controlled delta is
-    /// accumulated and then scaled, so a well-formed but extreme delta traps in
-    /// debug and wraps in release — publishing an arbitrary price.
-    #[test]
-    fn a_tick_by_tick_price_that_cannot_be_scaled_is_dropped() {
-        let mut hmds = HmdsState::new();
-
-        // A delta that fits the wire and the accumulator but not the scale.
-        let huge = i64::MAX / 2;
-        assert_eq!(
-            hmds.update_tbt_price(0, huge, 0), Some(huge),
-            "the accumulator itself still advances",
-        );
-        assert!(
-            huge.checked_mul(PRICE_SCALE / 100).is_none(),
-            "and the scale is what cannot represent it",
-        );
-
-        // Another delta on top of that overflows the running total.
-        assert_eq!(
-            hmds.update_tbt_price(0, i64::MAX, 0), None,
-            "the accumulation reports rather than wrapping",
-        );
-
-        // Ordinary values are unaffected.
-        let mut hmds = HmdsState::new();
-        assert_eq!(hmds.update_tbt_price(0, 12_345, 0), Some(12_345));
-        assert_eq!(hmds.update_tbt_price(0, -45, 0), Some(12_300));
-        assert_eq!(
-            hmds.update_tbt_bid_ask(0, 100, 200), Some((100, 200)),
-            "and both sides of the book advance together",
         );
     }
 
