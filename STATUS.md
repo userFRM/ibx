@@ -24,9 +24,10 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Top of book | ✅ | |
 | Depth of book | ✅ | |
 | Historical bars, ticks, schedules | ✅ | |
-| Tick-by-tick | ✅ | Trades, quotes, midpoint. Several subscriptions at once |
+| Tick-by-tick quotes | ✅ | Live: several subscriptions at once, each attributed |
+| Tick-by-tick trades | 🚧 | Arrive and are attributed; the record's own layout is not right yet — sizes come back saturated |
 | Trading halts | ✅ | Live: contracts trading are reported trading |
-| Tick attributes | 🔬 | Past-limit, unreported, past-low/high |
+| Tick attributes | 🚧 | Read from the trade record, whose layout is not right yet |
 
 ## Orders
 

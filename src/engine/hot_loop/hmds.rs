@@ -17,24 +17,36 @@ use super::{HeartbeatState, emit, clone_for_event, find_body_after_tag, extract_
 /// indistinguishable from a permanent hang.
 const HISTORICAL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// One tick-by-tick stream, and everything that is true of it alone.
+///
+/// Held per subscription rather than per contract. Two streams of different
+/// kinds on one contract — every trade, and every quote change — are two
+/// subscriptions with two of the venue's numbers, two running prices and two
+/// record layouts. Kept per contract, the second overwrote the first's number
+/// and its frames were then read under the first's layout: an every-trade
+/// stream delivered quotes, and a busy listing's trades came back with a size
+/// of nine hundred million and an exchange of three letters that were not one.
+pub(crate) struct TbtSubscription {
+    pub(crate) instrument: InstrumentId,
+    /// What this client called the subscription, which the acknowledgement
+    /// echoes.
+    pub(crate) query_id: String,
+    /// Which of the streams it is, and so which layout its records have.
+    pub(crate) kind: TbtType,
+    /// The venue's own number for it, stated on every frame.
+    pub(crate) venue_id: u64,
+    /// The increment its prices move in.
+    pub(crate) min_tick: i64,
+    /// The increment its sizes are counted in.
+    pub(crate) size_tick: f64,
+    /// Where its price has got to. A move is measured from here.
+    pub(crate) running: crate::protocol::tbt_stream::RunningPrice,
+}
+
 pub(crate) struct HmdsState {
     pub(crate) next_tbt_req_id: u32,
-    pub(crate) tbt_subscriptions: Vec<(InstrumentId, String, TbtType)>,
+    pub(crate) tbt_subscriptions: Vec<TbtSubscription>,
     pub(crate) tbt_price_state: [(i64, i64, i64); MAX_INSTRUMENTS],
-    /// Where each subscription's prices have got to. A move is stated from the
-    /// last price, so this is carried for the life of the subscription.
-    pub(crate) tbt_running: Vec<crate::protocol::tbt_stream::RunningPrice>,
-    /// The number the venue refers to each subscription by, as it stated when
-    /// it took the subscription on. Its numbering is its own and has nothing to
-    /// do with the id this client asked under.
-    pub(crate) tbt_venue_id: Vec<u64>,
-    /// What a size moves in, as the venue stated it for this subscription. A
-    /// share deals in whole ones; a crypto deals in hundred-millionths.
-    pub(crate) tbt_size_tick: Vec<f64>,
-    /// The smallest increment each instrument's price moves in, already scaled.
-    /// A move is stated in whole increments, so without this a move cannot be
-    /// turned into a price at all.
-    pub(crate) tbt_min_tick: Vec<i64>,
     pub(crate) next_hmds_query_id: u32,
     pub(crate) disconnected: bool,
     /// In-flight historical bar queries: (query_id, req_id, idle deadline).
@@ -149,10 +161,6 @@ impl HmdsState {
         Self {
             next_tbt_req_id: 1,
             tbt_subscriptions: Vec::new(),
-            tbt_running: vec![Default::default(); MAX_INSTRUMENTS],
-            tbt_min_tick: vec![0; MAX_INSTRUMENTS],
-            tbt_venue_id: vec![0; MAX_INSTRUMENTS],
-            tbt_size_tick: vec![0.0; MAX_INSTRUMENTS],
             tbt_price_state: [(0, 0, 0); MAX_INSTRUMENTS],
             next_hmds_query_id: 1000,
             disconnected: false,
@@ -206,7 +214,8 @@ impl HmdsState {
         // again and takes a new one.
         let stale: Vec<_> = self.tbt_subscriptions.drain(..).collect();
         let wanted = stale.len();
-        for (instrument, _dead_ticker_id, tbt_type) in stale {
+        for dead in stale {
+            let (instrument, tbt_type) = (dead.instrument, dead.kind);
             // Prices arrive as deltas against the last pair seen. The pair the
             // dead session left would have the new session's first delta added
             // to it, and every price after that would carry the error.
@@ -389,14 +398,14 @@ impl HmdsState {
                         if let Some(pos) = self
                             .tbt_subscriptions
                             .iter()
-                            .position(|(_, query_id, _)| *query_id == ack.query_id)
+                            .position(|sub| sub.query_id == ack.query_id)
                         {
-                            let instrument = self.tbt_subscriptions[pos].0;
-                            self.tbt_venue_id[instrument as usize] = ack.venue_id;
-                            self.tbt_min_tick[instrument as usize] =
+                            let sub = &mut self.tbt_subscriptions[pos];
+                            sub.venue_id = ack.venue_id;
+                            sub.min_tick =
                                 (ack.min_tick * crate::types::PRICE_SCALE as f64).round() as i64;
-                            self.tbt_size_tick[instrument as usize] = ack.size_min_tick;
-                            self.tbt_running[instrument as usize] = Default::default();
+                            sub.size_tick = ack.size_min_tick;
+                            sub.running = Default::default();
                             log::info!(
                                 "tick subscription {} is number {} to the venue, moving in {} \
                                  with sizes in {}",
@@ -700,26 +709,27 @@ impl HmdsState {
         // first contract's name — visibly, once two were running at once.
         let stated = crate::protocol::tbt_stream::frame_ticker_id(body);
         let found = stated.and_then(|id| {
-            self.tbt_subscriptions
-                .iter()
-                .find(|(instrument, _, _)| self.tbt_venue_id[*instrument as usize] == id)
+            self.tbt_subscriptions.iter().position(|sub| sub.venue_id == id)
         });
         // A frame naming a subscription this session does not hold is not
         // attributed to another one.
-        let Some(&(instrument, _, kind)) = found else {
+        let Some(at) = found else {
             if stated.is_some() {
                 log::warn!("a tick names a subscription this session does not hold; dropped");
             }
             return;
         };
-        let kind = match kind {
+        let instrument = self.tbt_subscriptions[at].instrument;
+        // The layout of a record is the layout of the stream it arrived on,
+        // which is a property of the subscription and not of the contract.
+        let kind = match self.tbt_subscriptions[at].kind {
             TbtType::BidAsk => TbtKind::BidAsk,
             _ => TbtKind::AllLast,
         };
 
         // A move is stated in whole increments of the contract's own smallest
         // one, so without that increment a move cannot be turned into a price.
-        let mts = self.tbt_min_tick[instrument as usize];
+        let mts = self.tbt_subscriptions[at].min_tick;
         if mts <= 0 {
             log::warn!(
                 "a tick arrived for an instrument whose smallest increment is not \
@@ -730,11 +740,11 @@ impl HmdsState {
 
         // What sizes move in for this contract. Stated once, when the venue
         // took the subscription on.
-        let size_tick = self.tbt_size_tick[instrument as usize];
+        let size_tick = self.tbt_subscriptions[at].size_tick;
 
         // Decoded in whole increments and scaled by whole numbers afterwards,
         // so a session of moves cannot drift the way adding fractions would.
-        let running = &mut self.tbt_running[instrument as usize];
+        let running = &mut self.tbt_subscriptions[at].running;
         let Some(frame) = tbt_stream::decode_frame(body, kind, 1.0, running) else {
             return;
         };
@@ -858,10 +868,18 @@ impl HmdsState {
             hb.last_hmds_sent = Instant::now();
         }
         let ticker_id = format!("tbt_{req_id}");
-        self.tbt_subscriptions.push((instrument, ticker_id, tbt_type));
-        // A move means nothing without the increment it is counted in.
-        self.tbt_min_tick[instrument as usize] = min_tick_scaled;
-        self.tbt_running[instrument as usize] = Default::default();
+        self.tbt_subscriptions.push(TbtSubscription {
+            instrument,
+            query_id: ticker_id,
+            kind: tbt_type,
+            venue_id: 0,
+            // A move means nothing without the increment it is counted in.
+            // The acknowledgement states the venue's own; this stands until it
+            // arrives.
+            min_tick: min_tick_scaled,
+            size_tick: 0.0,
+            running: Default::default(),
+        });
     }
 
     pub(crate) fn send_tbt_unsubscribe(
@@ -870,11 +888,11 @@ impl HmdsState {
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        let idx = match self.tbt_subscriptions.iter().position(|(id, _, _)| *id == instrument) {
+        let idx = match self.tbt_subscriptions.iter().position(|sub| sub.instrument == instrument) {
             Some(i) => i,
             None => return,
         };
-        let (_, ticker_id, _) = self.tbt_subscriptions.remove(idx);
+        let ticker_id = self.tbt_subscriptions.remove(idx).query_id;
         if let Some(conn) = hmds_conn.as_mut() {
             let xml = format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
@@ -1511,10 +1529,10 @@ mod tests {
         let mut hmds = HmdsState::new();
         let mut market = crate::engine::market_state::MarketState::new();
         let instrument = market.try_register(756733).expect("slot");
-        hmds.tbt_subscriptions.push((instrument, "tbt_0".to_string(), TbtType::Last));
+        hmds.tbt_subscriptions.push(TbtSubscription { instrument, query_id: "tbt_0".to_string(), kind: TbtType::Last, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
         // One with no contract behind it: it must be reported, not resubscribed
         // against a contract id the engine does not have.
-        hmds.tbt_subscriptions.push((7, "tbt_1".to_string(), TbtType::BidAsk));
+        hmds.tbt_subscriptions.push(TbtSubscription { instrument: 7, query_id: "tbt_1".to_string(), kind: TbtType::BidAsk, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -1533,8 +1551,8 @@ mod tests {
             "the dead session's prices go with it, or its last pair takes the next delta",
         );
         assert_eq!(hmds.tbt_subscriptions.len(), 1, "the resolvable stream is back");
-        assert_eq!(hmds.tbt_subscriptions[0].0, instrument);
-        assert_ne!(hmds.tbt_subscriptions[0].1, "tbt_0", "under a new id, not the dead session's");
+        assert_eq!(hmds.tbt_subscriptions[0].instrument, instrument);
+        assert_ne!(hmds.tbt_subscriptions[0].query_id, "tbt_0", "under a new id, not the dead session's");
     }
 
     /// The routing for a five-second bar stream is a ticker id the session
