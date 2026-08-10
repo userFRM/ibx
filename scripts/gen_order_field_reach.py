@@ -30,6 +30,10 @@ OUT = ROOT / "docs/order-field-reach.md"
 # Where an order is turned into tags. A field that reaches the venue is read in
 # one of these.
 BUILDERS = [
+    # Where a caller's order becomes the engine's, which is as much a part of
+    # reaching the venue as the encoder is: a field the conversion drops never
+    # gets as far as a tag. Leaving this out counted a carried field as lost.
+    ROOT / "src/api/types.rs",
     ROOT / "src/engine/hot_loop/order_builder.rs",
     ROOT / "src/engine/hot_loop/ccp.rs",
     ROOT / "src/engine/hot_loop/mod.rs",
@@ -59,15 +63,43 @@ def refused() -> dict[str, str]:
     block = text[at:end]
     for m in re.finditer(r"((?:^\s*///.*\n)+)\s*pub (\w+):", block, re.M):
         doc = " ".join(line.strip(" /") for line in m.group(1).strip().splitlines())
-        if "not carried" in doc:
+        if "not carried" in doc.lower():
             out[m.group(2)] = doc
     return out
+
+
+def where_fields_are_read() -> str:
+    """Everything that reads an order, with the order's own definition removed.
+
+    `src/api/types.rs` both declares the fields and converts them for the
+    engine. Searching it whole matches every field against its own
+    declaration and reports that all of them are carried, which is the same
+    blindness in the other direction; searching without it reports a field the
+    conversion carries as lost.
+    """
+    out = []
+    for path in BUILDERS:
+        if not path.exists():
+            continue
+        text = path.read_text()
+        if path.name == "types.rs" and "pub struct Order " in text:
+            at = text.index("pub struct Order ")
+            end = text.index("\n}", at)
+            declaration = text[at:end]
+            # And the value that fills it in, which names every field too.
+            default = ""
+            if "impl Default for Order" in text:
+                d_at = text.index("impl Default for Order")
+                default = text[d_at : text.index("\n}\n", d_at)]
+            text = text.replace(declaration, "").replace(default, "")
+        out.append(text)
+    return "\n".join(out)
 
 
 def main() -> int:
     fields = order_fields()
     says_so = refused()
-    read = "\n".join(p.read_text() for p in BUILDERS if p.exists())
+    read = where_fields_are_read()
 
     carried, dropped = [], []
     for field in fields:

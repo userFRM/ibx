@@ -8,17 +8,19 @@ only sign is the venue doing something other than what was asked.
 
 | Kind | Count | Meaning |
 | --- | ---: | --- |
-| carried | 112 | goes out under a tag |
-| refused | 0 | this protocol does not carry it, and the field says so |
-| dropped | 42 | a caller can set it and nothing reads it |
+| carried | 124 | goes out under a tag |
+| refused | 3 | this protocol does not carry it, and the field says so |
+| dropped | 27 | a caller can set it and nothing reads it |
 
 `dropped` is the order-field form of `silent`: the call returns, the
 order is placed, and the field is not on it.
 
 ## Set by a caller and not read
 
-`algo_id`, `auction_strategy`, `basis_points`, `basis_points_type`, `bond_accrued_interest`, `delta_neutral_clearing_account`, `delta_neutral_clearing_intent`, `delta_neutral_designated_location`, `delta_neutral_open_close`, `delta_neutral_settling_firm`, `delta_neutral_short_sale`, `delta_neutral_short_sale_slot`, `discretionary_up_to_limit_price`, `dont_use_auto_price_for_hedge`, `model_code`, `opt_out_smart_routing`, `order_misc_options`, `origin`, `override_percentage_constraints`, `parent_perm_id`, `pt_order_id`, `pt_order_type`, `randomize_price`, `randomize_size`, `scale_auto_reset`, `scale_init_fill_qty`, `scale_init_position`, `scale_price_adjust_interval`, `scale_price_adjust_value`, `scale_profit_offset`, `scale_random_percent`, `scale_subs_level_size`, `scale_table`, `settling_firm`, `shareholder`, `sl_order_id`, `sl_order_type`, `smart_combo_routing_params`, `soft_dollar_tier_display_name`, `soft_dollar_tier_name`, `soft_dollar_tier_val`, `what_if_type`
+`auction_strategy`, `basis_points`, `basis_points_type`, `bond_accrued_interest`, `delta_neutral_clearing_account`, `delta_neutral_clearing_intent`, `delta_neutral_designated_location`, `delta_neutral_settling_firm`, `delta_neutral_short_sale`, `delta_neutral_short_sale_slot`, `discretionary_up_to_limit_price`, `dont_use_auto_price_for_hedge`, `opt_out_smart_routing`, `order_misc_options`, `origin`, `override_percentage_constraints`, `parent_perm_id`, `pt_order_id`, `pt_order_type`, `randomize_price`, `randomize_size`, `settling_firm`, `shareholder`, `sl_order_id`, `sl_order_type`, `smart_combo_routing_params`, `what_if_type`
 
 ## Not carried by this protocol
 
-None.
+- `delta_neutral_open_close` — Whether the hedging leg opens or closes a position.  **Not carried by this protocol.** The counterpart's own field for it declares no tag at all and overrides its writer to do nothing, so it reaches the venue from nowhere. Taken here and kept, so an order built against another client still reads back what it set.
+- `scale_table` — The name of a scale table held by the venue.  **Not carried by this protocol.** The counterpart resolves a table into the ladder it stands for and sends the levels, so the venue is never told the name. Setting the ladder's own fields does the same thing.
+- `soft_dollar_tier_display_name` — What the soft-dollar tier is called on a screen.  **Not carried by this protocol.** The tier and its value are sent; the name shown beside them is held by the counterpart and never written.

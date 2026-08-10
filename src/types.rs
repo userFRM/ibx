@@ -552,6 +552,15 @@ pub struct OrderAttrs {
     pub hedge_type: u8,
     pub hedge_beta: f64,
     pub hedge_ratio: f64,
+    /// The soft-dollar arrangement this order's commission goes to: which
+    /// tier (tag 6519) and what it is worth (tag 6520). Taken from a caller
+    /// and dropped, the commission went wherever the account's default sends
+    /// it, which is not what the caller asked for.
+    pub soft_dollar_tier_name: String,
+    pub soft_dollar_tier_val: String,
+    /// The caller's own name for the algo running this order (tag 8016),
+    /// which comes back on every report about it.
+    pub algo_id: String,
     /// Order capacity and originator, on tag 47 — who this order is for, which
     /// the venue treats as a regulatory statement rather than a preference.
     pub rule80a: String,
@@ -615,6 +624,9 @@ impl Default for OrderAttrs {
     /// exemption on every order that never asked for either.
     fn default() -> Self {
         Self {
+            soft_dollar_tier_name: Default::default(),
+            soft_dollar_tier_val: Default::default(),
+            algo_id: Default::default(),
             display_size: Default::default(),
             min_qty: Default::default(),
             hidden: Default::default(),
@@ -938,6 +950,11 @@ pub struct ScaleAttrs {
     pub auto_reset: bool,
     /// Vary the component sizes (tag 6795).
     pub random_percent: bool,
+    /// A position already held, which the ladder counts against rather than
+    /// starting from nothing (tag 6485).
+    pub init_position: i32,
+    /// How much of the first component is already filled (tag 6486).
+    pub init_fill_qty: i32,
 }
 
 /// The contract an order hedges against: which one, its delta, and its price.

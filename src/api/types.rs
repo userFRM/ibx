@@ -128,6 +128,12 @@ pub struct Order {
     pub delta_neutral_clearing_intent: String,
     pub delta_neutral_con_id: i32,
     pub delta_neutral_designated_location: String,
+    /// Whether the hedging leg opens or closes a position.
+    ///
+    /// **Not carried by this protocol.** The counterpart's own field for it
+    /// declares no tag at all and overrides its writer to do nothing, so it
+    /// reaches the venue from nowhere. Taken here and kept, so an order built
+    /// against another client still reads back what it set.
     pub delta_neutral_open_close: String,
     pub delta_neutral_order_type: String,
     pub delta_neutral_settling_firm: String,
@@ -199,6 +205,11 @@ pub struct Order {
     pub scale_profit_offset: f64,
     pub scale_random_percent: bool,
     pub scale_subs_level_size: i32,
+    /// The name of a scale table held by the venue.
+    ///
+    /// **Not carried by this protocol.** The counterpart resolves a table into
+    /// the ladder it stands for and sends the levels, so the venue is never
+    /// told the name. Setting the ladder's own fields does the same thing.
     pub scale_table: String,
     pub seek_price_improvement: bool,
     pub settling_firm: String,
@@ -209,6 +220,10 @@ pub struct Order {
     pub smart_combo_routing_params: Vec<TagValue>,
     pub soft_dollar_tier_name: String,
     pub soft_dollar_tier_val: String,
+    /// What the soft-dollar tier is called on a screen.
+    ///
+    /// **Not carried by this protocol.** The tier and its value are sent; the
+    /// name shown beside them is held by the counterpart and never written.
     pub soft_dollar_tier_display_name: String,
     pub solicited: bool,
     pub starting_price: f64,
@@ -448,6 +463,9 @@ impl Order {
                 }
             };
         OrderAttrs {
+            soft_dollar_tier_name: self.soft_dollar_tier_name.clone(),
+            soft_dollar_tier_val: self.soft_dollar_tier_val.clone(),
+            algo_id: self.algo_id.clone(),
             display_size: self.display_size.max(0) as u32,
             min_qty: self.min_qty.max(0) as u32,
             hidden: self.hidden,
@@ -579,7 +597,9 @@ impl Order {
             || self.scale_price_adjust_value != f64::MAX
             || self.scale_price_adjust_interval != i32::MAX
             || self.scale_auto_reset
-            || self.scale_random_percent;
+            || self.scale_random_percent
+            || self.scale_init_position != i32::MAX
+            || self.scale_init_fill_qty != i32::MAX;
         if !asked {
             return None;
         }
@@ -594,6 +614,8 @@ impl Order {
             price_adjust_interval: n(self.scale_price_adjust_interval),
             auto_reset: self.scale_auto_reset,
             random_percent: self.scale_random_percent,
+            init_position: if self.scale_init_position == i32::MAX { 0 } else { self.scale_init_position },
+            init_fill_qty: if self.scale_init_fill_qty == i32::MAX { 0 } else { self.scale_init_fill_qty },
         }))
     }
 
@@ -616,7 +638,10 @@ impl Order {
     /// order, and its own tests are what check the attribute block stays
     /// complete as fields are added.
     pub fn has_extended_attrs(&self) -> bool {
-        self.display_size > 0
+        !self.soft_dollar_tier_name.is_empty()
+            || !self.soft_dollar_tier_val.is_empty()
+            || !self.algo_id.is_empty()
+            || self.display_size > 0
             || self.min_qty > 0
             || self.hidden
             || self.outside_rth
@@ -1420,6 +1445,9 @@ mod tests {
             ("reference_price_type", |o| o.reference_price_type = 2),
             ("stock_range_lower", |o| o.stock_range_lower = 100.0),
             ("stock_range_upper", |o| o.stock_range_upper = 200.0),
+            ("soft_dollar_tier_name", |o| o.soft_dollar_tier_name = "Tier A".into()),
+            ("soft_dollar_tier_val", |o| o.soft_dollar_tier_val = "45.5".into()),
+            ("algo_id", |o| o.algo_id = "my-algo".into()),
         ];
 
         // Structural link to `attrs()`: destructured without `..`, so adding a
@@ -1452,6 +1480,7 @@ mod tests {
             include_overnight: _, auto_cancel_parent: _, min_trade_qty: _,
             block_order: _, auto_cancel_date: _, clearing_account: _, clearing_intent: _,
             primary_exchange: _, delta_neutral_contract: _,
+            soft_dollar_tier_name: _, soft_dollar_tier_val: _, algo_id: _,
             // Reached by `exercise_options` rather than by an order, so there is
             // no setter to list above and nothing for the predicate to name.
             exercise_action: _,
