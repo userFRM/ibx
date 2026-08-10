@@ -1506,6 +1506,26 @@ fn push_order_attrs(
         if scale.random_percent {
             fields.push((6795, "1".to_string()));
         }
+        // A ladder that starts against a position already held, and a first
+        // component already partly filled. Left out, the venue starts the
+        // ladder from nothing and works components the caller has already had.
+        if scale.init_position != 0 {
+            fields.push((6485, scale.init_position.to_string()));
+        }
+        if scale.init_fill_qty != 0 {
+            fields.push((6486, scale.init_fill_qty.to_string()));
+        }
+    }
+    // The soft-dollar arrangement this order's commission goes to. Both parts
+    // or neither: a tier named with nothing against it is not an arrangement.
+    if !attrs.soft_dollar_tier_name.is_empty() && !attrs.soft_dollar_tier_val.is_empty() {
+        fields.push((6519, attrs.soft_dollar_tier_name.clone()));
+        fields.push((6520, attrs.soft_dollar_tier_val.clone()));
+    }
+    // The caller's own name for the algo running this order, which comes back
+    // on every report about it.
+    if !attrs.algo_id.is_empty() {
+        fields.push((8016, attrs.algo_id.clone()));
     }
     if attrs.trigger_method > 0 {
         fields.push((6115, attrs.trigger_method.to_string()));
@@ -3795,6 +3815,87 @@ mod outside_rth_polarity_tests {
             "a venue only where the leg has its own: {msg}"
         );
         assert!(f.contains(&"654=1"), "the position effect where set: {msg}");
+    }
+
+    /// A ladder can start against a position already held and a first
+    /// component already partly filled. Left out, the venue starts from
+    /// nothing and works components the caller has already had.
+    #[test]
+    fn a_ladder_states_what_it_starts_from() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            scale: Some(Box::new(crate::types::ScaleAttrs {
+                init_level_size: 100,
+                subs_level_size: 50,
+                price_increment: crate::types::PRICE_SCALE / 100,
+                init_position: 250,
+                init_fill_qty: 40,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 41, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6485=250"), "the position it starts against: {msg}");
+        assert!(f.contains(&"6486=40"), "what of the first component is filled: {msg}");
+    }
+
+    /// Where an order's commission goes, and the caller's own name for the
+    /// algo running it. Both were taken and dropped: the commission went
+    /// wherever the account's default sends it.
+    #[test]
+    fn an_order_states_its_soft_dollar_tier_and_algo_name() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            soft_dollar_tier_name: "Tier A".to_string(),
+            soft_dollar_tier_val: "45.5".to_string(),
+            algo_id: "my-algo-7".to_string(),
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 42, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6519=Tier A"), "the tier: {msg}");
+        assert!(f.contains(&"6520=45.5"), "what it is worth: {msg}");
+        assert!(f.contains(&"8016=my-algo-7"), "the caller's name for the algo: {msg}");
+    }
+
+    /// A tier named with nothing against it is not an arrangement, and half of
+    /// one is worse than none.
+    #[test]
+    fn half_a_soft_dollar_arrangement_states_nothing() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            soft_dollar_tier_name: "Tier A".to_string(),
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 43, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        assert!(!String::from_utf8_lossy(&buf[..n]).contains("6519="), "half an arrangement");
     }
 
     /// A caller can price the legs separately rather than pricing the
