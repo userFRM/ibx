@@ -44,8 +44,34 @@ fn subjects() -> Vec<(&'static str, &'static str, Contract)> {
     ]
 }
 
+/// The account is shared with a daemon that trades it during the session, and
+/// that daemon must not be interrupted. A session may only be opened before the
+/// open or after the close.
+fn window_is_open() -> bool {
+    // New York, where the session's hours are stated.
+    let out = std::process::Command::new("date")
+        .env("TZ", "America/New_York")
+        .arg("+%H%M")
+        .output()
+        .ok();
+    let hhmm: u32 = out
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(1200); // Unreadable clock counts as inside the session.
+    // Open before 09:15 and from 16:15, New York.
+    !(915..1615).contains(&hhmm)
+}
+
 fn main() {
     let _ = env_logger::try_init();
+
+    if !window_is_open() && std::env::var("IBX_IGNORE_WINDOW").is_err() {
+        eprintln!(
+            "the session is open and the account is in use — a live capture waits \
+             for the premarket window or for after the close"
+        );
+        std::process::exit(3);
+    }
     // Safety: set before anything reads it, and this binary is single-threaded
     // until the engine starts.
     unsafe { std::env::set_var("IBX_CAPTURE_TBT", "1") };
@@ -76,7 +102,8 @@ fn main() {
     };
     println!("session open");
 
-    for (what, kind, contract) in subjects() {
+    for (n, (what, kind, contract)) in subjects().into_iter().enumerate() {
+        let req = n as i64 + 1;
         // Resolve it first: a subscription wants the contract's own id, and the
         // id is also what says the venue knows the contract at all.
         let resolved = match client.qualify_contract(&contract) {
@@ -91,12 +118,12 @@ fn main() {
         // The increment a price moves in arrives with a market-data
         // subscription, and a move on the tick stream is stated in whole ones
         // of it — so without this the ticks decode to nothing usable.
-        if let Err(e) = client.req_mkt_data(2, &resolved, "", false, false) {
+        if let Err(e) = client.req_mkt_data(100 + req, &resolved, "", false, false) {
             println!("  {what:<20} market data refused: {e}");
         }
         std::thread::sleep(Duration::from_secs(3));
 
-        if let Err(e) = client.req_tick_by_tick_data(1, &resolved, kind, 0, false) {
+        if let Err(e) = client.req_tick_by_tick_data(req, &resolved, kind, 0, false) {
             println!("  {what:<20} the subscription was refused: {e}");
             continue;
         }
@@ -118,15 +145,15 @@ fn main() {
         );
         for q in quotes.iter().take(3) {
             println!(
-                "        bid {:.5} x {}   ask {:.5} x {}",
+                "        bid {:.5} x {:.0}   ask {:.5} x {:.0}",
                 q.bid as f64 / 1e8,
-                q.bid_size,
+                q.bid_size as f64 / 1e4,
                 q.ask as f64 / 1e8,
-                q.ask_size
+                q.ask_size as f64 / 1e4
             );
         }
         for t in trades.iter().take(3) {
-            println!("        traded {:.2} x {} on {}", t.price as f64 / 1e8, t.size, t.exchange);
+            println!("        traded {:.2} x {:.0} on {}", t.price as f64 / 1e8, t.size as f64 / 1e4, t.exchange);
         }
 
         let frames: Vec<String> = client

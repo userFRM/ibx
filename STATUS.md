@@ -24,7 +24,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Top of book | ✅ | |
 | Depth of book | ✅ | |
 | Historical bars, ticks, schedules | ✅ | |
-| Tick-by-tick | ✅ | Trades, quotes, midpoint |
+| Tick-by-tick | ✅ | Trades, quotes, midpoint. One subscription at a time — see limits |
 | Trading halts | 🔬 | Decoder done; needs a generic-tick subscription |
 | Tick attributes | 🔬 | Past-limit, unreported, past-low/high |
 
@@ -83,6 +83,7 @@ though it acted when it did not.
 | Price precision | Prices are held to a hundred-millionth. The venue holds a price as a count of the contract's own increment, which has no floor — a satoshi sits exactly on ours. Guarded at build time |
 
 | Advisor and event data | Buildable, not verifiable without an advisor account and a WSH subscription |
+| Several tick subscriptions at once | The venue numbers subscriptions itself and states that number on every frame. Its acknowledgement is not read yet, so a second concurrent subscription may be attributed to the first contract |
 
 ## Open questions
 

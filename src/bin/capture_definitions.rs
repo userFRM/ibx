@@ -139,8 +139,33 @@ fn subjects() -> Vec<(&'static str, Contract)> {
     ]
 }
 
+/// The account is shared with a daemon that trades it during the session, and
+/// that daemon must not be interrupted. A session may only be opened before the
+/// open or after the close.
+fn window_is_open() -> bool {
+    let out = std::process::Command::new("date")
+        .env("TZ", "America/New_York")
+        .arg("+%H%M")
+        .output()
+        .ok();
+    let hhmm: u32 = out
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(1200); // Unreadable clock counts as inside the session.
+    // Open before 09:15 and from 16:15, New York.
+    !(915..1615).contains(&hhmm)
+}
+
 fn main() {
     let _ = env_logger::try_init();
+
+    if !window_is_open() && std::env::var("IBX_IGNORE_WINDOW").is_err() {
+        eprintln!(
+            "the session is open and the account is in use — a live capture waits \
+             for the premarket window or for after the close"
+        );
+        std::process::exit(3);
+    }
 
     let username = std::env::var("IB_USERNAME").unwrap_or_default();
     let password = std::env::var("IB_PASSWORD").unwrap_or_default();
