@@ -134,9 +134,19 @@ pub fn disconnect(&self)
 
 ---
 
-#### `unread_wire`
+#### `shared_state`
 
-Everything the venue has sent this session that nothing here reads, as the connection it arrived on and what it was. Empty is this client's claim that it reads everything this venue sends it, and the only way to check that claim rather than take it. A message deliberately not read — one carrying nothing a caller could use — is not listed here; those are named in the source with the reason.
+Everything the venue has sent this session that nothing here reads, as the connection it arrived on and what it was. Empty is this client's claim that it reads everything this venue sends it, and the only way to check that claim rather than take it. A message deliberately not read — one carrying nothing a caller could use — is not listed here; those are named in the source with the reason. The session's own state, for reading what has arrived.
+
+```rust
+pub fn shared_state(&self) -> &Arc<SharedState>
+```
+
+**Returns:** `&Arc<SharedState>`
+
+---
+
+#### `unread_wire`
 
 ```rust
 pub fn unread_wire(&self) -> Vec<(&'static str, String)>

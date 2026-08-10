@@ -233,6 +233,20 @@ pub fn decode_frame(
     })
 }
 
+/// Which subscription a frame's records belong to, as the frame states it.
+///
+/// Every record names it, and they agree within a frame. Reading it without
+/// decoding the rest lets a caller route the frame before it knows how to read
+/// what is in it.
+pub fn frame_ticker_id(body: &[u8]) -> Option<u64> {
+    if body.len() < 2 {
+        return None;
+    }
+    let bits_stated = ((body[0] as usize) << 8) | body[1] as usize;
+    let payload = body.get(2..2 + bits_stated.div_ceil(8).min(body.len() - 2))?;
+    Bits::new(payload).unsigned()
+}
+
 /// A size, which the venue may state in one number or in two.
 ///
 /// The two-number form sends the low half first. Reading one number where it

@@ -418,6 +418,11 @@ impl EClient {
     /// it, and the only way to check that claim rather than take it. A message
     /// deliberately not read — one carrying nothing a caller could use — is
     /// not listed here; those are named in the source with the reason.
+    /// The session's own state, for reading what has arrived.
+    pub fn shared_state(&self) -> &Arc<SharedState> {
+        &self.shared
+    }
+
     pub fn unread_wire(&self) -> Vec<(&'static str, String)> {
         self.shared.market.unread_wire()
     }
