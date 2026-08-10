@@ -90,6 +90,15 @@ pub(crate) struct FarmState {
     /// The option-model subscriptions and what they were taken out on, so one
     /// can be withdrawn the same way it was asked for.
     greeks_subs: Vec<(u32, i64, String)>,
+    /// What generic tick each request asked for, as (req_id, request type).
+    /// The venue numbers a generic tick separately from the prices and states
+    /// nothing on the frames themselves about which tick they carry, so the
+    /// only thing that says what a frame holds is what was asked for under
+    /// that number.
+    generic_tick_reqs: Vec<(u32, u32)>,
+    /// The venue's number for a generic-tick subscription, and what it
+    /// carries: (server tag, request type, instrument).
+    generic_tick_tags: Vec<(u32, u32, InstrumentId)>,
     /// Message types the venue has sent on this connection that nothing reads.
     unread_types: std::collections::HashSet<String>,
     pub(crate) disconnected: bool,
@@ -149,7 +158,7 @@ fn build_trading_status_subscribe_tags(
 }
 
 /// The trading-status tick's own number, in place of a request type.
-const TRADING_STATUS_REQUEST_TYPE: &str = "437";
+const TRADING_STATUS_REQUEST_TYPE: u32 = 437;
 
 /// What the venue counts an instrument's sizes in, as its acknowledgement
 /// states it: the last field, after the increment prices move in.
@@ -172,19 +181,65 @@ const GREEKS_VENUE: &str = "IBVOL";
 const DEPTH_VENUE_REFUSED: i32 = 321;
 
 /// The option model's own tick, in place of a request type.
-const GREEKS_REQUEST_TYPE: &str = "732";
+const GREEKS_REQUEST_TYPE: u32 = 732;
 
-/// Drop the framing that follows a binary payload.
-fn strip_trailer(body: &[u8]) -> &[u8] {
-    const TRAILER: &[u8] = b"\x018349=";
-    body.windows(TRAILER.len())
-        .position(|w| w == TRAILER)
-        .map_or(body, |at| &body[..at])
+
+/// The news tick's own number, in place of a request type.
+const NEWS_REQUEST_TYPE: u32 = 292;
+
+/// One generic tick as the venue frames it.
+///
+/// The envelope opens with the length of everything after it, in bits, then
+/// the venue's number for the subscription, then the payload's length in
+/// bytes and the payload. Nothing on it says which tick it carries.
+///
+/// The leading length was read as a kind for a while, which worked only
+/// because each tick's payload happened to be a fixed size: an option model
+/// is a hundred and twenty-four bytes and so always announced the same
+/// number. Any other tick of that size would have been read as an option
+/// model, and a model of any other size would not have been read at all.
+struct GenericTickFrame<'a> {
+    server_tag: u32,
+    payload: &'a [u8],
 }
 
-/// The tick that carries the venue's own option model, on the same envelope as
-/// a news tick and told apart by its type.
-const TICK_GREEKS: u16 = 0x0408;
+impl<'a> GenericTickFrame<'a> {
+    /// Read the envelope, or nothing where it does not hold together.
+    ///
+    /// The frame states its length twice — once for the whole of it and once
+    /// for the payload — and the two have to agree. That is also what says
+    /// whether the payload's length is stated in one byte or two: the reading
+    /// that squares with the whole is the right one.
+    fn read(body: &'a [u8]) -> Option<Self> {
+        let stated_bits = u16::from_be_bytes([*body.first()?, *body.get(1)?]) as usize;
+        if !stated_bits.is_multiple_of(8) {
+            return None;
+        }
+        let stated = stated_bits / 8;
+        let frame = body.get(2..2 + stated)?;
+        let server_tag = u32::from_be_bytes([
+            *frame.first()?,
+            *frame.get(1)?,
+            *frame.get(2)?,
+            *frame.get(3)?,
+        ]);
+        // One byte of length, then two, and whichever squares with the whole
+        // frame is the one the venue wrote.
+        let short = *frame.get(4)? as usize;
+        if 5 + short == stated {
+            return Some(Self { server_tag, payload: frame.get(5..)? });
+        }
+        let long = u16::from_be_bytes([*frame.get(4)?, *frame.get(5)?]) as usize;
+        if 6 + long == stated {
+            return Some(Self { server_tag, payload: frame.get(6..)? });
+        }
+        log::debug!(
+            "A generic tick under server tag {server_tag} states {stated} bytes and a payload \
+             that fits neither reading; dropping it rather than reading past its end",
+        );
+        None
+    }
+}
 
 /// What the venue sent of its option model.
 ///
@@ -298,6 +353,8 @@ impl FarmState {
             depth_resub_info: Vec::new(),
             md_resub_info: Vec::new(),
             greeks_subs: Vec::new(),
+            generic_tick_reqs: Vec::new(),
+            generic_tick_tags: Vec::new(),
             unread_types: std::collections::HashSet::new(),
             disconnected: false,
             tick_buf: Vec::with_capacity(16),
@@ -443,7 +500,7 @@ impl FarmState {
             // before it started.
             b"3" => self.handle_subscription_reject(msg, context, shared),
             b"Y" => self.handle_depth_35y(msg, shared),
-            b"G" => self.handle_tick_news(msg, context, shared, event_tx),
+            b"G" => self.handle_generic_tick(msg, shared, event_tx),
             // Named once, the first time each arrives, the way the trading
             // connection names what it does not read. Reported where nobody
             // looks, a type the venue sends and this client drops is
@@ -672,6 +729,21 @@ impl FarmState {
             None => return,
         };
 
+        // A generic tick is numbered apart from the prices, and its frames say
+        // nothing about which tick they carry. What was asked for under this
+        // request is the only thing that does, so the two are recorded
+        // together here and read back when a frame arrives.
+        if let Some((_, request_type)) =
+            self.generic_tick_reqs.iter().find(|(id, _)| *id == req_id).copied()
+        {
+            self.generic_tick_tags.retain(|(tag, ..)| *tag != server_tag);
+            self.generic_tick_tags.push((server_tag, request_type, instrument));
+            log::info!(
+                "Generic tick {request_type} on instrument {instrument} -> server_tag {server_tag}"
+            );
+            return;
+        }
+
         context.market.register_server_tag(server_tag, instrument);
         context.market.set_min_tick(instrument, min_tick);
         if let Some(size_tick) = trailing_size_increment(&parts) {
@@ -803,12 +875,18 @@ impl FarmState {
             None
         };
 
+        let status_req_id = self.next_md_req_id;
+        self.next_md_req_id += 1;
+
         self.md_req_to_instrument.push((bid_ask_id, instrument));
+        self.md_req_to_instrument.push((status_req_id, instrument));
+        self.generic_tick_reqs.push((status_req_id, TRADING_STATUS_REQUEST_TYPE));
         if realtime {
             self.md_req_to_instrument.push((last_id, instrument));
         }
         if let Some(id) = greeks_req_id {
             self.md_req_to_instrument.push((id, instrument));
+            self.generic_tick_reqs.push((id, GREEKS_REQUEST_TYPE));
             // Recorded whether or not the farm is up: what was asked for is
             // bookkeeping, and a cancel has to find it either way.
             self.greeks_subs.push((id, con_id, sec_type.to_string()));
@@ -817,11 +895,12 @@ impl FarmState {
         match self.instrument_md_reqs.iter_mut().find(|(id, _)| *id == instrument) {
             Some((_, reqs)) => {
                 reqs.push(bid_ask_id);
+                reqs.push(status_req_id);
                 if realtime { reqs.push(last_id); }
                 if let Some(id) = greeks_req_id { reqs.push(id); }
             }
             None => {
-                let mut reqs = if realtime { vec![bid_ask_id, last_id] } else { vec![bid_ask_id] };
+                let mut reqs = if realtime { vec![bid_ask_id, last_id, status_req_id] } else { vec![bid_ask_id, status_req_id] };
                 if let Some(id) = greeks_req_id { reqs.push(id); }
                 self.instrument_md_reqs.push((instrument, reqs));
             }
@@ -873,7 +952,7 @@ impl FarmState {
                 // Asked for under the same request as the prices, so a caller
                 // reading a halt reads it against the quote it belongs to.
                 let tags = build_trading_status_subscribe_tags(
-                    bid_ask_id, con_id, sec_type, exchange, &ts,
+                    status_req_id, con_id, sec_type, exchange, &ts,
                 );
                 let refs: Vec<(u32, &str)> =
                     tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
@@ -977,6 +1056,7 @@ impl FarmState {
                 let (_, con_id, sec_type) = withdrawn.remove(at);
                 let con_id_str = (con_id as u32).to_string();
                 let fix_sec_type = crate::control::contracts::sec_type_to_fix(&sec_type);
+                let greeks_type = GREEKS_REQUEST_TYPE.to_string();
                 let _ = conn.send_fixcomp(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
                     (262, &req_id_str),
@@ -984,7 +1064,7 @@ impl FarmState {
                     (6008, &con_id_str),
                     (207, GREEKS_VENUE),
                     (167, fix_sec_type),
-                    (264, GREEKS_REQUEST_TYPE),
+                    (264, &greeks_type),
                 ]);
                 continue;
             }
@@ -1484,47 +1564,47 @@ impl FarmState {
         log::info!("Farm reconnected, re-subscribed {} instruments + {} depth", self.instrument_md_reqs.len(), depth_count);
     }
 
-    fn handle_tick_news(&mut self, msg: &[u8], context: &Context, shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
+    fn handle_generic_tick(&mut self, msg: &[u8], shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
         let body = match find_body_after_tag(msg, b"35=G\x01") {
             Some(b) => b,
             None => return,
         };
 
-        if body.len() < 12 { return; }
+        let Some(frame) = GenericTickFrame::read(body) else { return };
 
-        let tick_type = u16::from_be_bytes([body[0], body[1]]);
-        // The option model rides the same envelope. Its flags start a byte
-        // later than a news tick's payload does.
-        if tick_type == TICK_GREEKS {
-            let server_tag = u32::from_be_bytes([body[2], body[3], body[4], body[5]]);
-            let Some(instrument) = context.market.instrument_by_server_tag(server_tag) else {
-                log::debug!("Option model for unknown server tag {server_tag}; dropping");
-                return;
-            };
-            let payload = strip_trailer(&body[7..]);
-            if let Some(mut comp) = decode_greeks(payload) {
+        // Which tick this is is not on the frame. The venue numbers a generic
+        // tick apart from the prices and says what it carries once, when it
+        // takes the subscription on, so what was asked for under that number
+        // is the only thing that says what these bytes are. Read off the
+        // frame's own length instead, every tick whose payload happened to be
+        // the same size read as the same tick.
+        let Some((_, request_type, instrument)) = self
+            .generic_tick_tags
+            .iter()
+            .find(|(tag, ..)| *tag == frame.server_tag)
+            .copied()
+        else {
+            log::debug!(
+                "A generic tick arrived under server tag {}, which nothing here asked for",
+                frame.server_tag,
+            );
+            return;
+        };
+
+        if request_type == GREEKS_REQUEST_TYPE {
+            if let Some(mut comp) = decode_greeks(frame.payload) {
                 comp.instrument = instrument;
                 shared.market.push_option_computation(comp);
                 emit(event_tx, Event::OptionComputation(comp));
             }
             return;
         }
-        if tick_type != 0x1E90 { return; }
+        if request_type != NEWS_REQUEST_TYPE { return; }
+        let body = frame.payload;
+        if body.len() < 4 { return; }
 
-        let server_tag = u32::from_be_bytes([body[2], body[3], body[4], body[5]]);
-        // Instrument 0 is a real instrument — the first one registered — so an
-        // unrecognised tag must be dropped rather than defaulted, or the
-        // article is attributed to whatever was subscribed first.
-        let instrument = match context.market.instrument_by_server_tag(server_tag) {
-            Some(id) => id,
-            None => {
-                log::debug!("News for unknown server tag {server_tag}; dropping");
-                return;
-            }
-        };
-
-        let batch_count = u32::from_be_bytes([body[8], body[9], body[10], body[11]]) as usize;
-        let mut pos = 12;
+        let batch_count = u32::from_be_bytes([body[0], body[1], body[2], body[3]]) as usize;
+        let mut pos = 4;
 
         for _ in 0..batch_count {
             if pos + 4 > body.len() { break; }
@@ -1585,31 +1665,22 @@ mod news_tests {
     use crate::engine::context::Context;
 
     /// Wrap a news body in the frame the farm connection delivers it in.
-    fn framed_news(body: &[u8]) -> Vec<u8> {
+    /// One generic tick, framed the way the venue frames it: the length of
+    /// everything after it in bits, the venue's number for the subscription,
+    /// then the payload's length in bytes and the payload.
+    fn framed_generic_tick(server_tag: u32, payload: &[u8]) -> Vec<u8> {
+        let mut frame = server_tag.to_be_bytes().to_vec();
+        frame.push(payload.len() as u8);
+        frame.extend_from_slice(payload);
         let mut msg = b"35=G\x01".to_vec();
-        msg.extend_from_slice(body);
+        msg.extend_from_slice(&((frame.len() * 8) as u16).to_be_bytes());
+        msg.extend_from_slice(&frame);
         msg
     }
 
-    /// Instrument 0 is a real instrument — the first one registered — so an
-    /// unrecognised news tag must be dropped, not defaulted onto it. Before
-    /// this mapping change every live-session news tick carried a tag above the
-    /// old bound and hit exactly that path.
-    #[test]
-    fn news_for_an_unknown_tag_is_dropped_not_misattributed() {
-        let mut farm = FarmState::new();
-        let mut context = Context::new();
-        let shared = SharedState::new();
-        let first = context.market.register(756733);
-        assert_eq!(first, 0, "the first instrument really is id 0");
-
-        // One article, laid out as the handler reads it: u32 provider length
-        // and bytes, a skipped u32, a u16 article-id length and bytes, a
-        // skipped u32 then the timestamp, and a u32 headline length and bytes.
+    /// One article, laid out as the handler reads it.
+    fn one_article() -> Vec<u8> {
         let mut body = Vec::new();
-        body.extend_from_slice(&0x1E90u16.to_be_bytes());
-        body.extend_from_slice(&999_999u32.to_be_bytes());
-        body.extend_from_slice(&0u16.to_be_bytes());
         body.extend_from_slice(&1u32.to_be_bytes());
         body.extend_from_slice(&4u32.to_be_bytes());
         body.extend_from_slice(b"BRFG");
@@ -1620,27 +1691,90 @@ mod news_tests {
         body.extend_from_slice(&1_785_325_554u32.to_be_bytes());
         body.extend_from_slice(&8u32.to_be_bytes());
         body.extend_from_slice(b"headline");
-        let msg = framed_news(&body);
-        farm.handle_tick_news(&msg, &context, &shared, &None);
+        body
+    }
 
+    /// A frame under a number nothing asked a generic tick under says nothing
+    /// about which tick it is, so it is dropped rather than guessed at.
+    /// Instrument 0 is a real instrument — the first one registered — so a
+    /// guess would pin somebody else's article on it.
+    #[test]
+    fn a_tick_under_an_unasked_number_is_dropped_not_misattributed() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let first = context.market.register(756733);
+        assert_eq!(first, 0, "the first instrument really is id 0");
+        context.market.register_server_tag(999_999, first);
+
+        let msg = framed_generic_tick(999_999, &one_article());
+        farm.handle_generic_tick(&msg, &shared, &None);
         assert!(
             shared.market.drain_tick_news().is_empty(),
-            "an article for an unknown tag is dropped rather than pinned on instrument 0",
+            "a number nothing asked a generic tick under delivers nothing",
         );
 
-        // Positive control: the same frame with a registered tag must produce
-        // an article, or the assertion above proves nothing.
-        context.market.register_server_tag(999_999, first);
-        assert_eq!(
-            context.market.instrument_by_server_tag(999_999), Some(first),
-            "the tag resolves once registered",
-        );
-        farm.handle_tick_news(&msg, &context, &shared, &None);
+        // Positive control: the same frame, once this client has said what it
+        // asked for under that number.
+        farm.generic_tick_tags.push((999_999, NEWS_REQUEST_TYPE, first));
+        farm.handle_generic_tick(&msg, &shared, &None);
         assert_eq!(
             shared.market.drain_tick_news().len(), 1,
-            "a registered tag does deliver, so the drop above is the tag and not the frame",
+            "so the drop above is what was asked for, not the frame",
         );
     }
+
+    /// Which tick a frame carries is what was asked for under its number, not
+    /// how long the frame is. Read off the length, every tick whose payload
+    /// happened to be the size of an option model read as an option model.
+    #[test]
+    fn two_ticks_of_one_length_are_told_apart() {
+        let shared = SharedState::new();
+        let article = one_article();
+
+        let mut as_news = FarmState::new();
+        as_news.generic_tick_tags.push((7, NEWS_REQUEST_TYPE, 0));
+        as_news.handle_generic_tick(&framed_generic_tick(7, &article), &shared, &None);
+        assert_eq!(shared.market.drain_tick_news().len(), 1);
+
+        // The same bytes, the same length, asked for as something else.
+        let mut as_status = FarmState::new();
+        as_status.generic_tick_tags.push((7, TRADING_STATUS_REQUEST_TYPE, 0));
+        as_status.handle_generic_tick(&framed_generic_tick(7, &article), &shared, &None);
+        assert!(
+            shared.market.drain_tick_news().is_empty(),
+            "the same bytes under a different tick are not an article",
+        );
+    }
+
+    /// The frame states its length twice, and a frame whose two lengths
+    /// disagree is refused rather than read as far as it goes.
+    #[test]
+    fn a_frame_that_does_not_hold_together_is_refused() {
+        let article = one_article();
+        let mut msg = framed_generic_tick(7, &article);
+        // Claim one byte more of payload than the frame carries.
+        let at = msg.len() - article.len() - 1;
+        msg[at] += 1;
+        assert!(GenericTickFrame::read(&msg[5..]).is_none(), "the two lengths disagree");
+    }
+
+    /// A payload too long to state in one byte states its length in two, and
+    /// the reading that squares with the whole frame is the right one.
+    #[test]
+    fn a_long_payload_states_its_length_in_two_bytes() {
+        let payload = vec![7u8; 300];
+        let mut frame = 42u32.to_be_bytes().to_vec();
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        frame.extend_from_slice(&payload);
+        let mut body = ((frame.len() * 8) as u16).to_be_bytes().to_vec();
+        body.extend_from_slice(&frame);
+
+        let read = GenericTickFrame::read(&body).expect("the frame holds together");
+        assert_eq!(read.server_tag, 42);
+        assert_eq!(read.payload, &payload[..]);
+    }
+
 }
 
 #[cfg(test)]
