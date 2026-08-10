@@ -25,7 +25,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Depth of book | ✅ | |
 | Historical bars, ticks, schedules | ✅ | |
 | Tick-by-tick | ✅ | Trades, quotes, midpoint. Several subscriptions at once |
-| Trading halts | 🔬 | Decoder done; needs a generic-tick subscription |
+| Trading halts | 🔬 | Subscribed and arriving; the payload's layout is not settled |
 | Tick attributes | 🔬 | Past-limit, unreported, past-low/high |
 
 ## Orders
@@ -90,16 +90,15 @@ Settled only by a live capture, recorded so nobody re-derives them:
 
 - The combo side convention — live evidence and the counterpart's own encoding disagree
 - The trading-status timestamp's unit
-- Whether a size carries an implied decimal for fractional instruments
+- The trading status payload's field layout
 
 ---
 
 ## Before 1.0
 
-1. Subscribe generic ticks — turns halts and tick attributes from 🔬 to ✅
-2. Name `evMultiplier` and `marketRuleIds`, currently reachable by tag number
-3. Live sessions at market hours until one finds nothing
+1. Read the trading-status payload — turns halts and tick attributes from 🔬 to ✅
+2. Live sessions at market hours until one finds nothing
 
-Step 3 is the constraint. Live sessions have, every time, found defects the
+Step 2 is the constraint. Live sessions have, every time, found defects the
 offline suite could not — including a regression that broke every answering
 call while 1,391 tests stayed green.
