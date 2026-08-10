@@ -54,6 +54,29 @@ having. This is where the worst defects have been.
 | Soft-dollar tiers, news providers | **fixed** — both are stated on the logon and only there. The tier parser looked for a shape the venue does not send, so every entry failed and a list written here stood in |
 | A contract's tick size when the venue states none | **open** — 0.01 is invented, wrong for most futures |
 | The single letter a venue is known by | **accepted** — the venue names venues in full and states no abbreviation; this is client knowledge, and is recorded as such |
+| How a price is held | **diverges from the venue, knowingly** — see below |
+
+### How a price is held, and where that differs from the venue
+
+The venue sends a price as a whole number of the contract's own smallest
+increment. The counterpart holds it that way too: the count, beside the
+increment it counts. That has no floor — a contract quoted in millionths works
+as well as one quoted in pennies, because the count is relative to the contract.
+
+This client converts into one fixed scale of a hundred-millionth. That buys
+arithmetic between contracts without carrying an increment around, and costs a
+floor: a contract whose increment is finer than a hundred-millionth cannot be
+held, and a satoshi sits exactly on the limit. The limit is guarded at build
+time rather than discovered later.
+
+Nothing about the scale is guessed from the currency or the kind of contract —
+the increment always comes from the venue, per contract. What is fixed is only
+the form a worked-out price is stored in.
+
+Closing the gap means holding the count and the increment together and
+converting at the edge, which touches every price this client handles. It is
+recorded here rather than done quietly, and is not urgent while no entitled
+contract quotes finer than the limit.
 
 ## 3. The wire
 
