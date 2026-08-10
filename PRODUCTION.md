@@ -50,9 +50,9 @@ having. This is where the worst defects have been.
 | The current time | **fixed** on both surfaces — answered from the local clock, which reports zero skew whatever the truth |
 | Which venue a quote's bid, ask and last came from | **fixed** — attributed through a table written in this client; the venue states the list itself |
 | A request that returns as though it acted | **fixed and guarded** — held at zero by a generator CI runs |
-| Account currency | **fixed** — as the venue states it, per figure. Commission currency: **open** |
+| Account and commission currency | **fixed** — both as the venue states them, and empty where it stated none |
 | Soft-dollar tiers, news providers | **fixed** — both are stated on the logon and only there. The tier parser looked for a shape the venue does not send, so every entry failed and a list written here stood in |
-| A contract's tick size when the venue states none | **open** — 0.01 is invented, wrong for most futures |
+| A contract's tick size when the venue states none | **fixed** — unset rather than a penny, on a definition and on a subscription's acknowledgement alike |
 | The single letter a venue is known by | **accepted** — the venue names venues in full and states no abbreviation; this is client knowledge, and is recorded as such |
 | How a price is held | **diverges from the venue, knowingly** — see below |
 

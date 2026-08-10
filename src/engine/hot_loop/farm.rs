@@ -568,7 +568,21 @@ impl FarmState {
         if parts.len() < 3 { return; }
         let server_tag: u32 = match parts[0].parse() { Ok(v) => v, Err(_) => return };
         let req_id: u32 = match parts[1].parse() { Ok(v) => v, Err(_) => return };
-        let min_tick: f64 = parts[2].parse().unwrap_or(0.01);
+        // The venue states the increment; a penny is not stood in where it did
+        // not. Every price on this instrument is scaled by it, so a wrong one
+        // is wrong prices rather than a wrong field.
+        let min_tick: f64 = match parts[2].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                log::warn!(
+                    "a subscription was acknowledged with an increment that cannot be \
+                     read ({}), so this instrument has none and its prices cannot be \
+                     worked out",
+                    parts[2],
+                );
+                return;
+            }
+        };
 
         // Depth ack: always map the server_tag if this req_id is a depth subscription,
         // even when depth_levels=0 (book empty now but updates may arrive later).
@@ -660,7 +674,17 @@ impl FarmState {
         let parts: Vec<&str> = text.trim().split(',').collect();
         if parts.len() < 3 { return; }
         let con_id: i64 = match parts[0].parse() { Ok(v) => v, Err(_) => return };
-        let min_tick: f64 = parts[1].parse().unwrap_or(0.01);
+        let min_tick: f64 = match parts[1].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                log::warn!(
+                    "a depth subscription was acknowledged with an increment that \
+                     cannot be read ({}), so this instrument has none",
+                    parts[1],
+                );
+                return;
+            }
+        };
         let server_tag: u32 = match parts[2].parse() { Ok(v) => v, Err(_) => return };
 
         if let Some(instrument) = context.market.instrument_by_con_id(con_id) {

@@ -365,7 +365,13 @@ impl Default for ContractDefinition {
             local_symbol: String::new(),
             trading_class: String::new(),
             long_name: String::new(),
-            min_tick: 0.01,
+            // Not a penny by default. The smallest increment a contract moves
+            // in is the venue's to state, and a great many contracts do not
+            // move in pennies — most futures do not. Standing a penny in where
+            // the venue stated nothing prices those contracts on a grid they
+            // are not traded on, and says so with the same confidence as a
+            // figure the venue gave.
+            min_tick: 0.0,
             multiplier: 1.0,
             valid_exchanges: Vec::new(),
             order_types: Vec::new(),
@@ -708,8 +714,8 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     // carries an inline price-increment block, fix_parse keeps that sentinel,
     // so reading 6019 as min_tick yields 1.0. Derive min_tick from the parsed
     // increments instead: the smallest increment is the contract's minimum
-    // tick (iso ContractDetails.minTick). Absent a rule block, the default
-    // (0.01) stands.
+    // tick. Absent a rule block it stays unset, because the venue stated none
+    // and a penny is a guess that most futures fail.
     if let Some(min_increment) = parse_market_rules(data)
         .iter()
         .flat_map(|rule| rule.price_increments.iter())
@@ -1701,9 +1707,12 @@ mod tests {
         assert_eq!(def.min_tick, 0.0001);
     }
 
-    // Absent any inline rule block, min_tick keeps its default.
+    /// A definition stating no rule block states no smallest increment, and
+    /// none is invented for it. A penny used to stand in, which prices most
+    /// futures on a grid they are not traded on and says so as confidently as
+    /// a figure the venue gave.
     #[test]
-    fn secdef_min_tick_defaults_without_rule_block() {
+    fn a_definition_stating_no_rule_states_no_increment() {
         let msg = fix::fix_build(
             &[
                 (TAG_MSG_TYPE, "d"),
@@ -1714,7 +1723,7 @@ mod tests {
             1,
         );
         let def = super::parse_secdef_response(&msg).unwrap();
-        assert_eq!(def.min_tick, 0.01);
+        assert_eq!(def.min_tick, 0.0, "unstated, not a penny");
     }
 
     #[test]

@@ -152,7 +152,9 @@ impl EClient {
             let api_commission = ApiCommissionAndFeesReport {
                 exec_id: exec_id.clone(),
                 commission_and_fees: commission,
-                currency: "USD".into(),
+                // As stated on the execution rather than assumed. See the
+                // matching note on the other surface.
+                currency: api_contract.currency.clone(),
                 realized_pnl: f64::MAX,
                 yield_amount: f64::MAX,
                 yield_redemption_date: String::new(),
