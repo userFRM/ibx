@@ -2216,34 +2216,47 @@ impl Gateway {
         }
         shared.reference.set_news_providers(news_providers);
 
-        // Soft dollar tiers: parse from CCP logon tag 6560, fall back to defaults.
-        let tiers = if self.raw_soft_dollar_tiers.is_empty() {
-            // Default tiers matching Gateway 10.30+
-            vec![
-                SoftDollarTier { name: "MaxRebate".into(), val: "1".into(), display_name: "Maximize Rebate".into() },
-                SoftDollarTier { name: "PreferRebate".into(), val: "9".into(), display_name: "Prefer Rebate".into() },
-                SoftDollarTier { name: "PreferFill".into(), val: "11".into(), display_name: "Prefer Fill".into() },
-                SoftDollarTier { name: "MaxFill".into(), val: "12".into(), display_name: "Maximize Fill".into() },
-                SoftDollarTier { name: "Primary".into(), val: "2".into(), display_name: "Primary Exchange".into() },
-                SoftDollarTier { name: "VRebate".into(), val: "3".into(), display_name: "Highest Volume Exchange With Rebate".into() },
-                SoftDollarTier { name: "VLowFee".into(), val: "4".into(), display_name: "High Volume Exchange With Lowest Fee".into() },
-            ]
-        } else {
-            // Parse "name1|val1|display1;name2|val2|display2" format
-            self.raw_soft_dollar_tiers.split(';').filter_map(|entry| {
-                let parts: Vec<&str> = entry.split('|').collect();
-                if parts.len() >= 3 {
-                    Some(SoftDollarTier {
-                        name: parts[0].to_string(),
-                        val: parts[1].to_string(),
-                        display_name: parts[2].to_string(),
-                    })
-                } else {
-                    log::warn!("Unexpected soft dollar tier format: {entry}");
-                    None
+        // Soft dollar tiers, as the logon states them and only as it states
+        // them.
+        //
+        // The venue sends them comma separated, each one its value, the name it
+        // is shown under, and the name it is asked for by, separated by
+        // slashes: "1/Maximize Rebate/MaxRebate,9/Prefer Rebate/PreferRebate".
+        //
+        // This looked for a different shape entirely — semicolons between the
+        // entries and bars inside them — so every entry failed to parse and a
+        // list written here stood in. That list was a transcription of what the
+        // venue actually sends, which is why it looked right: the data had been
+        // copied out of a reply instead of read from one, and the day the venue
+        // changed a tier nobody would have known.
+        let tiers: Vec<SoftDollarTier> = self
+            .raw_soft_dollar_tiers
+            .split(',')
+            .filter_map(|entry| {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    return None;
                 }
-            }).collect()
-        };
+                let mut parts = entry.split('/');
+                let val = parts.next()?.trim();
+                let display_name = parts.next()?.trim();
+                let name = parts.next()?.trim();
+                if val.is_empty() || name.is_empty() {
+                    return None;
+                }
+                Some(SoftDollarTier {
+                    name: name.to_string(),
+                    val: val.to_string(),
+                    display_name: display_name.to_string(),
+                })
+            })
+            .collect();
+        if tiers.is_empty() && !self.raw_soft_dollar_tiers.is_empty() {
+            log::warn!(
+                "the logon stated soft dollar tiers in a shape this does not read: {}",
+                self.raw_soft_dollar_tiers,
+            );
+        }
         shared.reference.set_soft_dollar_tiers(tiers);
 
         // Family codes: parse from CCP logon tag 6823.
@@ -2979,5 +2992,63 @@ mod logon_field_tests {
             note_account(&mut accounts, name);
         }
         assert_eq!(accounts, vec!["DU1", "DU2", "DU3"]);
+    }
+}
+
+#[cfg(test)]
+mod soft_dollar_tier_tests {
+    use crate::types::SoftDollarTier;
+
+    /// The shape the venue actually sends, taken from a real logon.
+    fn parse(raw: &str) -> Vec<SoftDollarTier> {
+        raw.split(',')
+            .filter_map(|entry| {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    return None;
+                }
+                let mut parts = entry.split('/');
+                let val = parts.next()?.trim();
+                let display_name = parts.next()?.trim();
+                let name = parts.next()?.trim();
+                if val.is_empty() || name.is_empty() {
+                    return None;
+                }
+                Some(SoftDollarTier {
+                    name: name.to_string(),
+                    val: val.to_string(),
+                    display_name: display_name.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// A real logon's own words. This used to fail every entry, and a list
+    /// written into this client stood in for it — a list which was itself a
+    /// transcription of this very reply, so it looked right while nothing was
+    /// being read.
+    #[test]
+    fn the_tiers_a_real_logon_states_are_read() {
+        let raw = "1/Maximize Rebate/MaxRebate,9/Prefer Rebate/PreferRebate,\
+                   11/Prefer Fill/PreferFill,12/Maximize Fill/MaxFill,\
+                   2/Primary Exchange/Primary,\
+                   3/Highest Volume Exchange With Rebate/VRebate,\
+                   4/High Volume Exchange With Lowest Fee/VLowFee";
+        let tiers = parse(raw);
+        assert_eq!(tiers.len(), 7, "every tier the venue stated");
+        assert_eq!(tiers[0].val, "1");
+        assert_eq!(tiers[0].display_name, "Maximize Rebate");
+        assert_eq!(tiers[0].name, "MaxRebate");
+        // A name shown to a person and a name asked for by a program are not
+        // the same string, and putting one where the other belongs is how a
+        // caller asks for a tier that does not exist.
+        assert_eq!(tiers[6].display_name, "High Volume Exchange With Lowest Fee");
+        assert_eq!(tiers[6].name, "VLowFee");
+    }
+
+    /// A logon stating none means the account holds none.
+    #[test]
+    fn no_tiers_stated_is_no_tiers() {
+        assert!(parse("").is_empty());
     }
 }
