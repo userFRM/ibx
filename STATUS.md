@@ -77,9 +77,9 @@ though it acted when it did not.
 
 **Nothing a caller sets is dropped without saying so.** A call that reaches the
 venue can still leave behind most of what was put in it.
-`scripts/gen_order_field_reach.py` counts it: of 154 fields on an order, 124 go
-out under a tag, 3 say on the field itself that this protocol does not carry
-them, and 27 are still read by nothing.
+`scripts/gen_order_field_reach.py` counts it: of 154 fields on an order, 127 go
+out under a tag and 27 say on the field itself that this protocol does not
+carry them. None is read by nothing.
 
 ---
 
@@ -89,7 +89,7 @@ them, and 27 are still read by nothing.
 | --- | --- |
 | Price precision | Prices are held to a hundred-millionth. The venue holds a price as a count of the contract's own increment, which has no floor — a satoshi sits exactly on ours. Guarded at build time |
 | Quantities | Held to a hundred-millionth as well, so the smallest size a venue counts in survives. A day's volume in the busiest listing is four orders of magnitude inside what the field holds |
-| Order fields | 27 of 154 are set by a caller and read by nothing. Counted, listed by name, and checked in CI |
+| Order fields | 27 of 154 are not carried by this protocol. Each says so on the field, with the counterpart's own reason. Counted and checked in CI |
 
 | Advisor and event data | Buildable, not verifiable without an advisor account and a WSH subscription |
 

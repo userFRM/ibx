@@ -1527,6 +1527,14 @@ fn push_order_attrs(
     if !attrs.algo_id.is_empty() {
         fields.push((8016, attrs.algo_id.clone()));
     }
+    // Who settles this order, where that is not the account's own.
+    if !attrs.settling_firm.is_empty() {
+        fields.push((6282, attrs.settling_firm.clone()));
+    }
+    // Whether discretion runs all the way to the limit price.
+    if attrs.discretionary_up_to_limit {
+        fields.push((8165, "1".to_string()));
+    }
     if attrs.trigger_method > 0 {
         fields.push((6115, attrs.trigger_method.to_string()));
     }
@@ -3896,6 +3904,31 @@ mod outside_rth_polarity_tests {
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
         assert!(!String::from_utf8_lossy(&buf[..n]).contains("6519="), "half an arrangement");
+    }
+
+    /// Who settles an order, and whether discretion runs to the limit price.
+    /// Both were taken from a caller and dropped.
+    #[test]
+    fn an_order_states_who_settles_it_and_how_far_discretion_runs() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            settling_firm: "FIRM".to_string(),
+            discretionary_up_to_limit: true,
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 44, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6282=FIRM"), "who settles it: {msg}");
+        assert!(f.contains(&"8165=1"), "how far discretion runs: {msg}");
     }
 
     /// A caller can price the legs separately rather than pricing the

@@ -561,6 +561,10 @@ pub struct OrderAttrs {
     /// The caller's own name for the algo running this order (tag 8016),
     /// which comes back on every report about it.
     pub algo_id: String,
+    /// Who settles this order, where that is not the account's own (tag 6282).
+    pub settling_firm: String,
+    /// Whether discretion runs up to the limit price (tag 8165).
+    pub discretionary_up_to_limit: bool,
     /// Order capacity and originator, on tag 47 — who this order is for, which
     /// the venue treats as a regulatory statement rather than a preference.
     pub rule80a: String,
@@ -627,6 +631,8 @@ impl Default for OrderAttrs {
             soft_dollar_tier_name: Default::default(),
             soft_dollar_tier_val: Default::default(),
             algo_id: Default::default(),
+            settling_firm: Default::default(),
+            discretionary_up_to_limit: Default::default(),
             display_size: Default::default(),
             min_qty: Default::default(),
             hidden: Default::default(),
