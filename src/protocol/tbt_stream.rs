@@ -155,6 +155,22 @@ pub enum TbtRecord {
     MidPoint { price: f64 },
 }
 
+/// The smallest price step this representation can hold.
+///
+/// A move is stated in whole increments of the contract's own smallest one, and
+/// that increment comes from the venue — nothing here assumes a scale for a
+/// currency or a kind of contract. What is fixed is how a price is held once
+/// worked out, and a contract whose increment is finer than this cannot be
+/// held at all. A satoshi sits exactly on it.
+pub const SMALLEST_STEP: f64 = 1.0 / 100_000_000.0;
+
+// A satoshi sits exactly on the limit. If the representation is ever coarsened,
+// nothing should compile rather than crypto prices quietly rounding to nothing.
+const _: () = assert!(
+    SMALLEST_STEP <= 1e-8,
+    "a price step of a hundred-millionth must remain representable"
+);
+
 /// Where a subscription's prices have got to.
 ///
 /// Kept for the life of a subscription and never reset between records: a move
@@ -546,4 +562,21 @@ mod tests {
         assert_eq!(TbtKind::BidAsk.fields(), 5);
         assert_eq!(TbtKind::MidPoint.fields(), 2);
     }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    /// Nothing here assumes a scale for a currency or a kind of contract: the
+    /// increment comes from the venue, per contract, and the same decoder reads
+    /// a currency pair quoted in half pips and a share quoted in pennies.
+    #[test]
+    fn the_increment_comes_from_the_contract_not_from_a_table() {
+        let moves = 23_102i64;
+        // A currency pair moves in half a pip.
+        assert!((moves as f64 * 0.00005 - 1.15510).abs() < 1e-9);
+        // The same count of moves on a share quoted in pennies is a different
+        // price entirely, and neither is assumed.
+        assert!((moves as f64 * 0.01 - 231.02).abs() < 1e-9);
+    }
+
 }

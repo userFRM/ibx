@@ -705,7 +705,9 @@ impl HmdsState {
                     let trade = crate::types::TbtTrade {
                         instrument,
                         price: (t.price as i64).saturating_mul(mts),
-                        size: t.size as i64,
+                        // Every reader divides by the quantity scale, so a size
+                        // handed over unscaled reads ten thousand times too small.
+                        size: crate::types::qty_from_wire(t.size as i64),
                         timestamp: frame.timestamp_ms,
                         exchange: t.exchange.clone(),
                         conditions: t.conditions.clone(),
@@ -718,8 +720,8 @@ impl HmdsState {
                         instrument,
                         bid: (q.bid as i64).saturating_mul(mts),
                         ask: (q.ask as i64).saturating_mul(mts),
-                        bid_size: q.bid_size as i64,
-                        ask_size: q.ask_size as i64,
+                        bid_size: crate::types::qty_from_wire(q.bid_size as i64),
+                        ask_size: crate::types::qty_from_wire(q.ask_size as i64),
                         timestamp: frame.timestamp_ms,
                     };
                     shared.market.push_tbt_quote(quote);
