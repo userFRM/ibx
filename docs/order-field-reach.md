@@ -8,8 +8,8 @@ only sign is the venue doing something other than what was asked.
 
 | Kind | Count | Meaning |
 | --- | ---: | --- |
-| carried | 127 | goes out under a tag |
-| refused | 27 | this protocol does not carry it, and the field says so |
+| carried | 125 | goes out under a tag |
+| refused | 29 | this protocol does not carry it, and the field says so |
 | dropped | 0 | a caller can set it and nothing reads it |
 
 `dropped` is the order-field form of `silent`: the call returns, the
@@ -21,6 +21,7 @@ None.
 
 ## Not carried by this protocol
 
+- `algo_id` — A caller's own name for the algo running this order. **Not carried by this protocol.** The counterpart declares a field for it and the venue refuses it: previewed with one, both on an algo and without, it answered `Invalid value in field # 8016`. Taken here and kept, so an order built against another client reads back what it set.
 - `auction_strategy` — Which auction an order competes in.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `basis_points` — An offset stated in basis points, and what it is measured against.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `basis_points_type` — See `basis_points`.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
@@ -41,6 +42,7 @@ None.
 - `pt_order_id` — The profit-taking leg's id.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `pt_order_type` — The profit-taking leg's type.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `randomize_price` — Whether a ladder's prices are varied.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
+- `scale_init_fill_qty` — How much of a ladder's first component is already filled. **Not carried by this protocol.** The venue answers `Can not contain field # 6486` — not a bad value but a field that does not belong on an order. The position a ladder starts against, beside it, is taken.
 - `scale_table` — The name of a scale table held by the venue.  **Not carried by this protocol.** The counterpart resolves a table into the ladder it stands for and sends the levels, so the venue is never told the name. Setting the ladder's own fields does the same thing.
 - `shareholder` — The shareholder an order is placed for.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `sl_order_id` — The stop-loss leg's id.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
