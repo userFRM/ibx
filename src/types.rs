@@ -1978,7 +1978,7 @@ mod tests {
     fn price_sub_penny() {
         // $0.0001 (minimum tick for some instruments)
         let p: Price = PRICE_SCALE / 10_000;
-        assert_eq!(p, 10_000); // 10^4
+        assert_eq!(p, PRICE_SCALE / 10_000);
         let f = p as f64 / PRICE_SCALE as f64;
         assert!((f - 0.0001).abs() < 1e-12);
     }

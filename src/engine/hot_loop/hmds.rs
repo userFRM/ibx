@@ -2015,7 +2015,11 @@ pub(crate) fn parse_tick_subscription_ack(xml: &str) -> Option<TickSubscriptionA
 /// A subscription the venue stated no size increment for is counted in whole
 /// ones, which is what it means to state none.
 fn scaled_size(counted: u64, size_tick: f64) -> i64 {
-    crate::types::qty_from_counted(counted as i64, size_tick)
+    // A count past what a quantity can hold is held at the largest one rather
+    // than wrapped. Cast straight through, a count above the ceiling comes out
+    // negative, and a size that reads as negative is a sell where there was a
+    // buy — worse than a size that reads as improbably large.
+    crate::types::qty_from_counted(counted.min(i64::MAX as u64) as i64, size_tick)
 }
 
 #[cfg(test)]
@@ -2066,5 +2070,25 @@ mod tick_ack_tests {
         assert_eq!(scaled_size(100_000_000, 0.00000001), crate::types::QTY_SCALE);
         // Stating no increment means whole ones.
         assert_eq!(scaled_size(5, 0.0), 5 * crate::types::QTY_SCALE);
+    }
+}
+
+#[cfg(test)]
+mod counted_size_ceiling_tests {
+    use super::scaled_size;
+
+    /// A count past what a quantity can hold is held at the largest one. Cast
+    /// straight through it comes out negative, and a size that reads as
+    /// negative is a sell where there was a buy.
+    #[test]
+    fn a_count_past_the_ceiling_does_not_come_back_negative() {
+        assert!(scaled_size(u64::MAX, 1.0) > 0, "a size came back negative");
+        assert!(scaled_size(u64::MAX, 1e-8) > 0);
+    }
+
+    /// An ordinary count is untouched.
+    #[test]
+    fn an_ordinary_count_is_untouched() {
+        assert_eq!(scaled_size(100, 1.0), 100 * crate::types::QTY_SCALE);
     }
 }
