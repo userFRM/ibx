@@ -75,12 +75,19 @@ pub struct ExchangeTradingStatus {
 impl ExchangeTradingStatus {
     /// Whether trading has stopped.
     ///
-    /// Read from the mask, not the named status: the venue can set the mask and
-    /// name nothing, and a caller trusting the name would be told a halted
-    /// contract is trading.
+    /// Both fields have to say so: the mask has to carry a halt bit, and the
+    /// venue has to have named a status at all. Neither alone is enough, and
+    /// the counterpart asks for both before it calls a contract halted.
+    ///
+    /// This is not pedantry about a corner. A live American listing states,
+    /// in the premarket, a mask of nothing and an index of one — which alone
+    /// reads as a regulatory halt. Going by the index, every such contract
+    /// would be reported halted while it was trading normally.
     pub fn is_halted(self) -> bool {
-        self.mask & (TradingStatus::RegulatoryHalt.mask() | TradingStatus::VolatilityHalt.mask())
-            != 0
+        let named_something = self.named != TradingStatus::None;
+        let halt_bits =
+            TradingStatus::RegulatoryHalt.mask() | TradingStatus::VolatilityHalt.mask();
+        named_something && self.mask & halt_bits != 0
     }
 
     /// Whether the venue is restricting short sales in this contract.
@@ -91,12 +98,16 @@ impl ExchangeTradingStatus {
 
 /// Read the venue's trading-status record.
 ///
-/// Exactly twelve bytes, three big-endian 32-bit integers, no optional fields
-/// and no prefix. A body of any other length is refused rather than read from
-/// as far as it goes: a partly-read status is a claim about whether a market is
-/// open, made from bytes that were not the venue's.
+/// Three big-endian 32-bit integers. A body too short to hold them is refused
+/// rather than read from as far as it goes: a partly-read status is a claim
+/// about whether a market is open, made from bytes that were not the venue's.
+///
+/// A longer body is read for its three and the rest left alone. The venue
+/// sends four words where the counterpart reads three, and nothing there
+/// reads the fourth — so what it carries is not established, and a reading of
+/// it would be invented rather than found.
 pub fn parse_trading_status(body: &[u8]) -> Option<ExchangeTradingStatus> {
-    if body.len() != 12 {
+    if body.len() < 12 {
         return None;
     }
     let word = |at: usize| i32::from_be_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
@@ -137,11 +148,11 @@ mod tests {
         }
     }
 
-    /// The mask decides, not the name. A venue can set the mask and name
-    /// nothing, and a caller trusting the name would be told a halted contract
-    /// is trading.
+    /// Both fields have to say so. A mask with a halt bit and no status named
+    /// is not a halt, which is what the counterpart requires before it calls
+    /// a contract halted.
     #[test]
-    fn a_halt_with_no_name_is_still_a_halt() {
+    fn a_halt_with_no_name_is_not_a_halt() {
         let status = parse_trading_status(&body(
             TradingStatus::RegulatoryHalt.mask() as i32,
             0,
@@ -149,7 +160,7 @@ mod tests {
         ))
         .expect("twelve bytes parse");
         assert_eq!(status.named, TradingStatus::None);
-        assert!(status.is_halted(), "the mask said halted and the name said nothing");
+        assert!(!status.is_halted(), "the mask said halted and nothing was named");
     }
 
     /// "No status" sits at 16, so its mask is 65536. Placed at 4 it would carry
@@ -179,14 +190,39 @@ mod tests {
         assert!(status.short_sales_restricted());
     }
 
-    /// A body of the wrong length is refused rather than read as far as it
-    /// goes. A partly-read status is a claim about whether a market is open,
-    /// made from bytes that were not the venue's.
+    /// A body too short to hold the three is refused rather than read as far
+    /// as it goes. A partly-read status is a claim about whether a market is
+    /// open, made from bytes that were not the venue's.
     #[test]
-    fn a_body_that_is_not_twelve_bytes_is_refused() {
-        for len in [0usize, 4, 8, 11, 13, 16] {
+    fn a_body_too_short_for_the_three_is_refused() {
+        for len in [0usize, 4, 8, 11] {
             assert!(parse_trading_status(&vec![0u8; len]).is_none(), "len {len} was read");
         }
+    }
+
+    /// The venue sends four words where three are read. The fourth is left
+    /// alone rather than given a meaning nothing supports.
+    #[test]
+    fn a_longer_body_is_read_for_its_three() {
+        let mut sixteen = body(0, 1_767_000_000, 0);
+        sixteen.extend_from_slice(&7i32.to_be_bytes());
+        let status = parse_trading_status(&sixteen).expect("the three are there");
+        assert_eq!(status.named, TradingStatus::ExchangeOpen);
+        assert_eq!(status.stamp, 1_767_000_000);
+        assert!(!status.is_halted());
+    }
+
+    /// What a live American listing states in the premarket: no bits set and
+    /// an index of one. Going by the index alone it reads as a regulatory
+    /// halt, and every such contract would be reported halted while trading
+    /// normally.
+    #[test]
+    fn a_premarket_listing_is_not_reported_halted() {
+        let mut wire = body(0, 0, 1);
+        wire.extend_from_slice(&0i32.to_be_bytes());
+        let status = parse_trading_status(&wire).expect("the venue's own bytes");
+        assert_eq!(status.named, TradingStatus::RegulatoryHalt, "the index says so on its own");
+        assert!(!status.is_halted(), "and the mask does not, so trading has not stopped");
     }
 
     /// The stamp is kept exactly as stated and not turned into a time.
