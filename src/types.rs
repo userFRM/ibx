@@ -1449,6 +1449,12 @@ pub enum ControlCommand {
     UnsubscribeNews { instrument: InstrumentId },
     /// Subscribe to whole-account P&L via CCP (6040=142).
     SubscribePnl { req_id: i64, account: String },
+    /// Ask for, or replace, a partition of the advisor's own configuration.
+    ///
+    /// `command` says which of asking, replacing or removing is meant;
+    /// `partition` names which part — its groups, its allocation profiles, its
+    /// models. A replacement carries the configuration as its own document.
+    AdvisorConfig { command: i32, partition: String, document: Option<String> },
     /// Cancel P&L subscription.
     CancelPnl { req_id: i64 },
     /// Update a strategy parameter.
