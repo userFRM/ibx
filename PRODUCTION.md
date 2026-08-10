@@ -10,7 +10,7 @@ Java runtime, no gateway process, no tool driving a window.
 | --- | --- | --- |
 | **Compiles** | Every call a program uses exists, under the right name, with the right arguments | Met |
 | **Reaches** | The request leaves the machine and the reply is read | 35 reach the venue, 26 answered from what it pushed, 3 missing, 4 unserviceable |
-| **True** | Nothing reported was invented, defaulted, or dropped | 11 inventions removed, 1 class of dropping left |
+| **True** | Nothing reported was invented, defaulted, or dropped | 11 inventions removed; no message discards what it does not name |
 | **Proved** | A live session showed it working | Partial — §5 |
 
 A line moves when a check passes, not when code is written.
@@ -85,11 +85,16 @@ AllLast 0`. A currency pair has quotes and no trades.
 
 ## 2. What remains
 
-### 2.1 Data still dropped — 1
+### 2.1 Data still dropped — none
 
-| Item | Work |
-| --- | --- |
-| Order status | The same keep-everything change already made three times. ~½ session |
+Order status was listed here and is already covered: an order's status is
+produced from the execution report, whose fields are all kept, so there is no
+second message to change. The only other producer of a status is this client
+itself, marking orders uncertain when a transport goes away — nothing from the
+venue to keep.
+
+Every message the venue sends is now read without discarding what it does not
+name.
 
 ### 2.2 Requests that do not reach IBKR — 3
 
@@ -111,7 +116,6 @@ a word.
 
 - `evMultiplier` — no field for it on a definition; it arrives by another path
 - `marketRuleIds` — assembled per venue, not stated as a list
-- Order-status fields, not yet measured
 
 ### 2.4 Unserviceable — 4, correctly
 
@@ -173,13 +177,12 @@ Live sessions have found, every time, defects no offline test could:
 
 | # | Work | Size |
 | --- | --- | --- |
-| 1 | Order status keeps everything | ½ session |
-| 2 | Build the advisor and event-data wires | ½ session |
-| 3 | Name the remaining fields | ½ session |
-| 4 | **Live session at market hours** — prove everything since the last one | 1 session, then fixes |
-| 5 | Repeat 4 until a session finds nothing | 2–4 sessions |
+| 1 | Build the advisor and event-data wires | ½ session |
+| 2 | Name the remaining fields | ½ session |
+| 3 | **Live session at market hours** — prove everything since the last one | 1 session, then fixes |
+| 4 | Repeat 3 until a session finds nothing | 2–4 sessions |
 
-Steps 1–3 are days. Step 5 decides the date and cannot be compressed: today's
+Steps 1–2 are days. Step 4 decides the date and cannot be compressed: today's
 rate was roughly four real defects per live round.
 
 **Not reachable on this account, ever:** the advisor pair and event data can be
