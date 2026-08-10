@@ -38,6 +38,8 @@ pub const TAG_IB_ORDER_TYPES: u32 = 6431;
 pub const TAG_IB_MARKET_RULE_ID: u32 = 6031;
 /// The economic-value rule, stated on the definition as its own field.
 pub const TAG_EV_RULE: u32 = 6858;
+/// What the economic-value evaluation is multiplied by, stated as a number.
+pub const TAG_EV_MULTIPLIER: u32 = 6859;
 /// The venues SMART routes a contract to, comma separated, in the order whose
 /// positions a quote's exchange bitmask refers to.
 pub const TAG_SMART_VENUES: u32 = 6177;
@@ -257,6 +259,10 @@ pub struct ContractDefinition {
     /// the definition, not derived: a contract whose value follows something
     /// other than its own price is priced wrongly without it.
     pub ev_rule: String,
+    /// What that evaluation is multiplied by. Stated as a number in the tag
+    /// beside the rule; a rule without its multiplier values the contract by
+    /// the wrong factor, which is not a rounding error.
+    pub ev_multiplier: f64,
     pub bond_notes: String,
     pub desc_append: String,
     pub bond_type: String,
@@ -384,6 +390,7 @@ impl Default for ContractDefinition {
             contract_month: String::new(),
             under_sec_type: String::new(),
             ev_rule: String::new(),
+            ev_multiplier: 0.0,
             bond_notes: String::new(),
             desc_append: String::new(),
             bond_type: String::new(),
@@ -782,6 +789,9 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     if let Some(v) = tags.get(&200) { def.contract_month = v.clone(); }
     if let Some(v) = tags.get(&6577) { def.under_sec_type = v.clone(); }
     if let Some(v) = tags.get(&TAG_EV_RULE) { def.ev_rule = v.clone(); }
+    if let Some(v) = tags.get(&TAG_EV_MULTIPLIER) && let Ok(x) = v.trim().parse() {
+        def.ev_multiplier = x;
+    }
     if let Some(v) = tags.get(&TAG_UNDERLYING_CON_ID) {
         def.under_con_id = v.parse().unwrap_or(0);
     }
@@ -2448,9 +2458,10 @@ mod industry_tests {
     /// nowhere, so a caller pricing such a contract had nothing to price it by.
     #[test]
     fn the_economic_value_rule_is_read_from_the_definition() {
-        let def = parse_secdef_response(&secdef("6858=IND-FUT-CASH\u{1}"))
+        let def = parse_secdef_response(&secdef("6858=IND-FUT-CASH\u{1}6859=0.25\u{1}"))
             .expect("the definition parses");
         assert_eq!(def.ev_rule, "IND-FUT-CASH");
+        assert_eq!(def.ev_multiplier, 0.25, "a rule without its multiplier values the contract wrongly");
     }
 
     /// The venue states what the issuer does as one field with bars between,
@@ -2615,10 +2626,13 @@ mod unnamed_field_tests {
     /// A field that is named is read into its own place, not left as a number.
     #[test]
     fn a_field_this_client_names_does_not_also_appear_unnamed() {
-        let def = parse_secdef_response(&frame("6858=IND-FUT-CASH\u{1}"))
+        let def = parse_secdef_response(&frame("6858=IND-FUT-CASH\u{1}6859=0.25\u{1}"))
             .expect("the definition parses");
         assert_eq!(def.ev_rule, "IND-FUT-CASH");
-        assert!(!def.unnamed_fields.iter().any(|(t, _)| *t == 6858));
+        assert_eq!(def.ev_multiplier, 0.25, "a rule without its multiplier values the contract wrongly");
+        for named in [TAG_EV_RULE, TAG_EV_MULTIPLIER] {
+            assert!(!def.unnamed_fields.iter().any(|(t, _)| *t == named), "tag {named} is named");
+        }
     }
 }
 

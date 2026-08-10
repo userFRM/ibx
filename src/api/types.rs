@@ -904,16 +904,17 @@ pub struct ContractDetails {
     /// What kind of stock it is, what it does, and where it is domiciled —
     /// parsed off the definition all along and handed to nobody.
     pub stock_type: String,
-    /// What a quoted price must be multiplied by to be a price. A price read
-    /// without it is out by that factor, which is not a rounding error.
+    /// The rule the venue evaluates this contract's economic value under, and
+    /// what that evaluation is multiplied by. Both stated on the definition; a
+    /// contract whose value follows something other than its own price is
+    /// valued wrongly without them.
+    pub ev_rule: String,
+    pub ev_multiplier: f64,
     /// What a bond is and what a fund is — terms, ratings, charges and where
     /// it may be sold. A caller asking about either received a symbol.
     pub coupon: f64,
     pub contract_month: String,
     pub under_sec_type: String,
-    /// Every field the venue stated about this contract that this client does
-    /// not yet name, as (tag, value). Kept rather than dropped: what is not
-    /// named is still a fact the venue stated.
     pub under_con_id: u32,
     pub under_symbol: String,
     pub last_trade_time: String,
@@ -923,6 +924,9 @@ pub struct ContractDetails {
     pub last_price_precision: f64,
     pub last_size_precision: f64,
     pub settlement_method: String,
+    /// Every field the venue stated about this contract that this client does
+    /// not yet name, as (tag, value). Kept rather than dropped: what is not
+    /// named is still a fact the venue stated.
     pub unnamed_fields: Vec<(u32, String)>,
     pub bond_notes: String,
     pub desc_append: String,
@@ -1012,6 +1016,8 @@ impl ContractDetails {
             time_zone_id: def.time_zone_id.clone(),
             market_rule_ids: def.market_rule_id.map(|r| r.to_string()).unwrap_or_default(),
             stock_type: def.stock_type.clone(),
+            ev_rule: def.ev_rule.clone(),
+            ev_multiplier: def.ev_multiplier,
             coupon: def.coupon,
             contract_month: def.contract_month.clone(),
             under_sec_type: def.under_sec_type.clone(),
