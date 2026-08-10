@@ -99,6 +99,13 @@ pub struct EClientConfig {
     /// there — so what is named here is only where to knock. Name one for a
     /// test, or to knock at a particular region.
     pub host: String,
+    /// What the gateway's own file used to hold.
+    ///
+    /// A gateway is a process configured by a file beside it; this client is a
+    /// library, so those settings are stated here instead of in a file nobody
+    /// writes. Applied as the session opens, and for the whole process — see
+    /// [`GatewaySettings`](crate::api::settings::GatewaySettings).
+    pub gateway: crate::api::settings::GatewaySettings,
     /// `false` enters the live second-factor approval gate on connect (blocking).
     /// `true` skips it. See the type-level docs.
     pub paper: bool,
@@ -276,6 +283,9 @@ impl EClient {
         config: &EClientConfig,
         event_tx: Option<SyncSender<Event>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // What the gateway's file used to hold, put where the code that needs
+        // it reads it — before anything reads it.
+        config.gateway.apply();
         let gw_config = gateway_config(config);
 
         let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = Gateway::connect(&gw_config)?;
