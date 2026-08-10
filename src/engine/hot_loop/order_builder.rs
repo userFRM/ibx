@@ -1512,9 +1512,11 @@ fn push_order_attrs(
         if scale.init_position != 0 {
             fields.push((6485, scale.init_position.to_string()));
         }
-        if scale.init_fill_qty != 0 {
-            fields.push((6486, scale.init_fill_qty.to_string()));
-        }
+        // How much of the first component is already filled is not sent. The
+        // venue answers "Can not contain field # 6486" — not an invalid value
+        // but a field that does not belong on this message, whatever it is
+        // worth elsewhere. The position a ladder starts against, beside it, is
+        // taken without complaint.
     }
     // The soft-dollar arrangement this order's commission goes to. Both parts
     // or neither: a tier named with nothing against it is not an arrangement.
@@ -1522,11 +1524,12 @@ fn push_order_attrs(
         fields.push((6519, attrs.soft_dollar_tier_name.clone()));
         fields.push((6520, attrs.soft_dollar_tier_val.clone()));
     }
-    // The caller's own name for the algo running this order, which comes back
-    // on every report about it.
-    if !attrs.algo_id.is_empty() {
-        fields.push((8016, attrs.algo_id.clone()));
-    }
+    // The caller's own name for the algo running this order is not sent. The
+    // counterpart declares a field for it, and the venue refuses it: previewed
+    // with one, on an algo and without, it answered "Invalid value in field #
+    // 8016" both times. A field that makes an order fail is worse than one
+    // that is dropped, and the venue's own answer outranks a tag read off a
+    // class that declares it.
     // Who settles this order, where that is not the account's own.
     if !attrs.settling_firm.is_empty() {
         fields.push((6282, attrs.settling_firm.clone()));
@@ -3854,20 +3857,19 @@ mod outside_rth_polarity_tests {
         let msg = String::from_utf8_lossy(&buf[..n]);
         let f: Vec<&str> = msg.split('\u{1}').collect();
         assert!(f.contains(&"6485=250"), "the position it starts against: {msg}");
-        assert!(f.contains(&"6486=40"), "what of the first component is filled: {msg}");
+        // Not sent: the venue answers "Can not contain field # 6486".
+        assert!(!msg.contains("6486="), "a field the venue will not take: {msg}");
     }
 
-    /// Where an order's commission goes, and the caller's own name for the
-    /// algo running it. Both were taken and dropped: the commission went
-    /// wherever the account's default sends it.
+    /// Where an order's commission goes. Taken from a caller and dropped, the
+    /// commission went wherever the account's default sends it.
     #[test]
-    fn an_order_states_its_soft_dollar_tier_and_algo_name() {
+    fn an_order_states_its_soft_dollar_tier() {
         use std::io::Read;
         let (mut conn, mut peer, mut context, instrument) = combo_test_state();
         let attrs = crate::types::OrderAttrs {
             soft_dollar_tier_name: "Tier A".to_string(),
             soft_dollar_tier_val: "45.5".to_string(),
-            algo_id: "my-algo-7".to_string(),
             ..Default::default()
         };
         send_order_ex(
@@ -3882,7 +3884,8 @@ mod outside_rth_polarity_tests {
         let f: Vec<&str> = msg.split('\u{1}').collect();
         assert!(f.contains(&"6519=Tier A"), "the tier: {msg}");
         assert!(f.contains(&"6520=45.5"), "what it is worth: {msg}");
-        assert!(f.contains(&"8016=my-algo-7"), "the caller's name for the algo: {msg}");
+        // Not sent: the venue answers "Invalid value in field # 8016".
+        assert!(!msg.contains("8016="), "a field the venue will not take: {msg}");
     }
 
     /// A tier named with nothing against it is not an arrangement, and half of

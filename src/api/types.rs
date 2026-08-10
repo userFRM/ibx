@@ -104,6 +104,11 @@ pub struct Order {
     pub adjustable_trailing_unit: i32,
     pub adjusted_trailing_amount: f64,
     pub advanced_error_override: String,
+    /// A caller's own name for the algo running this order. **Not carried by
+    /// this protocol.** The counterpart declares a field for it and the venue
+    /// refuses it: previewed with one, both on an algo and without, it answered
+    /// `Invalid value in field # 8016`. Taken here and kept, so an order built
+    /// against another client reads back what it set.
     pub algo_id: String,
     pub allow_pre_open: bool,
     /// Which auction an order competes in.
@@ -329,6 +334,10 @@ pub struct Order {
     pub route_marketable_to_bbo: bool,
     pub rule80a: String,
     pub scale_auto_reset: bool,
+    /// How much of a ladder's first component is already filled. **Not carried
+    /// by this protocol.** The venue answers `Can not contain field # 6486` —
+    /// not a bad value but a field that does not belong on an order. The
+    /// position a ladder starts against, beside it, is taken.
     pub scale_init_fill_qty: i32,
     pub scale_init_level_size: i32,
     pub scale_init_position: i32,
@@ -1623,7 +1632,6 @@ mod tests {
             ("stock_range_upper", |o| o.stock_range_upper = 200.0),
             ("soft_dollar_tier_name", |o| o.soft_dollar_tier_name = "Tier A".into()),
             ("soft_dollar_tier_val", |o| o.soft_dollar_tier_val = "45.5".into()),
-            ("algo_id", |o| o.algo_id = "my-algo".into()),
             ("settling_firm", |o| o.settling_firm = "FIRM".into()),
             ("discretionary_up_to_limit_price", |o| o.discretionary_up_to_limit_price = true),
             ("randomize_size", |o| o.randomize_size = true),
