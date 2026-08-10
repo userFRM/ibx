@@ -51,7 +51,7 @@ having. This is where the worst defects have been.
 | Which venue a quote's bid, ask and last came from | **fixed** — attributed through a table written in this client; the venue states the list itself |
 | A request that returns as though it acted | **fixed and guarded** — held at zero by a generator CI runs |
 | Commission and account currency | **open** — hardcoded USD; the contract's currency is parsed and not carried |
-| Soft-dollar tiers when the logon states none | **open** — an invented list is served as the account's entitlements. News providers: **fixed**, the logon is the only source and empty means entitled to none |
+| Soft-dollar tiers, news providers | **fixed** — both are stated on the logon and only there. The tier parser looked for a shape the venue does not send, so every entry failed and a list written here stood in |
 | A contract's tick size when the venue states none | **open** — 0.01 is invented, wrong for most futures |
 | The single letter a venue is known by | **accepted** — the venue names venues in full and states no abbreviation; this is client knowledge, and is recorded as such |
 
