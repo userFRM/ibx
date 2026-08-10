@@ -1358,6 +1358,24 @@ fn push_order_attrs(
                 fields.push((1689, leg.exempt_code.to_string()));
             }
         }
+        // Where the caller priced the legs separately rather than pricing the
+        // combination, each leg's price follows the legs, one per leg and in
+        // leg order — which is the only thing that says which leg a price
+        // belongs to, since nothing on the wire names it.
+        //
+        // A caller who priced the legs and had the prices dropped got the
+        // combination worked at whatever the venue made of it, which is not
+        // the order that was placed.
+        if attrs.combo_legs.iter().any(|leg| leg.price.is_some()) {
+            for leg in &attrs.combo_legs {
+                // A leg the caller left unpriced states nothing, the way a leg
+                // with no venue of its own does.
+                fields.push((
+                    6879,
+                    leg.price.map(|p| format_price(p).to_string()).unwrap_or_default(),
+                ));
+            }
+        }
     }
 
     // Where the order clears, which is not the account it trades in. This
@@ -3694,6 +3712,20 @@ mod outside_rth_polarity_tests {
         }
     }
 
+    /// A connection, a context and an instrument, for a combination order.
+    fn combo_test_state() -> (
+        crate::protocol::connection::Connection,
+        std::net::TcpStream,
+        Context,
+        crate::types::InstrumentId,
+    ) {
+        let (conn, peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        (conn, peer, context, instrument)
+    }
+
     /// A combination names its legs on the order. There is no repeating group
     /// for them: a count, then a contract, a ratio and a side per leg. The side
     /// is a flag rather than the letter the order itself uses, and a leg that
@@ -3716,6 +3748,7 @@ mod outside_rth_polarity_tests {
                     short_sale_slot: 0,
                     designated_location: String::new(),
                     exempt_code: -1,
+                    price: None,
                 },
                 crate::types::ComboLegSpec {
                     con_id: 272093,
@@ -3726,6 +3759,7 @@ mod outside_rth_polarity_tests {
                     short_sale_slot: 0,
                     designated_location: String::new(),
                     exempt_code: -1,
+                    price: None,
                 },
             ],
             ..Default::default()
@@ -3761,6 +3795,73 @@ mod outside_rth_polarity_tests {
             "a venue only where the leg has its own: {msg}"
         );
         assert!(f.contains(&"654=1"), "the position effect where set: {msg}");
+    }
+
+    /// A caller can price the legs separately rather than pricing the
+    /// combination. Dropped, the combination is worked at whatever the venue
+    /// makes of it, which is not the order that was placed.
+    #[test]
+    fn legs_priced_separately_go_out_with_their_prices() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let leg = |con_id: i64, is_sell: bool, price: Option<crate::types::Price>| {
+            crate::types::ComboLegSpec {
+                con_id, ratio: 1, is_sell, exchange: String::new(),
+                open_close: 0, short_sale_slot: 0, designated_location: String::new(),
+                exempt_code: -1, price,
+            }
+        };
+        let attrs = crate::types::OrderAttrs {
+            combo_legs: vec![
+                leg(265598, false, Some(2 * crate::types::PRICE_SCALE)),
+                leg(272093, true, None),
+            ],
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 32, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        let priced: Vec<&&str> = f.iter().filter(|x| x.starts_with("6879=")).collect();
+        assert_eq!(priced.len(), 2, "one price a leg, in leg order: {msg}");
+        assert_eq!(*priced[0], "6879=2", "the leg the caller priced: {msg}");
+        assert_eq!(*priced[1], "6879=", "and the one it left alone: {msg}");
+    }
+
+    /// Nothing goes out where the caller priced the combination itself, which
+    /// is what most callers do.
+    #[test]
+    fn an_unpriced_combination_states_no_leg_prices() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            combo_legs: vec![crate::types::ComboLegSpec {
+                con_id: 265598, ratio: 1, is_sell: false, exchange: String::new(),
+                open_close: 0, short_sale_slot: 0, designated_location: String::new(),
+                exempt_code: -1, price: None,
+            }],
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 33, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&buf[..n]).contains("6879="),
+            "a price nobody stated",
+        );
     }
 
     /// A ladder and a hedge each go out under the tags the vendor's own
