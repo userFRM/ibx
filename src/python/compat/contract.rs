@@ -388,6 +388,10 @@ pub struct Order {
     pub customer_account: String,
     #[pyo3(get, set)]
     pub deactivate: bool,
+    /// Stand the order down if the connection goes, rather than leaving it
+    /// working with nobody watching it.
+    #[pyo3(get, set)]
+    pub deactivate_on_disconnect: bool,
     #[pyo3(get, set)]
     pub delta: f64,
     #[pyo3(get, set)]
@@ -647,6 +651,7 @@ impl Clone for Order {
             continuous_update: self.continuous_update,
             customer_account: self.customer_account.clone(),
             deactivate: self.deactivate,
+            deactivate_on_disconnect: self.deactivate_on_disconnect,
             delta: self.delta,
             delta_neutral_aux_price: self.delta_neutral_aux_price,
             delta_neutral_clearing_account: self.delta_neutral_clearing_account.clone(),
@@ -809,6 +814,7 @@ impl Default for Order {
             continuous_update: false,
             customer_account: String::new(),
             deactivate: false,
+            deactivate_on_disconnect: false,
             delta: f64::MAX,
             delta_neutral_aux_price: f64::MAX,
             delta_neutral_clearing_account: String::new(),
@@ -2039,6 +2045,12 @@ pub struct ContractDetails {
     pub multiplier: String,
     #[pyo3(get, set)]
     pub market_rule_id: i64,
+    /// Every price-increment rule this contract trades under, as the venue
+    /// states them. The reference client names it in the plural and states
+    /// them all; the singular beside it is the first of them, kept because
+    /// programs here already read it.
+    #[pyo3(get, set)]
+    pub market_rule_ids: String,
     #[pyo3(get, set)]
     pub strike: f64,
     #[pyo3(get, set)]
@@ -2270,6 +2282,7 @@ impl Clone for ContractDetails {
             last_trade_date: self.last_trade_date.clone(),
             multiplier: self.multiplier.clone(),
             market_rule_id: self.market_rule_id,
+            market_rule_ids: self.market_rule_ids.clone(),
             strike: self.strike,
             right: self.right.clone(),
             primary_exchange: self.primary_exchange.clone(),
@@ -2303,6 +2316,7 @@ impl ContractDetails {
             last_trade_date: String::new(),
             multiplier: String::new(),
             market_rule_id: 0,
+            market_rule_ids: String::new(),
             strike: 0.0,
             right: String::new(),
             primary_exchange: String::new(),
@@ -2398,6 +2412,7 @@ impl ContractDetails {
             last_trade_date: def.last_trade_date.clone(),
             multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
             market_rule_id: def.market_rule_id.map(|id| id as i64).unwrap_or(-1),
+            market_rule_ids: def.market_rule_id.map(|id| id.to_string()).unwrap_or_default(),
             strike: def.strike,
             right: def.right.map(|r| format!("{r:?}")).unwrap_or_default(),
             primary_exchange: def.primary_exchange.clone(),
