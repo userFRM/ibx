@@ -788,7 +788,7 @@ impl Context {
         id
     }
 
-    /// Submit a fractional shares limit order. Qty is fixed-point (QTY_SCALE = 10^4).
+    /// Submit a fractional shares limit order. Qty is fixed-point, `QTY_SCALE`.
     /// E.g., 0.5 shares = 5000, 1.25 shares = 12500.
     pub fn submit_limit_fractional(
         &mut self,
@@ -1744,7 +1744,6 @@ mod tests {
     #[test]
     fn submit_limit_fractional_drains_correctly() {
         let mut ctx = Context::new();
-        // 0.5 shares = 5000 in QTY_SCALE
         let id = ctx.submit_limit_fractional(0, Side::Buy, QTY_SCALE / 2, 150 * PRICE_SCALE);
         let orders: Vec<_> = ctx.drain_pending_orders().collect();
         assert_eq!(orders.len(), 1);
@@ -1753,7 +1752,7 @@ mod tests {
                 assert_eq!(*order_id, id);
                 assert_eq!(*instrument, 0);
                 assert_eq!(*side, Side::Buy);
-                assert_eq!(*qty, 5000);
+                assert_eq!(*qty as f64 / QTY_SCALE as f64, 0.5, "half a share");
                 assert_eq!(*price, 150 * PRICE_SCALE);
             }
             _ => panic!("expected SubmitLimitFractional"),

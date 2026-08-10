@@ -1783,8 +1783,28 @@ pub(crate) fn decode_tif(tif: u8) -> &'static str {
     }
 }
 
-/// Format a fixed-point Qty (QTY_SCALE = 10^4) to a decimal string. Zero alloc.
+/// Format a fixed-point `Qty` as a decimal string. Zero alloc.
+///
+/// The number of places comes from `QTY_SCALE` rather than being written out,
+/// so a quantity held more finely is written more finely. Fixed at four
+/// places while the scale said a hundred-millionth, half a share went out as
+/// something else entirely.
 pub(crate) fn format_qty(qty: Qty) -> StackStr {
+    /// How many decimal places `QTY_SCALE` holds.
+    const PLACES: usize = {
+        let mut places = 0;
+        let mut scale = QTY_SCALE;
+        while scale > 1 {
+            scale /= 10;
+            places += 1;
+        }
+        places
+    };
+    const _: () = assert!(
+        10i64.pow(PLACES as u32) == QTY_SCALE,
+        "the quantity scale is a power of ten, or a fraction of it cannot be written out",
+    );
+
     let whole = qty / QTY_SCALE;
     let frac = (qty % QTY_SCALE).unsigned_abs();
     let mut s = StackStr::new();
@@ -1792,13 +1812,13 @@ pub(crate) fn format_qty(qty: Qty) -> StackStr {
     if frac != 0 {
         s.push(b'.');
         let frac_start = s.len as usize;
-        let digits = [
-            b'0' + (frac / 1_000 % 10) as u8,
-            b'0' + (frac / 100 % 10) as u8,
-            b'0' + (frac / 10 % 10) as u8,
-            b'0' + (frac % 10) as u8,
-        ];
-        let mut end = 4;
+        let mut digits = [b'0'; PLACES];
+        let mut rest = frac;
+        for slot in digits.iter_mut().rev() {
+            *slot = b'0' + (rest % 10) as u8;
+            rest /= 10;
+        }
+        let mut end = PLACES;
         while end > 0 && digits[end - 1] == b'0' { end -= 1; }
         s.buf[frac_start..frac_start + end].copy_from_slice(&digits[..end]);
         s.len = (frac_start + end) as u8;
@@ -2609,5 +2629,37 @@ mod tests {
             hl.context.market.instrument_by_server_tag(910_002), Some(id),
             "news routes through this map, so its tag outlives the L1 request",
         );
+    }
+}
+
+#[cfg(test)]
+mod qty_formatting_tests {
+    use super::format_qty;
+    use crate::types::QTY_SCALE;
+
+    /// A quantity goes out as the number it is. The places were written out as
+    /// four while the scale held a hundred-millionth, so half a share left
+    /// this machine as something else.
+    #[test]
+    fn a_fraction_of_a_share_is_written_as_itself() {
+        for (held, written) in [
+            (QTY_SCALE, "1"),
+            (QTY_SCALE / 2, "0.5"),
+            (QTY_SCALE / 4, "0.25"),
+            (100 * QTY_SCALE, "100"),
+            (-3 * QTY_SCALE / 2, "-1.5"),
+            (1, "0.00000001"),
+        ] {
+            let out = format_qty(held);
+            assert_eq!(&*out, written, "{held} was written as {}", &*out);
+        }
+    }
+
+    /// Whatever the scale holds is written, and nothing beyond it.
+    #[test]
+    fn every_place_the_scale_holds_survives() {
+        let smallest = format_qty(1);
+        let places = smallest.split_once('.').expect("a fraction").1.len();
+        assert_eq!(10i64.pow(places as u32), QTY_SCALE, "a place the scale holds went unwritten");
     }
 }

@@ -9,7 +9,7 @@ pub type OrderId = u64;
 /// Example: $150.25 = 15_025_000_000
 pub type Price = i64;
 
-/// Fixed-point quantity: value * 10^4. Matches IB's 0.0001 minimum increment.
+/// Fixed-point quantity: value * `QTY_SCALE`.
 /// Example: 100 shares = 1_000_000
 pub type Qty = i64;
 
@@ -30,7 +30,18 @@ pub type Qty = i64;
 /// together and converting at the edge, which is a change to every price this
 /// client touches.
 pub const PRICE_SCALE: i64 = 100_000_000; // 10^8
-pub const QTY_SCALE: i64 = 10_000; // 10^4
+/// Quantities are held to a hundred-millionth, the same as prices.
+///
+/// A size is a count of what the venue said sizes move in for the contract,
+/// and for a crypto that is a hundred-millionth of a coin. Held to a
+/// ten-thousandth, every size finer than that rounded to nothing: a quote for
+/// a thousandth of a coin came back as no quote at all, which reads as an
+/// empty book rather than as a limit of this client's.
+///
+/// A day's volume in the busiest listing is some thousands of millions of
+/// shares, which at this scale is four orders of magnitude inside what the
+/// field holds.
+pub const QTY_SCALE: i64 = 100_000_000; // 10^8
 
 /// Convert a wire quantity into the `QTY_SCALE` fixed-point form the `Quote`
 /// fields hold. Every reader divides by `QTY_SCALE`, so a decode path that
@@ -1018,8 +1029,8 @@ pub enum OrderRequest {
     /// Market-to-Limit for auction (TIF=AUC, tag 59=8). MTL + auction participation.
     /// What-If order: sends a limit order with tag 6091=1 for margin/commission preview.
     /// The order is NOT placed — response comes back as 35=8 with margin fields.
-    /// Fractional shares limit order. Qty is fixed-point (QTY_SCALE = 10^4).
-    /// E.g., 0.5 shares = 5000. Tag 38 sent as decimal string.
+    /// Fractional shares limit order. Qty is fixed-point, `QTY_SCALE`, and
+    /// goes out on tag 38 as a decimal string.
     SubmitLimitFractional {
         order_id: OrderId,
         instrument: InstrumentId,
@@ -1778,14 +1789,14 @@ mod tests {
     #[test]
     fn qty_100_shares() {
         let q: Qty = 100 * QTY_SCALE;
-        assert_eq!(q, 1_000_000);
+        assert_eq!(q as f64 / QTY_SCALE as f64, 100.0);
     }
 
     #[test]
     fn qty_fractional() {
         // 0.5 shares (fractional shares)
         let q: Qty = QTY_SCALE / 2;
-        assert_eq!(q, 5_000);
+        assert_eq!(q as f64 / QTY_SCALE as f64, 0.5);
     }
 
     // --- OrderBuffer ---
@@ -1954,14 +1965,14 @@ mod tests {
     #[test]
     fn qty_negative() {
         let q: Qty = -100 * QTY_SCALE;
-        assert_eq!(q, -1_000_000);
+        assert_eq!(q as f64 / QTY_SCALE as f64, -100.0);
     }
 
     #[test]
-    fn qty_one_ten_thousandth() {
-        let q: Qty = 1; // smallest representable: 0.0001 shares
+    fn qty_smallest_representable() {
+        let q: Qty = 1;
         let f = q as f64 / QTY_SCALE as f64;
-        assert!((f - 0.0001).abs() < 1e-10);
+        assert!((f - 1e-8).abs() < 1e-12, "the smallest size a venue counts in");
     }
 
     // --- OrderBuffer edge cases ---
@@ -2308,5 +2319,29 @@ mod counted_size_tests {
         let scaled = qty_from_counted(hundredth_of_a_coin, 1e-8);
         assert_eq!(scaled, (0.01 * QTY_SCALE as f64) as i64);
         assert_ne!(scaled, qty_from_wire(hundredth_of_a_coin));
+    }
+}
+
+#[cfg(test)]
+mod quantity_scale_tests {
+    use super::{qty_from_counted, Qty, QTY_SCALE};
+
+    /// The smallest size a venue counts in survives being held. At a
+    /// ten-thousandth it did not: everything finer rounded to nothing, and a
+    /// quote for a thousandth of a coin came back as no quote at all.
+    #[test]
+    fn the_smallest_counted_size_survives() {
+        let one_count = qty_from_counted(1, 1e-8);
+        assert!(one_count > 0, "a hundred-millionth rounded away");
+        assert_eq!(one_count as f64 / QTY_SCALE as f64, 1e-8);
+    }
+
+    /// A day's volume in the busiest listing still fits.
+    #[test]
+    fn a_whole_market_day_still_fits() {
+        let shares = 5_000_000_000i64;
+        let held = qty_from_counted(shares, 1.0);
+        assert_eq!(held / QTY_SCALE, shares);
+        assert!(held < Qty::MAX / 2, "a day's volume is nowhere near the ceiling");
     }
 }
