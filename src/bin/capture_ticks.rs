@@ -41,6 +41,16 @@ fn subjects() -> Vec<(&'static str, &'static str, Contract)> {
             currency: "USD".to_string(),
             ..Default::default()
         }),
+        // A busy American listing during its own session, where the flags a
+        // trade carries — reported away from the exchange, or through a limit
+        // — actually occur.
+        ("a busy listing", "AllLast", Contract {
+            symbol: "SPY".to_string(),
+            sec_type: "STK".to_string(),
+            exchange: "SMART".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        }),
     ]
 }
 
@@ -165,13 +175,20 @@ fn main() {
             println!(
                 "        bid {:.5} x {:.0}   ask {:.5} x {:.0}",
                 q.bid as f64 / 1e8,
-                q.bid_size as f64 / 1e4,
+                q.bid_size as f64 / ibx::types::QTY_SCALE as f64,
                 q.ask as f64 / 1e8,
-                q.ask_size as f64 / 1e4
+                q.ask_size as f64 / ibx::types::QTY_SCALE as f64
             );
         }
         for t in trades.iter().take(3) {
-            println!("        traded {:.2} x {:.0} on {}", t.price as f64 / 1e8, t.size as f64 / 1e4, t.exchange);
+            println!(
+                "        traded {:.2} x {:.4} on {:<6} past_limit={} unreported={}",
+                t.price as f64 / 1e8,
+                t.size as f64 / ibx::types::QTY_SCALE as f64,
+                t.exchange,
+                t.past_limit,
+                t.unreported,
+            );
         }
 
         let frames: Vec<String> = client

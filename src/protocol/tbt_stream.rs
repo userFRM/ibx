@@ -94,6 +94,15 @@ impl<'a> Bits<'a> {
     /// A string, one character per octet, as long as its own length says.
     pub fn text(&mut self) -> Option<String> {
         let len = self.unsigned()?;
+        // A length is a number the venue sent, not a promise. Nothing in a
+        // frame can be longer than what is left of it, so a length past that
+        // is a misread — and a misread length taken as a size to reserve asks
+        // the machine for whatever number the bits happened to spell. Read off
+        // a live trade stream it asked for two and a half terabytes, and the
+        // process died on the spot.
+        if len > (self.remaining() / 8) as u64 {
+            return None;
+        }
         let mut out = String::with_capacity(len as usize);
         for _ in 0..len {
             out.push(self.octet()? as char);
@@ -579,4 +588,31 @@ mod scale_tests {
         assert!((moves as f64 * 0.01 - 231.02).abs() < 1e-9);
     }
 
+}
+
+#[cfg(test)]
+mod length_tests {
+    use super::Bits;
+
+    /// A length longer than the frame is a misread, and refused. Taken as a
+    /// size to reserve it asks the machine for whatever the bits spelled: off
+    /// a live trade stream that was two and a half terabytes, and the process
+    /// died rather than dropping one frame.
+    #[test]
+    fn a_length_past_the_end_of_the_frame_is_refused() {
+        // A number whose continuation says it is large, in a frame of a few
+        // bytes: whatever it says, there is not that much left to read.
+        let frame = [0x7f, 0x7f, 0x7f, 0x81, 0x41, 0x42];
+        let mut bits = Bits::new(&frame);
+        assert!(bits.text().is_none(), "a length past the frame was taken");
+    }
+
+    /// A length that fits is read.
+    #[test]
+    fn a_length_within_the_frame_is_read() {
+        // Two octets of text, stated as a length of two.
+        let frame = [0x82, 0x41, 0x42];
+        let mut bits = Bits::new(&frame);
+        assert_eq!(bits.text().as_deref(), Some("AB"));
+    }
 }

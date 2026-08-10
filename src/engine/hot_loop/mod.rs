@@ -344,7 +344,7 @@ impl HotLoop {
         if self.farm.holds_market_data(instrument) {
             return;
         }
-        if self.hmds.tbt_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
+        if self.hmds.tbt_subscriptions.iter().any(|sub| sub.instrument == instrument) {
             return;
         }
         if self.ccp.news_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
@@ -904,7 +904,7 @@ impl HotLoop {
                     }
                     // Unsubscribe all TBT subscriptions before stopping
                     let tbt_instruments: Vec<InstrumentId> = self.hmds.tbt_subscriptions
-                        .iter().map(|(id, _, _)| *id).collect();
+                        .iter().map(|sub| sub.instrument).collect();
                     for instrument in tbt_instruments {
                         self.hmds.send_tbt_unsubscribe(instrument, &mut self.hmds_conn, &mut self.hb);
                     }
@@ -2621,7 +2621,15 @@ mod tests {
         let id = hl.context.market.register(4001);
         hl.context.market.register_server_tag(910_001, id);
         hl.farm.instrument_md_reqs.push((id, vec![7]));
-        hl.hmds.tbt_subscriptions.push((id, "AAPL".to_string(), TbtType::Last));
+        hl.hmds.tbt_subscriptions.push(crate::engine::hot_loop::hmds::TbtSubscription {
+            instrument: id,
+            query_id: "AAPL".to_string(),
+            kind: TbtType::Last,
+            venue_id: 0,
+            min_tick: 0,
+            size_tick: 0.0,
+            running: Default::default(),
+        });
 
         tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
         hl.poll_once();
