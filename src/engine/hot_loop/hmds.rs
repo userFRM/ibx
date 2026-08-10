@@ -711,6 +711,8 @@ impl HmdsState {
                         timestamp: frame.timestamp_ms,
                         exchange: t.exchange.clone(),
                         conditions: t.conditions.clone(),
+                        past_limit: t.past_limit,
+                        unreported: t.unreported,
                     };
                     shared.market.push_tbt_trade(trade.clone());
                     emit(event_tx, Event::TbtTrade(trade));
@@ -723,6 +725,8 @@ impl HmdsState {
                         bid_size: crate::types::qty_from_wire(q.bid_size as i64),
                         ask_size: crate::types::qty_from_wire(q.ask_size as i64),
                         timestamp: frame.timestamp_ms,
+                        bid_past_low: q.bid_past_low,
+                        ask_past_high: q.ask_past_high,
                     };
                     shared.market.push_tbt_quote(quote);
                     emit(event_tx, Event::TbtQuote(quote));

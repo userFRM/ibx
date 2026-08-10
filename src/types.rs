@@ -1185,6 +1185,14 @@ pub struct TbtTrade {
     pub timestamp: u64,
     pub exchange: String,
     pub conditions: String,
+    /// The venue may still revise this print.
+    ///
+    /// Stated by the venue and decoded off the wire, then thrown away and
+    /// reported as false — so a caller was told a print was final when the
+    /// venue had said it might not be.
+    pub past_limit: bool,
+    /// The print did not go to the tape.
+    pub unreported: bool,
 }
 
 /// A single tick-by-tick bid/ask quote from 35=E.
@@ -1196,6 +1204,10 @@ pub struct TbtQuote {
     pub bid_size: i64,
     pub ask_size: i64,
     pub timestamp: u64,
+    /// The bid is below the day's low, or the ask above its high — the venue's
+    /// own words about whether this quote sits outside the day's range.
+    pub bid_past_low: bool,
+    pub ask_past_high: bool,
 }
 
 /// An IB news bulletin from auth server news bulletin message.

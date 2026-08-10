@@ -3051,6 +3051,8 @@ fn process_msgs_dispatches_tbt_trade() {
     shared.market.push_tbt_trade(TbtTrade {
         instrument: 0, price: 150 * PRICE_SCALE, size: 100,
         timestamp: 1700000000, exchange: "ARCA".into(), conditions: "".into(),
+        past_limit: false,
+        unreported: false,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3064,6 +3066,8 @@ fn process_msgs_dispatches_tbt_quote() {
     shared.market.push_tbt_quote(TbtQuote {
         instrument: 0, bid: 150 * PRICE_SCALE, ask: 151 * PRICE_SCALE,
         bid_size: 1000, ask_size: 2000, timestamp: 1700000000,
+        bid_past_low: false,
+        ask_past_high: false,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3077,6 +3081,8 @@ fn process_msgs_tbt_unknown_instrument_uses_neg1() {
     shared.market.push_tbt_trade(TbtTrade {
         instrument: 5, price: 150 * PRICE_SCALE, size: 100,
         timestamp: 0, exchange: "".into(), conditions: "".into(),
+        past_limit: false,
+        unreported: false,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
