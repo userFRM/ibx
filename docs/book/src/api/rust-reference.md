@@ -134,9 +134,25 @@ pub fn disconnect(&self)
 
 ---
 
+#### `instrument_of`
+
+Everything the venue has sent this session that nothing here reads, as the connection it arrived on and what it was. Empty is this client's claim that it reads everything this venue sends it, and the only way to check that claim rather than take it. A message deliberately not read — one carrying nothing a caller could use — is not listed here; those are named in the source with the reason. Which slot a contract holds on this session, if it holds one.
+
+```rust
+pub fn instrument_of(&self, con_id: i64) -> Option<crate::types::InstrumentId>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `con_id` | `i64` | Contract ID. Unique per instrument. |
+
+**Returns:** `Option<crate::types::InstrumentId>`
+
+---
+
 #### `shared_state`
 
-Everything the venue has sent this session that nothing here reads, as the connection it arrived on and what it was. Empty is this client's claim that it reads everything this venue sends it, and the only way to check that claim rather than take it. A message deliberately not read — one carrying nothing a caller could use — is not listed here; those are named in the source with the reason. The session's own state, for reading what has arrived.
+The session's own state, for reading what has arrived.
 
 ```rust
 pub fn shared_state(&self) -> &Arc<SharedState>
