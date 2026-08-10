@@ -2655,9 +2655,12 @@ mod smart_venue_tests {
     #[test]
     fn a_venues_letter_is_not_the_first_letter_of_its_name() {
         use crate::types::exchange_letter;
-        assert_eq!(exchange_letter("NASDAQ"), "Q");
-        assert_eq!(exchange_letter("ARCA"), "P");
-        assert_eq!(exchange_letter("BATS"), "Z");
+        // From the counterpart's own table, not from memory: two of these
+        // were written here wrongly, and one is not a single letter.
+        assert_eq!(exchange_letter("NASDAQ"), "O", "not Q");
+        assert_eq!(exchange_letter("ARCA"), "Ar", "two characters, and not P");
+        assert_eq!(exchange_letter("PSE"), "P", "P belongs to PSE");
+        assert_eq!(exchange_letter("NYSE"), "N");
         // A venue with no known abbreviation gets none rather than one that
         // would collide with a venue that has one.
         assert_eq!(exchange_letter("SOMEWHERE"), "");
