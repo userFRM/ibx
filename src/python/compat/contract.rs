@@ -2075,12 +2075,10 @@ pub struct ContractDetails {
     pub under_sec_type: String,
     #[pyo3(get, set)]
     pub ev_rule: String,
-    /// Every field the venue stated about this contract that this client does
-    /// not yet name, as (tag, value).
-    ///
-    /// A definition carries more than any one client reads. What is not named
-    /// is kept here rather than dropped, so a fact the venue stated can be
-    /// reached today under its number instead of waiting to be named.
+    /// What that evaluation is multiplied by. A rule without its multiplier
+    /// values the contract by the wrong factor.
+    #[pyo3(get, set)]
+    pub ev_multiplier: f64,
     #[pyo3(get, set)]
     pub under_con_id: u32,
     #[pyo3(get, set)]
@@ -2222,6 +2220,7 @@ impl Clone for ContractDetails {
             contract_month: self.contract_month.clone(),
             under_sec_type: self.under_sec_type.clone(),
             ev_rule: self.ev_rule.clone(),
+            ev_multiplier: self.ev_multiplier,
             under_con_id: self.under_con_id,
             under_symbol: self.under_symbol.clone(),
             last_trade_time: self.last_trade_time.clone(),
@@ -2322,6 +2321,7 @@ impl ContractDetails {
             contract_month: String::new(),
             under_sec_type: String::new(),
             ev_rule: String::new(),
+            ev_multiplier: 0.0,
             under_con_id: 0,
             under_symbol: String::new(),
             last_trade_time: String::new(),
@@ -2416,6 +2416,7 @@ impl ContractDetails {
             contract_month: def.contract_month.clone(),
             under_sec_type: def.under_sec_type.clone(),
             ev_rule: def.ev_rule.clone(),
+            ev_multiplier: def.ev_multiplier,
             under_con_id: def.under_con_id,
             under_symbol: def.under_symbol.clone(),
             last_trade_time: def.last_trade_time.clone(),

@@ -2087,7 +2087,15 @@ impl CcpState {
                 // What the instrument's economic value is reckoned by, where it
                 // has one, and what the reckoning is multiplied by.
                 ev_rule: parsed.get(&6858).cloned().unwrap_or_default(),
-                ev_multiplier: parsed.get(&6892).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                // The multiplier is the tag beside the rule, and the venue
+                // states it as a number. It was read off 6892, which the venue
+                // states as text — so it parsed to nothing and every fill
+                // carried a multiplier of zero. A contract whose value follows
+                // something other than its own price is then valued at nothing.
+                ev_multiplier: parsed
+                    .get(&crate::control::contracts::TAG_EV_MULTIPLIER)
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(0.0),
                 // The price on this report may yet be revised.
                 pending_price_revision: parsed.get(&8497)
                     .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
@@ -6406,7 +6414,7 @@ mod tests {
         ]);
         frame.insert(11, "L42".to_string());
         frame.insert(6858, "AVG_LEG_CLOSE_DIFF".to_string());
-        frame.insert(6892, "2.5".to_string());
+        frame.insert(6859, "2.5".to_string());
         frame.insert(8497, "1".to_string());
 
         ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
@@ -6414,7 +6422,10 @@ mod tests {
         let info = shared.orders.get_order_info(42).expect("the order is recorded");
         assert_eq!(info.last_exec.liquidation, 1, "the broker liquidated this");
         assert_eq!(info.last_exec.ev_rule, "AVG_LEG_CLOSE_DIFF");
-        assert_eq!(info.last_exec.ev_multiplier, 2.5);
+        assert_eq!(info.last_exec.ev_multiplier, 2.5, "the multiplier is the number beside the rule");
+        // Read off the text tag, it parsed to nothing and every fill carried a
+        // multiplier of zero.
+        assert_ne!(info.last_exec.ev_multiplier, 0.0);
         assert!(info.last_exec.pending_price_revision, "the price may still be revised");
     }
 
