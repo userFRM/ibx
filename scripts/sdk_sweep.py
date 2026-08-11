@@ -79,6 +79,24 @@ def main() -> int:
     ask("the exchange's trades", lambda: stream("Last", spy, "tickByTickAllLast"))
     ask("quote changes", lambda: stream("BidAsk", fx, "tickByTickBidAsk"))
 
+    print("\nsubscriptions")
+
+    def gather(hook, start, stop, secs=8):
+        got: list = []
+        setattr(ib.wrapper, hook, lambda *a: got.append(a))
+        start()
+        time.sleep(secs)
+        stop()
+        return got
+
+    ask("depth of book", lambda: gather(
+        "updateMktDepth", lambda: ib.reqMktDepth(spy, 5), lambda: ib.cancelMktDepth(spy)))
+    ask("five-second bars", lambda: gather(
+        "realtimeBar", lambda: ib.reqRealTimeBars(spy, 5, "TRADES", False),
+        lambda: ib.cancelRealTimeBars(spy), 12))
+    ask("profit and loss", lambda: gather(
+        "pnl", lambda: ib.reqPnL(), lambda: None, 5))
+
     print("\naccount")
     ask("account values", lambda: ib.accountSummary())
     ask("positions", lambda: ib.positions())

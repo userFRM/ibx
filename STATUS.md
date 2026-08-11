@@ -128,3 +128,13 @@ offline suite could not — including a client that died on a live
 trade stream, a subscription that delivered the wrong kind of tick, and a
 regression that broke every answering call — each while the whole offline suite
 stayed green.
+
+The last session found ten more, none of which any offline test could have
+seen: a request carrying a contract rather than an id answered with an empty
+series, an account that said nothing until something asked, an execution
+history the venue rejected the request for outright, a provider list read the
+wrong way round, option chains withheld from the client's own answering call,
+one trade stream asked for under the other's name, a snapshot cancelled before
+the quote arrived, a price the venue states as absent read as a price, a
+schedule that returned nothing, and a change to an order the venue refused for
+not saying where that order was working.
