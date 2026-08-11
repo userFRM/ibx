@@ -17,6 +17,15 @@ use ibx::api::types::Contract;
 /// Contracts that trade outside the American session, so this can be run
 /// before the New York open. Both are entitled on this account.
 fn subjects() -> Vec<(&'static str, &'static str, Contract)> {
+    if std::env::var("IBX_CRYPTO_ONLY").is_ok() {
+        return vec![("a crypto, quotes", "BidAsk", Contract {
+            symbol: "BTC".to_string(),
+            sec_type: "CRYPTO".to_string(),
+            exchange: "PAXOS".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        })];
+    }
     if std::env::var("IBX_TRADES_ONLY").is_ok() {
         return vec![("a busy listing", "AllLast", Contract {
             symbol: "SPY".to_string(),

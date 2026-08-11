@@ -102,9 +102,18 @@ fn main() {
         }),
     ];
 
+    // The venue remembers an order id for the account, so a run that reuses
+    // one is answered "Duplicate ID" rather than with a preview. Numbered from
+    // the clock so a second run says something about the orders rather than
+    // about the last run.
+    let first_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_secs() % 100_000) as i64 * 10)
+        .unwrap_or(9000);
+
     let mut heard = Heard::default();
     for (n, (what, order)) in cases.into_iter().enumerate() {
-        let id = 9000 + n as i64;
+        let id = first_id + n as i64;
         println!("\n  {what}");
         if let Err(e) = client.place_order(id, &resolved, &order) {
             println!("    refused before sending: {e}");

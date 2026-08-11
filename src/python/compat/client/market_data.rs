@@ -149,7 +149,7 @@ impl EClient {
             self.core.instrument_to_req.lock().unwrap().remove(&instrument);
             self.core.forget_instrument(instrument);
             let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
-            Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { instrument })?;
+            Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         }
         Ok(())
     }

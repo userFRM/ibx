@@ -905,11 +905,22 @@ impl HmdsState {
 
     pub(crate) fn send_tbt_unsubscribe(
         &mut self,
+        // The request that opened the stream being withdrawn. A contract can
+        // carry several, and taking "the one on this contract" withdraws
+        // whichever was opened first and leaves the caller's own running.
+        caller_req_id: i64,
         instrument: InstrumentId,
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        let idx = match self.tbt_subscriptions.iter().position(|sub| sub.instrument == instrument) {
+        let idx = match self
+            .tbt_subscriptions
+            .iter()
+            .position(|sub| sub.caller_req_id == caller_req_id && sub.instrument == instrument)
+            // A caller that opened one stream on this contract and names it by
+            // something else still gets that one withdrawn.
+            .or_else(|| self.tbt_subscriptions.iter().position(|sub| sub.instrument == instrument))
+        {
             Some(i) => i,
             None => return,
         };
@@ -2015,11 +2026,15 @@ pub(crate) fn parse_tick_subscription_ack(xml: &str) -> Option<TickSubscriptionA
 /// A subscription the venue stated no size increment for is counted in whole
 /// ones, which is what it means to state none.
 fn scaled_size(counted: u64, size_tick: f64) -> i64 {
-    // A count past what a quantity can hold is held at the largest one rather
-    // than wrapped. Cast straight through, a count above the ceiling comes out
-    // negative, and a size that reads as negative is a sell where there was a
-    // buy — worse than a size that reads as improbably large.
-    crate::types::qty_from_counted(counted.min(i64::MAX as u64) as i64, size_tick)
+    // Scaled from the count as sent, not from a count cut down to fit first.
+    // Cutting it down first threw away what the increment would have shrunk
+    // back into range, so a count above the ceiling came back as a plausible
+    // number that was not the venue's. Scaling first and saturating on the
+    // way out keeps every size a quantity can hold, and holds the rest at the
+    // ceiling rather than wrapping to a negative — a negative size is a sell
+    // where there was a buy.
+    let per_unit = if size_tick > 0.0 { size_tick } else { 1.0 };
+    (counted as f64 * per_unit * crate::types::QTY_SCALE as f64).round() as i64
 }
 
 #[cfg(test)]
@@ -2090,5 +2105,67 @@ mod counted_size_ceiling_tests {
     #[test]
     fn an_ordinary_count_is_untouched() {
         assert_eq!(scaled_size(100, 1.0), 100 * crate::types::QTY_SCALE);
+    }
+}
+
+#[cfg(test)]
+mod withdrawing_one_stream_tests {
+    use super::*;
+
+    fn stream(caller_req_id: i64, instrument: InstrumentId, kind: TbtType) -> TbtSubscription {
+        TbtSubscription {
+            instrument,
+            query_id: format!("tbt_{caller_req_id}"),
+            kind,
+            caller_req_id,
+            venue_id: caller_req_id as u64,
+            min_tick: 1,
+            size_tick: 1.0,
+            running: Default::default(),
+        }
+    }
+
+    /// A contract can carry two streams — every trade, and every quote change.
+    /// Withdrawing one by naming the contract took whichever was opened first
+    /// and left the caller's own running.
+    #[test]
+    fn withdrawing_one_stream_leaves_the_other() {
+        let mut hmds = HmdsState::new();
+        hmds.tbt_subscriptions.push(stream(1, 7, TbtType::Last));
+        hmds.tbt_subscriptions.push(stream(2, 7, TbtType::BidAsk));
+
+        hmds.send_tbt_unsubscribe(2, 7, &mut None, &mut HeartbeatState::new());
+
+        assert_eq!(hmds.tbt_subscriptions.len(), 1, "one stream was withdrawn");
+        assert_eq!(
+            hmds.tbt_subscriptions[0].caller_req_id, 1,
+            "the wrong stream was withdrawn",
+        );
+    }
+
+    /// A caller that opened one stream and names it by something else still
+    /// gets that one withdrawn, rather than nothing happening.
+    #[test]
+    fn one_stream_named_loosely_is_still_withdrawn() {
+        let mut hmds = HmdsState::new();
+        hmds.tbt_subscriptions.push(stream(1, 7, TbtType::Last));
+        hmds.send_tbt_unsubscribe(99, 7, &mut None, &mut HeartbeatState::new());
+        assert!(hmds.tbt_subscriptions.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod counted_size_range_tests {
+    use super::scaled_size;
+
+    /// A count too large to hold as sent is still held when the increment
+    /// shrinks it back into range. Cut down to fit before scaling, it came
+    /// back as a number that was plausible and was not the venue's.
+    #[test]
+    fn an_increment_that_shrinks_a_count_keeps_it() {
+        let counted = u64::MAX / 4;
+        let held = scaled_size(counted, 1e-8);
+        let expected = (counted as f64 * 1e-8 * crate::types::QTY_SCALE as f64).round() as i64;
+        assert_eq!(held, expected, "the increment was applied to a count that had been cut");
     }
 }
