@@ -57,7 +57,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Option chains, symbol search | ✅ | |
 | Scanners, news, fundamentals | ✅ | |
 | Corporate-events calendar | ✅ | Live: the event types arrive, 179 KB of them, and an events query is answered |
-| Implied volatility, option price | ✅ | Answered from the venue's own model rather than asked for — this protocol carries no request, and the counterpart computes both in its own process. Live: this client reproduces the venue's own option price exactly, to the cent, on its own numbers |
+| Implied volatility, option price | ✅ | Answered here, not asked for: this protocol carries no request and the counterpart computes both in its own process. Anchored to the venue's published model for the contract, so the price it reproduces is the venue's own — live, to the cent, on two contracts |
 
 ---
 
@@ -98,6 +98,7 @@ carry them. None is read by nothing.
 Settled only by a live capture, recorded so nobody re-derives them:
 
 - The combo side convention — live evidence and the counterpart's own encoding disagree
+- The one number an option model needs that no tick states is fitted, not read. The venue does serve its own — a series named `OptExInterestRate`, which it recognises and refuses only the query shape for, answering `QueryType BarData(BarDataIntraday) is not supported for tick type`. Every bar size this client offers asks the same way, so the query type is the thing to find. Until then the fitted number absorbs whatever the venue's model does that this one does not, which is visible: two contracts on one underlying and one expiry wanted five per cent and twenty
 - A crypto's tick-by-tick stream is acknowledged, with both its increments stated, and the venue then sends nothing on it. Asked for alone, over minutes, on a contract whose top of book is moving. Not this client's doing, and not yet explained
 - The trading-status timestamp's unit, and the fourth number the venue sends with it
 
