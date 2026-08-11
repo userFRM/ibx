@@ -1090,6 +1090,31 @@ impl ReferenceState {
         self.historical_news.lock().unwrap().drain(..).collect()
     }
 
+    /// The headlines answering one request, leaving anything a dispatch loop
+    /// is going to deliver where it is.
+    pub fn take_historical_news_for(&self, req_id: u32) -> Option<(Vec<NewsHeadline>, bool)> {
+        let mut held = self.historical_news.lock().unwrap();
+        let at = held.iter().position(|(id, ..)| *id == req_id)?;
+        let (_, headlines, has_more) = held.remove(at);
+        Some((headlines, has_more))
+    }
+
+    /// What a dispatch loop should deliver, leaving what an answering call is
+    /// waiting to take.
+    pub fn drain_historical_news_for_dispatch(&self) -> Vec<(u32, Vec<NewsHeadline>, bool)> {
+        let mut held = self.historical_news.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < held.len() {
+            if Self::is_ask_id(held[i].0) {
+                i += 1;
+            } else {
+                out.push(held.remove(i));
+            }
+        }
+        out
+    }
+
     pub fn drain_news_articles(&self) -> Vec<(u32, i32, String)> {
         self.news_articles.lock().unwrap().drain(..).collect()
     }

@@ -1558,9 +1558,6 @@ fn push_order_attrs(
     // 6246 execution pattern, 6263 volume, 6151 ignore-RTH, 8569 amount,
     // 6947 a type discriminator (NOT a timezone).
     //
-    // A time condition is still refused with every one of these read and the
-    // relevant ones sent, including the timezone, so what it wants is not in
-    // this list.
     if !attrs.conditions.is_empty() {
         let cond_strs = build_condition_strings(&attrs.conditions);
         fields.push((6136, cond_strs[0].clone())); // first element is count
@@ -1597,13 +1594,11 @@ fn push_order_attrs(
             fields.push((6263, cond_strs[base + 9].clone())); // volume
             fields.push((6246, cond_strs[base + 10].clone())); // execution
 
-            // A time condition is still refused, and these were tried against a
-            // live session to see whether the shape was the reason: writing the
-            // condition's own fields first and the empty ones after, as the
-            // terminal does, and adding the empty 6947 it pads with. Neither
-            // changed the answer, and both are churn on a path that price,
-            // volume and multi-condition orders already go through, so the
-            // order here stays fixed
+            // Writing the condition's own fields first and the empty ones
+            // after, as the terminal does, and adding the empty 6947 it pads
+            // with, changes nothing the venue does, and both are churn on a
+            // path every condition already goes through. The order here stays
+            // fixed.
         }
     }
 
@@ -1844,23 +1839,13 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new()); // volume (unused)
                 out.push(String::new()); // execution (unused)
             }
-            // The venue refuses a time condition, and it is not this
-            // encoding. Every field was checked against the terminal's own
-            // encoder and agrees with it: the type is 3, the operators are
-            // `>=` and `<=`, the conjunctions are `a`/`o`/`n`, the value is
-            // `YYYYMMDD-HH:MM:SS` in GMT, and a time condition carries that
-            // one field and no other — not the contract, exchange, trigger
-            // method or price a price condition carries, and not the timezone
-            // on tag 6947, which the terminal writes only for the condition
-            // types that answer yes to carrying one, and this is not among
-            // them. Sending the timezone anyway changes nothing, and neither
-            // does any other shape of the value: eight were tried, including
-            // both separators, with and without a zone, without seconds, date
-            // alone, milliseconds, and epoch in seconds and milliseconds.
-            //
-            // So the refusal is about something other than the condition, and
-            // price, volume and multi-condition orders are all accepted as
-            // they stand. Left as the terminal writes it.
+            // The type is 3, the operators are `>=` and `<=`, the
+            // conjunctions are `a`/`o`/`n`, the value is `YYYYMMDD-HH:MM:SS`
+            // in GMT, and a time condition carries that one field and no
+            // other — not the contract, exchange, trigger method or price a
+            // price condition carries, and not the timezone on tag 6947,
+            // which is written only for the condition types that carry one.
+            // The venue holds an order under this until its time.
             OrderCondition::Time { time, is_more } => {
                 out.push("3".into());
                 out.push(conj.into());
@@ -1898,7 +1883,11 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());
                 out.push(String::new());
                 out.push(String::new());
-                let exch = if exchange == "SMART" { "*" } else { exchange.as_str() };
+                // SMART is a name for every exchange, and the venue spells
+                // that "*" here. It is also the name this client sees a
+                // routed contract under — BEST — and passing that through was
+                // refused, so both spellings become the one the venue takes.
+                let exch = if exchange == "SMART" || exchange == "BEST" { "*" } else { exchange.as_str() };
                 out.push(format!("symbol={symbol};exchange={exch};securityType={sec_type};"));
             }
             OrderCondition::Volume { con_id, exchange, volume, is_more } => {

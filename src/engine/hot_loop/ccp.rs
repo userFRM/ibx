@@ -246,6 +246,63 @@ pub(crate) struct PendingSubscribe {
     pub(crate) mode_9887: i32,
 }
 
+/// The contract a request names, when it carries one.
+///
+/// Only the requests that must be sent under an id are listed: everything else
+/// either carries no contract or is resolved by the venue from the symbol.
+pub(crate) fn contract_named(cmd: &crate::types::ControlCommand) -> Option<(&str, &str, &str, &str)> {
+    match cmd {
+        crate::types::ControlCommand::FetchHistorical { con_id: 0, symbol, sec_type, exchange, currency, .. }
+        | crate::types::ControlCommand::FetchHeadTimestamp { con_id: 0, symbol, sec_type, exchange, currency, .. }
+        | crate::types::ControlCommand::FetchHistoricalTicks { con_id: 0, symbol, sec_type, exchange, currency, .. }
+        | crate::types::ControlCommand::FetchHistoricalSchedule { con_id: 0, symbol, sec_type, exchange, currency, .. }
+        | crate::types::ControlCommand::SubscribeRealTimeBar { con_id: 0, symbol, sec_type, exchange, currency, .. }
+        | crate::types::ControlCommand::SubscribeDepth { con_id: 0, symbol, sec_type, exchange, currency, .. } => {
+            Some((symbol, sec_type, exchange, currency))
+        }
+        _ => None,
+    }
+}
+
+/// The filters that go with that contract.
+fn filters_named(cmd: &crate::types::ControlCommand) -> crate::types::SecDefFilters {
+    match cmd {
+        crate::types::ControlCommand::FetchHistorical { filters, .. }
+        | crate::types::ControlCommand::FetchHeadTimestamp { filters, .. }
+        | crate::types::ControlCommand::FetchHistoricalTicks { filters, .. }
+        | crate::types::ControlCommand::FetchHistoricalSchedule { filters, .. }
+        | crate::types::ControlCommand::SubscribeRealTimeBar { filters, .. }
+        | crate::types::ControlCommand::SubscribeDepth { filters, .. } => filters.clone(),
+        _ => crate::types::SecDefFilters::default(),
+    }
+}
+
+/// Fill in the id the venue has given the contract a request named.
+fn name_the_contract(cmd: &mut crate::types::ControlCommand, id: i64) {
+    match cmd {
+        crate::types::ControlCommand::FetchHistorical { con_id, .. }
+        | crate::types::ControlCommand::FetchHeadTimestamp { con_id, .. }
+        | crate::types::ControlCommand::FetchHistoricalTicks { con_id, .. }
+        | crate::types::ControlCommand::FetchHistoricalSchedule { con_id, .. }
+        | crate::types::ControlCommand::SubscribeRealTimeBar { con_id, .. }
+        | crate::types::ControlCommand::SubscribeDepth { con_id, .. } => *con_id = id,
+        _ => {}
+    }
+}
+
+/// Which request a caller is waiting on.
+fn request_id(cmd: &crate::types::ControlCommand) -> Option<u32> {
+    match cmd {
+        crate::types::ControlCommand::FetchHistorical { req_id, .. }
+        | crate::types::ControlCommand::FetchHeadTimestamp { req_id, .. }
+        | crate::types::ControlCommand::FetchHistoricalTicks { req_id, .. }
+        | crate::types::ControlCommand::FetchHistoricalSchedule { req_id, .. }
+        | crate::types::ControlCommand::SubscribeRealTimeBar { req_id, .. }
+        | crate::types::ControlCommand::SubscribeDepth { req_id, .. } => Some(*req_id),
+        _ => None,
+    }
+}
+
 /// Which tag carries a maturity.
 ///
 /// A full expiry date is MaturityDate (541) and a contract month is
@@ -399,6 +456,18 @@ pub(crate) struct CcpState {
     pub(crate) pending_md_subscribe: Vec<(u32, PendingSubscribe, Instant)>,
     /// Those whose contract the venue has now named.
     pub(crate) resolved_md_subscribe: Vec<(i64, PendingSubscribe)>,
+    /// Requests that named a contract the venue has not given an id to yet,
+    /// keyed by the lookup asking for that id.
+    ///
+    /// A subscription is sent by symbol and the venue resolves it. Everything
+    /// on the historical farm is asked for by id, so a caller passing the
+    /// contract it wrote down — which is what a program written against the
+    /// reference client does — sent a request under id zero, and the venue
+    /// answered a complete series with nothing in it.
+    pub(crate) pending_named: Vec<(u32, crate::types::ControlCommand, Instant)>,
+    /// Those the venue has now named, ready to be handled as though the id had
+    /// been there all along.
+    pub(crate) resolved_named: Vec<crate::types::ControlCommand>,
     /// conIds we've already auto-fetched secdef for, keyed by con_id (dedup).
     pub(crate) auto_fetched_conids: HashSet<i64>,
     /// Scanner results awaiting per-conId contract-detail enrichment.
@@ -520,6 +589,8 @@ impl CcpState {
             unread_types: std::collections::HashSet::new(),
             pending_md_subscribe: Vec::new(),
             resolved_md_subscribe: Vec::new(),
+            pending_named: Vec::new(),
+            resolved_named: Vec::new(),
             auto_fetched_conids: HashSet::new(),
             pending_scanner_enrichment: Vec::new(),
         }
@@ -1029,6 +1100,14 @@ impl CcpState {
                         {
                             let (_, pending, _) = self.pending_md_subscribe.remove(at);
                             self.resolved_md_subscribe.push((def.con_id as i64, pending));
+                        }
+                        // And a request held for the same reason.
+                        if let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())
+                            && let Some(at) = self.pending_named.iter().position(|(pid, ..)| *pid == rid)
+                        {
+                            let (_, mut cmd, _) = self.pending_named.remove(at);
+                            name_the_contract(&mut cmd, def.con_id as i64);
+                            self.resolved_named.push(cmd);
                         }
                     }
                     // Match the response to its originating pending_secdef entry
@@ -2724,6 +2803,65 @@ impl CcpState {
         self.send_secdef_request_by_symbol(
             req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
         );
+    }
+
+    /// Ask the venue to name the contract a request wants, and hold the
+    /// request until it does.
+    ///
+    /// Answers `false` when the request names nothing that can be looked up,
+    /// so the caller sends it as it stands rather than holding it for ever.
+    pub(crate) fn hold_until_named(
+        &mut self,
+        cmd: crate::types::ControlCommand,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) -> Option<crate::types::ControlCommand> {
+        let (symbol, sec_type, exchange, currency) = match contract_named(&cmd) {
+            Some(named) if !named.0.is_empty() => (
+                named.0.to_string(), named.1.to_string(),
+                named.2.to_string(), named.3.to_string(),
+            ),
+            _ => return Some(cmd),
+        };
+        let filters = filters_named(&cmd);
+        let req_id = self.next_internal_secdef_id;
+        self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
+        self.pending_named.push((req_id, cmd, Instant::now()));
+        self.send_secdef_request_by_symbol(
+            req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
+        );
+        None
+    }
+
+    /// A held request whose contract the venue never named. Told to the caller
+    /// rather than left waiting.
+    pub(crate) fn sweep_pending_named(&mut self, shared: &SharedState) {
+        if self.pending_named.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut gave_up = Vec::new();
+        self.pending_named.retain(|(_, cmd, asked_at)| {
+            if now.duration_since(*asked_at) < Self::NAMING_TIMEOUT {
+                return true;
+            }
+            gave_up.push(cmd.clone());
+            false
+        });
+        for cmd in gave_up {
+            let Some((symbol, sec_type, exchange, _)) = contract_named(&cmd) else { continue };
+            let reason = format!(
+                "no security definition has been found for {sec_type} {symbol} on \
+                 {exchange}, so the request could not be sent",
+            );
+            log::warn!("Request abandoned: {reason}");
+            if let Some(req_id) = request_id(&cmd) {
+                super::push_hmds_error(
+                    shared, req_id, reason,
+                    matches!(cmd, crate::types::ControlCommand::FetchHistorical { .. }),
+                );
+            }
+        }
     }
 
     pub(crate) fn send_secdef_request_by_symbol(&mut self, req_id: u32, symbol: &str, sec_type: &str, exchange: &str, currency: &str, filters: &crate::types::SecDefFilters, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
@@ -5791,6 +5929,62 @@ mod tests {
             (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
             (crate::control::contracts::TAG_IB_CON_ID, "0"),
         ], 1)
+    }
+
+    /// A request carrying a contract rather than an id waits for the venue to
+    /// name it, and goes out once it has. Sent as it stood, it went out under
+    /// id zero and the venue answered a complete series with nothing in it.
+    #[test]
+    fn a_request_naming_a_contract_waits_to_be_given_its_id() {
+        let (mut ccp, _context, shared) = u186_test_state();
+        let bars = crate::types::ControlCommand::FetchHistorical {
+            req_id: 7,
+            con_id: 0,
+            symbol: "SPY".into(),
+            sec_type: "STK".into(),
+            exchange: "SMART".into(),
+            currency: "USD".into(),
+            end_date_time: String::new(),
+            duration: "2 D".into(),
+            bar_size: "1 hour".into(),
+            what_to_show: "TRADES".into(),
+            use_rth: true,
+            keep_up_to_date: false,
+            filters: Default::default(),
+        };
+
+        assert!(
+            ccp.hold_until_named(bars, &mut None, &mut HeartbeatState::new()).is_none(),
+            "held rather than sent under no id",
+        );
+        assert_eq!(ccp.pending_named.len(), 1);
+
+        // The venue names it.
+        let lookup = ccp.pending_named[0].0;
+        let (_, mut held, _) = ccp.pending_named.remove(0);
+        name_the_contract(&mut held, 756_733);
+        let _ = lookup;
+        match ccp.hold_until_named(held, &mut None, &mut HeartbeatState::new()) {
+            Some(crate::types::ControlCommand::FetchHistorical { con_id, req_id, .. }) => {
+                assert_eq!((req_id, con_id), (7, 756_733), "sent under the id it was given");
+            }
+            other => panic!("a named request is handled, not held again: {other:?}"),
+        }
+
+        // And one the venue never names is reported rather than left waiting.
+        let unnamed = crate::types::ControlCommand::FetchHistorical {
+            req_id: 8, con_id: 0, symbol: "NOSUCH".into(), sec_type: "STK".into(),
+            exchange: "SMART".into(), currency: "USD".into(), end_date_time: String::new(),
+            duration: "1 D".into(), bar_size: "1 hour".into(), what_to_show: "TRADES".into(),
+            use_rth: true, keep_up_to_date: false, filters: Default::default(),
+        };
+        ccp.hold_until_named(unnamed, &mut None, &mut HeartbeatState::new());
+        ccp.pending_named[0].2 -= CcpState::NAMING_TIMEOUT + Duration::from_secs(1);
+        ccp.sweep_pending_named(&shared);
+        assert!(ccp.pending_named.is_empty());
+        let errors = shared.reference.drain_historical_errors();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, 8);
     }
 
     /// A lookup the venue never answers must not leave the subscription

@@ -245,6 +245,36 @@ impl EClient {
     /// The client this follows returns them. Sending the request and returning
     /// nothing left a program that assigned the result holding nothing, with
     /// no way to tell that from an underlying with no options at all.
+    /// The headlines the venue holds for a contract.
+    ///
+    /// Answers rather than reporting through the wrapper, because a program
+    /// written against the reference client reads the return value.
+    #[allow(clippy::too_many_arguments)]
+    fn news_headlines(
+        &self,
+        py: Python<'_>,
+        con_id: i64,
+        provider_codes: &str,
+        start_date_time: &str,
+        end_date_time: &str,
+        total_results: i32,
+    ) -> PyResult<Vec<(String, String, String, String)>> {
+        let req_id = ask_id();
+        self.req_historical_news(
+            py, req_id, con_id, provider_codes, start_date_time, end_date_time,
+            total_results, Vec::new(),
+        )?;
+        let shared = self.connected_shared()?;
+        let what = format!("the headlines for contract {con_id}");
+        let (headlines, _) = wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.take_historical_news_for(req_id as u32)
+        })?;
+        Ok(headlines
+            .into_iter()
+            .map(|h| (h.time, h.provider_code, h.article_id, h.headline))
+            .collect())
+    }
+
     fn option_chains(
         &self,
         py: Python<'_>,

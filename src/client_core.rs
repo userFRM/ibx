@@ -1870,6 +1870,25 @@ impl ClientCore {
     pub fn validate_order(order: &ApiOrder, connected_account: &str) -> Result<(), String> {
         order.side()?;
 
+        // An execution condition names a symbol, an exchange and a security
+        // type, and the venue wants all three. Left short, it accepts the
+        // order and holds it Inactive with "Invalid value in field # 6246",
+        // which names a tag no caller of this client has heard of.
+        for condition in &order.conditions {
+            if let crate::types::OrderCondition::Execution { symbol, exchange, sec_type } = condition {
+                for (what, value) in
+                    [("symbol", symbol), ("exchange", exchange), ("security type", sec_type)]
+                {
+                    if value.trim().is_empty() {
+                        return Err(format!(
+                            "an execution condition needs a {what}; the venue refuses one \
+                             that leaves any of symbol, exchange or security type out",
+                        ));
+                    }
+                }
+            }
+        }
+
         // Reject non-finite and out-of-range numerics up front, before any
         // caller-visible order gets built from a NaN, an Infinity, or a
         // magnitude the wire's fixed-point i64 can't hold. See ibx#263.

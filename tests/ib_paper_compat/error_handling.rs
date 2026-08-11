@@ -84,6 +84,8 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
             end_date_time: end_dt.clone(), duration: "1 d".to_string(),
             bar_size: "5 mins".to_string(), what_to_show: "TRADES".to_string(), use_rth: true,
         keep_up_to_date: false,
+            currency: "".to_string(),
+            filters: Default::default(),
         }).unwrap();
     }
 

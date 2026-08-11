@@ -244,6 +244,9 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
             sec_type: "STK".into(),
             num_rows: 5,
             is_smart_depth: true,
+            symbol: "".to_string(),
+            currency: "".to_string(),
+            filters: Default::default(),
         })
         .unwrap();
 
@@ -276,6 +279,9 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
                 sec_type: "STK".into(),
                 num_rows: 5,
                 is_smart_depth: false,
+                symbol: "".to_string(),
+                currency: "".to_string(),
+                filters: Default::default(),
             })
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(15);
