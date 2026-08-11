@@ -129,12 +129,23 @@ trade stream, a subscription that delivered the wrong kind of tick, and a
 regression that broke every answering call — each while the whole offline suite
 stayed green.
 
-The last session found ten more, none of which any offline test could have
-seen: a request carrying a contract rather than an id answered with an empty
-series, an account that said nothing until something asked, an execution
-history the venue rejected the request for outright, a provider list read the
-wrong way round, option chains withheld from the client's own answering call,
-one trade stream asked for under the other's name, a snapshot cancelled before
-the quote arrived, a price the venue states as absent read as a price, a
-schedule that returned nothing, and a change to an order the venue refused for
-not saying where that order was working.
+The last session found ten more. Each is what a program would have seen:
+
+- `reqHistoricalData(Contract("SPY"))` returned no bars at all, unless the
+  contract had been looked up first
+- `accountSummary()` returned an empty list until something else asked the
+  venue for the account
+- a session opened with no execution history, because the venue rejected the
+  request that asks for it
+- `reqNewsProviders()` returned one provider whose name was every other
+  provider
+- the Rust client's `option_chain()` returned nothing while the Python
+  client's returned three
+- `reqTickByTickData(contract, "Last")` was answered with the other trade
+  stream, then with silence
+- `reqTickers()` returned a previous close and no bid or ask
+- a contract with no bid quoted at minus one, and a caller waiting for a
+  quote took that for one
+- `reqHistoricalSchedule()` returned `None`
+- changing an order's price left it inactive, and cancelling it then found
+  nothing to cancel
