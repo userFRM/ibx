@@ -121,6 +121,11 @@ pub struct HotLoop {
     /// connect failed, or a future runtime disconnect detector trips it.
     pending_hmds_reconnect: Option<Receiver<io::Result<Connection>>>,
     hmds_reconnect_attempt: u32,
+    /// The same, for the connection carrying the calendar. Rebuilt on the
+    /// same terms as the others: a farm that goes is not a session that ends.
+    secdef_reconnect_attempt: u32,
+    secdef_next_attempt_at: Option<Instant>,
+    pending_secdef_reconnect: Option<Receiver<io::Result<Connection>>>,
     /// Earliest instant the next HMDS reconnect attempt may spawn. `None`
     /// while HMDS is healthy.
     hmds_next_attempt_at: Option<Instant>,
@@ -221,6 +226,9 @@ impl HotLoop {
             ccp_reconnect_attempt: 0,
             pending_hmds_reconnect: None,
             hmds_reconnect_attempt: 0,
+            secdef_reconnect_attempt: 0,
+            secdef_next_attempt_at: None,
+            pending_secdef_reconnect: None,
             hmds_next_attempt_at: None,
         }
     }
@@ -512,10 +520,12 @@ impl HotLoop {
             self.poll_farm_reconnect();
             self.poll_ccp_reconnect();
             self.poll_hmds_reconnect();
+            self.poll_secdef_reconnect();
             self.budget.settle(Instant::now(), self.reconnect_cfg.stable_window);
             self.maybe_spawn_farm_reconnect();
             self.maybe_spawn_ccp_reconnect();
             self.maybe_spawn_hmds_reconnect();
+            self.maybe_spawn_secdef_reconnect();
 
             // 6. Wake any waiting consumers (e.g. Python event loop)
             self.shared.notify();
@@ -1440,6 +1450,81 @@ impl HotLoop {
         self.pending_hmds_reconnect = Some(rx);
     }
 
+    /// Rebuild the connection carrying the calendar, on the same terms as the
+    /// others: a farm that goes is not a session that ends.
+    fn maybe_spawn_secdef_reconnect(&mut self) {
+        if self.secdef_conn.is_some() { return; }
+        if self.pending_secdef_reconnect.is_some() { return; }
+        let auth = match self.reconnect_auth.as_ref() {
+            Some(a) if !a.secdef_host.is_empty() && !a.secdef_farm.is_empty() => a,
+            // A session the venue named no such farm for has none to rebuild.
+            _ => return,
+        };
+        if self.secdef_next_attempt_at.is_none() {
+            self.secdef_next_attempt_at =
+                Some(Instant::now() + hmds_reconnect_backoff(self.secdef_reconnect_attempt + 1));
+            return;
+        }
+        if Instant::now() < self.secdef_next_attempt_at.unwrap() { return; }
+        let auth = auth.clone();
+        self.secdef_reconnect_attempt += 1;
+        let attempt = self.secdef_reconnect_attempt;
+        log::info!(
+            "Security definition farm reconnect attempt {} starting ({}/{})",
+            attempt, auth.secdef_host, auth.secdef_farm,
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name(format!("secdef-reconnect-{attempt}"))
+            .spawn(move || {
+                let result = connect_farm(
+                    &auth.secdef_host, &auth.secdef_farm,
+                    &auth.username, &auth.password, auth.paper,
+                    &auth.server_session_id, &auth.session_key,
+                    &auth.hw_info, &auth.encoded, Farm::SecurityDefinition,
+                );
+                let _ = tx.send(result);
+            })
+            .ok();
+        self.pending_secdef_reconnect = Some(rx);
+    }
+
+    /// Take the rebuilt connection, or schedule another attempt.
+    fn poll_secdef_reconnect(&mut self) {
+        let rx = match self.pending_secdef_reconnect.as_ref() {
+            Some(rx) => rx,
+            None => return,
+        };
+        match rx.try_recv() {
+            Ok(Ok(conn)) => {
+                log::info!(
+                    "Security definition farm reconnected (attempt {})",
+                    self.secdef_reconnect_attempt,
+                );
+                self.secdef_conn = Some(conn);
+                self.hb.last_secdef_recv = Instant::now();
+                self.hb.last_secdef_sent = Instant::now();
+                self.secdef_reconnect_attempt = 0;
+                self.secdef_next_attempt_at = None;
+                self.pending_secdef_reconnect = None;
+            }
+            Ok(Err(e)) => {
+                log::warn!(
+                    "Security definition farm reconnect attempt {} failed: {e}",
+                    self.secdef_reconnect_attempt,
+                );
+                self.pending_secdef_reconnect = None;
+                self.secdef_next_attempt_at = Some(
+                    Instant::now() + hmds_reconnect_backoff(self.secdef_reconnect_attempt + 1),
+                );
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.pending_secdef_reconnect = None;
+            }
+        }
+    }
+
     /// Ask again for the keepUpToDate streams the dead HMDS socket was
     /// carrying. The request goes out on CCP and the bars arrive on HMDS, so
     /// only this side owns both and only this side can put them back.
@@ -2007,6 +2092,8 @@ mod tests {
             hmds_farm: "hfarm".into(),
             trading_host: "trade.example".into(),
             trading_farm: "tfarm".into(),
+            secdef_host: String::new(),
+            secdef_farm: String::new(),
         });
 
         // A live transport, so releasing it is observable.
@@ -2204,6 +2291,8 @@ mod tests {
             hmds_farm: "hfarm".into(),
             trading_host: "trade.example".into(),
             trading_farm: "tfarm".into(),
+            secdef_host: String::new(),
+            secdef_farm: String::new(),
         });
 
         // Well past the old cap, with the socket still down.
@@ -2702,5 +2791,75 @@ mod qty_formatting_tests {
         let smallest = format_qty(1);
         let places = smallest.split_once('.').expect("a fraction").1.len();
         assert_eq!(10i64.pow(places as u32), QTY_SCALE, "a place the scale holds went unwritten");
+    }
+}
+
+#[cfg(test)]
+mod calendar_farm_reconnect_tests {
+    use super::*;
+
+    /// A farm that goes is not a session that ends. The connection carrying
+    /// the calendar is rebuilt on the same terms as the others, so a caller
+    /// that asks again after one drops is served rather than told forever
+    /// that this session has no such connection.
+    #[test]
+    fn a_calendar_connection_that_went_is_scheduled_to_come_back() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            host: "gw.example".into(),
+            username: "u".into(),
+            password: zeroize::Zeroizing::new(String::new()),
+            paper: true,
+            code_provider: None,
+            ib_key_timeout_secs: crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
+            ib_key_token_sub_type: crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
+            session_key: Default::default(),
+            session_token: Default::default(),
+            server_session_id: String::new(),
+            hw_info: String::new(),
+            encoded: String::new(),
+            hmds_host: String::new(),
+            hmds_farm: String::new(),
+            trading_host: String::new(),
+            trading_farm: String::new(),
+            secdef_host: "sd.example".into(),
+            secdef_farm: "secdefeu".into(),
+        });
+        assert!(hl.secdef_conn.is_none());
+
+        // The first pass schedules rather than dials, the way the others do.
+        hl.maybe_spawn_secdef_reconnect();
+        assert!(hl.secdef_next_attempt_at.is_some(), "no attempt was scheduled");
+        assert!(hl.pending_secdef_reconnect.is_none(), "it dialled immediately");
+    }
+
+    /// A session the venue named no such farm for has none to rebuild, and
+    /// does not sit trying to.
+    #[test]
+    fn a_session_without_that_farm_does_not_try() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            host: "gw.example".into(),
+            username: "u".into(),
+            password: zeroize::Zeroizing::new(String::new()),
+            paper: true,
+            code_provider: None,
+            ib_key_timeout_secs: crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
+            ib_key_token_sub_type: crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
+            session_key: Default::default(),
+            session_token: Default::default(),
+            server_session_id: String::new(),
+            hw_info: String::new(),
+            encoded: String::new(),
+            hmds_host: String::new(),
+            hmds_farm: String::new(),
+            trading_host: String::new(),
+            trading_farm: String::new(),
+            secdef_host: String::new(),
+            secdef_farm: String::new(),
+        });
+        hl.maybe_spawn_secdef_reconnect();
+        assert!(hl.secdef_next_attempt_at.is_none());
+        assert!(hl.pending_secdef_reconnect.is_none());
     }
 }

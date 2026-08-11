@@ -486,6 +486,11 @@ pub struct ReconnectAuth {
     /// redirect may have changed since (ibx#295).
     pub trading_host: String,
     pub trading_farm: String,
+    /// Security-definition farm routing from the same response, empty when the
+    /// venue stated none. The calendar rides this one, and without the route a
+    /// connection that goes cannot be rebuilt.
+    pub secdef_host: String,
+    pub secdef_farm: String,
 }
 
 /// Keep the first value the venue sends for a field it sends once, and say so
@@ -566,6 +571,10 @@ pub struct Gateway {
     /// reconnect uses the route the auth server gave rather than a literal.
     pub trading_host: String,
     pub trading_farm: String,
+    /// Security-definition farm routing from the same response, retained so a
+    /// connection that goes can be rebuilt. The calendar rides this one.
+    pub secdef_host: String,
+    pub secdef_farm: String,
 }
 
 /// Which farm a connection is to, which decides two separate numbers the
@@ -2245,6 +2254,8 @@ impl Gateway {
             hmds_farm: hmds_farm_for_gw,
             trading_host: trading_host_for_gw,
             trading_farm: trading_farm_for_gw,
+            secdef_host: secdef.as_ref().map(|(h, _)| h.clone()).unwrap_or_default(),
+            secdef_farm: secdef.as_ref().map(|(_, f)| f.clone()).unwrap_or_default(),
         };
         Ok(Session {
             gateway: gw,
@@ -2437,6 +2448,8 @@ impl Gateway {
             server_session_id: self.server_session_id.clone(),
             hw_info: self.hw_info.clone(),
             encoded: self.encoded.clone(),
+            secdef_host: self.secdef_host.clone(),
+            secdef_farm: self.secdef_farm.clone(),
             hmds_host: self.hmds_host.clone(),
             hmds_farm: self.hmds_farm.clone(),
             trading_host: self.trading_host.clone(),
@@ -3014,6 +3027,8 @@ mod tests {
             server_session_id: String::new(),
             hw_info: String::new(),
             encoded: String::new(),
+            secdef_host: String::new(),
+            secdef_farm: String::new(),
             hmds_host: String::new(),
             hmds_farm: String::new(),
             trading_host: trading_host.to_string(),
