@@ -448,8 +448,15 @@ pub struct ClientCore {
     pending_group_events: Mutex<Vec<GroupEvent>>,
     // Change detection for quote polling
     pub last_quotes: Mutex<HashMap<InstrumentId, [i64; 16]>>,
-    // Snapshot req_ids — deliver first ticks then auto-cancel
-    pub snapshot_reqs: Mutex<HashSet<i64>>,
+    /// Requests that asked for a snapshot rather than a stream, and when each
+    /// last heard something.
+    ///
+    /// A snapshot ends when the venue has finished sending it. There is no
+    /// marker for that on this protocol, so it ends when the ticks stop:
+    /// ending at the first one cancelled the subscription on whatever arrived
+    /// first — often the previous close — and the bid and ask that the caller
+    /// asked for never came.
+    pub snapshot_reqs: Mutex<HashMap<i64, Option<std::time::Instant>>>,
 
     // PnL subscription state
     pub pnl_req_id: Mutex<Option<i64>>,
@@ -512,7 +519,7 @@ impl ClientCore {
             group_subscriptions: Mutex::new(HashMap::new()),
             pending_group_events: Mutex::new(Vec::new()),
             last_quotes: Mutex::new(HashMap::new()),
-            snapshot_reqs: Mutex::new(HashSet::new()),
+            snapshot_reqs: Mutex::new(HashMap::new()),
             pnl_req_id: Mutex::new(None),
             pnl_single_reqs: Mutex::new(HashMap::new()),
             last_pnl: Mutex::new([0; 3]),
@@ -786,7 +793,7 @@ impl ClientCore {
         );
         self.instrument_to_req.lock().unwrap().insert(instrument_id, req_id);
         if snapshot {
-            self.snapshot_reqs.lock().unwrap().insert(req_id);
+            self.snapshot_reqs.lock().unwrap().insert(req_id, None);
         }
         if wants_news {
             self.news_instruments.lock().unwrap().insert(instrument_id);
@@ -1464,10 +1471,49 @@ impl ClientCore {
         QuotePollResult { ticks, string_ticks, timestamp, delivered }
     }
 
-    /// Check and consume snapshot completion for a req_id.
-    /// Returns true if this was a snapshot that just completed.
-    pub fn check_snapshot_done(&self, req_id: i64, delivered: bool) -> bool {
-        delivered && self.snapshot_reqs.lock().unwrap().remove(&req_id)
+    /// Whether a snapshot has just finished arriving.
+    ///
+    /// Answers true once, for the pump that sees the snapshot complete. A
+    /// request that is not a snapshot is never one of these.
+    ///
+    /// A snapshot is asked for to learn what a contract is quoted at, so it
+    /// ends when that has arrived: both sides, or a traded price for something
+    /// quoted on one side. Ending on the first tick of any kind cancelled the
+    /// subscription on whatever came first — usually the previous close — and
+    /// the quote never arrived at all. A contract the venue says nothing about
+    /// ends on the quiet instead, so nothing waits for ever.
+    pub fn check_snapshot_done(&self, req_id: i64, delivered: bool, quoted: bool) -> bool {
+        /// How long a snapshot with nothing quoted waits before giving up on
+        /// hearing more.
+        const QUIET: std::time::Duration = std::time::Duration::from_secs(6);
+
+        let mut waiting = self.snapshot_reqs.lock().unwrap();
+        let Some(last_heard) = waiting.get_mut(&req_id) else {
+            return false;
+        };
+        if quoted {
+            waiting.remove(&req_id);
+            return true;
+        }
+        if delivered {
+            *last_heard = Some(std::time::Instant::now());
+            return false;
+        }
+        match *last_heard {
+            Some(at) if at.elapsed() >= QUIET => {
+                waiting.remove(&req_id);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a quote says what a contract is going for.
+    ///
+    /// A currency pair states no traded price and marks it as absent with a
+    /// negative one, so that is not a quote.
+    pub fn is_quoted(quote: &crate::types::Quote) -> bool {
+        (quote.bid > 0 && quote.ask > 0) || quote.last > 0
     }
 
     /// Snapshot the current instrument→req_id mapping.

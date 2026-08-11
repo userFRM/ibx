@@ -99,6 +99,10 @@ impl EClient {
     }
 }
 
+/// The time zone a venue states its hours in, and each session as its
+/// opening, its close, and the day it belongs to.
+type TradingSchedule = (String, Vec<(String, String, String)>);
+
 #[pymethods]
 impl EClient {
     /// Everything the venue knows about the contracts matching a description.
@@ -273,6 +277,35 @@ impl EClient {
             .into_iter()
             .map(|h| (h.time, h.provider_code, h.article_id, h.headline))
             .collect())
+    }
+
+    /// When a contract trades, over a stretch of days.
+    ///
+    /// Each session is its opening, its close, and the day it belongs to; the
+    /// time zone they are stated in comes with them.
+    fn trading_schedule(
+        &self,
+        py: Python<'_>,
+        contract: &Contract,
+        end_date_time: &str,
+        duration_str: &str,
+        use_rth: bool,
+    ) -> PyResult<TradingSchedule> {
+        let req_id = ask_id();
+        self.req_historical_schedule(py, req_id, contract, end_date_time, duration_str, use_rth)?;
+        let shared = self.connected_shared()?;
+        let what = format!("when {} trades", contract.symbol);
+        let schedule = wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.take_historical_schedule_for(req_id as u32)
+        })?;
+        Ok((
+            schedule.timezone,
+            schedule
+                .sessions
+                .into_iter()
+                .map(|s| (s.open_time, s.close_time, s.ref_date))
+                .collect(),
+        ))
     }
 
     fn option_chains(

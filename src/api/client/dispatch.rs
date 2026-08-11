@@ -237,7 +237,10 @@ impl EClient {
                 let ts_secs = ts.timestamp_ns / 1_000_000_000;
                 wrapper.tick_string(ts.req_id, 45, &ts_secs.to_string());
             }
-            if self.core.check_snapshot_done(req_id, result.delivered) {
+            if self.core.check_snapshot_done(
+                req_id, result.delivered,
+                crate::client_core::ClientCore::is_quoted(&self.shared.market.quote(iid)),
+            ) {
                 wrapper.tick_snapshot_end(req_id);
                 snapshot_done.push(req_id);
             }
