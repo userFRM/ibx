@@ -976,7 +976,7 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
 
     // Step 2: Unsubscribe — instrument 0 is the first registered (SPY)
     control_tx
-        .send(ControlCommand::UnsubscribeTbt { instrument: 0 })
+        .send(ControlCommand::UnsubscribeTbt { req_id: 1, instrument: 0 })
         .unwrap();
     // What matters is that the stream stops, not how much of it was already on
     // its way. A payload in flight when the withdrawal goes out still arrives,

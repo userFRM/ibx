@@ -167,7 +167,7 @@ impl BenchSession {
     pub fn unsubscribe_tbt(&self, instrument: InstrumentId) {
         let _ = self
             .control_tx
-            .send(ControlCommand::UnsubscribeTbt { instrument });
+            .send(ControlCommand::UnsubscribeTbt { req_id: 1, instrument });
     }
 
     pub fn send_order(&self, req: OrderRequest) {

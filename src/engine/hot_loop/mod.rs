@@ -658,8 +658,8 @@ impl HotLoop {
                         );
                     }
                 }
-                ControlCommand::UnsubscribeTbt { instrument } => {
-                    self.hmds.send_tbt_unsubscribe(instrument, &mut self.hmds_conn, &mut self.hb);
+                ControlCommand::UnsubscribeTbt { req_id, instrument } => {
+                    self.hmds.send_tbt_unsubscribe(req_id, instrument, &mut self.hmds_conn, &mut self.hb);
                     self.try_reclaim_instrument(instrument);
                 }
                 ControlCommand::SubscribeNews { con_id, symbol, providers, reply_tx } => {
@@ -902,11 +902,15 @@ impl HotLoop {
                             &mut self.hb,
                         );
                     }
-                    // Unsubscribe all TBT subscriptions before stopping
-                    let tbt_instruments: Vec<InstrumentId> = self.hmds.tbt_subscriptions
-                        .iter().map(|sub| sub.instrument).collect();
-                    for instrument in tbt_instruments {
-                        self.hmds.send_tbt_unsubscribe(instrument, &mut self.hmds_conn, &mut self.hb);
+                    // Every tick stream withdrawn before stopping, each named
+                    // by the request that opened it: a contract can carry
+                    // several, and withdrawing by contract leaves the rest.
+                    let open: Vec<(i64, InstrumentId)> = self.hmds.tbt_subscriptions
+                        .iter().map(|sub| (sub.caller_req_id, sub.instrument)).collect();
+                    for (req_id, instrument) in open {
+                        self.hmds.send_tbt_unsubscribe(
+                            req_id, instrument, &mut self.hmds_conn, &mut self.hb,
+                        );
                     }
                     // Unsubscribe all news subscriptions before stopping
                     let news_instruments: Vec<InstrumentId> = self.ccp.news_subscriptions

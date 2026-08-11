@@ -24,7 +24,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Top of book | ✅ | |
 | Depth of book | ✅ | |
 | Historical bars, ticks, schedules | ✅ | |
-| Tick-by-tick quotes | ✅ | Live: several subscriptions at once, each attributed |
+| Tick-by-tick quotes | ✅ | Live on currencies and American listings: several at once, each naming its own request |
 | Tick-by-tick trades | ✅ | Live: a thousand trades on a busy listing, priced and sized as the venue printed them |
 | Trading halts | ✅ | Live: contracts trading are reported trading |
 | Tick attributes | ✅ | Live: reported-away-from-the-exchange varies trade by trade |
@@ -98,6 +98,7 @@ carry them. None is read by nothing.
 Settled only by a live capture, recorded so nobody re-derives them:
 
 - The combo side convention — live evidence and the counterpart's own encoding disagree
+- A crypto's tick-by-tick stream is acknowledged, with both its increments stated, and the venue then sends nothing on it. Asked for alone, over minutes, on a contract whose top of book is moving. Not this client's doing, and not yet explained
 - The trading-status timestamp's unit, and the fourth number the venue sends with it
 
 ---

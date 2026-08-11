@@ -66,6 +66,10 @@ pub fn qty_from_counted(counted: i64, size_tick: f64) -> Qty {
     if size_tick <= 0.0 || size_tick == 1.0 {
         return qty_from_wire(counted);
     }
+    // Held at the ceiling if it will not fit, rather than wrapped. The cast
+    // from a float saturates in Rust, so a size past what can be held comes
+    // back as the largest one and never as a negative — a negative size is a
+    // sell where there was a buy.
     (counted as f64 * size_tick * QTY_SCALE as f64).round() as Qty
 }
 
@@ -1504,7 +1508,12 @@ pub enum ControlCommand {
     /// Subscribe to tick-by-tick data via historical data connection.
     SubscribeTbt { req_id: i64, con_id: i64, symbol: String, sec_type: String, exchange: String, tbt_type: TbtType, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
     /// Unsubscribe from tick-by-tick data.
-    UnsubscribeTbt { instrument: InstrumentId },
+    /// Withdraw one tick stream, named by the request that opened it.
+    ///
+    /// Named by the request and not by the contract: a contract can carry
+    /// several streams, and withdrawing "the one on this contract" takes
+    /// whichever was opened first and leaves the caller's own running.
+    UnsubscribeTbt { req_id: i64, instrument: InstrumentId },
     /// Subscribe to per-contract news ticks via CCP (264=292).
     SubscribeNews { con_id: i64, symbol: String, providers: String, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
     /// Unsubscribe from per-contract news ticks.

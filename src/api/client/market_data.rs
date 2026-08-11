@@ -116,7 +116,7 @@ impl EClient {
         if let Some(instrument) = self.core.req_to_instrument.lock().unwrap().remove(&req_id) {
             self.core.instrument_to_req.lock().unwrap().remove(&instrument);
             self.core.forget_instrument(instrument);
-            self.send(ControlCommand::UnsubscribeTbt { instrument })?;
+            self.send(ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         }
         Ok(())
     }

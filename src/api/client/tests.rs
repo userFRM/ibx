@@ -874,7 +874,7 @@ fn cancel_tick_by_tick_data_sends_unsubscribe_tbt() {
     client.core.req_to_instrument.lock().unwrap().insert(10, 3);
     client.cancel_tick_by_tick_data(10).unwrap();
     let cmd = rx.try_recv().unwrap();
-    assert!(matches!(cmd, ControlCommand::UnsubscribeTbt { instrument: 3 }));
+    assert!(matches!(cmd, ControlCommand::UnsubscribeTbt { instrument: 3, .. }));
 }
 
 #[test]
