@@ -240,6 +240,42 @@ impl EClient {
             .collect())
     }
 
+    /// The option chains an underlying has, answered rather than only sent.
+    ///
+    /// The client this follows returns them. Sending the request and returning
+    /// nothing left a program that assigned the result holding nothing, with
+    /// no way to tell that from an underlying with no options at all.
+    fn option_chains(
+        &self,
+        py: Python<'_>,
+        underlying_symbol: &str,
+        fut_fop_exchange: &str,
+        underlying_sec_type: &str,
+        underlying_con_id: i64,
+    ) -> PyResult<Vec<crate::python::compat::contract::OptionChain>> {
+        let req_id = ask_id();
+        self.req_sec_def_opt_params(
+            py, req_id, underlying_symbol, fut_fop_exchange, underlying_sec_type,
+            underlying_con_id,
+        )?;
+        let shared = self.connected_shared()?;
+        let what = format!("the option chains of {underlying_symbol}");
+        let (_, scopes) = wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.take_option_params_for(req_id as u32)
+        })?;
+        Ok(scopes
+            .iter()
+            .map(|s| crate::python::compat::contract::OptionChain {
+                exchange: s.exchange.clone(),
+                underlying_con_id,
+                trading_class: s.trading_class.clone(),
+                multiplier: s.multiplier.clone(),
+                expirations: s.expirations.clone(),
+                strikes: s.strikes.clone(),
+            })
+            .collect())
+    }
+
     /// How a contract's traded volume is spread across prices over a period.
     #[pyo3(signature = (contract, use_rth=true, time_period="3 days"))]
     fn histogram_data(

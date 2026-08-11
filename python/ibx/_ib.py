@@ -500,9 +500,14 @@ class IB:
         self.client.req_market_rule(marketRuleId)
 
     def reqSecDefOptParams(self, underlyingSymbol, futFopExchange, underlyingSecType, underlyingConId):
-        self.client.req_sec_def_opt_params(
-            self._next_req_id(), underlyingSymbol, futFopExchange,
-            underlyingSecType, underlyingConId,
+        """The option chains an underlying has, one per venue.
+
+        Returns them, as the client this follows does. It used to send the
+        request and return nothing, so a program that assigned the result held
+        nothing and could not tell that from an underlying with no options.
+        """
+        return self.client.option_chains(
+            underlyingSymbol, futFopExchange, underlyingSecType, underlyingConId,
         )
 
     def reqSmartComponents(self, bboExchange):

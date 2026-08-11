@@ -95,8 +95,10 @@ fn main() {
         Err(e) => { eprintln!("could not open a session: {e}"); std::process::exit(1); }
     };
     println!("session open\n");
-    println!("{:<22} {:>10}  {:>9}  {:>7}  {:>5}  {}",
-        "market", "contract", "quote", "bars", "order", "what the venue said");
+    println!(
+        "{:<22} {:>10}  {:>9}  {:>7}  {:>5}  what the venue said",
+        "market", "contract", "quote", "bars", "order",
+    );
 
     let mut heard = Heard::default();
     let stamp = std::time::SystemTime::now()
@@ -109,7 +111,7 @@ fn main() {
         let resolved = match client.qualify_contract(&contract) {
             Ok(c) => c,
             Err(e) => {
-                println!("{what:<22} {:>10}", format!("no: {}", first_line(&e)));
+                println!("{what:<22} no: {}", first_line(&e));
                 continue;
             }
         };

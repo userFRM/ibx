@@ -89,7 +89,7 @@ fn main() {
     };
     let spy = client.qualify_contract(&spy).expect("SPY resolves");
     let mut heard = Heard::default();
-    let mut wait = |client: &EClient, heard: &mut Heard, secs: u64| {
+    let wait = |client: &EClient, heard: &mut Heard, secs: u64| {
         let deadline = Instant::now() + Duration::from_secs(secs);
         while Instant::now() < deadline {
             client.process_msgs(heard);
