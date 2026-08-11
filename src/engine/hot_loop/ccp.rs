@@ -3355,6 +3355,9 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
                 // named is still a figure about the account, and dropping it
                 // left no trace that the venue had stated it.
                 shared.portfolio.note_account_value(k, val, currency);
+                if std::env::var("IBX_TRACE_ACCOUNT").is_ok() && k.contains("NetLiquidation") {
+                    log::info!("account row: {k} = {val} [{currency}]");
+                }
                 match k {
                     "NetLiquidation" => { if let Ok(v) = val.parse::<f64>() { context.account.net_liquidation = (v * PRICE_SCALE as f64) as Price; } }
                     "BuyingPower" => { if let Ok(v) = val.parse::<f64>() { context.account.buying_power = (v * PRICE_SCALE as f64) as Price; } }

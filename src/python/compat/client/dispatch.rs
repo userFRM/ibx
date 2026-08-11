@@ -689,7 +689,7 @@ impl EClient {
                      entry.avg_cost, entry.unrealized_pnl, entry.realized_pnl, account_name.as_str()));
             }
 
-            if batch.delivered {
+            if batch.finished {
                 call_wrapper!(self.wrapper, py, "update_account_time", ("",));
                 call_wrapper!(self.wrapper, py, "account_download_end", (account_name.as_str(),));
             }

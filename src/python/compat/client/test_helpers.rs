@@ -361,6 +361,18 @@ impl EClient {
         acct.unrealized_pnl = (unrealized_pnl * ps) as i64;
         acct.realized_pnl = (realized_pnl * ps) as i64;
         shared.portfolio.set_account(&acct);
+        // And as the venue states them, which is what the account is reported
+        // from: a figure this client holds and the venue never sent is not one
+        // a caller hears about.
+        for (key, value) in [
+            ("NetLiquidation", net_liquidation),
+            ("BuyingPower", buying_power),
+            ("DailyPnL", daily_pnl),
+            ("UnrealizedPnL", unrealized_pnl),
+            ("RealizedPnL", realized_pnl),
+        ] {
+            shared.portfolio.note_account_value(key, &format!("{value:.2}"), "");
+        }
         Ok(())
     }
 

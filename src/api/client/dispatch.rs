@@ -537,7 +537,7 @@ impl EClient {
             for field in &batch.fields {
                 wrapper.update_account_value(&field.key, &field.value, &field.currency, &self.account_id);
             }
-            if batch.delivered {
+            if batch.finished {
                 wrapper.update_account_time("");
                 wrapper.account_download_end(&self.account_id);
             }
