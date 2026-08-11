@@ -48,7 +48,7 @@ answered, and what it answered was about the subscription.
 | Capability | Stage | Proved by |
 | --- | :---: | --- |
 | 23 order types | ✅ live | Previewed against the venue, which prices them and places nothing |
-| Every field of an order | ✅ live | 127 of 154 go out under a tag; 27 say on the field that this protocol does not carry them; none is dropped in silence. Each field wired this session was previewed, and two the venue refused were taken back out |
+| Every field of an order | ✅ live | 125 of 154 go out under a tag; 29 say on the field that this protocol does not carry them; none is dropped in silence. Each field wired this session was previewed, and two the venue refused were taken back out |
 | Orders across markets | ✅ live | Previews accepted on German, Dutch, British, Swiss, Australian, Canadian and American listings and on a currency pair. Japan and Hong Kong refused them for a lot size this client had not rounded to — the venue's own rule, reached and reported |
 | Modify, cancel, global cancel | ✅ live | An order placed on paper far under the market was acknowledged, changed, and withdrawn in one session, through both clients. A change states where the resting order is working; left off, the venue refused it as a mismatch and the order sat inactive while the caller's own cancel found nothing |
 | Brackets, OCA, combos | ✅ live | A combination states its legs and, where the caller priced them separately, each leg's own price. The side convention is settled by the venue: a call spread with the nearer strike bought is priced, and the same two legs the other way round is refused as one that can only lose |
@@ -93,8 +93,8 @@ though it acted when it did not.
 
 **Nothing a caller sets is dropped without saying so.** A call that reaches the
 venue can still leave behind most of what was put in it.
-`scripts/gen_order_field_reach.py` counts it: of 154 fields on an order, 127 go
-out under a tag and 27 say on the field itself that this protocol does not
+`scripts/gen_order_field_reach.py` counts it: of 154 fields on an order, 125 go
+out under a tag and 29 say on the field itself that this protocol does not
 carry them. None is read by nothing.
 
 ---
@@ -112,7 +112,7 @@ does for a program:
 
 On the two things that look like limits and are not:
 
-- **The 27 order fields that do not reach the venue.** The counterpart does not
+- **The 29 order fields that do not reach the venue.** The counterpart does not
   send them either — for each, its own field declares no tag, or declares one
   the venue refuses by name. A program that sets them through a gateway is not
   sending them either; the difference is that here it is written down, counted,
