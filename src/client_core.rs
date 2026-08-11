@@ -441,6 +441,13 @@ pub struct ClientCore {
     // reqId <-> InstrumentId mapping
     pub req_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     pub instrument_to_req: Mutex<HashMap<InstrumentId, i64>>,
+    /// The other requests watching a contract that is already subscribed.
+    ///
+    /// One contract holds one subscription on the wire, which is what the
+    /// counterpart holds too; it hands the same quote to every window that
+    /// asked for it. A second caller here used to be refused outright, so two
+    /// parts of one program could not watch the same contract.
+    pub instrument_followers: Mutex<HashMap<InstrumentId, Vec<i64>>>,
     // con_id → InstrumentId for find_or_register_instrument lookup
     pub con_id_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     /// What each display group currently holds. The venue knows nothing of
@@ -528,6 +535,7 @@ impl ClientCore {
             readonly: std::sync::atomic::AtomicBool::new(false),
             req_to_instrument: Mutex::new(HashMap::new()),
             instrument_to_req: Mutex::new(HashMap::new()),
+            instrument_followers: Mutex::new(HashMap::new()),
             con_id_to_instrument: Mutex::new(HashMap::new()),
             display_groups: Mutex::new(HashMap::new()),
             group_subscriptions: Mutex::new(HashMap::new()),
@@ -582,6 +590,7 @@ impl ClientCore {
     pub fn reset(&self) {
         self.req_to_instrument.lock().unwrap().clear();
         self.instrument_to_req.lock().unwrap().clear();
+        self.instrument_followers.lock().unwrap().clear();
         self.con_id_to_instrument.lock().unwrap().clear();
         self.last_quotes.lock().unwrap().clear();
         self.snapshot_reqs.lock().unwrap().clear();
@@ -662,15 +671,31 @@ impl ClientCore {
     /// subscription would clobber the first's reverse mapping and orphan it
     /// silently — no ticks, no error (ibx#233). Names the refusal, or None
     /// when this request is free to take the slot.
-    fn duplicate_sub_refusal(&self, instrument: InstrumentId, req_id: i64, symbol: &str) -> Option<String> {
-        match self.instrument_to_req.lock().unwrap().get(&instrument) {
-            Some(&existing) if existing != req_id => Some(format!(
-                "{} already has a live market-data subscription under \
-                 req_id {existing}: cancel it first or reuse that req_id",
-                if symbol.is_empty() { "this contract" } else { symbol },
-            )),
-            _ => None,
+    fn follows_existing_subscription(&self, instrument: InstrumentId, req_id: i64) -> bool {
+        let held = self.instrument_to_req.lock().unwrap();
+        match held.get(&instrument) {
+            Some(&existing) if existing != req_id => {
+                drop(held);
+                let mut following = self.instrument_followers.lock().unwrap();
+                let watchers = following.entry(instrument).or_default();
+                if !watchers.contains(&req_id) {
+                    watchers.push(req_id);
+                }
+                self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
+                true
+            }
+            _ => false,
         }
+    }
+
+    /// Every other request watching a contract, so one quote reaches them all.
+    pub fn followers_of(&self, instrument: InstrumentId) -> Vec<i64> {
+        self.instrument_followers
+            .lock()
+            .unwrap()
+            .get(&instrument)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// What separates two contracts that share a symbol: expiry, strike, right
@@ -762,12 +787,25 @@ impl ClientCore {
             });
         }
 
-        // Reject a duplicate before anything reaches the engine, whenever the
-        // conId cache can say which slot this contract holds.
-        if let Some(refusal) = self.cached_instrument(con_id)
-            .and_then(|iid| self.duplicate_sub_refusal(iid, req_id, symbol))
+        // A contract already being watched needs no second subscription: this
+        // caller watches the one that is up, and hears the same quotes under
+        // its own request. Nothing goes to the engine.
+        if let Some(instrument) = self.cached_instrument(con_id)
+            && self.follows_existing_subscription(instrument, req_id)
         {
-            return Err(refusal);
+            self.mdt_by_req.lock().unwrap().insert(
+                req_id,
+                match mode_9887 {
+                    1 => MDT_DELAYED,
+                    2 => MDT_FROZEN,
+                    3 => MDT_DELAYED_FROZEN,
+                    _ => self.market_data_type.load(Ordering::Relaxed),
+                },
+            );
+            if snapshot {
+                self.snapshot_reqs.lock().unwrap().insert(req_id, None);
+            }
+            return Ok(instrument);
         }
 
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
@@ -799,6 +837,24 @@ impl ClientCore {
         // before the subscribe reaches the wire and that refusal arrives here.
         let instrument_id = Self::recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);
+        // The contract may have been named only by symbol, in which case the
+        // engine is the first to know which slot it holds — and it may already
+        // be watched. This caller watches it too rather than taking it over.
+        if self.follows_existing_subscription(instrument_id, req_id) {
+            self.mdt_by_req.lock().unwrap().insert(
+                req_id,
+                match mode_9887 {
+                    1 => MDT_DELAYED,
+                    2 => MDT_FROZEN,
+                    3 => MDT_DELAYED_FROZEN,
+                    _ => self.market_data_type.load(Ordering::Relaxed),
+                },
+            );
+            if snapshot {
+                self.snapshot_reqs.lock().unwrap().insert(req_id, None);
+            }
+            return Ok(instrument_id);
+        }
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
         // What this request asked for, so its own callback says so rather than
         // reporting the type set for everything else.
@@ -825,6 +881,35 @@ impl ClientCore {
     /// Returns `(instrument_id, needs_news_unsub)`.
     pub fn unregister_mkt_data(&self, req_id: i64) -> (Option<InstrumentId>, bool) {
         if let Some(instrument) = self.req_to_instrument.lock().unwrap().remove(&req_id) {
+            // A caller that was watching someone else's subscription stops
+            // watching it, and the subscription stays up for the rest. A
+            // caller that held it hands it to the next one watching rather
+            // than taking the quotes away from them.
+            {
+                let mut following = self.instrument_followers.lock().unwrap();
+                let watching = following.get_mut(&instrument);
+                if let Some(watchers) = watching {
+                    let was_following = watchers.contains(&req_id);
+                    watchers.retain(|&id| id != req_id);
+                    let next = if was_following { None } else { watchers.first().copied() };
+                    if let Some(next) = next {
+                        watchers.retain(|&id| id != next);
+                    }
+                    if watchers.is_empty() {
+                        following.remove(&instrument);
+                    }
+                    drop(following);
+                    self.mdt_sent.lock().unwrap().remove(&req_id);
+                    self.mdt_by_req.lock().unwrap().remove(&req_id);
+                    if was_following {
+                        return (None, false);
+                    }
+                    if let Some(next) = next {
+                        self.instrument_to_req.lock().unwrap().insert(instrument, next);
+                        return (None, false);
+                    }
+                }
+            }
             self.instrument_to_req.lock().unwrap().remove(&instrument);
             self.last_quotes.lock().unwrap().remove(&instrument);
             self.mdt_sent.lock().unwrap().remove(&req_id);

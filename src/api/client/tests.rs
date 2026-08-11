@@ -756,14 +756,36 @@ fn req_mkt_data_ex_propagates_mode_9887() {
 // ibx#233: a second live subscription on the same contract would clobber
 // the first's reverse mapping and orphan it silently. Reject at the call.
 #[test]
-fn req_mkt_data_duplicate_instrument_is_rejected() {
+fn a_second_caller_watches_the_subscription_that_is_up() {
     let (client, rx, _shared) = test_client();
     // Existing live subscription for SPY (instrument 0) under req_id 1.
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+    client.core.req_to_instrument.lock().unwrap().insert(1, 0);
 
-    let err = client.req_mkt_data(2, &spy(), "", false, false).unwrap_err();
-    assert!(err.contains("req_id 1"), "got: {err}");
-    assert!(rx.try_recv().is_err(), "nothing may reach the engine");
+    client.req_mkt_data(2, &spy(), "", false, false)
+        .expect("a second caller watches it rather than being refused");
+    assert!(rx.try_recv().is_err(), "one contract, one subscription on the wire");
+    assert_eq!(client.core.followers_of(0), vec![2], "and it hears the quotes");
+    assert_eq!(
+        client.core.instrument_to_req.lock().unwrap().get(&0).copied(),
+        Some(1),
+        "the one that holds it still holds it",
+    );
+
+    // The holder leaves; the one still watching takes it over rather than
+    // losing the feed, and nothing is withdrawn from the venue.
+    let (withdraw, _) = client.core.unregister_mkt_data(1);
+    assert!(withdraw.is_none(), "nothing is withdrawn while someone is watching");
+    assert_eq!(
+        client.core.instrument_to_req.lock().unwrap().get(&0).copied(),
+        Some(2),
+        "handed to the one still watching",
+    );
+
+    // And when the last one leaves, it goes.
+    let (withdraw, _) = client.core.unregister_mkt_data(2);
+    assert_eq!(withdraw, Some(0), "the last one out withdraws it");
 }
 
 // ibx#278: a contract given the ordinary ibapi way carries conId 0. Cached as
