@@ -80,8 +80,13 @@ pub(crate) struct FarmState {
     pub(crate) instrument_md_reqs: Vec<(InstrumentId, Vec<u32>)>,
     /// Active depth subscriptions: (req_id, is_smart_depth).
     pub(crate) depth_subs: Vec<(u32, bool)>,
+    /// Which exchange each fanned-out depth subscription is for, so a level
+    /// says where it stands. Without it every level of a smart book arrived
+    /// unattributed, and a caller was handed one book with no way to tell
+    /// which venue any of it was on.
+    pub(crate) depth_fanout_exchange: Vec<(u32, String)>,
     /// Maps server_tag → (depth_req_id, is_smart_depth, min_tick) for active depth subscriptions.
-    pub(crate) depth_tag_to_req: Vec<(u32, u32, bool, f64, f64)>,
+    pub(crate) depth_tag_to_req: Vec<(u32, u32, bool, f64, f64, String)>,
     /// SmartDepth fan-out: maps internal sub_req → user's original req_id.
     depth_fanout_map: Vec<(u32, u32)>,
     /// Primary depth subscription params for reconnect: (req_id, con_id, exchange, sec_type, num_rows, is_smart_depth).
@@ -430,6 +435,7 @@ impl FarmState {
             depth_subs: Vec::new(),
             depth_tag_to_req: Vec::new(),
             depth_fanout_map: Vec::new(),
+            depth_fanout_exchange: Vec::new(),
             depth_resub_info: Vec::new(),
             md_resub_info: Vec::new(),
             greeks_subs: Vec::new(),
@@ -787,14 +793,19 @@ impl FarmState {
                 .find(|(sub, _)| *sub == req_id)
                 .map(|(_, user)| *user)
                 .unwrap_or(req_id);
+            let venue = self.depth_fanout_exchange.iter()
+                .find(|(sub, _)| *sub == req_id)
+                .map(|(_, exch)| exch.clone())
+                .unwrap_or_default();
             self.depth_tag_to_req.push((
                 server_tag,
                 user_req,
                 is_smart,
                 min_tick,
                 trailing_size_increment(&parts).unwrap_or(1.0),
+                venue.clone(),
             ));
-            log::info!("Depth ack: server_tag {server_tag} -> req_id {user_req} (levels={depth_levels}, smart={is_smart}, min_tick={min_tick})");
+            log::info!("Depth ack: server_tag {server_tag} -> req_id {user_req} venue={venue:?} (levels={depth_levels}, smart={is_smart}, min_tick={min_tick})");
             return;
         }
 
@@ -1204,8 +1215,9 @@ impl FarmState {
                 for exch in exchanges {
                     let sub_req = self.next_md_req_id;
                     self.next_md_req_id += 1;
-                    self.depth_subs.push((sub_req, true));
+                    self.depth_subs.push((sub_req, is_smart_depth));
                     self.depth_fanout_map.push((sub_req, req_id));
+                    self.depth_fanout_exchange.push((sub_req, (*exch).to_string()));
                     let sub_req_str = sub_req.to_string();
                     self.send_depth_one(conn, &sub_req_str, &con_id_str, exch, fix_sec_type);
                 }
@@ -1316,9 +1328,9 @@ impl FarmState {
             let stag = ((body[pos] as u32) << 16) | ((body[pos+1] as u32) << 8) | (body[pos+2] as u32);
             pos += 3;
 
-            let (req_id, is_smart, min_tick, size_tick) = match self.depth_tag_to_req.iter()
+            let (req_id, is_smart, min_tick, size_tick, venue) = match self.depth_tag_to_req.iter()
                 .find(|(s, ..)| *s == stag)
-                .map(|(_, r, sm, mt, st)| (*r, *sm, *mt, *st))
+                .map(|(_, r, sm, mt, st, ex)| (*r, *sm, *mt, *st, ex.clone()))
             {
                 Some(v) => v,
                 None => { continue; }
@@ -1357,7 +1369,7 @@ impl FarmState {
                                   else { let p = bid_position; bid_position += 1; p };
                     let operation = if is_snapshot { 0 } else { 1 };
                     shared.market.push_depth_update(DepthUpdate {
-                        req_id, position, market_maker: String::new(),
+                        req_id, position, market_maker: venue.clone(),
                         operation, side, price, size, is_smart_depth: is_smart,
                     });
                     has_price = false;
@@ -1385,7 +1397,7 @@ impl FarmState {
                                   else { let p = bid_position; bid_position += 1; p };
                     let operation = if is_snapshot { 0 } else { 1 };
                     shared.market.push_depth_update(DepthUpdate {
-                        req_id, position, market_maker: String::new(),
+                        req_id, position, market_maker: venue.clone(),
                         operation, side, price, size, is_smart_depth: is_smart,
                     });
                     has_price = false;
@@ -1416,19 +1428,37 @@ impl FarmState {
         if body.len() < 4 { return; }
 
         // Try header stag at body[2..4] (common case).
-        let mut req_id: u32 = 0;
+        //
+        // Nothing is delivered until a section names the subscription it
+        // belongs to. Starting at zero and pushing regardless handed every
+        // level of a book to request zero, which no caller ever asked for and
+        // no caller could cancel.
+        let mut req_id: Option<u32> = None;
         let mut is_smart = false;
         let mut min_tick: f64 = 0.01;
         let mut size_tick: f64 = 1.0;
+        // Which venue this section of the book is from. The entries below
+        // carry no market maker of their own, and a level with no venue on it
+        // is a level a caller cannot place.
+        let mut venue = String::new();
         let mut pos = 2;
 
-        let hdr_stag = ((body[2] as u32) << 8) | (body[3] as u32);
-        if let Some((r, sm, mt, st)) = self.lookup_depth_stag(hdr_stag) {
-            req_id = r;
+        // Three bytes, the width the venue assigns them in and the width the
+        // book's other shape already reads. Read as two, no section ever
+        // matched a subscription and every level it carried was delivered
+        // under request zero.
+        let hdr_stag = if body.len() >= 5 {
+            ((body[2] as u32) << 16) | ((body[3] as u32) << 8) | (body[4] as u32)
+        } else {
+            u32::MAX
+        };
+        if let Some((r, sm, mt, st, ex)) = self.lookup_depth_stag(hdr_stag) {
+            req_id = Some(r);
             is_smart = sm;
             min_tick = mt;
             size_tick = st;
-            pos = 4;
+            venue = ex;
+            pos = 5;
         }
         // If header stag didn't match, start scanning from pos=2;
         // the first stag switch sentinel will set req_id.
@@ -1438,14 +1468,17 @@ impl FarmState {
 
             // Stag switch sentinel: 80 00 [2B stag] — bid_size=0 repurposed.
             // Also detect 00 00 [2B stag] (3-byte stag with high byte 0x00, at message boundaries).
-            if (b == 0x80 || b == 0x00) && pos + 4 <= body.len() && body[pos + 1] == 0x00 {
-                let candidate = ((body[pos + 2] as u32) << 8) | (body[pos + 3] as u32);
-                if let Some((r, sm, mt, st)) = self.lookup_depth_stag(candidate) {
-                    req_id = r;
+            if (b == 0x80 || b == 0x00) && pos + 5 <= body.len() && body[pos + 1] == 0x00 {
+                let candidate = ((body[pos + 2] as u32) << 16)
+                    | ((body[pos + 3] as u32) << 8)
+                    | (body[pos + 4] as u32);
+                if let Some((r, sm, mt, st, ex)) = self.lookup_depth_stag(candidate) {
+                    req_id = Some(r);
                     is_smart = sm;
                     min_tick = mt;
                     size_tick = st;
-                    pos += 4;
+                    venue = ex;
+                    pos += 5;
                     continue;
                 }
             }
@@ -1459,7 +1492,14 @@ impl FarmState {
                 let book_position = body[pos] as i32;
                 pos += 1;
 
-                if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick, size_tick) {
+                if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
+                    && let Some(req_id) = req_id
+                {
+                    // The venue's own name for the maker where it states one,
+                    // and otherwise the exchange this section of the book is
+                    // from: a level with neither is a level a caller cannot
+                    // place.
+                    let mm = if mm.is_empty() { venue.clone() } else { mm };
                     shared.market.push_depth_update(DepthUpdate {
                         req_id, position: book_position, market_maker: mm,
                         operation: if is_snapshot { 0 } else { 1 },
@@ -1482,9 +1522,11 @@ impl FarmState {
                     let book_position = body[pos] as i32;
                     pos += 1;
 
-                    if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick, size_tick) {
+                    if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
+                        && let Some(req_id) = req_id
+                    {
                         shared.market.push_depth_update(DepthUpdate {
-                            req_id, position: book_position, market_maker: String::new(),
+                            req_id, position: book_position, market_maker: venue.clone(),
                             operation: if is_snapshot { 0 } else { 1 },
                             side, price, size, is_smart_depth: is_smart,
                         });
@@ -1498,11 +1540,11 @@ impl FarmState {
         }
     }
 
-    /// Look up a depth server_tag → (req_id, is_smart, min_tick, size_tick).
-    fn lookup_depth_stag(&self, stag: u32) -> Option<(u32, bool, f64, f64)> {
+    /// Look up a depth server_tag → (req_id, is_smart, min_tick, size_tick, venue).
+    fn lookup_depth_stag(&self, stag: u32) -> Option<(u32, bool, f64, f64, String)> {
         self.depth_tag_to_req.iter()
             .find(|(s, ..)| *s == stag)
-            .map(|(_, r, sm, mt, st)| (*r, *sm, *mt, *st))
+            .map(|(_, r, sm, mt, st, ex)| (*r, *sm, *mt, *st, ex.clone()))
     }
 
     /// Parse one price + one size field tag pair. Returns (price, size, side, is_snapshot).
