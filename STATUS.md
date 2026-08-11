@@ -51,7 +51,7 @@ answered, and what it answered was about the subscription.
 | Every field of an order | live | 127 of 154 go out under a tag; 27 say on the field that this protocol does not carry them; none is dropped in silence. Each field wired this session was previewed, and two the venue refused were taken back out |
 | Orders across markets | live | Previews accepted on German, Dutch, British, Swiss, Australian, Canadian and American listings and on a currency pair. Japan and Hong Kong refused them for a lot size this client had not rounded to — the venue's own rule, reached and reported |
 | Modify, cancel, global cancel | live | An order placed on paper far under the market was acknowledged, changed, and withdrawn in one session |
-| Brackets, OCA, combos | live | A combination states its legs and, where the caller priced them separately, each leg's own price. The side convention is still open — see below |
+| Brackets, OCA, combos | live | A combination states its legs and, where the caller priced them separately, each leg's own price. The side convention is settled by the venue: a call spread with the nearer strike bought is priced, and the same two legs the other way round is refused as one that can only lose |
 | Conditions | offline | Price, volume, percent, execution and time, encoded and tested here |
 | Executions and fills | live | A fill reported and the position reconciled against it. The report keeps every field the venue states, named or not |
 | Option exercise / lapse | offline | Encoded and tested here; exercising a real option is not something to do on a whim |
@@ -113,7 +113,6 @@ carry them. None is read by nothing.
 
 Settled only by a live capture, recorded so nobody re-derives them:
 
-- The combo side convention — live evidence and the counterpart's own encoding disagree
 - The one number an option model needs that no tick states is fitted, not read. The venue does serve its own — a series named `OptExInterestRate`, which it recognises and refuses only the query shape for, answering `QueryType BarData(BarDataIntraday) is not supported for tick type`. Asked as a tick series instead it is accepted, and answers so far are empty for the contracts tried. Until then the fitted number absorbs whatever the venue's model does that this one does not, which is visible: two contracts on one underlying and one expiry wanted five per cent and twenty
 - A crypto's tick-by-tick stream is acknowledged, with both its increments stated, and the venue then sends nothing on it. Asked for alone, over minutes, on a contract whose top of book is moving. Not this client's doing, and not yet explained
 - The trading-status timestamp's unit, and the fourth number the venue sends with it
