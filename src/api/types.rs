@@ -1107,9 +1107,14 @@ pub struct ContractDetails {
     pub trading_hours: Option<String>,
     pub liquid_hours: Option<String>,
     pub time_zone_id: Option<String>,
-    /// The price-increment rules this contract trades under, as the definition
-    /// states them. Parsed all along and never surfaced, so a caller had no way
-    /// to learn which rule to ask `req_market_rule` for.
+    /// The price-increment rules this contract trades under, as the venue
+    /// names them.
+    ///
+    /// Usually empty here, and that is the venue's doing rather than a gap:
+    /// it sends the increments themselves with the definition — the price
+    /// steps and the size steps, whole tables of them — instead of naming a
+    /// rule to go and fetch. `req_market_rule` answers from those, and says
+    /// so when asked for one no contract on this session has used.
     pub market_rule_ids: String,
     /// What kind of stock it is, what it does, and where it is domiciled —
     /// parsed off the definition all along and handed to nobody.
