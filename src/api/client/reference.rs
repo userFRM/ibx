@@ -267,6 +267,8 @@ impl EClient {
         start_date_time: &str, end_date_time: &str,
         number_of_ticks: i32, what_to_show: &str, use_rth: bool,
     ) -> Result<(), String> {
+        // Refused here rather than turned into trades on the way out.
+        crate::control::historical::tick_data_type(what_to_show)?;
         self.send(ControlCommand::FetchHistoricalTicks {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,

@@ -16,6 +16,10 @@ use ibx::control::option_model::{implied_volatility, option_price, OptionTerms, 
 
 fn main() {
     let _ = env_logger::try_init();
+    // Keep every message the historical connection carries, so a reply this
+    // client does not yet read still shows itself.
+    // Safety: set before the engine starts, single-threaded here.
+    unsafe { std::env::set_var("IBX_CAPTURE_WIRE", "1") };
     let username = std::env::var("IB_USERNAME").unwrap_or_default();
     if username.trim().is_empty() {
         eprintln!("IB_USERNAME/IB_PASSWORD unset. This reads from real servers.");
@@ -131,7 +135,71 @@ fn main() {
         }
     }
     let mut heard = Heard::default();
-    let shapes = [("1 M", "1 day"), ("1 Y", "1 week"), ("5 D", "1 hour"), ("1 D", "1 min")];
+    // Asked as a tick series rather than as bars: the venue's refusal named
+    // the query type, and a tick type is served under a tick query.
+    println!("  asking for it as a tick series");
+    // The venue wants two of start, end and length. Give it start and end.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let stamp = |secs: u64| {
+        let days = secs / 86_400;
+        let (mut y, mut m, mut d) = (1970i64, 1i64, days as i64 + 1);
+        loop {
+            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+            let feb = if leap { 29 } else { 28 };
+            let len = [31, feb, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][(m - 1) as usize];
+            if d <= len { break }
+            d -= len; m += 1;
+            if m > 12 { m = 1; y += 1 }
+        }
+        let rest = secs % 86_400;
+        format!("{y:04}{m:02}{d:02} {:02}:{:02}:{:02}", rest / 3600, (rest % 3600) / 60, rest % 60)
+    };
+    let (from, to) = (stamp(now - 5 * 86_400), stamp(now));
+    println!("    from {from} to {to}");
+    // Asked of the option and of the underlying: a rate belongs to what the
+    // option is written on at least as plausibly as to the option itself.
+    let underlying = Contract {
+        symbol: "SPY".to_string(),
+        sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(),
+        currency: "USD".to_string(),
+        ..Default::default()
+    };
+    let under = client.qualify_contract(&underlying).unwrap_or(underlying);
+    for (what, c) in [("the option", &resolved), ("the underlying", &under)] {
+        println!("    of {what}");
+        let _ = client.req_historical_ticks(
+            if what == "the option" { 90 } else { 91 },
+            c, &from, &to, 10, "OptExInterestRate", false,
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            client.process_msgs(&mut heard);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        client.process_msgs(&mut heard);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    for said in heard.said.drain(..).take(2) { println!("    the venue says: {said}"); }
+    for (kind, hex) in client.unread_wire() {
+        if kind != "hmds-msg" { continue }
+        let bytes: Vec<u8> = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0))
+            .collect();
+        let text = String::from_utf8_lossy(&bytes);
+        if text.contains("OptExInterestRate") || text.contains("ResultSet") {
+            let shown: String = text.chars().map(|c| if c == '\u{1}' { '|' } else { c }).collect();
+            println!("    reply: {}", &shown[..shown.len().min(600)]);
+        }
+    }
+
+    let shapes: [(&str, &str); 0] = [];
     let mut asked = 2;
     for (duration, bar) in shapes {
         asked += 1;

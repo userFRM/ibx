@@ -464,12 +464,29 @@ pub fn build_head_timestamp_xml(req: &HeadTimestampRequest) -> String {
 }
 
 /// Map whatToShow to data type.
-fn tick_data_type(what_to_show: &str) -> &'static str {
-    match what_to_show.to_uppercase().as_str() {
+/// What the venue calls a tick series, from what a caller calls it.
+///
+/// A name this does not know is refused rather than turned into trades. The
+/// bar path stopped doing that when a misspelled `BID` quietly returned trade
+/// bars (ibx#232); this path went on doing it, so a caller asking for anything
+/// else was answered with trades and told nothing — which is exactly how a
+/// request for the venue's own interest-rate series came back as a list of
+/// option prints.
+pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
+    Ok(match what_to_show.to_uppercase().as_str() {
+        "" | "TRADES" => "AllLast",
         "MIDPOINT" => "MidPoint",
         "BID_ASK" => "BidAsk",
-        _ => "AllLast", // TRADES
-    }
+        // The rate the venue prices options at, which it serves as a series of
+        // its own rather than on any tick.
+        "OPTION_EXERCISE_INTEREST_RATE" => "OptExInterestRate",
+        other => {
+            return Err(format!(
+                "Unsupported what_to_show '{other}' for historical ticks: expected TRADES, \
+                 MIDPOINT, BID_ASK or OPTION_EXERCISE_INTEREST_RATE",
+            ));
+        }
+    })
 }
 
 /// Build the XML query for a historical ticks request.
@@ -486,7 +503,7 @@ pub fn build_tick_query_xml(
     let exchange = if exchange.is_empty() { "BEST" } else { exchange };
     let sec_type = if sec_type.is_empty() { "CS" } else { sec_type };
     let rth = if use_rth { "true" } else { "false" };
-    let data = tick_data_type(what_to_show);
+    let data = tick_data_type(what_to_show).unwrap_or("AllLast");
 
     // Use endTime if provided, otherwise startTime
     let time_tag = if !end_date_time.is_empty() {
@@ -1333,5 +1350,33 @@ mod duration_spelling_tests {
     fn an_unknown_unit_reaches_the_venue_unchanged() {
         assert_eq!(normalize_duration("5 Q"), "5 Q");
         assert_eq!(normalize_duration(""), "");
+    }
+}
+
+#[cfg(test)]
+mod tick_data_type_tests {
+    use super::tick_data_type;
+
+    /// Each name a caller can use names a series the venue serves.
+    #[test]
+    fn each_known_name_maps_to_the_venues_own() {
+        assert_eq!(tick_data_type(""), Ok("AllLast"));
+        assert_eq!(tick_data_type("TRADES"), Ok("AllLast"));
+        assert_eq!(tick_data_type("MIDPOINT"), Ok("MidPoint"));
+        assert_eq!(tick_data_type("BID_ASK"), Ok("BidAsk"));
+        assert_eq!(
+            tick_data_type("OPTION_EXERCISE_INTEREST_RATE"),
+            Ok("OptExInterestRate"),
+        );
+    }
+
+    /// One it does not know is refused rather than turned into trades. Turned
+    /// into trades, a caller asking for the venue's interest-rate series was
+    /// answered with a list of option prints and told nothing.
+    #[test]
+    fn a_name_it_does_not_know_is_refused() {
+        for unknown in ["MIDPONT", "BID", "OptExInterestRate ", "anything"] {
+            assert!(tick_data_type(unknown).is_err(), "{unknown} was taken for trades");
+        }
     }
 }
