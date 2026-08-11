@@ -98,7 +98,7 @@ carry them. None is read by nothing.
 Settled only by a live capture, recorded so nobody re-derives them:
 
 - The combo side convention — live evidence and the counterpart's own encoding disagree
-- The one number an option model needs that no tick states is fitted, not read. The venue does serve its own — a series named `OptExInterestRate`, which it recognises and refuses only the query shape for, answering `QueryType BarData(BarDataIntraday) is not supported for tick type`. Every bar size this client offers asks the same way, so the query type is the thing to find. Until then the fitted number absorbs whatever the venue's model does that this one does not, which is visible: two contracts on one underlying and one expiry wanted five per cent and twenty
+- The one number an option model needs that no tick states is fitted, not read. The venue does serve its own — a series named `OptExInterestRate`, which it recognises and refuses only the query shape for, answering `QueryType BarData(BarDataIntraday) is not supported for tick type`. Asked as a tick series instead it is accepted, and answers so far are empty for the contracts tried. Until then the fitted number absorbs whatever the venue's model does that this one does not, which is visible: two contracts on one underlying and one expiry wanted five per cent and twenty
 - A crypto's tick-by-tick stream is acknowledged, with both its increments stated, and the venue then sends nothing on it. Asked for alone, over minutes, on a contract whose top of book is moving. Not this client's doing, and not yet explained
 - The trading-status timestamp's unit, and the fourth number the venue sends with it
 
