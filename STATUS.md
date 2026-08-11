@@ -47,7 +47,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Account values, summary | ✅ | Every figure the venue states, in its stated currency |
 | Positions, P&L | ✅ | |
 | Managed accounts | ✅ | |
-| Financial advisor config | 🔬 | Needs an advisor account to verify |
+| Financial advisor config | 🔬 | Both clients ask the venue; needs an advisor account to see an answer |
 
 ## Reference data
 

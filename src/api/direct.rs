@@ -606,12 +606,14 @@ impl Client {
         );
     }
 
-    pub fn request_fa(&self, fa_data_type: i32) {
-        self.inner.request_fa(fa_data_type);
+    /// Ask the venue for a partition of the advisor's own configuration.
+    pub fn request_fa(&self, fa_data_type: i32) -> Result<(), String> {
+        self.inner.request_fa(fa_data_type)
     }
 
-    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) {
-        self.inner.replace_fa(self.stream_id(), fa_data_type, cxml);
+    /// Replace a partition of that configuration with the one given.
+    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), String> {
+        self.inner.replace_fa(fa_data_type, cxml)
     }
 
     /// What event types the corporate-events calendar carries.

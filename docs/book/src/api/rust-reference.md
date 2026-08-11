@@ -1467,31 +1467,34 @@ pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
 
 #### `request_fa`
 
-Request FA data. Not yet implemented.
+Request FA data. Not yet implemented. Ask the venue for a partition of the advisor's own configuration. The reference client names the partition by a number — its aliases, its groups, its allocation profiles — and the venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition.
 
 ```rust
-pub fn request_fa(&self, _fa_data_type: i32)
+pub fn request_fa(&self, fa_data_type: i32) -> Result<(), String>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `fa_data_type` | `i32` | FA data type (1=Groups, 2=Profiles, 3=Aliases). |
+
+**Returns:** `Result<(), String>`
 
 ---
 
 #### `replace_fa`
 
-Replace FA data. Not yet implemented.
+Replace a partition of the advisor's configuration with the one given.
 
 ```rust
-pub fn replace_fa(&self, req_id: i64, _fa_data_type: i32, _cxml: &str)
+pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), String>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `fa_data_type` | `i32` | FA data type (1=Groups, 2=Profiles, 3=Aliases). |
 | `cxml` | `&str` | FA XML configuration data. |
+
+**Returns:** `Result<(), String>`
 
 ---
 
