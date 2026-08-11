@@ -34,7 +34,7 @@ answered, and what it answered was about the subscription.
 
 | Capability | Stage | Proved by |
 | --- | :---: | --- |
-| Top of book | ✅ live | American shares and currencies quote continuously. European and Canadian venues answer the subscription with what this account is entitled to, and that answer reaches the caller |
+| Top of book | ✅ live | American shares and currencies quote continuously, whether asked for as a stream or as a snapshot. European and Canadian venues answer the subscription with what this account is entitled to, and that answer reaches the caller |
 | Depth of book | ✅ live | Forty-nine book updates in twenty seconds on one American listing. The venues that refuse depth to this account say so by name, and each refusal reaches the caller |
 | Historical bars | ✅ live | Bars returned for Dutch, British, Hong Kong, Australian and American listings and an American index, in one sweep. A contract named rather than identified is looked up first, so a request carrying what a caller wrote down is answered like one carrying the venue's own id |
 | Historical ticks, schedules | ✅ live | Ticks and trading schedules answered; a series this client does not know is refused rather than turned into trades |

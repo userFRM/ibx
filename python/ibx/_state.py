@@ -310,7 +310,10 @@ class LiveState(EWrapper):
             self._pending.add(req_id)
 
     def tickPrice(self, reqId, tickType, price, attrib=None):
-        self._apply(reqId, tickType, price)
+        # The venue states "there is no such price" as a negative one. Kept as
+        # a price, it read as a contract quoted at minus one, and a caller
+        # waiting for a quote to arrive was answered by its absence.
+        self._apply(reqId, tickType, None if price is not None and price < 0 else price)
 
     def tickSize(self, reqId, tickType, size):
         self._apply(reqId, tickType, size)
@@ -382,6 +385,19 @@ class HistoricalNews:
     providerCode: str
     articleId: str
     headline: str
+
+
+@dataclass
+class TradingSession:
+    startDateTime: str
+    endDateTime: str
+    refDate: str
+
+
+@dataclass
+class HistoricalSchedule:
+    timeZone: str
+    sessions: list[TradingSession]
 
 
 @dataclass

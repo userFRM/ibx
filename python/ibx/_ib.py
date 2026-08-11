@@ -15,7 +15,7 @@ from __future__ import annotations
 import threading
 import time
 
-from ._state import BracketOrder, HistoricalNews, LiveState
+from ._state import BracketOrder, HistoricalNews, HistoricalSchedule, LiveState, TradingSession
 from .ibx import Contract, EClient
 
 
@@ -271,8 +271,12 @@ class IB:
         del regulatorySnapshot
         tickers = [self.reqMktData(c, snapshot=True) for c in contracts]
         deadline = time.monotonic() + timeout
+        # What a snapshot is asked for is the quote, so that is what this
+        # waits for. Waiting for any field at all was answered by the previous
+        # close, which arrives first, and the quote was cancelled before it
+        # came.
         while time.monotonic() < deadline:
-            if all(t.hasBidAsk() or t.last is not None or t.close is not None for t in tickers):
+            if all(t.hasBidAsk() or t.last is not None for t in tickers):
                 break
             time.sleep(0.01)
         for c in contracts:
@@ -560,8 +564,17 @@ class IB:
         self.client.req_scanner_parameters()
 
     def reqHistoricalSchedule(self, contract, endDateTime="", durationStr="1 M", useRTH=True):
-        self.client.req_historical_schedule(
-            self._next_req_id(), contract, endDateTime, durationStr, useRTH
+        """When a contract trades over a stretch of days.
+
+        Each session is its opening, its close, and the day it belongs to, in
+        the time zone the venue states them in.
+        """
+        timezone, sessions = self.client.trading_schedule(
+            contract, endDateTime, durationStr, useRTH
+        )
+        return HistoricalSchedule(
+            timeZone=timezone,
+            sessions=[TradingSession(*row) for row in sessions],
         )
 
     def reqHistoricalTicks(
