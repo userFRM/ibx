@@ -219,19 +219,28 @@ impl EClient {
         let mut snapshot_done: Vec<i64> = Vec::new();
         for (iid, req_id) in instruments {
             let result = self.core.poll_instrument_ticks(&self.shared, iid, req_id);
+            // The same quote, once per caller watching this contract.
+            let watchers = self.core.followers_of(iid);
             // Fire market_data_type once per subscription on first tick delivery
             if let Some(mdt) = self.core.check_mdt_needed(req_id, result.delivered) {
                 wrapper.market_data_type(req_id, mdt);
             }
             for tick in &result.ticks {
-                if tick.is_price {
-                    wrapper.tick_price(tick.req_id, tick.tick_type, tick.value, &attrib);
-                } else {
-                    wrapper.tick_size(tick.req_id, tick.tick_type, tick.value);
+                for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
+                    if let Some(mdt) = self.core.check_mdt_needed(id, result.delivered) {
+                        wrapper.market_data_type(id, mdt);
+                    }
+                    if tick.is_price {
+                        wrapper.tick_price(id, tick.tick_type, tick.value, &attrib);
+                    } else {
+                        wrapper.tick_size(id, tick.tick_type, tick.value);
+                    }
                 }
             }
             for st in &result.string_ticks {
-                wrapper.tick_string(st.req_id, st.tick_type, &st.value);
+                for id in std::iter::once(st.req_id).chain(watchers.iter().copied()) {
+                    wrapper.tick_string(id, st.tick_type, &st.value);
+                }
             }
             if let Some(ts) = &result.timestamp {
                 let ts_secs = ts.timestamp_ns / 1_000_000_000;

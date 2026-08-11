@@ -605,11 +605,14 @@ impl HotLoop {
                                 )));
                             }
                         }
+                        // Already subscribed, so nothing goes to the venue
+                        // again: one contract holds one subscription on the
+                        // wire, and the caller watches the one that is up. It
+                        // used to be refused, so two parts of one program
+                        // could not watch the same contract.
                         Some(id) if self.farm.holds_market_data(id) => {
                             if let Some(tx) = &reply_tx {
-                                let _ = tx.send(Err(format!(
-                                    "{symbol} already has a live market data subscription"
-                                )));
+                                let _ = tx.send(Ok(id));
                             }
                         }
                         Some(id) => {
