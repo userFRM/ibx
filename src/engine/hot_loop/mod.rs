@@ -726,13 +726,38 @@ impl HotLoop {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, true);
                     } else if keep_up_to_date {
-                        if self.hmds.send_historical_request_via_ccp(req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show, use_rth, &symbol, &sec_type, &exchange, &mut self.ccp_conn, &mut self.hb, &self.ccp.ccp_sign_key, &self.ccp.ccp_sign_iv, &self.shared) {
+                        // The bars so far, then the stream that keeps them
+                        // current. The venue answers a request to keep bars up
+                        // to date with the bars and closes the query, on either
+                        // connection it can be sent over; what it keeps sending
+                        // is five-second bars, and the bar still forming is
+                        // folded from those.
+                        self.hmds.send_historical_request_ex(
+                            req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show,
+                            use_rth, false, &symbol, &sec_type, &exchange,
+                            &mut self.hmds_conn, &mut self.hb, &self.shared,
+                        );
+                        if let Ok(size) = crate::control::historical::BarSize::from_api_str(&bar_size) {
                             self.hmds.keep_up_to_date_reqs.insert(req_id);
+                            self.hmds.forming_bars.retain(|f| f.req_id != req_id);
+                            self.hmds.forming_bars.push(crate::engine::hot_loop::hmds::FormingBar {
+                                req_id,
+                                seconds: size.seconds(),
+                                opened_at: 0,
+                                bar: Default::default(),
+                                weighted: 0.0,
+                            });
                             self.hmds.kut_resub.retain(|k| k.req_id != req_id);
                             self.hmds.kut_resub.push(crate::engine::hot_loop::hmds::KutRequest {
                                 req_id, con_id, end_date_time, duration, bar_size,
-                                what_to_show, use_rth, symbol, sec_type, exchange,
+                                what_to_show: what_to_show.clone(), use_rth,
+                                symbol: symbol.clone(), sec_type: sec_type.clone(),
+                                exchange: exchange.clone(),
                             });
+                            self.hmds.send_realtime_bar_subscribe(
+                                req_id, con_id, &symbol, &sec_type, &exchange, &what_to_show,
+                                use_rth, &mut self.hmds_conn, &mut self.hb,
+                            );
                         }
                     } else {
                         self.hmds.send_historical_request_ex(req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show, use_rth, false, &symbol, &sec_type, &exchange, &mut self.hmds_conn, &mut self.hb, &self.shared);

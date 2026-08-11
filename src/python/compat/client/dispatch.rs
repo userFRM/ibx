@@ -633,6 +633,11 @@ impl EClient {
         for (req_id, bar) in rtbars {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
                 // keepUpToDate bar → dispatch as historical_data_update
+                // The moment the bar opened, in seconds since the epoch. The
+                // bars of the initial answer carry the venue's own stamp in
+                // the venue's own zone; a bar still forming is stamped here,
+                // and a zone this client invented for it would be a claim
+                // about a time zone rather than a time.
                 let bar_obj = BarData::new(
                     format!("{}", bar.timestamp), bar.open, bar.high, bar.low, bar.close,
                     bar.volume as i64, bar.wap, bar.count,

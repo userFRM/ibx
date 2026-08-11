@@ -72,6 +72,8 @@ pub(crate) struct HmdsState {
     pub(crate) rtbar_subs: Vec<(String, u32, Option<u32>, f64)>,
     /// req_ids that should keep streaming after initial batch (keepUpToDate=True).
     pub(crate) keep_up_to_date_reqs: std::collections::HashSet<u32>,
+    /// The bars still forming, one per request keeping its bars up to date.
+    pub(crate) forming_bars: Vec<FormingBar>,
     /// The keepUpToDate streams, kept so a reconnect can ask for them again.
     /// The request goes out on CCP and the bars come back on HMDS, so losing
     /// the HMDS socket ends the stream even though nothing cancelled it.
@@ -148,6 +150,51 @@ fn belongs_on(asked_for: TbtType, unreported: bool) -> bool {
     !(asked_for == TbtType::Last && unreported)
 }
 
+/// A bar still forming, folded from the five-second bars the venue streams.
+///
+/// The venue answers a request to keep bars up to date with the bars so far
+/// and nothing after them: the query is closed as soon as it is answered, on
+/// both connections it can be sent over. What it does keep sending is
+/// five-second bars, which is what the bar still forming is made of.
+#[derive(Clone)]
+pub(crate) struct FormingBar {
+    /// The caller's request, which its updates are delivered under.
+    pub(crate) req_id: u32,
+    /// How long the caller's bars are.
+    pub(crate) seconds: u32,
+    /// The moment the bar being formed opened.
+    pub(crate) opened_at: u32,
+    pub(crate) bar: crate::types::RealTimeBar,
+    /// Volume-weighted price needs the weights kept as they arrive.
+    pub(crate) weighted: f64,
+}
+
+impl FormingBar {
+    /// Fold a five-second bar in, and answer with the bar as it now stands.
+    fn fold(&mut self, five: &crate::types::RealTimeBar) -> crate::types::RealTimeBar {
+        let opened_at = five.timestamp - five.timestamp % self.seconds;
+        if opened_at != self.opened_at {
+            self.opened_at = opened_at;
+            self.bar = *five;
+            self.weighted = five.wap * five.volume;
+            self.bar.timestamp = opened_at;
+            return self.bar;
+        }
+        self.bar.high = self.bar.high.max(five.high);
+        self.bar.low = if self.bar.low == 0.0 { five.low } else { self.bar.low.min(five.low) };
+        self.bar.close = five.close;
+        self.bar.volume += five.volume;
+        self.bar.count += five.count;
+        self.weighted += five.wap * five.volume;
+        self.bar.wap = if self.bar.volume > 0.0 {
+            self.weighted / self.bar.volume
+        } else {
+            five.wap
+        };
+        self.bar
+    }
+}
+
 /// A live five-second bar stream, in the shape its request needs to go again.
 #[derive(Clone)]
 pub(crate) struct RtBarRequest {
@@ -194,6 +241,7 @@ impl HmdsState {
             pending_ticks: Vec::new(),
             rtbar_subs: Vec::new(),
             keep_up_to_date_reqs: std::collections::HashSet::new(),
+            forming_bars: Vec::new(),
             kut_resub: Vec::new(),
             rtbar_resub: Vec::new(),
             cold_scanner_results: Vec::new(),
@@ -842,6 +890,14 @@ impl HmdsState {
         let payload = &body[11..11 + payload_len];
         if let Some(mut bar) = crate::control::historical::decode_bar_payload(payload, min_tick) {
             bar.timestamp = timestamp;
+            // A caller keeping bars up to date asked for its own bar size, so
+            // what it hears is the bar it asked for as it stands, not the
+            // five-second one this was folded from.
+            if let Some(forming) = self.forming_bars.iter_mut().find(|f| f.req_id == req_id) {
+                let so_far = forming.fold(&bar);
+                shared.market.push_real_time_bar(req_id, so_far);
+                return;
+            }
             shared.market.push_real_time_bar(req_id, bar);
         }
     }
@@ -2197,5 +2253,45 @@ mod counted_size_range_tests {
         let held = scaled_size(counted, 1e-8);
         let expected = (counted as f64 * 1e-8 * crate::types::QTY_SCALE as f64).round() as i64;
         assert_eq!(held, expected, "the increment was applied to a count that had been cut");
+    }
+}
+
+#[cfg(test)]
+mod forming_bar_tests {
+    use super::*;
+
+    fn five(timestamp: u32, open: f64, high: f64, low: f64, close: f64, volume: f64) -> crate::types::RealTimeBar {
+        crate::types::RealTimeBar {
+            timestamp, open, high, low, close, volume, wap: close, count: 1,
+        }
+    }
+
+    /// A caller keeping five-minute bars up to date hears its own bar as it
+    /// forms, not the five-second bars it is made of.
+    #[test]
+    fn the_forming_bar_is_folded_from_what_the_venue_streams() {
+        let mut forming = FormingBar {
+            req_id: 1, seconds: 300, opened_at: 0,
+            bar: Default::default(), weighted: 0.0,
+        };
+        // 14:35:00, then two more within the same five minutes.
+        let first = forming.fold(&five(1_786_456_500, 10.0, 10.5, 9.5, 10.2, 100.0));
+        assert_eq!(first.timestamp, 1_786_456_500, "the bar opens on its own boundary");
+
+        forming.fold(&five(1_786_456_505, 10.2, 11.0, 10.1, 10.8, 50.0));
+        let so_far = forming.fold(&five(1_786_456_510, 10.8, 10.9, 9.0, 9.4, 50.0));
+        assert_eq!(so_far.timestamp, 1_786_456_500, "still the same bar");
+        assert_eq!(so_far.open, 10.0, "opened where the first one did");
+        assert_eq!(so_far.high, 11.0, "the highest of them");
+        assert_eq!(so_far.low, 9.0, "the lowest of them");
+        assert_eq!(so_far.close, 9.4, "the latest of them");
+        assert_eq!(so_far.volume, 200.0, "all of it");
+        assert_eq!(so_far.count, 3);
+        assert!((so_far.wap - (10.2 * 100.0 + 10.8 * 50.0 + 9.4 * 50.0) / 200.0).abs() < 1e-9);
+
+        // And the next five minutes start a bar of their own.
+        let next = forming.fold(&five(1_786_456_800, 9.4, 9.6, 9.3, 9.5, 10.0));
+        assert_eq!(next.timestamp, 1_786_456_800);
+        assert_eq!(next.volume, 10.0, "nothing carried over");
     }
 }

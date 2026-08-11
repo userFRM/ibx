@@ -6,6 +6,7 @@ requests historical bars, and attempts order placement.
 Run: pytest tests/python/test_issue_106.py -v -s
 """
 
+import datetime
 import os, threading, time
 import pytest
 from ibx import EWrapper, EClient, Contract, Order
@@ -16,6 +17,22 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def front_quarter() -> str:
+    """The quarterly month this contract is trading in now.
+
+    Written down as a constant, this test asked for a contract that had
+    expired, and the venue answered — correctly — that there is no such thing.
+    """
+    today = datetime.date.today()
+    month = today.month + (1 if today.day > 20 else 0)
+    year = today.year + (1 if month > 12 else 0)
+    month = (month - 1) % 12 + 1
+    quarter = ((month - 1) // 3 + 1) * 3
+    if quarter < month:
+        quarter, year = 3, year + 1
+    return f"{year}{quarter:02d}"
+
+
 def make_es():
     """Front-month ES mini S&P 500 future."""
     c = Contract()
@@ -23,7 +40,7 @@ def make_es():
     c.sec_type = "FUT"
     c.exchange = "CME"
     c.currency = "USD"
-    c.last_trade_date_or_contract_month = "202606"
+    c.last_trade_date_or_contract_month = front_quarter()
     c.multiplier = "50"
     c.trading_class = "ES"
     return c
