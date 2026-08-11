@@ -91,11 +91,7 @@ impl EClient {
         number_of_ticks: i32, ignore_size: bool,
     ) -> Result<(), String> {
         let _ = (number_of_ticks, ignore_size);
-        let kind = match tick_type {
-            "Last" | "AllLast" => TbtType::Last,
-            "BidAsk" => TbtType::BidAsk,
-            other => return Err(format!("no such kind of tick: {other}")),
-        };
+        let kind = TbtType::named(tick_type)?;
         self.core
             .register_tbt(
                 &self.shared,

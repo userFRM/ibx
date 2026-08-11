@@ -850,7 +850,8 @@ impl HmdsState {
         let req_id = self.next_tbt_req_id;
         self.next_tbt_req_id += 1;
         let tbt_type_str = match tbt_type {
-            TbtType::Last => "AllLast",
+            TbtType::AllLast => "AllLast",
+            TbtType::Last => "Last",
             TbtType::BidAsk => "BidAsk",
         };
         // The contract says what it is. A US stock routed BEST was assumed for

@@ -868,6 +868,17 @@ fn req_tick_by_tick_data_is_sent_rather_than_refused() {
     );
 }
 
+/// The two trade streams are two streams. Asking for one under the other's
+/// name asked the venue for someone else's trades: every trade reported away
+/// from the exchange arrived on a subscription that wanted the exchange's own.
+#[test]
+fn the_two_trade_streams_are_asked_for_separately() {
+    assert_eq!(TbtType::named("AllLast"), Ok(TbtType::AllLast));
+    assert_eq!(TbtType::named("Last"), Ok(TbtType::Last));
+    assert_eq!(TbtType::named("BidAsk"), Ok(TbtType::BidAsk));
+    assert!(TbtType::named("Sideways").is_err(), "a kind that is not a kind is refused");
+}
+
 #[test]
 fn cancel_tick_by_tick_data_sends_unsubscribe_tbt() {
     let (client, rx, _shared) = test_client();

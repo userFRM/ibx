@@ -1230,10 +1230,30 @@ impl OrderBuffer {
 /// Tick-by-tick data type for subscription requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TbtType {
-    /// Last trade ticks (AllLast).
+    /// Every trade, including those reported away from the exchange.
+    AllLast,
+    /// Trades on the exchange itself. A different stream to the venue, and
+    /// asking for one under the other's name is asking for someone else's
+    /// trades.
     Last,
     /// Bid/ask quote ticks (BidAsk).
     BidAsk,
+}
+
+impl TbtType {
+    /// The stream a caller named, under the reference client's own names.
+    ///
+    /// `Last` and `AllLast` are two streams, not two names for one: the second
+    /// carries trades reported away from the exchange and the first does not.
+    /// Both clients read the name here, so neither can drift from the other.
+    pub fn named(name: &str) -> Result<Self, String> {
+        match name {
+            "AllLast" => Ok(Self::AllLast),
+            "Last" => Ok(Self::Last),
+            "BidAsk" => Ok(Self::BidAsk),
+            other => Err(format!("no such kind of tick: {other}")),
+        }
+    }
 }
 
 /// A single tick-by-tick trade (AllLast) from 35=E.
