@@ -46,17 +46,33 @@ impl EClient {
     // ── FA (Financial Advisor) ──
 
     /// Request FA data. Not yet implemented.
-    pub fn request_fa(&self, _fa_data_type: i32) {
-        self.report_reason(-1, "request_fa is not wired. The request reaches the venue in the \
-             vendor's client, so it can be, but an advisor account is needed to exercise it \
-             and none is available to verify against");
+    /// Ask the venue for a partition of the advisor's own configuration.
+    ///
+    /// The reference client names the partition by a number — its aliases, its
+    /// groups, its allocation profiles — and the venue names it by a word, so
+    /// the number is turned into the word it stands for. A number that stands
+    /// for nothing is refused rather than sent as an empty partition.
+    pub fn request_fa(&self, fa_data_type: i32) -> Result<(), String> {
+        let partition = advisor_partition(fa_data_type)
+            .ok_or_else(|| format!("no advisor configuration is named by {fa_data_type}"))?;
+        self.send(crate::types::ControlCommand::AdvisorConfig {
+            // Asking for it by name.
+            command: 5,
+            partition: partition.to_string(),
+            document: None,
+        })
     }
 
-    /// Replace FA data. Not yet implemented.
-    pub fn replace_fa(&self, req_id: i64, _fa_data_type: i32, _cxml: &str) {
-        self.report_reason(req_id, "replace_fa is not wired. The request reaches the venue in \
-             the vendor's client, so it can be, but an advisor account is needed to exercise \
-             it and none is available to verify against");
+    /// Replace a partition of the advisor's configuration with the one given.
+    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), String> {
+        let partition = advisor_partition(fa_data_type)
+            .ok_or_else(|| format!("no advisor configuration is named by {fa_data_type}"))?;
+        self.send(crate::types::ControlCommand::AdvisorConfig {
+            // Replacing it with what is carried.
+            command: 3,
+            partition: partition.to_string(),
+            document: Some(cxml.to_string()),
+        })
     }
 
     // ── Option calculations ──
@@ -169,5 +185,38 @@ impl EClient {
     /// will not act on a request.
     fn report_reason(&self, req_id: i64, reason: &str) {
         self.shared.reference.push_historical_error(req_id.max(0) as u32, 321, reason.to_string());
+    }
+}
+
+/// The word the venue names an advisor's configuration partition by, from the
+/// number the reference client names it by.
+fn advisor_partition(fa_data_type: i32) -> Option<&'static str> {
+    match fa_data_type {
+        1 => Some("Aliases"),
+        2 => Some("Group"),
+        3 => Some("Profile"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod advisor_partition_tests {
+    use super::advisor_partition;
+
+    /// The reference client names a partition by a number and the venue names
+    /// it by a word. Both clients here send the word, and a number that
+    /// stands for nothing is refused rather than sent as an empty partition.
+    #[test]
+    fn each_number_names_the_partition_the_venue_knows() {
+        assert_eq!(advisor_partition(1), Some("Aliases"));
+        assert_eq!(advisor_partition(2), Some("Group"));
+        assert_eq!(advisor_partition(3), Some("Profile"));
+    }
+
+    #[test]
+    fn a_number_that_names_nothing_is_refused() {
+        for unknown in [0, 4, -1, i32::MAX] {
+            assert_eq!(advisor_partition(unknown), None, "{unknown} was taken");
+        }
     }
 }
