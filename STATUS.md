@@ -3,61 +3,77 @@
 A JVM-free Interactive Brokers client. No gateway process, no desktop
 application, no tool driving a window.
 
-Legend: **✅ working** · **🔬 built, not yet proved against a live venue** ·
-**🚧 in progress** · **⛔ not served, and says so**
+Every row says what proved it, because "working" on its own is a claim and not
+an answer.
+
+| Stage | What it means |
+| --- | --- |
+| **live** | Exercised against the venue and the answer checked. The evidence is named |
+| **wire** | The request reaches the venue and it answers, but nothing has read the answer end to end |
+| **offline** | Built and tested here. Nothing has put it in front of the venue |
+| **refused** | Not served, and it says so where the caller can see it |
+
+Anything marked **live** was proved on a paper account against the real
+servers. Where a market's data is not entitled to this account, that is said
+rather than counted as a failure of the client: the request left, the venue
+answered, and what it answered was about the subscription.
 
 ---
 
 ## Client surfaces
 
-| Surface | Status | Notes |
+| Surface | Stage | Proved by |
 | --- | :---: | --- |
-| `EClient` / `EWrapper` | ✅ | Reference-client shape. Both naming conventions resolve |
-| `ibx.IB` | ✅ | 90 / 90 calls of the async wrapper's surface |
-| `ibx::api::Client` | ✅ | 77 / 77 callable; 3 report that they belong to a local process this client does not have |
-| Gateway settings | ✅ | Stated on the client beside the login, both languages: 17 carried, 7 named as having no counterpart |
+| `EClient` / `EWrapper` | live | Every live session in this file runs through it. Both naming conventions resolve |
+| `ibx.IB` | live | 90 / 90 calls of the async wrapper's surface; the Python suite exercises it |
+| `ibx::api::Client` | live | 77 / 77 callable; 3 say they belong to a local process this client does not have |
+| Gateway settings | offline | 17 carried, 7 named as having no counterpart; a test compares both clients' lists |
+| Both clients agree | offline | Four gates compare them: settings, order fields, surfaces, and what each does when a call cannot be served |
 
 ## Market data
 
-| Capability | Status | Notes |
+| Capability | Stage | Proved by |
 | --- | :---: | --- |
-| Top of book | ✅ | |
-| Depth of book | ✅ | |
-| Historical bars, ticks, schedules | ✅ | |
-| Tick-by-tick quotes | ✅ | Live on currencies and American listings: several at once, each naming its own request |
-| Tick-by-tick trades | ✅ | Live: a thousand trades on a busy listing, priced and sized as the venue printed them |
-| Trading halts | ✅ | Live: contracts trading are reported trading |
-| Tick attributes | ✅ | Live: reported-away-from-the-exchange varies trade by trade |
+| Top of book | live | American shares and currencies quote continuously. European and Canadian venues answer the subscription with what this account is entitled to, and that answer reaches the caller |
+| Depth of book | live | Forty-nine book updates in twenty seconds on one American listing. The venues that refuse depth to this account say so by name, and each refusal reaches the caller |
+| Historical bars | live | Bars returned for Dutch, British, Hong Kong, Australian and American listings and an American index, in one sweep |
+| Historical ticks, schedules | live | Ticks and trading schedules answered; a series this client does not know is refused rather than turned into trades |
+| Tick-by-tick quotes | live | Currencies and American listings, several streams at once, each record naming its own request |
+| Tick-by-tick trades | live | A thousand and twenty-seven trades on a busy listing, priced to the cent and sized in the shares the venue printed |
+| Trading halts | live | Contracts that are trading are reported trading, read from the mask and the named status together |
+| Tick attributes | live | Reported-away-from-the-exchange varies trade by trade, as it does for an off-exchange facility |
 
 ## Orders
 
-| Capability | Status | Notes |
+| Capability | Stage | Proved by |
 | --- | :---: | --- |
-| 23 order types | ✅ | |
-| Modify, cancel, global cancel | ✅ | |
-| Brackets, OCA, combos | ✅ | Combo side convention pending one live capture |
-| Conditions | ✅ | Price, volume, percent, execution, time |
-| Executions and fills | ✅ | |
-| Option exercise / lapse | ✅ | |
+| 23 order types | live | Previewed against the venue, which prices them and places nothing |
+| Every field of an order | live | 127 of 154 go out under a tag; 27 say on the field that this protocol does not carry them; none is dropped in silence. Each field wired this session was previewed, and two the venue refused were taken back out |
+| Orders across markets | live | Previews accepted on German, Dutch, British, Swiss, Australian, Canadian and American listings and on a currency pair. Japan and Hong Kong refused them for a lot size this client had not rounded to — the venue's own rule, reached and reported |
+| Modify, cancel, global cancel | live | An order placed on paper far under the market was acknowledged, changed, and withdrawn in one session |
+| Brackets, OCA, combos | live | A combination states its legs and, where the caller priced them separately, each leg's own price. The side convention is still open — see below |
+| Conditions | offline | Price, volume, percent, execution and time, encoded and tested here |
+| Executions and fills | live | A fill reported and the position reconciled against it. The report keeps every field the venue states, named or not |
+| Option exercise / lapse | offline | Encoded and tested here; exercising a real option is not something to do on a whim |
 
 ## Account
 
-| Capability | Status | Notes |
+| Capability | Stage | Proved by |
 | --- | :---: | --- |
-| Account values, summary | ✅ | Every figure the venue states, in its stated currency |
-| Positions, P&L | ✅ | |
-| Managed accounts | ✅ | |
-| Financial advisor config | 🔬 | Both clients ask the venue; needs an advisor account to see an answer |
+| Account values, summary | live | Every figure the venue states, in its stated currency |
+| Positions, P&L | live | Positions and daily figures arrive on login and after each fill |
+| Managed accounts | live | Every account this login holds is named |
+| Financial advisor config | wire | Both clients ask the venue. Seeing the answer needs an advisor account, which this login is not |
 
 ## Reference data
 
-| Capability | Status | Notes |
+| Capability | Stage | Proved by |
 | --- | :---: | --- |
-| Contract definitions | ✅ | Share, foreign share, index, bond, fund, option, future |
-| Option chains, symbol search | ✅ | |
-| Scanners, news, fundamentals | ✅ | |
-| Corporate-events calendar | ✅ | Live: the event types arrive, 179 KB of them, and an events query is answered |
-| Implied volatility, option price | ✅ | Answered here, not asked for: this protocol carries no request and the counterpart computes both in its own process. Anchored to the venue's published model for the contract, so the price it reproduces is the venue's own — live, to the cent, on two contracts |
+| Contract definitions | live | Eleven of twelve resolved in one sweep across nine countries — German, Dutch, British, Swiss, Japanese, Hong Kong, Australian, Canadian and American, plus a currency pair and an index. The twelfth was a future matching two contracts, which is refused by name rather than guessed at |
+| Option chains, symbol search | live | Three chain replies for one underlying, and fifty-six matches for a three-letter search |
+| Scanners, news, fundamentals | live | Six hundred and ninety-seven thousand bytes of scanner parameters, the news providers this account holds, and a fundamental document |
+| Corporate-events calendar | live | Live: the event types arrive, 179 KB of them, and an events query is answered |
+| Implied volatility, option price | live | Answered here, not asked for: this protocol carries no request and the counterpart computes both in its own process. Anchored to the venue's published model for the contract, so the price it reproduces is the venue's own — live, to the cent, on two contracts |
 
 ---
 
