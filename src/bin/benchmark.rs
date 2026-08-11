@@ -150,6 +150,7 @@ fn main() {
     let run_orders = env::var("BENCH_ORDERS").map(|v| v == "1").unwrap_or(false);
 
     let config = GatewayConfig {
+        settings: Default::default(),
         username,
         password: zeroize::Zeroizing::new(password),
         host,
@@ -186,6 +187,7 @@ fn main() {
     let (mut hot_loop, control_tx) = gw.into_hot_loop(
         shared, Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
         ibx::gateway::CallerAuth {
+            settings: config.settings.clone(),
             host: config.host.clone(),
             username: config.username.clone(),
             password: config.password.clone(),

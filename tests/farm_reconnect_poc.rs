@@ -26,6 +26,7 @@ fn config() -> Option<GatewayConfig> {
         ),
     };
     Some(GatewayConfig {
+        settings: Default::default(),
         username,
         password: zeroize::Zeroizing::new(password),
         host: std::env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string()),
@@ -61,7 +62,7 @@ fn farm_reconnect_with_cached_credentials() {
 
     // Phase 3: Reconnect using cached credentials (no SRP)
     let t1 = Instant::now();
-    let new_farm = connect_farm(
+    let new_farm = connect_farm(&Default::default(), 
         &cfg.host, "usfarm",
         &cfg.username, &cfg.password, cfg.paper,
         &server_session_id, &session_key, &hw_info, &encoded, ibx::gateway::Farm::MarketData,
@@ -87,6 +88,7 @@ fn hotloop_auto_reconnect_on_farm_disconnect() {
         shared.clone(), Some(event_tx),
         farm_conn, ccp_conn, hmds, None, None,
         ibx::gateway::CallerAuth {
+            settings: Default::default(),
             host: cfg.host.clone(),
             username: cfg.username.clone(),
             password: cfg.password.clone(),
@@ -144,6 +146,7 @@ fn ccp_reconnect_with_cached_credentials() {
     let full_auth_ms = t0.elapsed().as_millis();
 
     let auth = ReconnectAuth {
+        settings: Default::default(),
         host: cfg.host.clone(),
         username: cfg.username.clone(),
         password: cfg.password.clone(),

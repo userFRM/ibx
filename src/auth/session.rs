@@ -162,8 +162,13 @@ fn read_or_create_hwid() -> String {
 /// Live data farms validate the MAC field; an all-zero MAC causes the FIX
 /// 35=A logon to be silently rejected (paper farms don't validate).
 /// `machine_id` is the persistent 8-hex value from `~/hwid` (see #132).
-pub fn get_hw_info() -> String {
-    let machine_id = read_or_create_hwid();
+pub fn get_hw_info(stated: Option<&str>) -> String {
+    let machine_id = match stated.map(str::trim).filter(|v| {
+        !v.is_empty() && v.chars().all(|c| c.is_ascii_hexdigit())
+    }) {
+        Some(stated) => format!("{stated:0>8}"),
+        None => read_or_create_hwid(),
+    };
     let mac = first_real_mac().unwrap_or_else(|| "00:00:00:00:00:00".to_string());
     format!("{machine_id}|{mac}")
 }
@@ -1679,7 +1684,7 @@ mod tests {
 
     #[test]
     fn hw_info_format() {
-        let info = get_hw_info();
+        let info = get_hw_info(None);
         assert!(info.contains('|'));
         let parts: Vec<&str> = info.split('|').collect();
         assert_eq!(parts.len(), 2);
@@ -1692,8 +1697,8 @@ mod tests {
     // behavior (random id per call) and failed once a hwid file existed.
     #[test]
     fn hw_info_machine_id_is_stable_across_calls() {
-        let info1 = get_hw_info();
-        let info2 = get_hw_info();
+        let info1 = get_hw_info(None);
+        let info2 = get_hw_info(None);
         let machine1 = info1.split('|').next().unwrap();
         let machine2 = info2.split('|').next().unwrap();
         assert_eq!(machine1, machine2, "Persistent machine ID must not change between calls");
@@ -1704,7 +1709,7 @@ mod tests {
 
     #[test]
     fn hw_info_mac_format_is_six_hex_octets() {
-        let info = get_hw_info();
+        let info = get_hw_info(None);
         let mac = info.split('|').nth(1).unwrap();
         let octets: Vec<&str> = mac.split(':').collect();
         assert_eq!(octets.len(), 6, "MAC must be 6 colon-separated octets, got {mac:?}");

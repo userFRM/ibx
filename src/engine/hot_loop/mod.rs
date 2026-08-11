@@ -1281,7 +1281,7 @@ impl HotLoop {
                 let (farm_host, farm_name) =
                     crate::gateway::reconnect_trading_route(&auth);
                 let result = connect_farm(
-                    &farm_host, &farm_name,
+                    &auth.settings, &farm_host, &farm_name,
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
                     &auth.hw_info, &auth.encoded, Farm::MarketData,
@@ -1477,7 +1477,7 @@ impl HotLoop {
             .name(format!("hmds-reconnect-{attempt}"))
             .spawn(move || {
                 let result = connect_farm(
-                    &auth.hmds_host, &auth.hmds_farm,
+                    &auth.settings, &auth.hmds_host, &auth.hmds_farm,
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
                     &auth.hw_info, &auth.encoded, Farm::Historical,
@@ -1516,7 +1516,7 @@ impl HotLoop {
             .name(format!("secdef-reconnect-{attempt}"))
             .spawn(move || {
                 let result = connect_farm(
-                    &auth.secdef_host, &auth.secdef_farm,
+                    &auth.settings, &auth.secdef_host, &auth.secdef_farm,
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
                     &auth.hw_info, &auth.encoded, Farm::SecurityDefinition,
@@ -2114,6 +2114,7 @@ mod tests {
     fn an_hmds_disconnect_lets_its_reconnect_run() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            settings: Default::default(),
             host: "gw.example".into(),
             username: "u".into(),
             password: zeroize::Zeroizing::new(String::new()),
@@ -2312,6 +2313,7 @@ mod tests {
     fn hmds_keeps_retrying_through_an_outage_longer_than_the_ladder() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            settings: Default::default(),
             host: "gw.example".into(),
             username: "u".into(),
             password: zeroize::Zeroizing::new(String::new()),
@@ -2843,6 +2845,7 @@ mod calendar_farm_reconnect_tests {
     fn a_calendar_connection_that_went_is_scheduled_to_come_back() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            settings: Default::default(),
             host: "gw.example".into(),
             username: "u".into(),
             password: zeroize::Zeroizing::new(String::new()),
@@ -2876,6 +2879,7 @@ mod calendar_farm_reconnect_tests {
     fn a_session_without_that_farm_does_not_try() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            settings: Default::default(),
             host: "gw.example".into(),
             username: "u".into(),
             password: zeroize::Zeroizing::new(String::new()),

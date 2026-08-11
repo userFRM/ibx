@@ -10,10 +10,15 @@
 //! to configure it in two places — one of which, until now, was the process
 //! environment.
 //!
-//! **These take effect for the whole process.** They are read wherever they
-//! are needed rather than carried down to it, which is what the gateway's own
-//! file amounted to as well. Two sessions in one process share them; a session
-//! that needs its own would need them threaded through, and nothing has asked.
+//! **Each session runs under its own.** They are settled once, as the session
+//! opens, into a [`SessionSettings`] the session carries: two sessions in one
+//! process have their own, and neither can change the other's. What a caller
+//! states wins over the environment, which wins over the default, so a program
+//! configured the old way keeps working.
+//!
+//! Logging is the exception, and is named as one: a process has one logger, so
+//! `log_level`, `log_dir` and `log_queue` are process-scoped and read when
+//! logging starts.
 
 /// A setting stated on the client, or left to the environment.
 ///
@@ -51,19 +56,9 @@ pub struct GatewaySettings {
     pub log_queue: Option<bool>,
 
     // ── What the gateway did with what it received ──
-    /// How many messages may go out per slice, and how long a slice is.
-    ///
-    /// The gateway ships with both at zero, which is no pacing at all. Stated
-    /// here so a client that paces can be made to pace the same, and so that
-    /// pacing more than the gateway did is a choice rather than an accident.
-    pub messages_per_slice: Option<u32>,
-    pub time_slice_ms: Option<u32>,
     /// Which executions arrive when a session opens: today's, or every one
     /// the venue still holds. The gateway asks for every one.
     pub execution_reports: Option<ExecutionReportScope>,
-    /// What a delivered timestamp is stated in. The gateway states the
-    /// operator's own time zone.
-    pub timestamp_zone: Option<TimestampZone>,
     /// Whether a US stock trading on Nasdaq is handed back under the older
     /// spelling. The gateway does, so a program written against it compares
     /// against that spelling.
@@ -79,55 +74,14 @@ pub enum ExecutionReportScope {
     All,
 }
 
-/// What a delivered timestamp is stated in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimestampZone {
-    /// The time zone this client runs in, which is what the gateway used.
-    Operator,
-    /// The one the instrument trades in.
-    Instrument,
-    /// Universal time.
-    Utc,
-}
-
-/// Each setting, and the variable it is read from.
-///
-/// The variables are how this is carried, not what it is: a caller states the
-/// setting and never sees the name below.
-type Setting = (&'static str, fn(&GatewaySettings) -> Option<String>);
-
-const VARIABLES: &[Setting] = &[
-    ("IBX_TZ", |s| s.timezone.clone()),
-    ("IBX_LOCALE", |s| s.locale.clone()),
-    ("IBX_BUILD", |s| s.build.clone()),
-    ("IBX_VERSION", |s| s.version.clone()),
-    ("IBX_ENCODED", |s| s.encoded.clone()),
-    ("IBX_HWID", |s| s.hardware_id.clone()),
-    ("IBX_FARM_HOST", |s| s.market_data_host.clone()),
-    ("IBX_MISC_PORT", |s| s.port.map(|p| p.to_string())),
-    ("IBX_REGISTRATION_TIMEOUT_MS", |s| s.registration_timeout_ms.map(|n| n.to_string())),
-    ("IBX_LOG_LEVEL", |s| s.log_level.clone()),
-    ("IBX_LOG_DIR", |s| s.log_dir.clone()),
-    ("IBX_LOG_QUEUE", |s| s.log_queue.map(|q| q.to_string())),
-    ("IBX_MSGS_PER_SLICE", |s| s.messages_per_slice.map(|n| n.to_string())),
-    ("IBX_TIME_SLICE_MS", |s| s.time_slice_ms.map(|n| n.to_string())),
-    ("IBX_EXECUTION_REPORTS", |s| s.execution_reports.map(|scope| match scope {
-        ExecutionReportScope::Today => "today".to_string(),
-        ExecutionReportScope::All => "all".to_string(),
-    })),
-    ("IBX_TIMESTAMP_ZONE", |s| s.timestamp_zone.map(|zone| match zone {
-        TimestampZone::Operator => "operator".to_string(),
-        TimestampZone::Instrument => "instrument".to_string(),
-        TimestampZone::Utc => "utc".to_string(),
-    })),
-    ("IBX_ISLAND_FOR_NASDAQ", |s| s.island_for_nasdaq.map(|on| on.to_string())),
-];
-
 /// Gateway settings with nothing to stand in for here, and why.
 ///
 /// Named rather than dropped: someone moving off a gateway will look for them,
 /// and "there is no such thing here" is an answer where silence is not.
 pub const UNAVAILABLE: &[(&str, &str)] = &[
+    ("ApiMsgsPerSlice", "nothing here paces outgoing messages; the gateway ships with pacing off"),
+    ("ApiTimeSliceMillis", "nothing here paces outgoing messages; the gateway ships with pacing off"),
+    ("TimestampZone", "a timestamp is delivered as the venue states it, in the venue's own terms"),
     ("LocalServerPort", "no local socket to listen on; this client is the client"),
     ("LocalApiPort", "no local socket to listen on; this client is the client"),
     ("TrustedIPs", "nothing connects to this client, so nothing needs trusting"),
@@ -137,69 +91,159 @@ pub const UNAVAILABLE: &[(&str, &str)] = &[
     ("vmoptions", "no runtime to size"),
 ];
 
+/// Every setting a session runs under, resolved to a value.
+///
+/// Settled once, as the session opens, and immutable afterwards. Two sessions
+/// in one process each hold their own: what used to happen is that the second
+/// session's settings were written into the process environment and the first
+/// session's reconnects picked them up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSettings {
+    pub timezone: String,
+    pub locale: String,
+    pub build: String,
+    pub version: String,
+    pub encoded: String,
+    pub hardware_id: Option<String>,
+    pub market_data_host: Option<String>,
+    pub port: u16,
+    pub registration_timeout: std::time::Duration,
+    pub execution_reports: ExecutionReportScope,
+    pub island_for_nasdaq: bool,
+}
+
+impl Default for SessionSettings {
+    fn default() -> Self {
+        GatewaySettings::default().resolve()
+    }
+}
+
 impl GatewaySettings {
-    /// Put these where the code that needs them reads them.
+    /// Settle every setting: what the caller stated, else what the environment
+    /// holds, else the default.
     ///
-    /// Called as a session opens. A setting a caller left alone is not
-    /// cleared: whatever the environment already held stands, so a program
-    /// configured the old way keeps working.
-    pub fn apply(&self) {
-        for (variable, read) in VARIABLES {
-            if let Some(value) = read(self) {
-                // Safety: called from `connect` before the engine's threads
-                // start. Two sessions opening at once in one process would
-                // race here, which is the same race the gateway's own file had
-                // and the reason these are documented as process-wide.
-                unsafe { std::env::set_var(variable, value) };
-            }
+    /// The one place the environment is read. Called on the caller's thread as
+    /// the session opens, before any thread of the engine's exists, so nothing
+    /// downstream reads a setting that can still change.
+    pub fn resolve(&self) -> SessionSettings {
+        fn stated(caller: Option<&String>, variable: &str) -> Option<String> {
+            caller
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .or_else(|| std::env::var(variable).ok().filter(|v| !v.is_empty()))
+        }
+        SessionSettings {
+            timezone: stated(self.timezone.as_ref(), "IBX_TZ")
+                .unwrap_or_else(|| "UTC".to_string()),
+            locale: stated(self.locale.as_ref(), "IBX_LOCALE")
+                .unwrap_or_else(|| crate::config::IB_LOCALE.to_string()),
+            build: stated(self.build.as_ref(), "IBX_BUILD")
+                .unwrap_or_else(|| crate::config::IB_BUILD.to_string()),
+            version: stated(self.version.as_ref(), "IBX_VERSION")
+                .unwrap_or_else(|| crate::config::IB_VERSION.to_string()),
+            // The whole string, or the locale set into it, or neither. Tag
+            // 6266 carries `{jdkVer}/{platform}/{locale}/{dist}` and the venue
+            // refuses a locale that is not a canonical one.
+            encoded: stated(self.encoded.as_ref(), "IBX_ENCODED").unwrap_or_else(|| {
+                match stated(self.locale.as_ref(), "IBX_LOCALE") {
+                    Some(locale) => format!("17.0.10.0.101/W/{locale}/G"),
+                    None => crate::config::IB_ENCODED.to_string(),
+                }
+            }),
+            hardware_id: stated(self.hardware_id.as_ref(), "IBX_HWID"),
+            market_data_host: stated(self.market_data_host.as_ref(), "IBX_FARM_HOST"),
+            port: self
+                .port
+                .or_else(|| std::env::var("IBX_MISC_PORT").ok().and_then(|v| v.parse().ok()))
+                .unwrap_or(crate::config::MISC_PORT),
+            registration_timeout: self
+                .registration_timeout_ms
+                .or_else(|| {
+                    std::env::var("IBX_REGISTRATION_TIMEOUT_MS").ok().and_then(|v| v.parse().ok())
+                })
+                .map_or(std::time::Duration::from_secs(5), std::time::Duration::from_millis),
+            execution_reports: self.execution_reports.unwrap_or_else(|| {
+                match std::env::var("IBX_EXECUTION_REPORTS").as_deref() {
+                    Ok("today") => ExecutionReportScope::Today,
+                    _ => ExecutionReportScope::All,
+                }
+            }),
+            island_for_nasdaq: self.island_for_nasdaq.unwrap_or_else(|| {
+                !matches!(
+                    std::env::var("IBX_ISLAND_FOR_NASDAQ").as_deref(),
+                    Ok("0") | Ok("false") | Ok("no")
+                )
+            }),
         }
     }
 
-    /// What every setting is currently, whether it was stated here or was
-    /// already in the environment.
-    pub fn in_force() -> Vec<(&'static str, Option<String>)> {
-        VARIABLES
-            .iter()
-            .map(|(variable, _)| (*variable, std::env::var(variable).ok()))
-            .collect()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A setting stated on the client reaches the code that reads it.
+    /// A setting stated on the client is what the session runs under.
     #[test]
-    fn a_stated_setting_is_applied() {
-        let settings = GatewaySettings {
+    fn a_stated_setting_is_what_the_session_runs_under() {
+        let resolved = GatewaySettings {
             timezone: Some("America/New_York".to_string()),
             port: Some(4002),
             ..Default::default()
-        };
-        settings.apply();
-        assert_eq!(std::env::var("IBX_TZ").as_deref(), Ok("America/New_York"));
-        assert_eq!(crate::config::misc_port(), 4002);
-        unsafe {
-            std::env::remove_var("IBX_TZ");
-            std::env::remove_var("IBX_MISC_PORT");
         }
+        .resolve();
+        assert_eq!(resolved.timezone, "America/New_York");
+        assert_eq!(resolved.port, 4002);
     }
 
-    /// One a caller left alone does not clear what was already set, so a
-    /// program configured the old way keeps working.
+    /// Two sessions in one process each run under their own. Stating one used
+    /// to write it into the process, where the other session's reconnects
+    /// found it.
     #[test]
-    fn an_unstated_setting_leaves_what_was_there() {
+    fn one_session_does_not_state_anothers() {
+        let first = GatewaySettings {
+            timezone: Some("America/New_York".to_string()),
+            ..Default::default()
+        }
+        .resolve();
+        let second = GatewaySettings {
+            timezone: Some("Europe/Zurich".to_string()),
+            ..Default::default()
+        }
+        .resolve();
+        assert_eq!(first.timezone, "America/New_York");
+        assert_eq!(second.timezone, "Europe/Zurich");
+    }
+
+    /// What the caller stated, else what the environment holds, else the
+    /// default. A program configured the old way keeps working.
+    #[test]
+    fn the_environment_is_what_a_caller_states_nothing_over() {
         unsafe { std::env::set_var("IBX_LOCALE", "fr_FR") };
-        GatewaySettings::default().apply();
-        assert_eq!(std::env::var("IBX_LOCALE").as_deref(), Ok("fr_FR"));
+        let from_environment = GatewaySettings::default().resolve();
+        assert_eq!(from_environment.locale, "fr_FR");
+        assert_eq!(from_environment.encoded, "17.0.10.0.101/W/fr_FR/G");
+
+        let stated = GatewaySettings {
+            locale: Some("ja_JP".to_string()),
+            ..Default::default()
+        }
+        .resolve();
+        assert_eq!(stated.locale, "ja_JP", "the caller's own wins");
         unsafe { std::env::remove_var("IBX_LOCALE") };
+
+        let neither = GatewaySettings::default().resolve();
+        assert_eq!(neither.timezone, "UTC");
+        assert_eq!(neither.build, crate::config::IB_BUILD);
+        assert_eq!(neither.port, crate::config::MISC_PORT);
+        assert!(neither.island_for_nasdaq, "the counterpart's own default");
     }
 
-    /// Every setting on the struct is carried. A field added and not listed
-    /// would be one a caller can set and nothing reads.
+    /// Every field of the stated form reaches the resolved one. A field added
+    /// to one and not the other is a setting a caller can state and nothing
+    /// reads.
     #[test]
-    fn every_setting_is_carried() {
+    fn every_setting_is_resolved() {
         let all = GatewaySettings {
             timezone: Some("t".into()),
             locale: Some("l".into()),
@@ -213,22 +257,30 @@ mod tests {
             log_level: Some("debug".into()),
             log_dir: Some("d".into()),
             log_queue: Some(true),
-            messages_per_slice: Some(50),
-            time_slice_ms: Some(1000),
-            execution_reports: Some(ExecutionReportScope::All),
-            timestamp_zone: Some(TimestampZone::Utc),
-            island_for_nasdaq: Some(true),
+            execution_reports: Some(ExecutionReportScope::Today),
+            island_for_nasdaq: Some(false),
         };
-        let carried = VARIABLES.iter().filter(|(_, read)| read(&all).is_some()).count();
-        assert_eq!(carried, VARIABLES.len(), "a setting is stated and not carried");
-        // Destructured without `..`, so a field added to the struct stops
-        // compiling here until it is carried above.
+        let resolved = all.resolve();
+        assert_eq!(resolved.timezone, "t");
+        assert_eq!(resolved.locale, "l");
+        assert_eq!(resolved.build, "b");
+        assert_eq!(resolved.version, "v");
+        assert_eq!(resolved.encoded, "e");
+        assert_eq!(resolved.hardware_id.as_deref(), Some("h"));
+        assert_eq!(resolved.market_data_host.as_deref(), Some("m"));
+        assert_eq!(resolved.port, 1);
+        assert_eq!(resolved.registration_timeout, std::time::Duration::from_millis(2));
+        assert_eq!(resolved.execution_reports, ExecutionReportScope::Today);
+        assert!(!resolved.island_for_nasdaq);
+        // Destructured without `..`, so a field added to the stated form stops
+        // compiling here until it is resolved above. The three log settings
+        // are process-scoped by nature — one logger per process — and are
+        // named here rather than resolved.
         let GatewaySettings {
             timezone: _, locale: _, build: _, version: _, encoded: _, hardware_id: _,
             market_data_host: _, port: _, registration_timeout_ms: _,
             log_level: _, log_dir: _, log_queue: _,
-            messages_per_slice: _, time_slice_ms: _, execution_reports: _,
-            timestamp_zone: _, island_for_nasdaq: _,
+            execution_reports: _, island_for_nasdaq: _,
         } = all;
     }
 }

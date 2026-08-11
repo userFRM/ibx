@@ -45,7 +45,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
             for msg in messages {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
-                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                    && let Some(def) = contracts::parse_secdef_response(&msg, true)
                         && def.sec_type == contracts::SecurityType::Forex {
                             println!("  Contract: {} conId={} secType={:?} exchange={}",
                                 def.symbol, def.con_id, def.sec_type, def.exchange);
@@ -156,7 +156,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
             for msg in messages {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
-                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                    && let Some(def) = contracts::parse_secdef_response(&msg, true)
                         && def.sec_type == contracts::SecurityType::Future {
                             println!("  Contract: {} conId={} secType={:?} exchange={} expiry={} multiplier={}",
                                 def.symbol, def.con_id, def.sec_type, def.exchange,
@@ -298,7 +298,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
                             got_end = true;
                             continue;
                         }
-                    if let Some(def) = contracts::parse_secdef_response(&msg)
+                    if let Some(def) = contracts::parse_secdef_response(&msg, true)
                         && def.sec_type == contracts::SecurityType::Option && def.right.is_some() {
                             option_contracts.push(def);
                         }
@@ -543,7 +543,7 @@ pub(super) fn phase_global_venues(conns: Conns) -> Conns {
             for msg in messages {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
-                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                    && let Some(def) = contracts::parse_secdef_response(&msg, true)
                     && !found.iter().any(|d| d.con_id == def.con_id)
                 {
                     found.push(def);
@@ -657,7 +657,7 @@ pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
             for msg in messages {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
-                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                    && let Some(def) = contracts::parse_secdef_response(&msg, true)
                     && def.currency == "GBP"
                 {
                     listing = Some(def);

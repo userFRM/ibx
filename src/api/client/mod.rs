@@ -225,6 +225,9 @@ pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, String> {
 /// drop silently.
 fn gateway_config(config: &EClientConfig) -> GatewayConfig {
     GatewayConfig {
+        // Settled here, once, on the caller's thread: everything downstream
+        // reads a value rather than the process it happens to run in.
+        settings: std::sync::Arc::new(config.gateway.resolve()),
         username: config.username.clone(),
         password: zeroize::Zeroizing::new(config.password.clone()),
         // A caller with a login should not have to know a hostname. The one
@@ -289,9 +292,6 @@ impl EClient {
         config: &EClientConfig,
         event_tx: Option<SyncSender<Event>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // What the gateway's file used to hold, put where the code that needs
-        // it reads it — before anything reads it.
-        config.gateway.apply();
         let gw_config = gateway_config(config);
 
         let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = Gateway::connect(&gw_config)?;
@@ -319,11 +319,15 @@ impl EClient {
             }
 
         let shared = Arc::new(SharedState::new());
+        // Before the engine's threads exist, so nothing reads a setting that
+        // can still change.
+        shared.set_settings(gw_config.settings.clone());
         gw.populate_init_data(&shared);
 
         let (mut hot_loop, control_tx) = gw.into_hot_loop_with_farms(
             shared.clone(), event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn, config.core_id,
             crate::gateway::CallerAuth {
+                settings: Default::default(),
                 host: config.host.clone(),
                 username: config.username.clone(),
                 password: zeroize::Zeroizing::new(config.password.clone()),
@@ -348,6 +352,7 @@ impl EClient {
         // Stated before the client is handed back, so a caller cannot place
         // anything between the session opening and the setting taking hold.
         core.set_readonly(config.readonly);
+        core.set_registration_timeout(gw_config.settings.registration_timeout);
 
         Ok(Self {
             shared,

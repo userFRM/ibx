@@ -174,7 +174,8 @@ impl EClient {
     /// owns its own state, sockets, and engine thread, and ``connect()`` does
     /// not serialize across instances. If you pin engines via ``core_id``, give
     /// each a distinct value. See ibx#203 / ibx#207.
-    #[pyo3(signature = (host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false))]
+    #[pyo3(signature = (host="cdc1.ibllc.com".to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None))]
+    #[allow(clippy::too_many_arguments)]
     fn connect(
         &self,
         py: Python<'_>,
@@ -189,6 +190,10 @@ impl EClient {
         ib_key_token_sub_type: Option<String>,
         code_provider: Option<Py<PyAny>>,
         readonly: bool,
+        // What this session runs under, by the names `ibx.configure` uses.
+        // Stated here it belongs to this session; stated there it is the
+        // process's, and is what a session that states nothing falls back to.
+        settings: Option<std::collections::HashMap<String, String>>,
     ) -> PyResult<()> {
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
@@ -201,6 +206,10 @@ impl EClient {
         let code_provider = code_provider.map(code_provider_from_py);
 
         let config = GatewayConfig {
+            settings: std::sync::Arc::new(
+                crate::python::settings_from(settings.unwrap_or_default())
+                    .map_err(PyRuntimeError::new_err)?,
+            ),
             username,
             password: zeroize::Zeroizing::new(password),
             host,
@@ -224,6 +233,8 @@ impl EClient {
         *self.account_id.lock().unwrap() = Some(gw.account_id.clone());
         *self.accounts.lock().unwrap() = gw.accounts.clone();
         let shared = Arc::new(SharedState::new());
+        shared.set_settings(config.settings.clone());
+        self.core.set_registration_timeout(config.settings.registration_timeout);
         gw.populate_init_data(&shared);
 
         let connect_host = config.host.clone();
@@ -234,6 +245,7 @@ impl EClient {
         let (hot_loop, control_tx) = gw.into_hot_loop_with_farms(
             shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id,
             crate::gateway::CallerAuth {
+                settings: Default::default(),
                 host: connect_host,
                 username: connect_username,
                 password: connect_password,

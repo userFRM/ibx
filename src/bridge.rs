@@ -1648,6 +1648,12 @@ impl PortfolioState {
 /// Shared state between hot loop and external caller.
 /// Composed of domain-specific containers for clear ownership boundaries.
 pub struct SharedState {
+    /// What the session runs under, settled when it opened.
+    ///
+    /// Held here so the engine reads a value rather than the process it runs
+    /// in: two sessions in one process have their own, and neither can change
+    /// the other's mid-flight.
+    pub settings: std::sync::Mutex<std::sync::Arc<crate::api::settings::SessionSettings>>,
     pub market: MarketDataState,
     pub orders: OrderState,
     pub reference: ReferenceState,
@@ -1678,8 +1684,20 @@ impl Default for SharedState {
 }
 
 impl SharedState {
+    /// What this session runs under.
+    pub fn settings(&self) -> std::sync::Arc<crate::api::settings::SessionSettings> {
+        self.settings.lock().unwrap().clone()
+    }
+
+    /// Stated once, as the session opens, before the engine's threads start.
+    #[doc(hidden)]
+    pub fn set_settings(&self, settings: std::sync::Arc<crate::api::settings::SessionSettings>) {
+        *self.settings.lock().unwrap() = settings;
+    }
+
     pub fn new() -> Self {
         Self {
+            settings: std::sync::Mutex::new(std::sync::Arc::new(Default::default())),
             market: MarketDataState::new(),
             orders: OrderState::new(),
             reference: ReferenceState::new(),

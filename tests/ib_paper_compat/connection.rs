@@ -57,7 +57,7 @@ pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut 
         } else {
             ibx::gateway::Farm::MarketData
         };
-        match ibx::gateway::connect_farm(
+        match ibx::gateway::connect_farm(&Default::default(), 
             &config.host, farm,
             &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token,
@@ -251,6 +251,7 @@ pub(super) fn phase_auth_wrong_password(config: &GatewayConfig) {
     println!("--- Phase 118: Authentication Failure (wrong password) ---");
 
     let bad_config = GatewayConfig {
+        settings: Default::default(),
         username: config.username.clone(),
         password: zeroize::Zeroizing::new("definitely_wrong_password_12345".to_string()),
         host: config.host.clone(),
@@ -407,6 +408,7 @@ pub(super) fn phase_farm_recovers_with_credentials(
     let (mut hot_loop, control_tx) = gw.into_hot_loop_with_farms(
         shared.clone(), Some(event_tx), conns.farm, conns.ccp, conns.hmds, None, None,
         gateway::CallerAuth {
+            settings: Default::default(),
             host: config.host.clone(),
             username: config.username.clone(),
             password: zeroize::Zeroizing::new(config.password.to_string()),

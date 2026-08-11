@@ -536,7 +536,9 @@ fn contains_field(body: &[u8], field: &[u8]) -> bool {
 /// The symbol tag is reused by the identifier block — `55=BBG` and `55=US` sit
 /// there — so a record counts only when it also states what the contract is
 /// and which contract it is.
-pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
+pub fn parse_secdef_responses(
+    data: &[u8], island_for_nasdaq: bool,
+) -> Vec<ContractDefinition> {
     use crate::protocol::fix::SOH;
     const SYMBOL_FIELD: &[u8] = b"\x0155=";
 
@@ -551,7 +553,7 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
     }
     // Nothing repeats, so the message is its own single record.
     if starts.len() < 2 {
-        return parse_secdef_response(data).into_iter().collect();
+        return parse_secdef_response(data, island_for_nasdaq).into_iter().collect();
     }
 
     let header = &data[..starts[0]];
@@ -570,7 +572,7 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
     let flush = |open: &mut Option<Vec<u8>>, out: &mut Vec<ContractDefinition>| {
         if let Some(mut record) = open.take() {
             record.push(SOH);
-            if let Some(def) = parse_secdef_response(&record) {
+            if let Some(def) = parse_secdef_response(&record, island_for_nasdaq) {
                 out.push(def);
             }
         }
@@ -599,7 +601,7 @@ pub fn parse_secdef_responses(data: &[u8]) -> Vec<ContractDefinition> {
     if out.len() > 1 {
         let first = out[0].con_id;
         if out.iter().all(|d| d.con_id == first) {
-            return parse_secdef_response(data).into_iter().collect();
+            return parse_secdef_response(data, island_for_nasdaq).into_iter().collect();
         }
     }
     out
@@ -669,7 +671,9 @@ pub fn unread_definition_tags(data: &[u8]) -> Vec<u32> {
     unread
 }
 
-pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
+pub fn parse_secdef_response(
+    data: &[u8], island_for_nasdaq: bool,
+) -> Option<ContractDefinition> {
     let tags = fix::fix_parse(data);
 
     // Verify it's a security definition message
@@ -712,8 +716,9 @@ pub fn parse_secdef_response(data: &[u8]) -> Option<ContractDefinition> {
     // rather than each remembering to. What goes back out routes under the
     // venue's own name regardless: `exchange_to_fix` translates it.
     let sec_type = def.sec_type.to_api_str();
-    def.exchange = delivered_exchange(&def.exchange, sec_type, &def.currency);
-    def.primary_exchange = delivered_exchange(&def.primary_exchange, sec_type, &def.currency);
+    def.exchange = delivered_exchange(&def.exchange, sec_type, &def.currency, island_for_nasdaq);
+    def.primary_exchange =
+        delivered_exchange(&def.primary_exchange, sec_type, &def.currency, island_for_nasdaq);
     if let Some(v) = tags.get(&TAG_IB_LOCAL_SYMBOL) {
         def.local_symbol = v.clone();
     }
@@ -1677,7 +1682,7 @@ mod tests {
             ],
             1,
         );
-        let def = super::parse_secdef_response(&msg).unwrap();
+        let def = super::parse_secdef_response(&msg, true).unwrap();
         assert_eq!(def.con_id, 265598);
         assert_eq!(def.symbol, "AAPL");
         assert_eq!(def.sec_type, SecurityType::Stock);
@@ -1695,7 +1700,7 @@ mod tests {
     #[test]
     fn parse_rejects_non_secdef() {
         let msg = fix::fix_build(&[(TAG_MSG_TYPE, "A")], 1);
-        assert!(super::parse_secdef_response(&msg).is_none());
+        assert!(super::parse_secdef_response(&msg, true).is_none());
     }
 
     // Regression for ibx#197: a US equity secdef carries an inline price-
@@ -1722,7 +1727,7 @@ mod tests {
             ],
             1,
         );
-        let def = super::parse_secdef_response(&msg).unwrap();
+        let def = super::parse_secdef_response(&msg, true).unwrap();
         // Smallest increment across bands, not the "1" rule sentinel.
         assert_eq!(def.min_tick, 0.0001);
     }
@@ -1742,7 +1747,7 @@ mod tests {
             ],
             1,
         );
-        let def = super::parse_secdef_response(&msg).unwrap();
+        let def = super::parse_secdef_response(&msg, true).unwrap();
         assert_eq!(def.min_tick, 0.0, "unstated, not a penny");
     }
 
@@ -1818,7 +1823,7 @@ mod tests {
             ],
             1,
         );
-        let def = super::parse_secdef_response(&msg).unwrap();
+        let def = super::parse_secdef_response(&msg, true).unwrap();
         assert_eq!(def.last_trade_date, "20260918");
     }
 
@@ -1839,7 +1844,7 @@ mod tests {
             ],
             1,
         );
-        let def = super::parse_secdef_response(&msg).unwrap();
+        let def = super::parse_secdef_response(&msg, true).unwrap();
         assert_eq!(def.last_trade_date, "20260918");
     }
 
@@ -1858,7 +1863,7 @@ mod tests {
             ],
             1,
         );
-        let def = super::parse_secdef_response(&msg).unwrap();
+        let def = super::parse_secdef_response(&msg, true).unwrap();
         assert_eq!(def.sec_type, SecurityType::Option);
         assert_eq!(def.last_trade_date, "20260321");
         assert_eq!(def.strike, 200.0);
@@ -1982,7 +1987,7 @@ mod tests {
             ],
             1,
         );
-        let def = super::parse_secdef_response(&msg).unwrap();
+        let def = super::parse_secdef_response(&msg, true).unwrap();
         assert_eq!(def.market_rule_id, Some(4563));
     }
 
@@ -1996,7 +2001,7 @@ mod tests {
             ],
             1,
         );
-        let def = super::parse_secdef_response(&msg).unwrap();
+        let def = super::parse_secdef_response(&msg, true).unwrap();
         assert_eq!(def.market_rule_id, None);
     }
 
@@ -2413,7 +2418,7 @@ mod tests {
             (TAG_CURRENCY, "AUD"),
         ], 1);
 
-        let defs = parse_secdef_responses(&msg);
+        let defs = parse_secdef_responses(&msg, true);
         assert_eq!(defs.len(), 2, "both listings: {defs:?}");
         assert_eq!(defs[0].con_id, 756733);
         assert_eq!(defs[0].currency, "USD");
@@ -2435,7 +2440,7 @@ mod tests {
             (TAG_SYMBOL, "US"),
             (455, "US78462F1030"),
         ], 1);
-        let defs = parse_secdef_responses(&with_ids);
+        let defs = parse_secdef_responses(&with_ids, true);
         assert_eq!(defs.len(), 1, "one contract and two identifiers: {defs:?}");
         assert_eq!(defs[0].con_id, 756733);
 
@@ -2447,7 +2452,7 @@ mod tests {
             (TAG_IB_CON_ID, "265598"),
             (TAG_CURRENCY, "USD"),
         ], 1);
-        let defs = parse_secdef_responses(&single);
+        let defs = parse_secdef_responses(&single, true);
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].con_id, 265598);
     }
@@ -2468,7 +2473,7 @@ mod industry_tests {
     /// nowhere, so a caller pricing such a contract had nothing to price it by.
     #[test]
     fn the_economic_value_rule_is_read_from_the_definition() {
-        let def = parse_secdef_response(&secdef("6858=IND-FUT-CASH\u{1}6859=0.25\u{1}"))
+        let def = parse_secdef_response(&secdef("6858=IND-FUT-CASH\u{1}6859=0.25\u{1}"), true)
             .expect("the definition parses");
         assert_eq!(def.ev_rule, "IND-FUT-CASH");
         assert_eq!(def.ev_multiplier, 0.25, "a rule without its multiplier values the contract wrongly");
@@ -2479,7 +2484,7 @@ mod industry_tests {
     /// all three of them with bars in the middle.
     #[test]
     fn what_the_issuer_does_arrives_as_three_things() {
-        let def = parse_secdef_response(&secdef("6624=Technology|Computers|Computers\u{1}"))
+        let def = parse_secdef_response(&secdef("6624=Technology|Computers|Computers\u{1}"), true)
             .expect("the definition parses");
         assert_eq!(def.industry, "Technology");
         assert_eq!(def.category, "Computers");
@@ -2494,7 +2499,7 @@ mod industry_tests {
     fn the_identifiers_are_kept_and_the_cusip_picked_out_of_them() {
         let def = parse_secdef_response(&secdef(
             "455=US0378331005\u{1}456=4\u{1}455=037833100\u{1}456=1\u{1}",
-        )).expect("the definition parses");
+        ), true).expect("the definition parses");
         assert_eq!(def.isin, "US0378331005");
         assert_eq!(def.cusip, "037833100", "the CUSIP is in the list, by its kind");
         assert_eq!(def.sec_id_list.len(), 2, "and every identifier is kept");
@@ -2508,7 +2513,7 @@ mod industry_tests {
         let def = parse_secdef_response(&secdef(
             "223=4.25\u{1}6495=CORP\u{1}6496=FIXED\u{1}6497=1\u{1}6498=0\u{1}\
              6499=0\u{1}6501=20270115\u{1}6502=CALL\u{1}6720=A+\u{1}6493=notes\u{1}",
-        )).expect("the definition parses");
+        ), true).expect("the definition parses");
         assert_eq!(def.coupon, 4.25);
         assert_eq!(def.bond_type, "CORP");
         assert_eq!(def.coupon_type, "FIXED");
@@ -2529,7 +2534,7 @@ mod industry_tests {
             "6481=Some Fund\u{1}6472=Some Family\u{1}6473=Bond\u{1}6474=1.5\u{1}\
              6475=0.5\u{1}6476=0.75\u{1}6477=0\u{1}6511=1\u{1}6512=1\u{1}\
              8150=NY,CA\u{1}8503=Fixed Income\u{1}",
-        )).expect("the definition parses");
+        ), true).expect("the definition parses");
         assert_eq!(def.fund_name, "Some Fund");
         assert_eq!(def.fund_family, "Some Family");
         assert_eq!(def.fund_type, "Bond");
@@ -2546,7 +2551,7 @@ mod industry_tests {
     /// one, and under a shorter field where that is all it gives.
     #[test]
     fn a_description_falls_back_to_the_shorter_field() {
-        let def = parse_secdef_response(&secdef("6853=short form\u{1}"))
+        let def = parse_secdef_response(&secdef("6853=short form\u{1}"), true)
             .expect("the definition parses");
         assert_eq!(def.desc_append, "short form");
     }
@@ -2555,7 +2560,7 @@ mod industry_tests {
     /// unless the multiplier comes with it.
     #[test]
     fn a_price_carries_what_it_must_be_multiplied_by() {
-        let def = parse_secdef_response(&secdef("6021=100\u{1}"))
+        let def = parse_secdef_response(&secdef("6021=100\u{1}"), true)
             .expect("the definition parses");
         assert_eq!(def.price_magnifier, 100);
     }
@@ -2564,7 +2569,7 @@ mod industry_tests {
     /// for a category means by it.
     #[test]
     fn one_thing_stated_is_the_category() {
-        let def = parse_secdef_response(&secdef("6624=Financial\u{1}"))
+        let def = parse_secdef_response(&secdef("6624=Financial\u{1}"), true)
             .expect("the definition parses");
         assert_eq!(def.category, "Financial");
         assert!(def.industry.is_empty() && def.subcategory.is_empty());
@@ -2613,7 +2618,7 @@ mod unnamed_field_tests {
     fn a_field_this_client_does_not_name_is_kept_under_its_number() {
         // Numbers this parser names none of, so the test does not go stale the
         // day one of them is given a name.
-        let def = parse_secdef_response(&frame("9998=something\u{1}9997=42\u{1}"))
+        let def = parse_secdef_response(&frame("9998=something\u{1}9997=42\u{1}"), true)
             .expect("the definition parses");
         let kept: Vec<u32> = def.unnamed_fields.iter().map(|(t, _)| *t).collect();
         assert!(kept.contains(&9998));
@@ -2626,7 +2631,7 @@ mod unnamed_field_tests {
     /// its fields overstated what was unread, by ten.
     #[test]
     fn the_messages_own_fields_are_not_counted_as_the_contracts() {
-        let def = parse_secdef_response(&frame("")).expect("the definition parses");
+        let def = parse_secdef_response(&frame(""), true).expect("the definition parses");
         let kept: Vec<u32> = def.unnamed_fields.iter().map(|(t, _)| *t).collect();
         for envelope in [8, 9, 10, 34, 35, 52, 320] {
             assert!(!kept.contains(&envelope), "{envelope} is the message's, not the contract's");
@@ -2636,7 +2641,7 @@ mod unnamed_field_tests {
     /// A field that is named is read into its own place, not left as a number.
     #[test]
     fn a_field_this_client_names_does_not_also_appear_unnamed() {
-        let def = parse_secdef_response(&frame("6858=IND-FUT-CASH\u{1}6859=0.25\u{1}"))
+        let def = parse_secdef_response(&frame("6858=IND-FUT-CASH\u{1}6859=0.25\u{1}"), true)
             .expect("the definition parses");
         assert_eq!(def.ev_rule, "IND-FUT-CASH");
         assert_eq!(def.ev_multiplier, 0.25, "a rule without its multiplier values the contract wrongly");
@@ -2658,7 +2663,7 @@ mod smart_venue_tests {
     fn the_venues_own_routing_list_is_read_in_the_order_it_states() {
         let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01\
                       6177=AMEX,NYSE,CHX,ARCA,NASDAQ,DRCTEDGE,BEX,BATS,EDGE\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert_eq!(
             def.smart_venues,
             vec!["AMEX", "NYSE", "CHX", "ARCA", "NASDAQ", "DRCTEDGE", "BEX", "BATS", "EDGE"],
@@ -2670,7 +2675,7 @@ mod smart_venue_tests {
     #[test]
     fn a_contract_that_is_not_smart_routed_lists_no_venues() {
         let frame = b"35=d\x01320=R1\x016008=1\x0155=VOD\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert!(def.smart_venues.is_empty());
     }
 
@@ -2703,7 +2708,7 @@ mod underlying_tests {
     fn a_derivative_names_the_contract_it_is_written_on() {
         let frame = b"35=d\x01320=R1\x016008=36233584\x0155=SPY\x01167=OPT\x01\
                       6346=756733\x016855=SPY\x01310=STK\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert_eq!(def.under_con_id, 756733);
         assert_eq!(def.under_symbol, "SPY");
         assert_eq!(def.under_sec_type, "STK");
@@ -2718,7 +2723,7 @@ mod underlying_tests {
     #[test]
     fn the_time_trading_stops_is_read_as_well_as_the_date() {
         let frame = b"35=d\x01320=R1\x016008=1\x0155=SPY\x018583=20260918\x018584=150000\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert_eq!(def.last_trade_time, "150000");
     }
 
@@ -2726,7 +2731,7 @@ mod underlying_tests {
     #[test]
     fn a_contract_written_on_nothing_names_nothing() {
         let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01167=CS\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert_eq!(def.under_con_id, 0);
         assert!(def.under_symbol.is_empty());
     }
@@ -2742,7 +2747,7 @@ mod issue_date_tests {
     #[test]
     fn a_bond_states_the_day_it_was_issued() {
         let frame = b"35=d\x01320=R1\x016008=851160433\x0155=IBM\x01167=CORP\x01225=20260203\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert_eq!(def.issue_date, "20260203");
     }
 
@@ -2751,7 +2756,7 @@ mod issue_date_tests {
     #[test]
     fn a_share_states_no_issue_date() {
         let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01167=CS\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert!(def.issue_date.is_empty());
     }
 }
@@ -2767,7 +2772,7 @@ mod repeated_field_tests {
     fn a_tag_stated_more_than_once_is_kept_more_than_once() {
         let frame = b"35=d\x01320=R1\x016008=1\x0155=SPY\x01\
                       9001=alpha\x019001=beta\x019001=gamma\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         let values: Vec<&str> = def
             .unnamed_fields
             .iter()
@@ -2795,7 +2800,7 @@ mod record_boundary_tests {
                      225=20260101\x01\
                      55=ZZZ\x01167=CORP\x016008=222\x01\
                      225=20270202\x01";
-        let defs = parse_secdef_responses(data);
+        let defs = parse_secdef_responses(data, true);
         assert_eq!(defs.len(), 2, "two contracts are named");
         assert_eq!(defs[0].con_id, 111);
         assert_eq!(defs[1].con_id, 222);
@@ -2811,7 +2816,7 @@ mod record_boundary_tests {
         let data = b"35=d\x01320=R1\x01\
                      55=AAA\x01167=CORP\x016008=111\x01\
                      55=BBG\x01456=A\x01225=20260101\x01";
-        let defs = parse_secdef_responses(data);
+        let defs = parse_secdef_responses(data, true);
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].issue_date, "20260101");
     }
@@ -2829,7 +2834,7 @@ mod size_and_precision_tests {
     fn the_smallest_order_is_read_from_the_size_field_not_a_price_precision() {
         let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01\
                       8193=1\x018175=0.0001\x018598=0.01\x018599=0.000001\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert_eq!(def.min_size, 0.0001);
         assert_eq!(def.last_price_precision, 0.01);
         assert_eq!(def.last_size_precision, 0.000001);
@@ -2840,7 +2845,7 @@ mod size_and_precision_tests {
     #[test]
     fn a_size_stated_without_the_flag_is_not_in_force() {
         let frame = b"35=d\x01320=R1\x016008=1\x0155=SPY\x018175=0.0001\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert_eq!(def.min_size, 0.0);
     }
 
@@ -2848,7 +2853,7 @@ mod size_and_precision_tests {
     #[test]
     fn how_a_contract_settles_is_read() {
         let frame = b"35=d\x01320=R1\x016008=1\x0155=ES\x016660=C\x016614=20260918\x01";
-        let def = parse_secdef_response(frame).expect("the definition parses");
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
         assert_eq!(def.settlement_method, "C");
         assert_eq!(def.real_expiration_date, "20260918");
     }
@@ -2875,7 +2880,7 @@ mod size_table_tests {
         assert_eq!(rules[0].size_increments.len(), 1, "the size band is read");
         assert_eq!(rules[0].size_increments[0].increment, 40.0);
 
-        let def = parse_secdef_response(data).expect("the definition parses");
+        let def = parse_secdef_response(data, true).expect("the definition parses");
         assert_eq!(def.min_tick, 0.01, "the price table gives the tick");
         assert_eq!(def.size_increment, 40.0, "the size table gives the size");
     }
@@ -2886,7 +2891,7 @@ mod size_table_tests {
     fn a_rule_with_no_size_table_states_no_size() {
         let data = b"35=d\x01320=R1\x016008=1\x0155=SPY\x01\
                      6019=1\x016031=26\x016026=1\x016023=0\x016027=0.05\x01";
-        let def = parse_secdef_response(data).expect("the definition parses");
+        let def = parse_secdef_response(data, true).expect("the definition parses");
         assert_eq!(def.min_tick, 0.05);
         assert_eq!(def.size_increment, 0.0);
     }
@@ -2901,23 +2906,18 @@ mod size_table_tests {
 ///
 /// Only US stocks: the older name means nothing for a future, and nothing
 /// outside the United States trades under it.
-pub fn delivered_exchange(exchange: &str, sec_type: &str, currency: &str) -> String {
+pub fn delivered_exchange(
+    exchange: &str, sec_type: &str, currency: &str, island_for_nasdaq: bool,
+) -> String {
     let stock = sec_type.eq_ignore_ascii_case("STK");
     let american = currency.eq_ignore_ascii_case("USD");
-    if stock && american && exchange.eq_ignore_ascii_case("NASDAQ") && island_for_nasdaq() {
+    if stock && american && exchange.eq_ignore_ascii_case("NASDAQ") && island_for_nasdaq {
         return "ISLAND".to_string();
     }
     exchange.to_string()
 }
 
-/// Whether that older spelling is used, as the client was configured.
-fn island_for_nasdaq() -> bool {
-    // The counterpart's own default, and this client's: matching it is the
-    // point. Stated otherwise on the client to get the venue's own name.
-    std::env::var("IBX_ISLAND_FOR_NASDAQ")
-        .map(|v| v != "false" && v != "0")
-        .unwrap_or(true)
-}
+
 
 
 #[cfg(test)]
@@ -2929,25 +2929,26 @@ mod delivered_name_tests {
     /// compares the same here.
     #[test]
     fn a_us_stock_on_nasdaq_is_handed_back_as_island() {
-        assert_eq!(delivered_exchange("NASDAQ", "STK", "USD"), "ISLAND");
+        assert_eq!(delivered_exchange("NASDAQ", "STK", "USD", true), "ISLAND");
     }
 
     /// Nothing else is. The older name means nothing for a future, and
     /// nothing outside the United States trades under it.
     #[test]
     fn nothing_else_is_renamed() {
-        assert_eq!(delivered_exchange("NASDAQ", "FUT", "USD"), "NASDAQ");
-        assert_eq!(delivered_exchange("NASDAQ", "STK", "CAD"), "NASDAQ");
-        assert_eq!(delivered_exchange("ARCA", "STK", "USD"), "ARCA");
-        assert_eq!(delivered_exchange("", "STK", "USD"), "");
+        assert_eq!(delivered_exchange("NASDAQ", "FUT", "USD", true), "NASDAQ");
+        assert_eq!(delivered_exchange("NASDAQ", "STK", "CAD", true), "NASDAQ");
+        assert_eq!(delivered_exchange("ARCA", "STK", "USD", true), "ARCA");
+        assert_eq!(delivered_exchange("", "STK", "USD", true), "");
     }
 
-    /// A caller that wants the venue's own name says so.
+    /// A session that wants the venue's own name says so, and says it for
+    /// itself: this used to be read from the process, so one session saying it
+    /// said it for every other session running beside it.
     #[test]
     fn the_venues_own_name_can_be_asked_for() {
-        unsafe { std::env::set_var("IBX_ISLAND_FOR_NASDAQ", "false") };
-        assert_eq!(delivered_exchange("NASDAQ", "STK", "USD"), "NASDAQ");
-        unsafe { std::env::remove_var("IBX_ISLAND_FOR_NASDAQ") };
+        assert_eq!(delivered_exchange("NASDAQ", "STK", "USD", false), "NASDAQ");
+        assert_eq!(delivered_exchange("NASDAQ", "STK", "USD", true), "ISLAND");
     }
 
     /// And what goes out still routes under the venue's own name, whatever a

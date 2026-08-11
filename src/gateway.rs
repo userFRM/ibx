@@ -174,15 +174,18 @@ pub fn token_short_hash(session_token: &BigUint) -> String {
 /// Tag 6947 carries the JVM default timezone (e.g. `Europe/Paris`,
 /// `America/New_York`). The auth server doesn't validate it — `UTC` is
 /// the safe default — but `IBX_TZ` overrides for users who want to mirror
-/// their locale or comply with regional logging requirements.
-pub fn build_ccp_logon(hw_info: &str, encoded: &str, heartbeat: u64, seq: u32) -> Vec<u8> {
+/// their locale or comply with regional logging requirements. The session
+/// states its own, settled when it opened.
+pub fn build_ccp_logon(
+    settings: &crate::api::settings::SessionSettings,
+    hw_info: &str, encoded: &str, heartbeat: u64, seq: u32,
+) -> Vec<u8> {
     let now = chrono_free_timestamp();
-    let tz_owned = std::env::var("IBX_TZ").unwrap_or_else(|_| "UTC".to_string());
-    let tz = tz_owned.as_str();
+    let tz = settings.timezone.as_str();
     let hb_str = heartbeat.to_string();
     let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
-    let build = crate::config::ib_build();
-    let version = crate::config::ib_version();
+    let build = settings.build.clone();
+    let version = settings.version.clone();
     fix_build(
         &[
             (fix::TAG_MSG_TYPE, fix::MSG_LOGON),
@@ -211,6 +214,7 @@ pub fn build_ccp_logon(hw_info: &str, encoded: &str, heartbeat: u64, seq: u32) -
 
 /// Build encrypted farm logon message.
 pub fn build_farm_encrypted_logon(
+    settings: &crate::api::settings::SessionSettings,
     channel: &mut SecureChannel,
     username: &str,
     _paper: bool,
@@ -229,8 +233,8 @@ pub fn build_farm_encrypted_logon(
     let now = chrono_free_timestamp();
     let hb_str = FARM_HEARTBEAT.to_string();
     let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
-    let build = crate::config::ib_build();
-    let version = crate::config::ib_version();
+    let build = settings.build.clone();
+    let version = settings.version.clone();
 
     let inner = fix_build(
         &[
@@ -446,6 +450,7 @@ fn try_frame_farm_msg(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
 /// other did not, and every reconnect scheduler silently refused to run on the
 /// empty host (ibx#378). The compiler asks for them now.
 pub struct CallerAuth {
+    pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
     pub host: String,
     pub username: String,
     pub password: Zeroizing<String>,
@@ -460,6 +465,10 @@ pub struct CallerAuth {
 /// Credentials cached for auto-reconnect (no SRP needed).
 #[derive(Clone)]
 pub struct ReconnectAuth {
+    /// What this session runs under. Carried so a reconnect states what the
+    /// session stated when it opened, rather than whatever the process holds
+    /// by the time it drops.
+    pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
     pub host: String,
     pub username: String,
     /// Wrapped in `Zeroizing` so the plaintext is wiped from memory on drop.
@@ -633,6 +642,7 @@ pub struct Session {
 
 /// Connect to a data farm: key exchange → encrypted logon → token auth → routing → Connection.
 pub fn connect_farm(
+    settings: &crate::api::settings::SessionSettings,
     host: &str,
     farm_id: &str,
     username: &str,
@@ -644,8 +654,11 @@ pub fn connect_farm(
     encoded: &str,
     farm: Farm,
 ) -> io::Result<Connection> {
-    let port = misc_port();
-    let farm_host = farm_host_override().unwrap_or_else(|| host.to_string());
+    let port = settings.port;
+    let farm_host = settings
+        .market_data_host
+        .clone()
+        .unwrap_or_else(|| host.to_string());
     log::info!("Connecting to {farm_id} {farm_host}:{port}");
     let addr = format!("{farm_host}:{port}")
         .to_socket_addrs()?
@@ -682,6 +695,7 @@ pub fn connect_farm(
         server_session_id.to_string()
     };
     let logon_bytes = build_farm_encrypted_logon(
+        settings,
         &mut channel, username, paper, farm_id,
         &farm_session_id, session_key, hw_info, encoded, farm.login_version(),
     );
@@ -1011,7 +1025,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     }
 
     // FIX Logon
-    let logon_msg = build_ccp_logon(&auth.hw_info, &auth.encoded, CCP_HEARTBEAT, 1);
+    let logon_msg = build_ccp_logon(&auth.settings, &auth.hw_info, &auth.encoded, CCP_HEARTBEAT, 1);
     tls.write_all(&logon_msg)?;
     tls.flush()?;
 
@@ -1110,6 +1124,12 @@ fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &BigUint) -> 
 
 /// Configuration for connecting to IB.
 pub struct GatewayConfig {
+    /// What this session runs under, settled before it opened.
+    ///
+    /// Held per session rather than read from the process as it goes: a second
+    /// session in one process used to write its own settings where the first
+    /// session's reconnects would find them.
+    pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
     pub username: String,
     /// Wrapped in `Zeroizing` so the plaintext is wiped from memory on drop.
     pub password: Zeroizing<String>,
@@ -1472,7 +1492,10 @@ impl Gateway {
             r.username == config.username && r.paper == config.paper
         });
 
-        let hw_info = resume.map_or_else(session::get_hw_info, |r| r.hw_info.clone());
+        let hw_info = match resume {
+            Some(r) => r.hw_info.clone(),
+            None => session::get_hw_info(config.settings.hardware_id.as_deref()),
+        };
         // Tag 6266 carries `{jdkVer}/{platform}/{locale}/{dist}`. The locale
         // segment must be a canonical Java `Locale.toString()` value (e.g.
         // `en_US`, `fr`, `ja_JP`); bare `en` is rejected as `invalid twsInfo`.
@@ -1480,12 +1503,7 @@ impl Gateway {
         // the whole string for full control.
         let encoded = match resume {
             Some(r) => r.encoded.clone(),
-            None => std::env::var("IBX_ENCODED").unwrap_or_else(|_| {
-                match std::env::var("IBX_LOCALE") {
-                    Ok(loc) if !loc.is_empty() => format!("17.0.10.0.101/W/{loc}/G"),
-                    _ => IB_ENCODED.to_string(),
-                }
-            }),
+            None => config.settings.encoded.clone(),
         };
 
         // --- Phase 1: TLS + auth ---
@@ -1729,7 +1747,7 @@ impl Gateway {
         }
 
         // --- Phase 2: Auth server logon (over TLS) ---
-        let logon_msg = build_ccp_logon(&hw_info, &encoded, CCP_HEARTBEAT, 1);
+        let logon_msg = build_ccp_logon(&config.settings, &hw_info, &encoded, CCP_HEARTBEAT, 1);
         log::info!("Sending auth logon ({} bytes)", logon_msg.len());
         tls.write_all(&logon_msg)?;
         tls.flush()?;
@@ -1939,7 +1957,8 @@ impl Gateway {
         // to do. Asking for every one means naming a start far enough back to
         // cover what the venue still holds.
         let executions_today_only =
-            std::env::var("IBX_EXECUTION_REPORTS").as_deref() == Ok("today");
+            config.settings.execution_reports
+                == crate::api::settings::ExecutionReportScope::Today;
         let window_start = if executions_today_only {
             today_start.clone()
         } else {
@@ -2192,17 +2211,18 @@ impl Gateway {
             let token = &farm_token;
             let hw = &hw_info;
             let enc = &encoded;
+            let settings = config.settings.as_ref();
             let trading_handle = scope.spawn(move || {
-                connect_farm(&trading_host, &trading_farm, username, password,
+                connect_farm(settings, &trading_host, &trading_farm, username, password,
                     paper, ssid, token, hw, enc, Farm::MarketData)
             });
             let mktdata_handle = scope.spawn(move || {
-                connect_farm(&mktdata_host, &mktdata_farm, username, password,
+                connect_farm(settings, &mktdata_host, &mktdata_farm, username, password,
                     paper, ssid, token, hw, enc, Farm::Historical)
             });
             let secdef_handle = secdef.as_ref().map(|(secdef_host, secdef_farm)| {
                 scope.spawn(move || {
-                    connect_farm(secdef_host, secdef_farm, username, password,
+                    connect_farm(settings, secdef_host, secdef_farm, username, password,
                         paper, ssid, token, hw, enc, Farm::SecurityDefinition)
                 })
             });
@@ -2455,6 +2475,7 @@ impl Gateway {
     /// that happened to be running.
     pub fn reconnect_auth(&self, caller: CallerAuth) -> ReconnectAuth {
         ReconnectAuth {
+            settings: caller.settings,
             host: caller.host,
             username: caller.username,
             password: caller.password,
@@ -2769,7 +2790,9 @@ mod tests {
 
     #[test]
     fn build_ccp_logon_structure() {
-        let msg = build_ccp_logon("abc123|00:00:00:00:00:00", "17.0.10.0.101/W/en/G", 10, 1);
+        let msg = build_ccp_logon(
+            &Default::default(), "abc123|00:00:00:00:00:00", "17.0.10.0.101/W/en/G", 10, 1,
+        );
         let fields = fix_parse(&msg);
         assert_eq!(fields[&35], "A");
         assert_eq!(fields[&98], "0");
@@ -3018,6 +3041,7 @@ mod tests {
     #[test]
     fn gateway_config_fields() {
         let config = GatewayConfig {
+            settings: Default::default(),
             username: "user".to_string(),
             password: Zeroizing::new("pass".to_string()),
             host: "cdc1.ibllc.com".to_string(),
@@ -3034,6 +3058,7 @@ mod tests {
 
     fn auth_with(host: &str, trading_host: &str, trading_farm: &str) -> ReconnectAuth {
         ReconnectAuth {
+            settings: Default::default(),
             host: host.to_string(),
             username: String::new(),
             password: zeroize::Zeroizing::new(String::new()),

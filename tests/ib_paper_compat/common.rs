@@ -42,6 +42,7 @@ pub(super) fn get_config() -> Option<GatewayConfig> {
     };
     let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
     Some(GatewayConfig {
+        settings: Default::default(),
         username,
         password: zeroize::Zeroizing::new(password),
         host,
@@ -75,6 +76,7 @@ pub(super) static RECOVERY_AUTH: std::sync::OnceLock<gateway::ReconnectAuth> =
 /// Remember what a reconnect will need. Call once, after `Gateway::connect`.
 pub(super) fn remember_recovery_auth(gw: &gateway::Gateway, config: &GatewayConfig) {
     let _ = RECOVERY_AUTH.set(gw.reconnect_auth(gateway::CallerAuth {
+        settings: Default::default(),
         host: config.host.clone(),
         username: config.username.clone(),
         password: zeroize::Zeroizing::new(config.password.to_string()),

@@ -39,3 +39,25 @@ def test_a_misspelled_setting_is_refused():
         assert "timezon" in str(refused)
     else:
         raise AssertionError("a misspelled setting was accepted")
+
+
+def test_a_session_states_its_own_settings():
+    """Settings belong to the session that stated them, not to the process.
+
+    They used to be written into the process environment as a session opened,
+    so a second session in one process silently retargeted the first: whichever
+    connected last decided the time zone, the build, and where the market-data
+    connection went for both.
+    """
+    client = ibx.EClient(ibx.EWrapper())
+    # Refused before anything is sent, so a misspelling cannot open a session
+    # configured differently from the way it was written.
+    try:
+        client.connect(username="u", password="p", settings={"tiemzone": "UTC"})
+    except RuntimeError as refusal:
+        assert "no such setting: tiemzone" in str(refusal)
+    else:
+        raise AssertionError("a setting that is not a setting was accepted")
+
+    # And the process is not touched by a session stating one.
+    assert ibx.settings()["timezone"] is None
