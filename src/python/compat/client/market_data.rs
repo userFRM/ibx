@@ -114,11 +114,7 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
 
-        let tbt_type = match tick_type {
-            "Last" | "AllLast" => TbtType::Last,
-            "BidAsk" => TbtType::BidAsk,
-            _ => return Err(PyRuntimeError::new_err(format!("Unknown tick type: '{tick_type}'"))),
-        };
+        let tbt_type = TbtType::named(tick_type).map_err(PyRuntimeError::new_err)?;
 
         let shared = self.shared_state()?;
         Self::send_control(py, &tx, ControlCommand::RegisterInstrument {

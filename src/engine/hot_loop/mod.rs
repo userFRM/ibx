@@ -2726,7 +2726,7 @@ mod tests {
         hl.hmds.tbt_subscriptions.push(crate::engine::hot_loop::hmds::TbtSubscription {
             instrument: id,
             query_id: "AAPL".to_string(),
-            kind: TbtType::Last,
+            kind: TbtType::AllLast,
             caller_req_id: 0,
             venue_id: 0,
             min_tick: 0,

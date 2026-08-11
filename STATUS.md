@@ -39,7 +39,7 @@ answered, and what it answered was about the subscription.
 | Historical bars | ✅ live | Bars returned for Dutch, British, Hong Kong, Australian and American listings and an American index, in one sweep. A contract named rather than identified is looked up first, so a request carrying what a caller wrote down is answered like one carrying the venue's own id |
 | Historical ticks, schedules | ✅ live | Ticks and trading schedules answered; a series this client does not know is refused rather than turned into trades |
 | Tick-by-tick quotes | ✅ live | Currencies and American listings, several streams at once, each record naming its own request |
-| Tick-by-tick trades | ✅ live | A thousand and twenty-seven trades on a busy listing, priced to the cent and sized in the shares the venue printed |
+| Tick-by-tick trades | ✅ live | A thousand and twenty-seven trades on a busy listing, priced to the cent and sized in the shares the venue printed. The exchange's own trades and every trade including those reported away from it are two streams, asked for separately |
 | Trading halts | ✅ live | Contracts that are trading are reported trading, read from the mask and the named status together |
 | Tick attributes | ✅ live | Reported-away-from-the-exchange varies trade by trade, as it does for an off-exchange facility |
 
@@ -114,7 +114,7 @@ carry them. None is read by nothing.
 Settled only by a live capture, recorded so nobody re-derives them:
 
 - The one number an option model needs that no tick states is fitted, not read. The venue does serve its own — a series named `OptExInterestRate`, which it recognises and refuses only the query shape for, answering `QueryType BarData(BarDataIntraday) is not supported for tick type`. Asked as a tick series instead it is accepted, and answers so far are empty for the contracts tried. Until then the fitted number absorbs whatever the venue's model does that this one does not, which is visible: two contracts on one underlying and one expiry wanted five per cent and twenty
-- A crypto's tick-by-tick stream is acknowledged, with both its increments stated, and the venue then sends nothing on it. Asked for alone, over minutes, on a contract whose top of book is moving. Not this client's doing, and not yet explained
+- A crypto's tick-by-tick stream is acknowledged, with both its increments stated, and the venue then sends nothing on it. In the same session and on the same contract, the top of book quotes continuously and a historical tick request is answered, while an American share and a currency pair stream ticks throughout. So the venue holds crypto ticks and does not stream them
 - The trading-status timestamp's unit, and the fourth number the venue sends with it
 
 ---
