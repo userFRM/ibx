@@ -54,7 +54,7 @@ answered, and what it answered was about the subscription.
 | Brackets, OCA, combos | ✅ live | A combination states its legs and, where the caller priced them separately, each leg's own price. The side convention is settled by the venue: a call spread with the nearer strike bought is priced, and the same two legs the other way round is refused as one that can only lose |
 | Conditions | ✅ live | All six kinds — price, volume, percent change, margin, execution and time — placed on a real order through the Python client and held by the venue until their condition. An execution condition missing any of its three parts is refused here, because the venue answers that one by holding the order inactive and naming a tag |
 | Executions and fills | ✅ live | A fill reported and the position reconciled against it. The report keeps every field the venue states, named or not. The session asks for them within the window the venue answers, which it requires |
-| Option exercise / lapse | 🛠 offline | Encoded and tested here; exercising a real option is not something to do on a whim |
+| Option exercise / lapse | ✅ live | Both sent for a real option contract this account does not hold, and the venue answers each by name: you have not got the number of options requested to be exercised. That answer reaches the caller |
 
 ## Account
 
