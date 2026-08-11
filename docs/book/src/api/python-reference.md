@@ -897,10 +897,8 @@ def req_news_article(req_id, provider_code, article_id, news_article_options=Vec
 
 #### `req_historical_news`
 
-Request historical news.
-
 ```python
-def req_historical_news(req_id, con_id, provider_codes, start_date_time, end_date_time, total_results, historical_news_options=Vec::new()))
+def req_historical_news(req_id, con_id, provider_codes, start_date_time, end_date_time, total_results, historical_news_options)
 ```
 
 | Parameter | Type | Description |
