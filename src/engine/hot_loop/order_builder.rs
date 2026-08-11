@@ -433,7 +433,7 @@ pub(crate) fn drain_and_send_orders(
                     .map(|id| id.local_symbol)
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| symbol.clone());
-                let (sec_type_str, _destination) = orig
+                let (sec_type_str, destination) = orig
                     .map(|o| context.market.order_routing(o.instrument))
                     .unwrap_or_else(|| ("STK".to_string(), "SMART".to_string()));
                 let ord_type_str = crate::types::ord_type_fix_str(ord_type).to_string();
@@ -447,7 +447,7 @@ pub(crate) fn drain_and_send_orders(
                     .map(|c| c.to_string())
                     .unwrap_or_default();
 
-                // Lean modify message — omit identity tags (6121, 6119, 231, 100, 15, 204)
+                // Lean modify message — omit identity tags (6121, 6119, 231, 15, 204)
                 let mut fields: Vec<(u32, &str)> = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_ORDER_REPLACE),
                     (fix::TAG_SENDING_TIME, &now),
@@ -470,7 +470,9 @@ pub(crate) fn drain_and_send_orders(
                 if outside_rth {
                     fields.push((6433, "1"));
                 }
-                let rest: [(u32, &str); 11] = [
+                let rest: [(u32, &str); 13] = [
+                    (100, &destination),  // where the resting order is working
+                    (6210, &destination), // and its second statement
                     (38, &qty_str),       // OrderQty
                     (54, side_str),       // Side
                     (40, &ord_type_str),  // OrdType
@@ -2143,6 +2145,12 @@ mod tests {
             Some(format_price(149 * crate::types::PRICE_SCALE).to_string()),
             "the trigger the caller stated: {msg}"
         );
+        // Where the resting order is working. Left off, the venue compares the
+        // replace against the order it holds and refuses it as a mismatch on
+        // this field, naming a tag number the caller has never heard of; the
+        // order then sits inactive and the caller's own cancel finds nothing.
+        assert_eq!(tag("100=").as_deref(), Some("BEST"), "the destination: {msg}");
+        assert_eq!(tag("6210=").as_deref(), Some("BEST"), "and its second statement: {msg}");
     }
 
     /// The trigger is a price and lands on the instrument's grid like any
@@ -3194,19 +3202,19 @@ mod modify_wire_tests {
 
     /// ibx#247: the replace asserted 6433=1 unconditionally, so an RTH-only
     /// order was opted into the extended session by its first modify. Pins the
-    /// 6122/6433/38 neighbourhood in both polarities — presence and captured
-    /// position when the caller sets the flag, absence when it does not.
+    /// flag's captured position — straight after 6122, ahead of where the
+    /// order is working — in both polarities.
     #[test]
     fn modify_emits_outside_rth_only_when_the_caller_set_it() {
         let on = replace_bytes(true);
         assert!(
-            on.contains("|6122=c|6433=1|38=50|"),
-            "6433 must keep its captured position between 6122 and 38: {on}"
+            on.contains("|6122=c|6433=1|100="),
+            "6433 must keep its captured position after 6122: {on}"
         );
 
         let off = replace_bytes(false);
         assert!(!off.contains("|6433="), "an RTH-only order must not assert 6433: {off}");
-        assert!(off.contains("|6122=c|38=50|"), "the rest of the message is unchanged: {off}");
+        assert!(off.contains("|6122=c|100="), "the rest of the message is unchanged: {off}");
     }
 
     /// ibx#324: a stop has no limit leg, so the price a caller supplies to a
