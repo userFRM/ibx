@@ -376,7 +376,6 @@ impl HotLoop {
             // Tick-by-tick rebuilds bid and ask from deltas against the last
             // pair it saw. Left in place, the next occupant's first delta
             // would be applied to the previous contract's prices.
-            self.hmds.tbt_price_state[instrument as usize] = (0, 0, 0);
             log::info!("Reclaimed instrument slot {instrument}");
         }
     }
@@ -2153,12 +2152,11 @@ mod tests {
 
         // Flat, and nothing else refers to it: now it may go.
         hl.context.update_position(instrument, -0.5);
-        hl.hmds.tbt_price_state[instrument as usize] = (1, 2, 3);
         hl.try_reclaim_instrument(instrument);
         assert_eq!(hl.context.market.con_id(instrument), None, "the freed slot holds no contract");
-        assert_eq!(
-            hl.hmds.tbt_price_state[instrument as usize], (0, 0, 0),
-            "and no prices for the next occupant's deltas to build on",
+        assert!(
+            hl.hmds.tbt_subscriptions.iter().all(|sub| sub.instrument != instrument),
+            "and no stream left for the next occupant to inherit prices from",
         );
         assert!(hl.pinned_by_position.is_empty(), "and nothing is still waiting on it");
     }

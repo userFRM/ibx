@@ -49,7 +49,9 @@ def _answers_a_failure(body: str) -> bool:
 
 def test_a_call_that_cannot_be_served_answers_on_both_clients():
     rust = _methods(r"\n    pub fn ([a-z_0-9]+)\(", "src/api/client/*.rs")
-    python = _methods(r"\n    (?:pub\(crate\) )?fn ([a-z_0-9]+)\(", "src/python/compat/client/*.rs")
+    python = _methods(
+        r"\n    (?:pub |pub\(crate\) )?fn ([a-z_0-9]+)\(", "src/python/compat/client/*.rs"
+    )
 
     differs = sorted(
         name

@@ -1500,10 +1500,10 @@ pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), String>
 
 #### `calculate_implied_volatility`
 
-Not served. Reports why on the error callback.
+Not served. Reports why on the error callback. What volatility a price implies, under the venue's own model. This protocol carries no request for it — the counterpart works it out in its own process — so it is worked out here, anchored to what the venue last said its own model made of this contract. Where it has said nothing, nothing is answered: a number from a rate nobody stated would be this library's invention.
 
 ```rust
-pub fn calculate_implied_volatility( &self, req_id: i64, _contract: &super::Contract, _option_price: f64, _under_price: f64, )
+pub fn calculate_implied_volatility( &self, req_id: i64, contract: &super::Contract, option_price: f64, under_price: f64, )
 ```
 
 | Parameter | Type | Description |
@@ -1517,10 +1517,10 @@ pub fn calculate_implied_volatility( &self, req_id: i64, _contract: &super::Cont
 
 #### `calculate_option_price`
 
-Not served. Reports why on the error callback.
+What price a volatility implies, under that same model.
 
 ```rust
-pub fn calculate_option_price( &self, req_id: i64, _contract: &super::Contract, _volatility: f64, _under_price: f64, )
+pub fn calculate_option_price( &self, req_id: i64, contract: &super::Contract, volatility: f64, under_price: f64, )
 ```
 
 | Parameter | Type | Description |

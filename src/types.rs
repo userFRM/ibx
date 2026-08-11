@@ -256,7 +256,7 @@ pub enum HeldElsewhere {
 ///
 /// A field the venue did not state is `f64::MAX`, the reference client's own
 /// mark for a value that was not sent. Zero is a real greek.
-#[derive(Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct OptionComputation {
     pub instrument: InstrumentId,
     pub implied_vol: f64,
