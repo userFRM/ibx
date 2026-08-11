@@ -198,7 +198,7 @@ const _: () = assert!(
 /// is measured from the last price, not from nothing. Held as a whole number of
 /// ticks rather than as a price, so a session's worth of additions cannot drift
 /// the way repeatedly adding fractions would.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RunningPrice {
     last_ticks: i64,
     bid_ticks: i64,

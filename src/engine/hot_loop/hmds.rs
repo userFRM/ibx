@@ -5,7 +5,7 @@ use crate::config::chrono_free_timestamp;
 use crate::protocol::connection::{Connection, Frame};
 use crate::protocol::fix;
 use crate::protocol::fixcomp;
-use crate::types::{InstrumentId, TbtType, MAX_INSTRUMENTS};
+use crate::types::{InstrumentId, TbtType};
 use std::sync::mpsc::SyncSender;
 
 use super::{HeartbeatState, emit, clone_for_event, find_body_after_tag, extract_raw_tag};
@@ -50,7 +50,6 @@ pub(crate) struct TbtSubscription {
 pub(crate) struct HmdsState {
     pub(crate) next_tbt_req_id: u32,
     pub(crate) tbt_subscriptions: Vec<TbtSubscription>,
-    pub(crate) tbt_price_state: [(i64, i64, i64); MAX_INSTRUMENTS],
     pub(crate) next_hmds_query_id: u32,
     pub(crate) disconnected: bool,
     /// In-flight historical bar queries: (query_id, req_id, idle deadline).
@@ -171,7 +170,6 @@ impl HmdsState {
         Self {
             next_tbt_req_id: 1,
             tbt_subscriptions: Vec::new(),
-            tbt_price_state: [(0, 0, 0); MAX_INSTRUMENTS],
             next_hmds_query_id: 1000,
             disconnected: false,
             pending_historical: Vec::new(),
@@ -229,7 +227,6 @@ impl HmdsState {
             // Prices arrive as deltas against the last pair seen. The pair the
             // dead session left would have the new session's first delta added
             // to it, and every price after that would carry the error.
-            self.tbt_price_state[instrument as usize] = (0, 0, 0);
             match market.con_id(instrument) {
                 Some(con_id) => {
                     let (stype, venue) = market.order_routing(instrument);
@@ -943,7 +940,6 @@ impl HmdsState {
             log::info!("Sent TBT unsubscribe: instrument={instrument} ticker_id={ticker_id}");
             hb.last_hmds_sent = Instant::now();
         }
-        self.tbt_price_state[instrument as usize] = (0, 0, 0);
     }
 
     pub(crate) fn send_historical_request_ex(
@@ -1578,11 +1574,11 @@ mod tests {
         );
 
         assert!(!hmds.disconnected, "the transport is live again");
-        assert_eq!(
-            hmds.tbt_price_state[instrument as usize], (0, 0, 0),
-            "the dead session's prices go with it, or its last pair takes the next delta",
-        );
         assert_eq!(hmds.tbt_subscriptions.len(), 1, "the resolvable stream is back");
+        assert_eq!(
+            hmds.tbt_subscriptions[0].running, Default::default(),
+            "the dead session's prices go with it, or its last pair takes the next move",
+        );
         assert_eq!(hmds.tbt_subscriptions[0].instrument, instrument);
         assert_ne!(hmds.tbt_subscriptions[0].query_id, "tbt_0", "under a new id, not the dead session's");
     }

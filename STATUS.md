@@ -57,7 +57,7 @@ Legend: **✅ working** · **🔬 built, not yet proved against a live venue** �
 | Option chains, symbol search | ✅ | |
 | Scanners, news, fundamentals | ✅ | |
 | Corporate-events calendar | ✅ | Live: the event types arrive, 179 KB of them, and an events query is answered |
-| Implied volatility, option price | ⛔ | Not carried by this protocol at all: the counterpart solves both in its own process from a pricing model it ships |
+| Implied volatility, option price | ✅ | Answered from the venue's own model rather than asked for — this protocol carries no request, and the counterpart computes both in its own process. Live: this client reproduces the venue's own option price exactly, to the cent, on its own numbers |
 
 ---
 

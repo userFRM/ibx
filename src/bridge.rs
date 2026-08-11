@@ -291,6 +291,9 @@ pub struct MarketDataState {
     tick_news: Mutex<Vec<TickNews>>,
     news_bulletins: Mutex<Vec<NewsBulletin>>,
     option_computations: Mutex<Vec<crate::types::OptionComputation>>,
+    /// The last statement the venue made of its own model, per contract, kept
+    /// rather than only handed over.
+    last_option_model: Mutex<std::collections::HashMap<crate::types::InstrumentId, crate::types::OptionComputation>>,
     /// Subscriptions the venue was never able to be asked for, and why.
     subscription_failures: Mutex<Vec<(crate::types::InstrumentId, String)>>,
     /// What the venue has said went wrong, in its own words.
@@ -320,6 +323,7 @@ impl MarketDataState {
             tick_news: Mutex::new(Vec::with_capacity(32)),
             news_bulletins: Mutex::new(Vec::with_capacity(16)),
             option_computations: Mutex::new(Vec::with_capacity(16)),
+            last_option_model: Mutex::new(std::collections::HashMap::new()),
             subscription_failures: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
             venue_time: Mutex::new(None),
@@ -474,7 +478,17 @@ impl MarketDataState {
         self.news_bulletins.lock().unwrap().push(bulletin);
     }
 
+    /// What the venue last said its own model made of a contract.
+    ///
+    /// Kept as well as delivered. Delivered alone it is gone the moment a
+    /// caller reads it, and answering "what would this be worth at another
+    /// volatility" needs the venue's own statement still to hand.
+    pub fn option_model(&self, instrument: crate::types::InstrumentId) -> Option<crate::types::OptionComputation> {
+        self.last_option_model.lock().unwrap().get(&instrument).copied()
+    }
+
     #[doc(hidden)] pub fn push_option_computation(&self, comp: crate::types::OptionComputation) {
+        self.last_option_model.lock().unwrap().insert(comp.instrument, comp);
         self.option_computations.lock().unwrap().push(comp);
     }
 

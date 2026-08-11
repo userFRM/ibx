@@ -6,11 +6,6 @@ use crate::api::wrapper::Wrapper;
 
 use super::EClient;
 
-/// Why neither option calculation can be served here.
-const OPTION_CALCULATION_UNSERVED: &str =
-    "this protocol carries no request that takes a caller-supplied option price or \
-     volatility for the venue to work back from, so neither an implied volatility nor \
-     an option price can be asked of it";
 
 impl EClient {
     // ── Smart Components ──
@@ -85,19 +80,107 @@ impl EClient {
     // nothing at all.
 
     /// Not served. Reports why on the error callback.
+    /// What volatility a price implies, under the venue's own model.
+    ///
+    /// This protocol carries no request for it — the counterpart works it out
+    /// in its own process — so it is worked out here, anchored to what the
+    /// venue last said its own model made of this contract. Where it has said
+    /// nothing, nothing is answered: a number from a rate nobody stated would
+    /// be this library's invention.
     pub fn calculate_implied_volatility(
-        &self, req_id: i64, _contract: &super::Contract,
-        _option_price: f64, _under_price: f64,
+        &self, req_id: i64, contract: &super::Contract,
+        option_price: f64, under_price: f64,
     ) {
-        self.report_reason(req_id, OPTION_CALCULATION_UNSERVED);
+        match self.solve_option(contract, |terms, model| {
+            crate::control::option_model::implied_volatility(
+                terms, model, option_price, under_price,
+            )
+        }) {
+            Ok(volatility) => self.shared.market.push_option_computation(
+                crate::types::OptionComputation {
+                    instrument: req_id.max(0) as u32,
+                    implied_vol: volatility,
+                    opt_price: option_price,
+                    und_price: under_price,
+                    ..Default::default()
+                },
+            ),
+            Err(why) => self.report_reason(req_id, &why),
+        }
     }
 
-    /// Not served. Reports why on the error callback.
+    /// What price a volatility implies, under that same model.
     pub fn calculate_option_price(
-        &self, req_id: i64, _contract: &super::Contract,
-        _volatility: f64, _under_price: f64,
+        &self, req_id: i64, contract: &super::Contract,
+        volatility: f64, under_price: f64,
     ) {
-        self.report_reason(req_id, OPTION_CALCULATION_UNSERVED);
+        match self.solve_option(contract, |terms, model| {
+            crate::control::option_model::option_price(terms, model, volatility, under_price)
+        }) {
+            Ok(price) => self.shared.market.push_option_computation(
+                crate::types::OptionComputation {
+                    instrument: req_id.max(0) as u32,
+                    implied_vol: volatility,
+                    opt_price: price,
+                    und_price: under_price,
+                    ..Default::default()
+                },
+            ),
+            Err(why) => self.report_reason(req_id, &why),
+        }
+    }
+
+    /// The contract's terms and the venue's own model for it, or why neither
+    /// question can be answered.
+    fn solve_option(
+        &self,
+        contract: &super::Contract,
+        solve: impl Fn(
+            crate::control::option_model::OptionTerms,
+            crate::control::option_model::VenueModel,
+        ) -> Option<f64>,
+    ) -> Result<f64, String> {
+        let instrument = self
+            .instrument_of(contract.con_id)
+            .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
+        let stated = self
+            .shared
+            .market
+            .option_model(instrument)
+            .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
+        let years = years_to_expiry(&contract.last_trade_date_or_contract_month)
+            .ok_or_else(|| "the contract states no expiry to measure from".to_string())?;
+        let terms = crate::control::option_model::OptionTerms {
+            strike: contract.strike,
+            years_to_expiry: years,
+            is_call: contract.right.eq_ignore_ascii_case("C")
+                || contract.right.eq_ignore_ascii_case("CALL"),
+        };
+        // What the venue did not state is not a number. It writes the largest
+        // double where it has nothing to say, which this client passes on
+        // as-is because the reference client does — so it has to be read back
+        // as silence here rather than taken for a value. Taken for one, a
+        // contract with no dividend had the largest double in the world
+        // subtracted from its underlying.
+        let stated_or_none = |v: f64| (v.is_finite() && v != f64::MAX).then_some(v);
+        let model = crate::control::option_model::VenueModel {
+            volatility: stated_or_none(stated.implied_vol)
+                .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,
+            option_price: stated_or_none(stated.opt_price)
+                .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,
+            underlying_price: stated_or_none(stated.und_price)
+                .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,
+            // No dividend stated is no dividend, which is what it means.
+            present_value_of_dividends: stated_or_none(stated.pv_dividend).unwrap_or(0.0),
+        };
+        solve(terms, model).ok_or_else(|| {
+            "no volatility fits this price under the venue's own model for this contract. An \
+             option far enough into the money is worth its intrinsic value and little else, and \
+             its price then hardly moves with volatility at all — so there is no one volatility \
+             the price implies, and naming one would be picking a number rather than solving \
+             for it"
+                .to_string()
+        })
     }
 
     /// Nothing was started, so there is nothing to stop.
@@ -199,6 +282,42 @@ fn advisor_partition(fa_data_type: i32) -> Option<&'static str> {
     }
 }
 
+/// Why neither question can be answered without the venue having spoken.
+const OPTION_MODEL_UNSTATED: &str =
+    "the venue has not stated its own model for this contract on this session. Ask for the \
+     option's model first — a market-data subscription on the option carries it — and both \
+     questions can then be answered against what it said";
+
+/// Years between now and a stated expiry, as `yyyymmdd`.
+fn years_to_expiry(expiry: &str) -> Option<f64> {
+    let digits: String = expiry.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
+    if digits.len() != 8 {
+        return None;
+    }
+    let year: i64 = digits[0..4].parse().ok()?;
+    let month: i64 = digits[4..6].parse().ok()?;
+    let day: i64 = digits[6..8].parse().ok()?;
+    let expiry_day = days_from_civil(year, month, day);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let today = now / 86_400;
+    let days = expiry_day - today;
+    (days > 0).then(|| days as f64 / 365.0)
+}
+
+/// Days since the epoch for a civil date. Written out rather than pulled in:
+/// one date, once, and a dependency for it would be a dependency for good.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 #[cfg(test)]
 mod advisor_partition_tests {
     use super::advisor_partition;
@@ -218,5 +337,35 @@ mod advisor_partition_tests {
         for unknown in [0, 4, -1, i32::MAX] {
             assert_eq!(advisor_partition(unknown), None, "{unknown} was taken");
         }
+    }
+}
+
+#[cfg(test)]
+mod expiry_tests {
+    use super::{days_from_civil, years_to_expiry};
+
+    /// A known date, against a known day count. Written out rather than pulled
+    /// in, so it is checked rather than trusted.
+    #[test]
+    fn a_civil_date_counts_the_days_since_the_epoch() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2000, 3, 1), 11017);
+        assert_eq!(days_from_civil(2026, 1, 1), 20454);
+    }
+
+    /// An expiry already past is no expiry to measure to.
+    #[test]
+    fn an_expiry_in_the_past_measures_nothing() {
+        assert!(years_to_expiry("19990101").is_none());
+        assert!(years_to_expiry("").is_none());
+        assert!(years_to_expiry("2026").is_none());
+    }
+
+    /// One ahead measures the years between, and a longer one measures more.
+    #[test]
+    fn an_expiry_ahead_measures_the_years_between() {
+        let near = years_to_expiry("20301231").expect("a date ahead");
+        let far = years_to_expiry("20351231").expect("a date further ahead");
+        assert!(near > 0.0 && far > near, "{near} then {far}");
     }
 }
