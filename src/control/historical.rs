@@ -140,6 +140,36 @@ impl BarSize {
         matches!(self, Self::Sec1 | Self::Sec5 | Self::Min5 | Self::Hour1 | Self::Day1)
     }
 
+    /// How long one of these lasts.
+    ///
+    /// What a bar covers, so a bar still forming can be folded from the
+    /// five-second bars the venue streams.
+    pub fn seconds(&self) -> u32 {
+        match self {
+            Self::Sec1 => 1,
+            Self::Sec5 => 5,
+            Self::Sec10 => 10,
+            Self::Sec15 => 15,
+            Self::Sec30 => 30,
+            Self::Min1 => 60,
+            Self::Min2 => 120,
+            Self::Min3 => 180,
+            Self::Min5 => 300,
+            Self::Min10 => 600,
+            Self::Min15 => 900,
+            Self::Min20 => 1_200,
+            Self::Min30 => 1_800,
+            Self::Hour1 => 3_600,
+            Self::Hour2 => 7_200,
+            Self::Hour3 => 10_800,
+            Self::Hour4 => 14_400,
+            Self::Hour8 => 28_800,
+            Self::Day1 => 86_400,
+            Self::Week1 => 604_800,
+            Self::Month1 => 2_592_000,
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Sec1 => "1 secs",

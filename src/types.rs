@@ -1441,7 +1441,7 @@ pub enum HistoricalTickData {
 }
 
 /// A real-time 5-second bar.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RealTimeBar {
     pub timestamp: u32,
     pub open: f64,
