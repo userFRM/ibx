@@ -140,7 +140,7 @@ impl EClient {
 
     /// Request option chain parameters.
     #[pyo3(signature = (req_id, underlying_symbol, fut_fop_exchange="", underlying_sec_type="STK", underlying_con_id=0))]
-    fn req_sec_def_opt_params(
+    pub(crate) fn req_sec_def_opt_params(
         &self,
         py: Python<'_>,
         req_id: i64,

@@ -177,10 +177,34 @@ impl Contract {
     }
 }
 
+
+/// Set a field on a freshly made object from what a caller named it.
+///
+/// The reference client names a contract's fields one way and this binding
+/// holds them under both, so a program written against that client can set
+/// them by the names it already uses. The constructor took only one spelling,
+/// which meant the very first line of a ported program — a contract with a
+/// `secType` on it — failed before anything reached the venue.
+fn set_from_keywords(
+    object: &Bound<'_, PyAny>,
+    keywords: Option<&Bound<'_, pyo3::types::PyDict>>,
+) -> PyResult<()> {
+    let Some(keywords) = keywords else { return Ok(()) };
+    for (name, value) in keywords.iter() {
+        let name: String = name.extract()?;
+        if object.setattr(name.as_str(), &value).is_err() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "no such field: {name}",
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[pymethods]
 impl Contract {
     #[new]
-    #[pyo3(signature = (con_id=0, symbol="".to_string(), sec_type="STK".to_string(), exchange="SMART".to_string(), currency="USD".to_string(), last_trade_date_or_contract_month="".to_string(), strike=0.0, right="".to_string(), multiplier="".to_string(), local_symbol="".to_string(), primary_exchange="".to_string(), trading_class="".to_string()))]
+    #[pyo3(signature = (con_id=0, symbol="".to_string(), sec_type="STK".to_string(), exchange="SMART".to_string(), currency="USD".to_string(), last_trade_date_or_contract_month="".to_string(), strike=0.0, right="".to_string(), multiplier="".to_string(), local_symbol="".to_string(), primary_exchange="".to_string(), trading_class="".to_string(), **keywords))]
     fn new(
         con_id: i64,
         symbol: String,
@@ -194,8 +218,10 @@ impl Contract {
         local_symbol: String,
         primary_exchange: String,
         trading_class: String,
-    ) -> Self {
-        Self {
+        keywords: Option<&Bound<'_, pyo3::types::PyDict>>,
+        py: Python<'_>,
+    ) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self {
             con_id,
             symbol,
             sec_type,
@@ -209,7 +235,10 @@ impl Contract {
             primary_exchange,
             trading_class,
             ..Default::default()
-        }
+        })?;
+        // And whatever else the caller named, under either spelling.
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
     }
 
     fn __repr__(&self) -> String {
@@ -927,7 +956,7 @@ impl Order {
         display_size=0, min_qty=0, hidden=false, good_after_time="".to_string(),
         good_till_date="".to_string(), oca_group="".to_string(), trailing_percent=0.0,
         algo_strategy="".to_string(), what_if=false, cash_qty=0.0, parent_id=0,
-        transmit=true
+        transmit=true, **keywords
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -951,8 +980,10 @@ impl Order {
         cash_qty: f64,
         parent_id: i64,
         transmit: bool,
-    ) -> Self {
-        Self {
+            keywords: Option<&Bound<'_, pyo3::types::PyDict>>,
+        py: Python<'_>,
+    ) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self {
             order_id,
             action,
             total_quantity,
@@ -975,7 +1006,10 @@ impl Order {
             parent_id,
             transmit,
             ..Default::default()
-        }
+        })?;
+        // And whatever else the caller named, under either spelling.
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
     }
 
     fn __repr__(&self) -> String {
@@ -2706,6 +2740,7 @@ impl DepthMktDataDescriptionPy {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Contract>()?;
     m.add_class::<Order>()?;
+    m.add_class::<OptionChain>()?;
     m.add_class::<TagValue>()?;
     m.add_class::<OrderState>()?;
     m.add_class::<OrderAllocation>()?;
@@ -2946,5 +2981,35 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+}
+
+/// One venue's option chain for an underlying, as the client this follows
+/// hands it over: the venue, the class it trades under, what one contract
+/// covers, and every expiry and strike it lists.
+#[pyclass(get_all, set_all, skip_from_py_object)]
+#[derive(Clone, Default)]
+pub struct OptionChain {
+    pub exchange: String,
+    #[pyo3(name = "underlyingConId")]
+    pub underlying_con_id: i64,
+    #[pyo3(name = "tradingClass")]
+    pub trading_class: String,
+    pub multiplier: String,
+    pub expirations: Vec<String>,
+    pub strikes: Vec<f64>,
+}
+
+#[pymethods]
+impl OptionChain {
+    fn __repr__(&self) -> String {
+        format!(
+            "OptionChain(exchange='{}', tradingClass='{}', multiplier='{}', {} expirations, {} strikes)",
+            self.exchange,
+            self.trading_class,
+            self.multiplier,
+            self.expirations.len(),
+            self.strikes.len(),
+        )
     }
 }

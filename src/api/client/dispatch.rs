@@ -423,7 +423,7 @@ impl EClient {
         }
 
         // Option chain → security_definition_option_parameter + _end
-        for (req_id, underlying_con_id, scopes) in self.shared.reference.drain_option_params() {
+        for (req_id, underlying_con_id, scopes) in self.shared.reference.drain_option_params_for_dispatch() {
             for scope in &scopes {
                 wrapper.security_definition_option_parameter(
                     req_id as i64, &scope.exchange, underlying_con_id, &scope.trading_class,

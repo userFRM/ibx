@@ -988,6 +988,14 @@ impl ReferenceState {
         Self::take_one(&self.matching_symbols, req_id)
     }
 
+    /// The option chains answered for one request.
+    pub fn take_option_params_for(&self, req_id: u32) -> Option<(i64, Vec<OptionChainScope>)> {
+        let mut held = self.option_params.lock().unwrap();
+        let at = held.iter().position(|(id, ..)| *id == req_id)?;
+        let (_, underlying, scopes) = held.remove(at);
+        Some((underlying, scopes))
+    }
+
     pub fn take_histogram_for(&self, req_id: u32) -> Option<Vec<HistogramEntry>> {
         Self::take_one(&self.histogram_data, req_id)
     }
@@ -1049,6 +1057,25 @@ impl ReferenceState {
 
     pub fn drain_option_params(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
         self.option_params.lock().unwrap().drain(..).collect()
+    }
+
+    /// The chains meant for a callback, leaving those a caller is waiting on.
+    ///
+    /// Draining everything hands an answering call's own answer to the
+    /// callback pump instead, and the call then waits out its timeout for
+    /// something that has already been delivered somewhere else.
+    pub fn drain_option_params_for_dispatch(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
+        let mut held = self.option_params.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < held.len() {
+            if Self::is_ask_id(held[i].0) {
+                i += 1;
+            } else {
+                out.push(held.remove(i));
+            }
+        }
+        out
     }
 
     pub fn drain_scanner_params(&self) -> Vec<String> {

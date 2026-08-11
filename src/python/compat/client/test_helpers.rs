@@ -279,7 +279,12 @@ impl EClient {
         let shared = self.shared_state()?;
         let ps = PRICE_SCALE as f64;
         shared.market.push_tbt_trade(TbtTrade {
-            req_id: 0, instrument, price: (price * ps) as i64, size,
+            // A size is held the way every size is held, so what a test
+            // pushes reads back as the number of shares it named.
+            req_id: instrument as i64,
+            instrument,
+            price: (price * ps) as i64,
+            size: size * crate::types::QTY_SCALE,
             exchange: exchange.to_string(), conditions: String::new(), timestamp: 12345,
             past_limit: false,
             unreported: false,
@@ -295,9 +300,12 @@ impl EClient {
         let shared = self.shared_state()?;
         let ps = PRICE_SCALE as f64;
         shared.market.push_tbt_quote(TbtQuote {
-            req_id: 0, instrument,
+            req_id: instrument as i64,
+            instrument,
             bid: (bid * ps) as i64, ask: (ask * ps) as i64,
-            bid_size, ask_size, timestamp: 12345,
+            bid_size: bid_size * crate::types::QTY_SCALE,
+            ask_size: ask_size * crate::types::QTY_SCALE,
+            timestamp: 12345,
             bid_past_low: false,
             ask_past_high: false,
         });

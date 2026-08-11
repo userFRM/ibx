@@ -490,7 +490,7 @@ impl EClient {
         }
 
         // Drain option chains -> securityDefinitionOptionParameter + ...End
-        let option_params = shared.reference.drain_option_params();
+        let option_params = shared.reference.drain_option_params_for_dispatch();
         for (req_id, underlying_con_id, scopes) in option_params {
             for scope in &scopes {
                 let expirations = pyo3::types::PyList::new(py, &scope.expirations)?;
