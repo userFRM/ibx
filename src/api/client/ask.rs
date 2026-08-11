@@ -79,6 +79,15 @@ pub struct OptionChain {
     pub strikes: Vec<f64>,
 }
 
+/// One headline the venue holds, and what an article request needs to read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Headline {
+    pub time: String,
+    pub provider_code: String,
+    pub article_id: String,
+    pub headline: String,
+}
+
 /// A holding, as the account states it.
 #[derive(Debug, Clone)]
 pub struct PositionRow {
@@ -249,6 +258,213 @@ impl EClient {
             req_id, &underlying.symbol, "", &underlying.sec_type, underlying.con_id,
         )?;
         self.wait_for(&mut collector, &state, &format!("the option chain on {}", underlying.symbol))
+    }
+
+    /// The earliest moment the venue holds data for a contract.
+    ///
+    /// The same question `req_head_time_stamp` asks.
+    pub fn head_timestamp(
+        &self, contract: &Contract, what_to_show: &str, use_rth: bool,
+    ) -> Result<String, String> {
+        struct Head { req_id: i64, state: Arc<Mutex<Pending<String>>> }
+        impl Wrapper for Head {
+            fn head_timestamp(&mut self, req_id: i64, head_timestamp: &str) {
+                if req_id == self.req_id {
+                    let mut s = self.state.lock().unwrap();
+                    s.rows.push(head_timestamp.to_string());
+                    s.done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Head { req_id, state: Arc::clone(&state) };
+        self.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1)?;
+        let what = format!("the first data the venue holds for {}", contract.symbol);
+        Ok(self.wait_for(&mut collector, &state, &what)?.remove(0))
+    }
+
+    /// Contracts whose name or symbol matches a pattern.
+    pub fn matching_symbols(
+        &self, pattern: &str,
+    ) -> Result<Vec<crate::api::types::ContractDescription>, String> {
+        struct Matches {
+            req_id: i64,
+            state: Arc<Mutex<Pending<crate::api::types::ContractDescription>>>,
+        }
+        impl Wrapper for Matches {
+            fn symbol_samples(
+                &mut self, req_id: i64, descriptions: &[crate::api::types::ContractDescription],
+            ) {
+                if req_id == self.req_id {
+                    let mut s = self.state.lock().unwrap();
+                    s.rows.extend(descriptions.iter().cloned());
+                    s.done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Matches { req_id, state: Arc::clone(&state) };
+        self.req_matching_symbols(req_id, pattern)?;
+        self.wait_for(&mut collector, &state, &format!("a search for {pattern}"))
+    }
+
+    /// The headlines the venue holds for a contract.
+    ///
+    /// Each is the time, the provider's code, the article's id and the
+    /// headline itself. Reading an article needs the first two.
+    pub fn news_headlines(
+        &self, con_id: i64, provider_codes: &str,
+        start_date_time: &str, end_date_time: &str, total_results: i32,
+    ) -> Result<Vec<Headline>, String> {
+        struct Headlines { req_id: i64, state: Arc<Mutex<Pending<Headline>>> }
+        impl Wrapper for Headlines {
+            fn historical_news(
+                &mut self, req_id: i64, time: &str, provider_code: &str,
+                article_id: &str, headline: &str,
+            ) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().rows.push(Headline {
+                        time: time.to_string(),
+                        provider_code: provider_code.to_string(),
+                        article_id: article_id.to_string(),
+                        headline: headline.to_string(),
+                    });
+                }
+            }
+            fn historical_news_end(&mut self, req_id: i64, _has_more: bool) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Headlines { req_id, state: Arc::clone(&state) };
+        self.req_historical_news(
+            req_id, con_id, provider_codes, start_date_time, end_date_time,
+            total_results as u32,
+        )?;
+        self.wait_for(&mut collector, &state, &format!("headlines for contract {con_id}"))
+    }
+
+    /// How a contract's trades were spread across prices.
+    pub fn histogram_data(
+        &self, contract: &Contract, use_rth: bool, period: &str,
+    ) -> Result<Vec<(f64, i64)>, String> {
+        struct Histogram { req_id: i64, state: Arc<Mutex<Pending<(f64, i64)>>> }
+        impl Wrapper for Histogram {
+            fn histogram_data(&mut self, req_id: i64, items: &[(f64, i64)]) {
+                if req_id == self.req_id {
+                    let mut s = self.state.lock().unwrap();
+                    s.rows.extend(items.iter().copied());
+                    s.done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Histogram { req_id, state: Arc::clone(&state) };
+        self.req_histogram_data(req_id, contract, use_rth, period)?;
+        let what = format!("how {} traded across prices", contract.symbol);
+        self.wait_for(&mut collector, &state, &what)
+    }
+
+    /// A fundamental document about a contract, as the venue writes it.
+    pub fn fundamental_data(
+        &self, contract: &Contract, report_type: &str,
+    ) -> Result<String, String> {
+        struct Document { req_id: i64, state: Arc<Mutex<Pending<String>>> }
+        impl Wrapper for Document {
+            fn fundamental_data(&mut self, req_id: i64, data: &str) {
+                if req_id == self.req_id {
+                    let mut s = self.state.lock().unwrap();
+                    s.rows.push(data.to_string());
+                    s.done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Document { req_id, state: Arc::clone(&state) };
+        self.req_fundamental_data(req_id, contract, report_type)?;
+        let what = format!("a {report_type} for {}", contract.symbol);
+        Ok(self.wait_for(&mut collector, &state, &what)?.remove(0))
+    }
+
+    /// What the venue says an order would cost, without placing it.
+    ///
+    /// The order is marked as a question rather than an instruction, so
+    /// nothing reaches the market.
+    pub fn what_if_order(
+        &self, contract: &Contract, order: &crate::api::types::Order,
+    ) -> Result<crate::api::types::OrderState, String> {
+        struct Preview {
+            order_id: i64,
+            state: Arc<Mutex<Pending<crate::api::types::OrderState>>>,
+        }
+        impl Wrapper for Preview {
+            fn open_order(
+                &mut self, order_id: i64, _c: &Contract, _o: &crate::api::types::Order,
+                order_state: &crate::api::types::OrderState,
+            ) {
+                if order_id == self.order_id {
+                    let mut s = self.state.lock().unwrap();
+                    s.rows.push(order_state.clone());
+                    s.done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.order_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(format!("{code}: {message}"));
+                    s.done = true;
+                }
+            }
+        }
+        let order_id = ask_id();
+        let asked = crate::api::types::Order { what_if: true, ..order.clone() };
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Preview { order_id, state: Arc::clone(&state) };
+        self.place_order(order_id, contract, &asked)?;
+        let what = format!("a preview of {} {} {}", asked.action, asked.total_quantity, contract.symbol);
+        Ok(self.wait_for(&mut collector, &state, &what)?.remove(0))
     }
 
     /// Every holding in the account.

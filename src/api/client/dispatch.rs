@@ -423,7 +423,12 @@ impl EClient {
         }
 
         // Option chain → security_definition_option_parameter + _end
-        for (req_id, underlying_con_id, scopes) in self.shared.reference.drain_option_params_for_dispatch() {
+        // The plain drain, not the one that holds back what an answering call
+        // is waiting for: on this client the answering calls receive *through*
+        // this loop, so withholding from it withholds from them. `option_chain`
+        // came back empty against a live venue while the Python client, whose
+        // answering calls take from the queue themselves, was answered.
+        for (req_id, underlying_con_id, scopes) in self.shared.reference.drain_option_params() {
             for scope in &scopes {
                 wrapper.security_definition_option_parameter(
                     req_id as i64, &scope.exchange, underlying_con_id, &scope.trading_class,

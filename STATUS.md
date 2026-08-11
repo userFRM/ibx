@@ -28,7 +28,7 @@ answered, and what it answered was about the subscription.
 | `ibx.IB` | ✅ live | 90 / 90 calls of the async wrapper's surface; the Python suite exercises it |
 | `ibx::api::Client` | ✅ live | 77 / 77 callable; 3 say they belong to a local process this client does not have |
 | Gateway settings | ✅ live | 17 carried, 7 named as having no counterpart. A session opened against the venue under a stated build and time zone, resolved SPY, and read the settings back |
-| Both clients agree | 🛠 offline | Four gates compare them: settings, order fields, surfaces, and what each does when a call cannot be served |
+| Both clients agree | ✅ live | Four gates compare them offline — settings, order fields, surfaces, and what each does when a call cannot be served — and a fifth asks the venue the same ten questions from each and compares the answers. It found the Rust client's option chains coming back empty while the Python client's were answered |
 
 ## Market data
 
