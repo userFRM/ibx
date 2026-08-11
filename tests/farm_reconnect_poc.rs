@@ -160,6 +160,8 @@ fn ccp_reconnect_with_cached_credentials() {
         hmds_farm: gw.hmds_farm.clone(),
         trading_host: String::new(),
         trading_farm: String::new(),
+        secdef_host: gw.secdef_host.clone(),
+        secdef_farm: gw.secdef_farm.clone(),
     };
 
     println!("Full auth: {}ms | session_id={}", full_auth_ms, auth.server_session_id);
