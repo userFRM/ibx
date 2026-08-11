@@ -97,6 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider: CodeProvider = Arc::new(read_code_from_stdin);
 
     let config = GatewayConfig {
+        settings: Default::default(),
         username,
         password: Zeroizing::new(password),
         host: host.clone(),

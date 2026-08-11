@@ -571,7 +571,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
             for msg in messages {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
-                    && let Some(def) = contracts::parse_secdef_response(&msg)
+                    && let Some(def) = contracts::parse_secdef_response(&msg, true)
                         && def.sec_type == contracts::SecurityType::Forex {
                             forex_con_id = Some(def.con_id as i64);
                         }

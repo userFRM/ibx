@@ -76,6 +76,7 @@ pub struct BenchSession {
 impl BenchSession {
     pub fn connect(config: &BenchConfig) -> Self {
         let gw_config = GatewayConfig {
+            settings: Default::default(),
             username: config.username.clone(),
             password: zeroize::Zeroizing::new(config.password.clone()),
             host: config.host.clone(),
@@ -103,6 +104,7 @@ impl BenchSession {
         let (mut hot_loop, control_tx) =
             gw.into_hot_loop(shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
                 ibx::gateway::CallerAuth {
+                    settings: gw_config.settings.clone(),
                     host: gw_config.host.clone(),
                     username: gw_config.username.clone(),
                     password: gw_config.password.clone(),

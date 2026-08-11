@@ -48,6 +48,7 @@ class IB:
         username="",
         password="",
         paper=True,
+        settings=None,
     ):
         """Open the session.
 
@@ -60,6 +61,12 @@ class IB:
         ``readonly`` is carried through: a read-only session refuses to send
         anything that changes a position, and says so rather than appearing to
         have sent it.
+
+        ``settings`` is what this session runs under, by the names
+        :func:`ibx.configure` uses — ``{"timezone": "Europe/Zurich"}``. Stated
+        here they belong to this session; stated through ``configure`` they
+        belong to the process, and are what a session that states none falls
+        back to.
         """
         del host, port, timeout, account
         self.client.connect(
@@ -68,6 +75,7 @@ class IB:
             password=password,
             paper=paper,
             readonly=readonly,
+            settings={k: str(v) for k, v in (settings or {}).items()},
         )
         self._start_pump()
         # The wrapper this follows subscribes to the account as it connects,

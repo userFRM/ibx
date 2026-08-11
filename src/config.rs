@@ -22,7 +22,12 @@ pub const CCP_HOSTS: &[&str] = &[
     "ndc1.ibllc.com",
 ];
 
+/// The locale a session announces itself with, where it states none.
+pub const IB_LOCALE: &str = "en_US";
+
 /// Network ports.
+pub const MISC_PORT: u16 = 4000;
+
 pub fn misc_port() -> u16 {
     std::env::var("IBX_MISC_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(4000)
 }

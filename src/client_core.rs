@@ -432,6 +432,12 @@ pub enum GroupEvent {
 }
 
 pub struct ClientCore {
+    /// How long a caller waits for the engine to name an instrument.
+    ///
+    /// Stated by the session. It was read from the process once and cached for
+    /// the life of it, so the first session to ask fixed the wait for every
+    /// session after it.
+    pub registration_timeout: std::sync::Mutex<std::time::Duration>,
     /// Whether this session refuses to send anything that changes a position.
     ///
     /// The counterpart carries the same control, and a caller running a
@@ -532,6 +538,13 @@ impl Default for ClientCore {
 impl ClientCore {
     pub fn new() -> Self {
         Self {
+            // What a session that never states one waits. The library's own
+            // tests state a millisecond; see `set_registration_timeout`.
+            registration_timeout: Mutex::new(if cfg!(test) {
+                std::time::Duration::from_millis(1)
+            } else {
+                std::time::Duration::from_secs(5)
+            }),
             readonly: std::sync::atomic::AtomicBool::new(false),
             req_to_instrument: Mutex::new(HashMap::new()),
             instrument_to_req: Mutex::new(HashMap::new()),
@@ -619,33 +632,23 @@ impl ClientCore {
 
     // ── Registration helpers ──
 
-    /// How long a caller waits for the engine to name an instrument.
+    /// What this session waits, stated when it opened.
     ///
-    /// `IBX_REGISTRATION_TIMEOUT_MS` overrides it. The library's own tests get
-    /// a millisecond from the attribute below, but a test outside the library
-    /// links it built the ordinary way and would wait the full five seconds on
-    /// every call that has no engine to answer — minutes of it, across a
-    /// suite. Read once.
-    #[cfg(not(test))]
-    fn registration_timeout() -> std::time::Duration {
-        static TIMEOUT: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
-        *TIMEOUT.get_or_init(|| {
-            std::env::var("IBX_REGISTRATION_TIMEOUT_MS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .map_or(std::time::Duration::from_secs(5), std::time::Duration::from_millis)
-        })
+    /// The library's own tests wait a millisecond: a test with no engine to
+    /// answer would otherwise wait the full default on every call.
+    pub fn set_registration_timeout(&self, waiting: std::time::Duration) {
+        *self.registration_timeout.lock().unwrap() = waiting;
     }
-    #[cfg(test)]
-    fn registration_timeout() -> std::time::Duration {
-        std::time::Duration::from_millis(1)
+
+    fn registration_timeout(&self) -> std::time::Duration {
+        *self.registration_timeout.lock().unwrap()
     }
 
     /// Wait for the hot loop to process a registration command and return the
     /// assigned ID. The engine replies Err when the instrument table is full
     /// (ibx#233) — previously that condition killed the hot loop.
-    fn recv_registration(reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>) -> Result<InstrumentId, String> {
-        reply_rx.recv_timeout(Self::registration_timeout())
+    fn recv_registration(&self, reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>) -> Result<InstrumentId, String> {
+        reply_rx.recv_timeout(self.registration_timeout())
             .map_err(|_| "Registration timed out".to_string())?
     }
 
@@ -747,7 +750,7 @@ impl ClientCore {
             reply_tx: Some(reply_tx),
         }).map_err(|e| format!("Engine stopped: {e}"))?;
 
-        let id = Self::recv_registration(reply_rx)?;
+        let id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, id);
         Ok(id)
     }
@@ -835,7 +838,7 @@ impl ClientCore {
         // gone out, left a live subscription the caller was told did not happen
         // and held no req_id to cancel by (ibx#278). The engine now refuses
         // before the subscribe reaches the wire and that refusal arrives here.
-        let instrument_id = Self::recv_registration(reply_rx)?;
+        let instrument_id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);
         // The contract may have been named only by symbol, in which case the
         // engine is the first to know which slot it holds — and it may already
@@ -983,7 +986,7 @@ impl ClientCore {
             reply_tx: Some(reply_tx),
         }).map_err(|e| format!("Engine stopped: {e}"))?;
 
-        let instrument_id = Self::recv_registration(reply_rx)?;
+        let instrument_id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
         self.instrument_to_req.lock().unwrap().insert(instrument_id, req_id);

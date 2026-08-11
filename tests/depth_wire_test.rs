@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 fn config() -> GatewayConfig {
     GatewayConfig {
+        settings: Default::default(),
         username: std::env::var("IB_USERNAME").expect("IB_USERNAME"),
         password: zeroize::Zeroizing::new(std::env::var("IB_PASSWORD").expect("IB_PASSWORD")),
         host: std::env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string()),

@@ -654,7 +654,7 @@ impl Client {
 
     /// The time zone this session states its times in.
     pub fn time_zone(&self) -> String {
-        std::env::var("IBX_TZ").unwrap_or_else(|_| "UTC".to_string())
+        self.inner.shared_state().settings().timezone.clone()
     }
 
     /// How much this client writes about what it is doing.

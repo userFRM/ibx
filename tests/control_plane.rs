@@ -50,7 +50,7 @@ fn contract_request_response_roundtrip() {
     );
 
     // 3. Parse response and verify
-    let def = parse_secdef_response(&resp_msg).unwrap();
+    let def = parse_secdef_response(&resp_msg, true).unwrap();
     assert_eq!(def.con_id, 265598);
     assert_eq!(def.symbol, "AAPL");
     assert_eq!(def.sec_type, SecurityType::Stock);
@@ -153,7 +153,7 @@ fn option_contract_full_workflow() {
         2,
     );
 
-    let def = parse_secdef_response(&resp).unwrap();
+    let def = parse_secdef_response(&resp, true).unwrap();
     assert_eq!(def.sec_type, SecurityType::Option);
     assert_eq!(def.strike, 200.0);
     assert_eq!(def.right, Some(OptionRight::Call));
@@ -200,9 +200,9 @@ fn secdef_response_pagination() {
     assert!(secdef_response_is_last(&resp_last));
 
     // All three parse successfully
-    assert!(parse_secdef_response(&resp1).is_some());
-    assert!(parse_secdef_response(&resp2).is_some());
-    assert!(parse_secdef_response(&resp_last).is_some());
+    assert!(parse_secdef_response(&resp1, true).is_some());
+    assert!(parse_secdef_response(&resp2, true).is_some());
+    assert!(parse_secdef_response(&resp_last, true).is_some());
 }
 
 // ============================================================
@@ -517,7 +517,7 @@ fn fixcomp_wraps_secdef_response() {
     let messages = fixcomp::fixcomp_decompress(&compressed).unwrap();
     assert_eq!(messages.len(), 1);
 
-    let def = parse_secdef_response(&messages[0]).unwrap();
+    let def = parse_secdef_response(&messages[0], true).unwrap();
     assert_eq!(def.con_id, 265598);
     assert_eq!(def.symbol, "AAPL");
 }

@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
 
     let cfg = GatewayConfig {
+        settings: Default::default(),
         username: username.clone(),
         password: Zeroizing::new(password.clone()),
         host: host.clone(),
@@ -43,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut auth = ReconnectAuth {
+        settings: Default::default(),
         host: host.clone(),
         username: username.clone(),
         password: Zeroizing::new(password.clone()),
