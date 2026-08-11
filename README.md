@@ -10,49 +10,41 @@
   <a href="STATUS.md">Status</a> &bull;
   <a href="#python">Python</a> &bull;
   <a href="#rust">Rust</a> &bull;
-  <a href="#what-it-carries">What it carries</a> &bull;
+  <a href="#api-surface">API surface</a> &bull;
   <a href="#notebooks">Notebooks</a> &bull;
-  <a href="#how-it-is-built">Architecture</a> &bull;
+  <a href="#architecture">Architecture</a> &bull;
   <a href="docs/engineering-notes.md">Engineering notes</a>
 </p>
 
 ---
 
-A program that trades through Interactive Brokers runs a gateway beside it: a
-Java process that logs in, holds the connection, and offers a socket on
-localhost. The program talks to that socket. Everything it can do, it does
-through a process that has to be started, watched, restarted, and given a
-screen it does not use.
+IBX implements the IBKR client protocol directly. It authenticates, maintains
+the market-data, trading, historical and security-definition connections, and
+exposes the same API a program would otherwise reach through IB Gateway — with
+no gateway process, JVM, or local socket in between.
 
-IBX is that gateway, as a library. It logs in itself, holds the connections
-itself, and hands your program the same API the gateway's socket does — in
-Rust, and in Python through the same `EClient`/`EWrapper` and `IB` shapes a
-program written against
-[ibapi](https://github.com/InteractiveBrokers/tws-api) or
-[ib_async](https://github.com/ib-api-reloaded/ib_async) already uses.
+The API is source-compatible with the TWS API (`EClient` / `EWrapper`) and, in
+Python, additionally with [ib_async](https://github.com/ib-api-reloaded/ib_async)
+(`IB`). Migrating an existing program changes the connect call:
 
 ```diff
-- ib.connect("127.0.0.1", 4001, clientId=1)     # and a gateway running somewhere
-+ ib.connect(username="...", password="...")    # and nothing else
+- ib.connect("127.0.0.1", 4001, clientId=1)     # requires a running gateway
++ ib.connect(username="...", password="...")    # no external process
 ```
-
-Everything else in the program stays as it is.
 
 ## Status
 
-[STATUS.md](STATUS.md) is the board, and it is written from evidence: a
-capability counts as working when a live session has shown it and the answer
-has been read, and the row says what proved it. Anything not yet shown says so.
+[STATUS.md](STATUS.md) holds the capability matrix. Status is assigned from a
+named artifact — a test, a script, or a recorded server response. 29 of 30
+capabilities are verified against IBKR production servers; the remaining one
+requires an advisor account.
 
-Today that is 29 of 30 rows proved against real servers, and the one that is
-not needs an advisor account this login is not. Alongside it:
-
-| Measure | Where it stands | Kept honest by |
+| Measure | Value | Enforced by |
 | --- | --- | --- |
-| Caller-facing requests | 76, none of which returns as though it acted when it did not | [`scripts/gen_wire_reach.py`](scripts/gen_wire_reach.py), in CI |
-| Fields of an order | 154: 125 reach the venue, 29 say on the field that this protocol carries them nowhere, none is dropped in silence | [`scripts/gen_order_field_reach.py`](scripts/gen_order_field_reach.py), in CI |
-| The two clients | Same settings, same order fields, same surface, same refusals — and the same answers from the venue | four offline gates, plus [`scripts/conformance.py`](scripts/conformance.py) against real servers |
-| Tests | 1,367 offline, 489 against real servers | `cargo test`, `pytest tests/python` |
+| Caller-facing requests | 76, of which 0 return as though they acted when they did not | [`scripts/gen_wire_reach.py`](scripts/gen_wire_reach.py) (CI) |
+| Order fields | 154: 125 transmitted, 29 not carried by the protocol, 0 silently dropped | [`scripts/gen_order_field_reach.py`](scripts/gen_order_field_reach.py) (CI) |
+| Rust/Python equivalence | 4 static gates plus a 10-request live comparison | [`scripts/conformance.py`](scripts/conformance.py) |
+| Tests | 1,367 offline, 489 against production servers | `cargo test`, `pytest tests/python` |
 
 ## Python
 
@@ -65,39 +57,7 @@ pip install maturin
 maturin develop --features python
 ```
 
-### The ib_async shape
-
-```python
-import ibx
-
-ib = ibx.IB()
-ib.connect(username="your_user", password="your_pass", paper=True)
-
-spy = ibx.Contract(symbol="SPY", secType="STK", exchange="SMART", currency="USD")
-
-(ticker,) = ib.reqTickers(spy)
-print(ticker.bid, ticker.ask)
-
-bars = ib.reqHistoricalData(spy, "", "2 D", "1 hour", "TRADES", useRTH=True)
-print(len(bars), "bars")
-
-order = ibx.Order(action="BUY", orderType="LMT", totalQuantity=1, lmtPrice=1.00)
-trade = ib.placeOrder(spy, order)
-ib.sleep(2)
-print(trade.orderStatus.status)
-ib.cancelOrder(order)
-
-for value in ib.accountSummary():
-    if value.tag == "NetLiquidation":
-        print(value.value, value.currency)
-
-ib.disconnect()
-```
-
-The contract needs no lookup first: a request that names a contract is given
-its id on the way out, the way a gateway does it.
-
-### The ibapi shape
+### TWS API-compatible client (`EClient` / `EWrapper`)
 
 ```python
 import threading
@@ -130,8 +90,43 @@ client.req_mkt_data(1, aapl, "", False)
 client.req_account_summary(2, "All", "NetLiquidation,BuyingPower")
 ```
 
-Both naming conventions resolve: `reqMktData` and `req_mkt_data`, `secType`
-and `sec_type`, `conId` and `con_id`.
+Both naming conventions resolve on every type and method: `reqMktData` and
+`req_mkt_data`, `secType` and `sec_type`, `conId` and `con_id`.
+
+Both surfaces drive one client and one engine. `ibx.IB` is a facade over
+`EClient`; they share a session, and either may be used.
+
+### ib_async-compatible facade (`ibx.IB`)
+
+```python
+import ibx
+
+ib = ibx.IB()
+ib.connect(username="your_user", password="your_pass", paper=True)
+
+spy = ibx.Contract(symbol="SPY", secType="STK", exchange="SMART", currency="USD")
+
+(ticker,) = ib.reqTickers(spy)
+print(ticker.bid, ticker.ask)
+
+bars = ib.reqHistoricalData(spy, "", "2 D", "1 hour", "TRADES", useRTH=True)
+print(len(bars), "bars")
+
+order = ibx.Order(action="BUY", orderType="LMT", totalQuantity=1, lmtPrice=1.00)
+trade = ib.placeOrder(spy, order)
+ib.sleep(2)
+print(trade.orderStatus.status)
+ib.cancelOrder(order)
+
+for value in ib.accountSummary():
+    if value.tag == "NetLiquidation":
+        print(value.value, value.currency)
+
+ib.disconnect()
+```
+
+A contract does not need to be qualified first: a request carrying a contract
+rather than a contract id is resolved before transmission.
 
 ## Rust
 
@@ -140,7 +135,7 @@ and `sec_type`, `conId` and `con_id`.
 ibx = { git = "https://github.com/userFRM/ibx" }
 ```
 
-The same callbacks, and calls that answer where a question has one answer:
+Callback API, plus synchronous calls for requests with a single response:
 
 ```rust
 use ibx::api::client::{EClient, EClientConfig};
@@ -167,8 +162,8 @@ let preview = client.what_if_order(&spy, &Order {
 println!("{} bars, preview {}", bars.len(), preview.status);
 ```
 
-A contract being watched can be read at any moment from any thread, without
-waiting on the callback loop:
+A subscribed contract's quote can be read from any thread without waiting on
+the callback loop:
 
 ```rust
 client.req_mkt_data(1, &spy, "", false, false)?;
@@ -179,7 +174,7 @@ if let Some(instrument) = client.instrument_of(spy.con_id) {
 }
 ```
 
-## What it carries
+## API surface
 
 | Category | Calls |
 | --- | --- |
@@ -201,33 +196,29 @@ SNAP MID, SNAP PRI, BOX TOP. Algos: VWAP, TWAP, Arrival Price, Close Price,
 Dark Ice, PctVol. Conditions: price, volume, percent change, margin, execution
 and time. Brackets, one-cancels-all, and combinations with a price per leg.
 
-**Settings.** What a gateway reads from the file beside it is stated on the
-client and read back — the build it announces, the time zone it states times
-in, how many messages it paces, which executions a session opens with. Seven
-of the gateway's own settings have no counterpart here and say why: there is
-no window to size, no local socket to listen on, no runtime to give memory to.
+**Settings.** The gateway's configuration file is replaced by settings on the
+client: announced build, time zone, message pacing, execution-report scope, and
+others — 17 in total, readable at runtime. Seven gateway settings have no
+counterpart and report why (no window geometry, no local listening socket, no
+JVM heap). Rust: `EClientConfig.gateway`. Python: `ibx.configure()`.
 
-## Speed
+## Performance
 
-The gateway is a process on the other side of a socket. IBX is a library in
-your program: a tick is decoded and handed to your code without a hop through
-localhost, a JVM, or a garbage collector.
+The engine runs on a pinned thread and does not allocate on the hot path:
+socket poll → verify → decompress → decode → publish quote → drain outgoing
+orders. A tick is delivered to the caller in-process, without a localhost
+round trip, a JVM, or a garbage collector.
 
-Measured in isolation, without network I/O, over a million iterations — the
-harness is in [`bench/`](bench) and the counterpart it is measured against is
-the official client:
-
-| | Official client | IBX | |
-| --- | --- | --- | --- |
-| Reading a tick, wire to strategy | 2 ms | 340 ns | |
-| Sending a limit order | 83 µs | 459 ns | |
-| Cancelling one | 125 µs | 386 ns | |
-| Changing one | 86 µs | 470 ns | |
+Benchmark harnesses are in [`bench/`](bench) — one per operation for this
+engine, and a TWS API harness in [`bench/cpp`](bench/cpp) that measures the
+same operations through a running gateway. They measure different paths
+(in-process call versus cross-process round trip) and are published as harnesses
+rather than as a headline ratio.
 
 ## Notebooks
 
-Adapted from [ib_async's own examples](https://ib-api-reloaded.github.io/ib_async/notebooks.html),
-running against this engine with no gateway underneath.
+Adapted from [ib_async's examples](https://ib-api-reloaded.github.io/ib_async/notebooks.html),
+running against this engine with no gateway process.
 
 | Notebook | What it shows |
 | --- | --- |
@@ -239,7 +230,7 @@ running against this engine with no gateway underneath.
 | [market_depth](notebooks/market_depth.ipynb) | The book, and the smart book across venues |
 | [scanners](notebooks/scanners.ipynb) | Scanner parameters and subscriptions |
 
-## How it is built
+## Architecture
 
 ```
     ┌──────────────────────────────────────────────┐
@@ -266,10 +257,10 @@ running against this engine with no gateway underneath.
 ```
 
 One pinned core polls the sockets, verifies, decompresses, decodes, updates the
-quote table, and drains outgoing orders — without allocating. Your code reads
-quotes without waiting for it, and receives everything else on the callbacks it
-already has. The Python bindings are the same engine: nothing holds the GIL
-while the wire is being read.
+quote table, and drains outgoing orders, without allocating. Quotes are read
+through a seqlock from any thread; everything else arrives on the callbacks.
+The Python bindings run the same engine and do not hold the GIL while reading
+the wire.
 
 ## Requirements
 
