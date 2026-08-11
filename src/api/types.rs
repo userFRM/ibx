@@ -1192,6 +1192,28 @@ pub struct ContractDetails {
     pub min_size: f64,
 }
 
+impl Contract {
+    /// What tells two contracts on one underlying apart, for a lookup that
+    /// names this one.
+    ///
+    /// Every request that carries a contract rather than an id needs these:
+    /// a lookup for an option by symbol alone answers whichever the venue
+    /// lists first, which is a different contract from the one asked about.
+    pub(crate) fn lookup_filters(&self) -> crate::types::SecDefFilters {
+        crate::types::SecDefFilters {
+            primary_exchange: self.primary_exchange.clone(),
+            local_symbol: self.local_symbol.clone(),
+            last_trade_date_or_contract_month: self.last_trade_date_or_contract_month.clone(),
+            strike: self.strike,
+            right: self.right.clone(),
+            multiplier: self.multiplier.clone(),
+            trading_class: self.trading_class.clone(),
+            sec_id: self.sec_id.clone(),
+            sec_id_type: self.sec_id_type.clone(),
+        }
+    }
+}
+
 impl ContractDetails {
     pub fn from_definition(def: &crate::control::contracts::ContractDefinition) -> Self {
         let c = Contract {

@@ -551,7 +551,7 @@ impl EClient {
         }
 
         // Drain historical news -> historicalNews + historicalNewsEnd
-        let news_results = shared.reference.drain_historical_news();
+        let news_results = shared.reference.drain_historical_news_for_dispatch();
         for (req_id, headlines, has_more) in news_results {
             for h in &headlines {
                 call_wrapper!(self.wrapper, py, "historical_news", (req_id as i64, h.time.as_str(), h.provider_code.as_str(),

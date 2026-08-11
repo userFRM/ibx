@@ -1549,12 +1549,16 @@ pub enum ControlCommand {
         /// so anything venue-specific was rejected (ibx#305).
         sec_type: String,
         exchange: String,
+        currency: String,
         end_date_time: String,
         duration: String,
         bar_size: String,
         what_to_show: String,
         use_rth: bool,
         keep_up_to_date: bool,
+        /// What tells two contracts on one underlying apart, for the
+        /// lookup that names this one when the caller passed no id.
+        filters: SecDefFilters,
     },
     /// Measure auth-connection round-trip time (ibx#158): sends a
     /// test request immediately; the sample lands in
@@ -1566,8 +1570,15 @@ pub enum ControlCommand {
     FetchHeadTimestamp {
         req_id: u32,
         con_id: i64,
+        symbol: String,
+        sec_type: String,
+        exchange: String,
+        currency: String,
         what_to_show: String,
         use_rth: bool,
+        /// What tells two contracts on one underlying apart, for the
+        /// lookup that names this one when the caller passed no id.
+        filters: SecDefFilters,
     },
     /// Request contract details via auth connection.
     FetchContractDetails {
@@ -1646,13 +1657,18 @@ pub enum ControlCommand {
     FetchHistoricalTicks {
         req_id: u32,
         con_id: i64,
+        symbol: String,
         sec_type: String,
         exchange: String,
+        currency: String,
         start_date_time: String,
         end_date_time: String,
         number_of_ticks: u32,
         what_to_show: String,
         use_rth: bool,
+        /// What tells two contracts on one underlying apart, for the
+        /// lookup that names this one when the caller passed no id.
+        filters: SecDefFilters,
     },
     /// Subscribe to real-time 5-second bars via historical data connection.
     SubscribeRealTimeBar {
@@ -1661,8 +1677,12 @@ pub enum ControlCommand {
         symbol: String,
         sec_type: String,
         exchange: String,
+        currency: String,
         what_to_show: String,
         use_rth: bool,
+        /// What tells two contracts on one underlying apart, for the
+        /// lookup that names this one when the caller passed no id.
+        filters: SecDefFilters,
     },
     /// Cancel real-time bar subscription.
     CancelRealTimeBar { req_id: u32 },
@@ -1670,20 +1690,30 @@ pub enum ControlCommand {
     FetchHistoricalSchedule {
         req_id: u32,
         con_id: i64,
+        symbol: String,
         sec_type: String,
         exchange: String,
+        currency: String,
         end_date_time: String,
         duration: String,
         use_rth: bool,
+        /// What tells two contracts on one underlying apart, for the
+        /// lookup that names this one when the caller passed no id.
+        filters: SecDefFilters,
     },
     /// Subscribe to market depth (L2) for a contract.
     SubscribeDepth {
         req_id: u32,
         con_id: i64,
+        symbol: String,
         exchange: String,
         sec_type: String,
+        currency: String,
         num_rows: i32,
         is_smart_depth: bool,
+        /// What tells two contracts on one underlying apart, for the
+        /// lookup that names this one when the caller passed no id.
+        filters: SecDefFilters,
     },
     /// Unsubscribe from market depth.
     UnsubscribeDepth { req_id: u32 },

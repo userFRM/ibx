@@ -821,10 +821,10 @@ def req_matching_symbols(req_id, pattern)
 
 #### `req_sec_def_opt_params`
 
-Request option chain parameters.
+Request the expirations and strikes an underlying's options list.
 
 ```python
-def req_sec_def_opt_params(req_id, underlying_symbol, fut_fop_exchange="", underlying_sec_type="STK", underlying_con_id=0))
+def req_sec_def_opt_params(req_id, underlying_symbol, fut_fop_exchange, underlying_sec_type, underlying_con_id)
 ```
 
 | Parameter | Type | Description |

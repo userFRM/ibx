@@ -377,6 +377,14 @@ class LiveState(EWrapper):
 
 
 @dataclass
+class HistoricalNews:
+    time: str
+    providerCode: str
+    articleId: str
+    headline: str
+
+
+@dataclass
 class Ticker:
     """A contract's current quote, accumulated from the ticks that make it up.
 

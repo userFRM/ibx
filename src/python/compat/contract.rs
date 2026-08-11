@@ -1799,10 +1799,32 @@ pub struct PriceCondition {
 
 #[pymethods]
 impl PriceCondition {
+    // The reference client spells these by running the words together, and
+    // names an exchange `exch`. A condition built the way that client builds
+    // it sets them by those names.
+    #[getter(conId)]
+    fn get_con_id_alias(&self) -> i64 { self.con_id }
+    #[setter(conId)]
+    fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
+    #[getter(exch)]
+    fn get_exchange_alias(&self) -> String { self.exchange.clone() }
+    #[setter(exch)]
+    fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
+    #[getter(isMore)]
+    fn get_is_more_alias(&self) -> bool { self.is_more }
+    #[setter(isMore)]
+    fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
+    #[getter(triggerMethod)]
+    fn get_trigger_method_alias(&self) -> i32 { self.trigger_method }
+    #[setter(triggerMethod)]
+    fn set_trigger_method_alias(&mut self, v: i32) { self.trigger_method = v; }
+
     #[new]
-    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), price=0.0, is_more=true, trigger_method=0))]
-    fn new(con_id: i64, exchange: String, price: f64, is_more: bool, trigger_method: i32) -> Self {
-        Self { con_id, exchange, price, is_more, trigger_method }
+    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), price=0.0, is_more=true, trigger_method=0, **keywords))]
+    fn new(con_id: i64, exchange: String, price: f64, is_more: bool, trigger_method: i32, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { con_id, exchange, price, is_more, trigger_method })?;
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
     }
 
     fn __repr__(&self) -> String {
@@ -1835,10 +1857,20 @@ pub struct TimeCondition {
 
 #[pymethods]
 impl TimeCondition {
+    // The reference client spells these by running the words together, and
+    // names an exchange `exch`. A condition built the way that client builds
+    // it sets them by those names.
+    #[getter(isMore)]
+    fn get_is_more_alias(&self) -> bool { self.is_more }
+    #[setter(isMore)]
+    fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
+
     #[new]
-    #[pyo3(signature = (time="".to_string(), is_more=true))]
-    fn new(time: String, is_more: bool) -> Self {
-        Self { time, is_more }
+    #[pyo3(signature = (time="".to_string(), is_more=true, **keywords))]
+    fn new(time: String, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { time, is_more })?;
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
     }
 
     fn __repr__(&self) -> String {
@@ -1865,10 +1897,20 @@ pub struct MarginCondition {
 
 #[pymethods]
 impl MarginCondition {
+    // The reference client spells these by running the words together, and
+    // names an exchange `exch`. A condition built the way that client builds
+    // it sets them by those names.
+    #[getter(isMore)]
+    fn get_is_more_alias(&self) -> bool { self.is_more }
+    #[setter(isMore)]
+    fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
+
     #[new]
-    #[pyo3(signature = (percent=0, is_more=true))]
-    fn new(percent: u32, is_more: bool) -> Self {
-        Self { percent, is_more }
+    #[pyo3(signature = (percent=0, is_more=true, **keywords))]
+    fn new(percent: u32, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { percent, is_more })?;
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
     }
 
     fn __repr__(&self) -> String {
@@ -1896,10 +1938,24 @@ pub struct ExecutionCondition {
 
 #[pymethods]
 impl ExecutionCondition {
+    // The reference client spells these by running the words together, and
+    // names an exchange `exch`. A condition built the way that client builds
+    // it sets them by those names.
+    #[getter(exch)]
+    fn get_exchange_alias(&self) -> String { self.exchange.clone() }
+    #[setter(exch)]
+    fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
+    #[getter(secType)]
+    fn get_sec_type_alias(&self) -> String { self.sec_type.clone() }
+    #[setter(secType)]
+    fn set_sec_type_alias(&mut self, v: String) { self.sec_type = v; }
+
     #[new]
-    #[pyo3(signature = (symbol="".to_string(), exchange="".to_string(), sec_type="".to_string()))]
-    fn new(symbol: String, exchange: String, sec_type: String) -> Self {
-        Self { symbol, exchange, sec_type }
+    #[pyo3(signature = (symbol="".to_string(), exchange="".to_string(), sec_type="".to_string(), **keywords))]
+    fn new(symbol: String, exchange: String, sec_type: String, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { symbol, exchange, sec_type })?;
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
     }
 
     fn __repr__(&self) -> String {
@@ -1933,10 +1989,28 @@ pub struct VolumeCondition {
 
 #[pymethods]
 impl VolumeCondition {
+    // The reference client spells these by running the words together, and
+    // names an exchange `exch`. A condition built the way that client builds
+    // it sets them by those names.
+    #[getter(conId)]
+    fn get_con_id_alias(&self) -> i64 { self.con_id }
+    #[setter(conId)]
+    fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
+    #[getter(exch)]
+    fn get_exchange_alias(&self) -> String { self.exchange.clone() }
+    #[setter(exch)]
+    fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
+    #[getter(isMore)]
+    fn get_is_more_alias(&self) -> bool { self.is_more }
+    #[setter(isMore)]
+    fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
+
     #[new]
-    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), volume=0, is_more=true))]
-    fn new(con_id: i64, exchange: String, volume: i64, is_more: bool) -> Self {
-        Self { con_id, exchange, volume, is_more }
+    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), volume=0, is_more=true, **keywords))]
+    fn new(con_id: i64, exchange: String, volume: i64, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { con_id, exchange, volume, is_more })?;
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
     }
 
     fn __repr__(&self) -> String {
@@ -1972,10 +2046,32 @@ pub struct PercentChangeCondition {
 
 #[pymethods]
 impl PercentChangeCondition {
+    // The reference client spells these by running the words together, and
+    // names an exchange `exch`. A condition built the way that client builds
+    // it sets them by those names.
+    #[getter(conId)]
+    fn get_con_id_alias(&self) -> i64 { self.con_id }
+    #[setter(conId)]
+    fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
+    #[getter(exch)]
+    fn get_exchange_alias(&self) -> String { self.exchange.clone() }
+    #[setter(exch)]
+    fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
+    #[getter(isMore)]
+    fn get_is_more_alias(&self) -> bool { self.is_more }
+    #[setter(isMore)]
+    fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
+    #[getter(changePercent)]
+    fn get_change_percent_alias(&self) -> f64 { self.change_percent }
+    #[setter(changePercent)]
+    fn set_change_percent_alias(&mut self, v: f64) { self.change_percent = v; }
+
     #[new]
-    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), change_percent=0.0, is_more=true))]
-    fn new(con_id: i64, exchange: String, change_percent: f64, is_more: bool) -> Self {
-        Self { con_id, exchange, change_percent, is_more }
+    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), change_percent=0.0, is_more=true, **keywords))]
+    fn new(con_id: i64, exchange: String, change_percent: f64, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { con_id, exchange, change_percent, is_more })?;
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
     }
 
     fn __repr__(&self) -> String {
@@ -2054,6 +2150,28 @@ impl BarData {
 }
 
 // ── ContractDetails ──
+
+impl Contract {
+    /// What tells two contracts on one underlying apart, for a lookup that
+    /// names this one.
+    ///
+    /// Every request that carries a contract rather than an id needs these:
+    /// a lookup for an option by symbol alone answers whichever the venue
+    /// lists first, which is a different contract from the one asked about.
+    pub(crate) fn lookup_filters(&self) -> crate::types::SecDefFilters {
+        crate::types::SecDefFilters {
+            primary_exchange: self.primary_exchange.clone(),
+            local_symbol: self.local_symbol.clone(),
+            last_trade_date_or_contract_month: self.last_trade_date_or_contract_month.clone(),
+            strike: self.strike,
+            right: self.right.clone(),
+            multiplier: self.multiplier.clone(),
+            trading_class: self.trading_class.clone(),
+            sec_id: self.sec_id.clone(),
+            sec_id_type: self.sec_id_type.clone(),
+        }
+    }
+}
 
 /// ibapi-compatible ContractDetails class.
 #[pyclass(from_py_object)]

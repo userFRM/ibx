@@ -2405,7 +2405,7 @@ fn req_head_time_stamp_sends_fetch() {
     client.req_head_time_stamp(10, &spy(), "TRADES", true, 1).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::FetchHeadTimestamp { req_id, con_id, what_to_show, use_rth } => {
+        ControlCommand::FetchHeadTimestamp { req_id, con_id, what_to_show, use_rth, .. } => {
             assert_eq!(req_id, 10);
             assert_eq!(con_id, 756733);
             assert_eq!(what_to_show, "TRADES");

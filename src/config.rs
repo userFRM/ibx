@@ -107,6 +107,24 @@ pub fn chrono_free_timestamp() -> TimestampBuf {
     TimestampBuf { buf }
 }
 
+/// Midnight, so many days ago, in the same form.
+///
+/// A window the venue is asked to answer within starts at one of these.
+pub fn midnight_days_ago(days: u64) -> TimestampBuf {
+    let mut stamp = chrono_free_timestamp();
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (year, month, day) = days_to_ymd(secs / 86400 - days);
+    write_u2(&mut stamp.buf[0..], (year / 100) as u8);
+    write_u2(&mut stamp.buf[2..], (year % 100) as u8);
+    write_u2(&mut stamp.buf[4..], month as u8);
+    write_u2(&mut stamp.buf[6..], day as u8);
+    stamp.buf[9..].copy_from_slice(b"00:00:00");
+    stamp
+}
+
 /// Write a u8 as 2 zero-padded decimal digits into a byte slice.
 #[inline]
 fn write_u2(buf: &mut [u8], val: u8) {

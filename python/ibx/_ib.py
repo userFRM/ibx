@@ -15,7 +15,7 @@ from __future__ import annotations
 import threading
 import time
 
-from ._state import BracketOrder, LiveState
+from ._state import BracketOrder, HistoricalNews, LiveState
 from .ibx import Contract, EClient
 
 
@@ -70,6 +70,11 @@ class IB:
             readonly=readonly,
         )
         self._start_pump()
+        # The wrapper this follows subscribes to the account as it connects,
+        # and a program reads `accountValues()` straight afterwards. Without
+        # this the account is silent until something asks, and an empty list
+        # reads as an account holding nothing.
+        self.client.req_account_updates(True, "")
         return self
 
     def _start_pump(self) -> None:
@@ -181,8 +186,18 @@ class IB:
 
     # -- the rest of the live state ---------------------------------------
 
-    def accountSummary(self, account=""):
+    def accountSummary(self, account="", timeout=5):
+        """What the venue says the account is worth.
+
+        The subscription is made as the session opens, so this normally has
+        its answer already. On the first call it may not have arrived yet;
+        waiting for it is what tells an account with nothing in it from one
+        that has not spoken.
+        """
         del account
+        deadline = time.monotonic() + timeout
+        while not self.wrapper.snapshot_account_values() and time.monotonic() < deadline:
+            time.sleep(0.05)
         return self.wrapper.snapshot_account_values()
 
     def pnl(self, account="", modelCode=""):
@@ -528,10 +543,12 @@ class IB:
         totalResults=100, historicalNewsOptions=None,
     ):
         del historicalNewsOptions
-        self.client.req_historical_news(
-            self._next_req_id(), conId, providerCodes, startDateTime,
-            endDateTime, totalResults, [],
-        )
+        return [
+            HistoricalNews(*row)
+            for row in self.client.news_headlines(
+                conId, providerCodes, startDateTime, endDateTime, totalResults,
+            )
+        ]
 
     def reqNewsBulletins(self, allMessages=True):
         self.client.req_news_bulletins(allMessages)

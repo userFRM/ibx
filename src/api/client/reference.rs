@@ -24,9 +24,11 @@ impl EClient {
             symbol: contract.symbol.clone(),
             sec_type: contract.sec_type.clone(),
             exchange: contract.exchange.clone(),
+            currency: contract.currency.clone(),
             end_date_time: end_date_time.into(),
             duration: duration.into(),
             bar_size: bar_size.into(),
+            filters: contract.lookup_filters(),
             what_to_show: what_to_show.into(),
             use_rth,
             keep_up_to_date,
@@ -45,6 +47,11 @@ impl EClient {
         self.send(ControlCommand::FetchHeadTimestamp {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
+            symbol: contract.symbol.clone(),
+            sec_type: contract.sec_type.clone(),
+            exchange: contract.exchange.clone(),
+            filters: contract.lookup_filters(),
+            currency: contract.currency.clone(),
             what_to_show: what_to_show.into(),
             use_rth,
         })
@@ -61,17 +68,7 @@ impl EClient {
             sec_type: contract.sec_type.clone(),
             exchange: contract.exchange.clone(),
             currency: contract.currency.clone(),
-            filters: crate::types::SecDefFilters {
-                primary_exchange: contract.primary_exchange.clone(),
-                local_symbol: contract.local_symbol.clone(),
-                last_trade_date_or_contract_month: contract.last_trade_date_or_contract_month.clone(),
-                strike: contract.strike,
-                right: contract.right.clone(),
-                multiplier: contract.multiplier.clone(),
-                trading_class: contract.trading_class.clone(),
-                sec_id: contract.sec_id.clone(),
-                sec_id_type: contract.sec_id_type.clone(),
-            },
+            filters: contract.lookup_filters(),
         })
     }
 
@@ -272,10 +269,13 @@ impl EClient {
         self.send(ControlCommand::FetchHistoricalTicks {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
+            symbol: contract.symbol.clone(),
             sec_type: contract.sec_type.clone(),
             exchange: contract.exchange.clone(),
+            currency: contract.currency.clone(),
             start_date_time: start_date_time.into(),
             end_date_time: end_date_time.into(),
+            filters: contract.lookup_filters(),
             number_of_ticks: number_of_ticks as u32,
             what_to_show: what_to_show.into(),
             use_rth,
@@ -292,8 +292,11 @@ impl EClient {
         self.send(ControlCommand::FetchHistoricalSchedule {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
+            symbol: contract.symbol.clone(),
             sec_type: contract.sec_type.clone(),
             exchange: contract.exchange.clone(),
+            currency: contract.currency.clone(),
+            filters: contract.lookup_filters(),
             end_date_time: end_date_time.into(),
             duration: duration.into(),
             use_rth,

@@ -1903,6 +1903,14 @@ impl Gateway {
         let mut ccp_seq: u32 = 1; // logon was seq 1
         let now = chrono_free_timestamp();
         let today_start = format!("{}-00:00:00", &now[..8]);
+        /// How far back a session asks for executions when it asks for every
+        /// one the venue holds.
+        ///
+        /// The venue answers a window starting within seven days of now and
+        /// rejects one starting earlier ("Invalid value in field # 6536"),
+        /// which is the whole message and so the whole request. Midnight six
+        /// days ago is inside that window at any hour of the day.
+        const EXECUTIONS_REACH_BACK_DAYS: u64 = 6;
 
         // Helper: send_ib_msg builds 35=U with 6040=<comm_type> + extra tags
         let mut send_init = |fields: &[(u32, &str)]| -> io::Result<()> {
@@ -1924,13 +1932,20 @@ impl Gateway {
         // left off, it answers with what it has. The counterpart writes the
         // window only under its own condition, so leaving it off is a path the
         // venue takes rather than one invented here.
+        //
+        // The window is not optional: without it the venue rejects the whole
+        // message ("Message must contain field # 6536") and the session opens
+        // with no executions at all — which is what asking for every one used
+        // to do. Asking for every one means naming a start far enough back to
+        // cover what the venue still holds.
         let executions_today_only =
             std::env::var("IBX_EXECUTION_REPORTS").as_deref() == Ok("today");
-        if executions_today_only {
-            send_init(&[(35, "U"), (52, &now), (6040, "72"), (6536, &today_start), (6537, &now), (6556, "today4")])?;
+        let window_start = if executions_today_only {
+            today_start.clone()
         } else {
-            send_init(&[(35, "U"), (52, &now), (6040, "72"), (6556, "today4")])?;
-        }
+            crate::config::midnight_days_ago(EXECUTIONS_REACH_BACK_DAYS).to_string()
+        };
+        send_init(&[(35, "U"), (52, &now), (6040, "72"), (6536, &window_start), (6537, &now), (6556, "today4")])?;
         send_init(&[(35, "U"), (52, &now), (6040, "74"), (1, ""), (6544, "2")])?;
         send_init(&[(35, "U"), (52, &now), (6040, "76"), (1, ""), (6565, "1")])?;
         for _ in 0..92 {
@@ -2300,16 +2315,20 @@ impl Gateway {
         // not — and a caller enumerating providers and then asking for an
         // article gets a refusal it cannot explain.
         //
-        // Wire format: "code1,name1;code2,name2;…".
+        // Wire format: "code1/name1,code2/name2,…". Read as though the pairs
+        // were separated by semicolons and the halves by commas, one provider
+        // came back holding the whole list: its code was the first code and
+        // name, and its name was every other provider. A caller then asked for
+        // headlines under a code no venue knows and was answered with nothing.
         let news_providers: Vec<NewsProvider> = self
             .raw_news_providers
-            .split(';')
+            .split(',')
             .filter_map(|entry| {
                 let entry = entry.trim();
                 if entry.is_empty() {
                     return None;
                 }
-                let (code, name) = entry.split_once(',')?;
+                let (code, name) = entry.split_once('/')?;
                 Some(NewsProvider {
                     code: code.trim().to_string(),
                     name: name.trim().to_string(),

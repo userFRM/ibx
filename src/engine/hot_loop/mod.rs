@@ -505,6 +505,7 @@ impl HotLoop {
             self.ccp.sweep_scanner_enrichments(&self.shared);
             self.ccp.sweep_contract_details(&self.shared, &self.event_tx);
             self.ccp.sweep_pending_subscribes(&self.shared);
+            self.ccp.sweep_pending_named(&self.shared);
             self.hmds.sweep_pending_historical(&self.shared);
             let _ = ccp_was_ok; // reconnects are scheduled below (ibx#218)
 
@@ -565,8 +566,18 @@ impl HotLoop {
         };
 
         // Drain the buffer so we can mutably borrow self in the loop body.
-        let cmds: Vec<ControlCommand> = self.cmd_buf.drain(..).collect();
+        // Requests held for want of a contract id come first: they were asked
+        // for before anything still in the buffer.
+        let mut cmds: Vec<ControlCommand> = std::mem::take(&mut self.ccp.resolved_named);
+        cmds.append(&mut self.cmd_buf);
         for cmd in cmds {
+            // A caller who passed the contract it wrote down rather than the
+            // venue's id for it gets the lookup made on its behalf, and the
+            // request arrives here again once the venue has named it.
+            let Some(cmd) = self.ccp.hold_until_named(cmd, &mut self.ccp_conn, &mut self.hb)
+            else {
+                continue;
+            };
             match cmd {
                 ControlCommand::Subscribe { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier, mode_9887, reply_tx } => {
                     // What tells two conId-less contracts on one underlying apart.
@@ -709,7 +720,7 @@ impl HotLoop {
                 ControlCommand::RegisterInstrument { con_id, symbol, sec_type, exchange, identity, reply_tx } => {
                     self.register_or_reject(con_id, symbol, &sec_type, &exchange, &identity, &reply_tx);
                 }
-                ControlCommand::FetchHistorical { req_id, con_id, symbol, sec_type, exchange, end_date_time, duration, bar_size, what_to_show, use_rth, keep_up_to_date } => {
+                ControlCommand::FetchHistorical { req_id, con_id, symbol, sec_type, exchange, end_date_time, duration, bar_size, what_to_show, use_rth, keep_up_to_date, .. } => {
                     // keepUpToDate sends via CCP but bars/end arrive on HMDS — both
                     // paths require an authed HMDS socket to deliver a completion.
                     if self.hmds_conn.is_none() {
@@ -735,7 +746,7 @@ impl HotLoop {
                         self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
-                ControlCommand::FetchHeadTimestamp { req_id, con_id, what_to_show, use_rth } => {
+                ControlCommand::FetchHeadTimestamp { req_id, con_id, what_to_show, use_rth, .. } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
@@ -828,14 +839,14 @@ impl HotLoop {
                         self.hmds.pending_histogram.remove(pos);
                     }
                 }
-                ControlCommand::FetchHistoricalTicks { req_id, con_id, sec_type, exchange, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth } => {
+                ControlCommand::FetchHistoricalTicks { req_id, con_id, sec_type, exchange, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth, .. } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
                         self.hmds.send_historical_ticks_request(req_id, con_id, &sec_type, &exchange, &start_date_time, &end_date_time, number_of_ticks, &what_to_show, use_rth, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
-                ControlCommand::SubscribeRealTimeBar { req_id, con_id, symbol, sec_type, exchange, what_to_show, use_rth } => {
+                ControlCommand::SubscribeRealTimeBar { req_id, con_id, symbol, sec_type, exchange, what_to_show, use_rth, .. } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
@@ -850,14 +861,14 @@ impl HotLoop {
                         self.hmds.send_historical_cancel(&cancel_id, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
-                ControlCommand::FetchHistoricalSchedule { req_id, con_id, sec_type, exchange, end_date_time, duration, use_rth } => {
+                ControlCommand::FetchHistoricalSchedule { req_id, con_id, sec_type, exchange, end_date_time, duration, use_rth, .. } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
                         self.hmds.send_schedule_request(req_id, con_id, &sec_type, &exchange, &end_date_time, &duration, use_rth, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
-                ControlCommand::SubscribeDepth { req_id, con_id, exchange, sec_type, num_rows, is_smart_depth } => {
+                ControlCommand::SubscribeDepth { req_id, con_id, exchange, sec_type, num_rows, is_smart_depth, .. } => {
                     self.farm.send_depth_subscribe(
                         req_id, con_id, &exchange, &sec_type, num_rows, is_smart_depth,
                         &mut self.farm_conn,
