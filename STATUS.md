@@ -39,7 +39,7 @@ answered, and what it answered was about the subscription.
 | Historical bars | ✅ live | Bars returned for Dutch, British, Hong Kong, Australian and American listings and an American index, in one sweep. A contract named rather than identified is looked up first, so a request carrying what a caller wrote down is answered like one carrying the venue's own id |
 | Historical ticks, schedules | ✅ live | Ticks and trading schedules answered; a series this client does not know is refused rather than turned into trades |
 | Tick-by-tick quotes | ✅ live | Currencies and American listings, several streams at once, each record naming its own request |
-| Tick-by-tick trades | ✅ live | A thousand and twenty-seven trades on a busy listing, priced to the cent and sized in the shares the venue printed. The exchange's own trades and every trade including those reported away from it are two streams, asked for separately |
+| Tick-by-tick trades | ✅ live | A thousand and twenty-seven trades on a busy listing, priced to the cent and sized in the shares the venue printed. The exchange's own trades and every trade including those never reported to the tape are two streams: the venue serves the wider one and marks each print, so the narrower one is that stream without them. Both were counted on a future, which has no off-exchange tape |
 | Trading halts | ✅ live | Contracts that are trading are reported trading, read from the mask and the named status together |
 | Tick attributes | ✅ live | Reported-away-from-the-exchange varies trade by trade, as it does for an off-exchange facility |
 
@@ -113,7 +113,7 @@ carry them. None is read by nothing.
 
 Settled only by a live capture, recorded so nobody re-derives them:
 
-- The one number an option model needs that no tick states is fitted, not read. The venue does serve its own — a series named `OptExInterestRate`, which it recognises and refuses only the query shape for, answering `QueryType BarData(BarDataIntraday) is not supported for tick type`. Asked as a tick series instead it is accepted, and answers so far are empty for the contracts tried. Until then the fitted number absorbs whatever the venue's model does that this one does not, which is visible: two contracts on one underlying and one expiry wanted five per cent and twenty
+- The one number an option model needs that no tick states is fitted, not read. The venue does serve its own — a series named `OptExInterestRate`, which it recognises and refuses only the query shape for, answering `QueryType BarData(BarDataIntraday) is not supported for tick type`. Asked as a tick series it is accepted against an option contract and refused by name against the underlying share, which says where the series lives; every window tried against the option — a day, a week, ten weeks, with and without regular hours — is answered with an empty batch. Until then the fitted number absorbs whatever the venue's model does that this one does not, which is visible: two contracts on one underlying and one expiry wanted five per cent and twenty
 - A crypto's tick-by-tick stream is acknowledged, with both its increments stated, and the venue then sends nothing on it. In the same session and on the same contract, the top of book quotes continuously and a historical tick request is answered, while an American share and a currency pair stream ticks throughout. So the venue holds crypto ticks and does not stream them
 - The trading-status timestamp's unit, and the fourth number the venue sends with it
 

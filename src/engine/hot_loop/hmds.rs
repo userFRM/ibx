@@ -139,6 +139,15 @@ fn hist_exchange(exchange: &str) -> String {
     crate::control::contracts::exchange_to_fix(exchange).to_string()
 }
 
+/// Whether a trade belongs on the stream a caller asked for.
+///
+/// The venue serves one trade stream and marks the prints that were not
+/// reported to the tape; the exchange's own trades are that stream without
+/// them.
+fn belongs_on(asked_for: TbtType, unreported: bool) -> bool {
+    !(asked_for == TbtType::Last && unreported)
+}
+
 /// A live five-second bar stream, in the shape its request needs to go again.
 #[derive(Clone)]
 pub(crate) struct RtBarRequest {
@@ -753,6 +762,12 @@ impl HmdsState {
         // What sizes move in for this contract. Stated once, when the venue
         // took the subscription on.
         let size_tick = self.tbt_subscriptions[at].size_tick;
+        // Whether this subscription wants only what the exchange itself
+        // printed. The venue serves one trade stream — a future, which has no
+        // off-exchange tape at all, streams on AllLast and stays silent on
+        // Last — and marks the prints that were not reported to the tape. So
+        // the narrower stream is the wider one without those.
+        let kind_asked_for = self.tbt_subscriptions[at].kind;
 
         // Decoded in whole increments and scaled by whole numbers afterwards,
         // so a session of moves cannot drift the way adding fractions would.
@@ -764,6 +779,9 @@ impl HmdsState {
         for record in &frame.records {
             match record {
                 TbtRecord::Trade(t) => {
+                    if !belongs_on(kind_asked_for, t.unreported) {
+                        continue;
+                    }
                     let trade = crate::types::TbtTrade {
                         instrument,
                         req_id: caller_req_id,
@@ -849,9 +867,12 @@ impl HmdsState {
     ) {
         let req_id = self.next_tbt_req_id;
         self.next_tbt_req_id += 1;
+        // The venue names one trade stream. Asked for under the other name it
+        // acknowledges the subscription and sends nothing, which is how a
+        // caller asking for the exchange's own trades was answered with
+        // silence; what tells the two apart arrives on each trade.
         let tbt_type_str = match tbt_type {
-            TbtType::AllLast => "AllLast",
-            TbtType::Last => "Last",
+            TbtType::AllLast | TbtType::Last => "AllLast",
             TbtType::BidAsk => "BidAsk",
         };
         // The contract says what it is. A US stock routed BEST was assumed for
@@ -2138,6 +2159,18 @@ mod withdrawing_one_stream_tests {
             hmds.tbt_subscriptions[0].caller_req_id, 1,
             "the wrong stream was withdrawn",
         );
+    }
+
+    /// Every trade includes the prints that never reached the tape; the
+    /// exchange's own trades are the same stream without them. Sent as two
+    /// requests, the venue acknowledged the second and answered it with
+    /// silence — on a future, which has no off-exchange tape at all.
+    #[test]
+    fn the_narrower_stream_is_the_wider_one_without_the_unreported() {
+        assert!(belongs_on(TbtType::AllLast, true), "every trade means every trade");
+        assert!(belongs_on(TbtType::AllLast, false));
+        assert!(!belongs_on(TbtType::Last, true), "that one never reached the tape");
+        assert!(belongs_on(TbtType::Last, false));
     }
 
     /// A caller that opened one stream and names it by something else still
