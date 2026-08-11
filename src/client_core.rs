@@ -220,8 +220,15 @@ pub struct AccountFieldUpdate {
 /// Batch of account update results.
 pub struct AccountUpdateBatch {
     pub fields: Vec<AccountFieldUpdate>,
-    /// Whether any field was delivered (triggers account_download_end).
+    /// Whether any field was delivered.
     pub delivered: bool,
+    /// Whether the venue has now finished stating the account, said once.
+    ///
+    /// This used to be the first field of any kind, which was this client's
+    /// own zeroed copy of an account the venue had not described yet: a caller
+    /// waiting for the account to arrive was told it had, and read figures the
+    /// venue had never sent.
+    pub finished: bool,
 }
 
 /// Prepared account summary response.
@@ -474,6 +481,13 @@ pub struct ClientCore {
     // Account updates subscription
     pub account_updates_subscribed: AtomicBool,
     pub last_account: Mutex<Option<AccountState>>,
+    /// What has already been delivered of what the venue stated, by figure and
+    /// currency, so each is delivered once and again when it changes.
+    pub last_stated_account: Mutex<HashMap<(String, String), String>>,
+    /// Whether the caller has been told the account is fully stated.
+    pub account_end_sent: AtomicBool,
+    /// When the venue last added a figure to the account.
+    pub last_account_field: Mutex<Option<std::time::Instant>>,
     pub last_portfolio: Mutex<Option<Vec<PositionInfo>>>,
 
     // Execution replay store
@@ -528,6 +542,9 @@ impl ClientCore {
             bulletin_subscribed: AtomicBool::new(false),
             account_updates_subscribed: AtomicBool::new(false),
             last_account: Mutex::new(None),
+            last_stated_account: Mutex::new(HashMap::new()),
+            account_end_sent: AtomicBool::new(false),
+            last_account_field: Mutex::new(None),
             last_portfolio: Mutex::new(None),
             executions: Mutex::new(Vec::new()),
             open_orders: Mutex::new(HashMap::new()),
@@ -576,6 +593,9 @@ impl ClientCore {
         self.bulletin_subscribed.store(false, Ordering::Relaxed);
         self.account_updates_subscribed.store(false, Ordering::Relaxed);
         *self.last_account.lock().unwrap() = None;
+        self.last_stated_account.lock().unwrap().clear();
+        self.account_end_sent.store(false, Ordering::Release);
+        *self.last_account_field.lock().unwrap() = None;
         *self.last_portfolio.lock().unwrap() = None;
         self.executions.lock().unwrap().clear();
         self.open_orders.lock().unwrap().clear();
@@ -1002,6 +1022,9 @@ impl ClientCore {
         self.account_updates_subscribed.store(subscribe, Ordering::Release);
         if !subscribe {
             *self.last_account.lock().unwrap() = None;
+        self.last_stated_account.lock().unwrap().clear();
+        self.account_end_sent.store(false, Ordering::Release);
+        *self.last_account_field.lock().unwrap() = None;
             *self.last_portfolio.lock().unwrap() = None;
         }
     }
@@ -1761,71 +1784,53 @@ impl ClientCore {
         results
     }
 
-    /// Prepare account update fields (subscription-gated, change-detected).
+    /// The account figures to deliver, as the venue stated them.
+    ///
+    /// Built from the venue's own statements rather than from this client's
+    /// typed copy of them. The typed copy exists before the venue has said
+    /// anything, so a session used to open by reporting every figure as zero
+    /// in no currency, and the real ones arrived afterwards beside them — a
+    /// caller reading the first NetLiquidation it found was told the account
+    /// was empty.
+    ///
+    /// Each figure is delivered once and again whenever it changes, per
+    /// currency: a figure stated in two currencies is two figures.
     pub fn prepare_account_updates(&self, shared: &SharedState) -> Option<AccountUpdateBatch> {
         if !self.account_updates_subscribed.load(Ordering::Acquire) {
             return None;
         }
-        if !shared.portfolio.account_data_received() {
+        let stated = shared.portfolio.stated_account_values();
+        if stated.is_empty() {
             return None;
         }
 
-        let acct = shared.portfolio.account();
-        let mut prev_guard = self.last_account.lock().unwrap();
-        let is_first = prev_guard.is_none();
-        let prev = prev_guard.unwrap_or_default();
-
-        let cur_vals = account_field_values(&acct);
-        let prev_vals = account_field_values(&prev);
-
+        let mut already = self.last_stated_account.lock().unwrap();
         let mut fields = Vec::new();
-        let mut delivered = false;
-
-        // The currency a figure is in is stated by the venue, per figure, and is
-        // not always the account's own. It used to be reported as dollars
-        // whatever the venue said, so an account held in euros was described in
-        // a currency it does not hold.
-        let stated = shared.portfolio.stated_account_values();
-        let currency_of = |key: &str| -> String {
-            stated
-                .iter()
-                .find(|(k, _, c)| k == key && !c.is_empty())
-                .map(|(_, _, c)| c.clone())
-                .unwrap_or_default()
-        };
-
-        for (i, &key) in ACCOUNT_UPDATE_FIELDS.iter().enumerate() {
-            if is_first || cur_vals[i] != prev_vals[i] {
-                fields.push(AccountFieldUpdate {
-                    key: key.to_string(),
-                    value: format!("{:.2}", cur_vals[i] as f64 / PRICE_SCALE_F),
-                    currency: currency_of(key),
-                });
-                delivered = true;
+        for (key, value, currency) in stated {
+            let held = already.get(&(key.clone(), currency.clone()));
+            if held.map(String::as_str) == Some(value.as_str()) {
+                continue;
             }
+            already.insert((key.clone(), currency.clone()), value.clone());
+            fields.push(AccountFieldUpdate { key, value, currency });
         }
 
-        // Integer fields
-        if is_first || acct.day_trades_remaining != prev.day_trades_remaining {
-            fields.push(AccountFieldUpdate {
-                key: "DayTradesRemaining".to_string(),
-                value: acct.day_trades_remaining.to_string(),
-                currency: String::new(),
-            });
-            delivered = true;
-        }
-        if is_first || acct.leverage != prev.leverage {
-            fields.push(AccountFieldUpdate {
-                key: "Leverage-S".to_string(),
-                value: format!("{:.4}", acct.leverage as f64 / PRICE_SCALE_F),
-                currency: String::new(),
-            });
-            delivered = true;
-        }
+        /// How long the account has to have been quiet before it is called
+        /// fully stated.
+        const QUIET: std::time::Duration = std::time::Duration::from_millis(1500);
 
-        *prev_guard = Some(acct);
-
-        Some(AccountUpdateBatch { fields, delivered })
+        let delivered = !fields.is_empty();
+        // Said once, when the venue has stopped adding to the account. The
+        // first field of any kind used to say it, and the figures that matter
+        // arrive seconds later: a caller that waits for this and then reads
+        // the account found what it came for missing.
+        let mut last = self.last_account_field.lock().unwrap();
+        if delivered {
+            *last = Some(std::time::Instant::now());
+        }
+        let finished = matches!(*last, Some(at) if at.elapsed() >= QUIET)
+            && !self.account_end_sent.swap(true, Ordering::AcqRel);
+        Some(AccountUpdateBatch { fields, delivered, finished })
     }
 
     /// Prepare portfolio updates (position entries) for account streaming.
@@ -1882,28 +1887,25 @@ impl ClientCore {
         let req = self.account_summary_req.lock().unwrap().take();
         let (req_id, tags) = req?;
 
-        let acct = shared.portfolio.account();
-        let values = account_summary_values(&acct);
-
+        // What the venue said, in the currency it said it in. Built from this
+        // client's typed copy instead, an account held in a currency the venue
+        // states its figures in came back as zero: the copy is filled from the
+        // rows the venue sends, and a summary asked for before they arrive
+        // reported an empty account rather than nothing.
+        let stated = shared.portfolio.stated_account_values();
         let mut entries = Vec::new();
-        for (i, &tag) in ACCOUNT_SUMMARY_TAGS.iter().enumerate() {
+        for &tag in ACCOUNT_SUMMARY_TAGS {
             if !tags.is_empty() && !tags.iter().any(|t| t == tag) {
                 continue;
             }
-            entries.push(AccountSummaryEntry {
-                tag,
-                value: format!("{:.2}", values[i]),
-                // As stated by the venue for this figure. Empty where it stated
-                // none, which is honest: a currency nobody stated is not the
-                // dollar by default.
-                currency: shared
-                    .portfolio
-                    .stated_account_values()
-                    .iter()
-                    .find(|(k, _, c)| k == tag && !c.is_empty())
-                    .map(|(_, _, c)| c.clone())
-                    .unwrap_or_default(),
-            });
+            for (key, value, currency) in stated.iter().filter(|(k, ..)| k == tag) {
+                entries.push(AccountSummaryEntry {
+                    tag,
+                    value: value.clone(),
+                    currency: currency.clone(),
+                });
+                let _ = key;
+            }
         }
 
         Some(AccountSummaryBatch { req_id, entries })
