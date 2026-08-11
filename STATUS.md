@@ -99,15 +99,34 @@ carry them. None is read by nothing.
 
 ---
 
-## Known limits
+## Where this differs from a gateway
 
-| Limit | Detail |
+Nothing a caller can reach. The differences are what a gateway is, not what it
+does for a program:
+
+| A gateway has | Here |
 | --- | --- |
-| Price precision | Prices are held to a hundred-millionth. The venue holds a price as a count of the contract's own increment, which has no floor — a satoshi sits exactly on ours. Guarded at build time |
-| Quantities | Held to a hundred-millionth as well, so the smallest size a venue counts in survives. A day's volume in the busiest listing is four orders of magnitude inside what the field holds |
-| Order fields | 27 of 154 are not carried by this protocol. Each says so on the field, with the counterpart's own reason. Counted and checked in CI |
+| A window, and a file beside it | Settings stated on the client, and read back. Seven of the gateway's own have no counterpart because there is nothing to configure: no window to size, no local socket to listen on, no runtime to give memory to |
+| A local socket a program connects to | This client *is* the program's client. Nothing to connect to, nothing to trust, nothing to leave running |
+| A Java runtime | None |
 
-| Advisor and event data | Buildable, not verifiable without an advisor account and a WSH subscription |
+On the two things that look like limits and are not:
+
+- **The 27 order fields that do not reach the venue.** The counterpart does not
+  send them either — for each, its own field declares no tag, or declares one
+  the venue refuses by name. A program that sets them through a gateway is not
+  sending them either; the difference is that here it is written down, counted,
+  and checked on every build. Each field keeps what a caller set, so an order
+  built against another client reads back unchanged.
+- **Prices and quantities held to a hundred-millionth.** A gateway hands a
+  caller a double. This holds a fixed point fine enough for a satoshi and for
+  four orders of magnitude more volume than the busiest listing trades in a
+  day, and refuses at build time to be made coarser.
+
+What is not yet proved here, rather than not built: an advisor's allocations
+and the corporate-events subscription. Both reach the venue and are answered;
+seeing what they answer needs an advisor account and a subscription this login
+does not have.
 
 ## Open questions
 
