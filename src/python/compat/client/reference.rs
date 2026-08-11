@@ -320,7 +320,23 @@ impl EClient {
                 self.callback(py, "market_rule", (market_rule_id as i64, list.as_any()))?;
                 return Ok(());
             }
-        log::warn!("req_market_rule: rule {market_rule_id} not in cache");
+        // Answered, not logged. A caller waiting on a callback that will never
+        // come cannot tell that apart from a slow venue, and the other client
+        // here has answered this all along.
+        self.callback(
+            py,
+            "error",
+            (
+                market_rule_id as i64,
+                321i64,
+                format!(
+                    "market rule {market_rule_id} has not been seen on this session. Rules \
+                     arrive with the details of a contract that uses them, so ask for such a \
+                     contract first"
+                ),
+                "",
+            ),
+        )?;
         Ok(())
     }
 
