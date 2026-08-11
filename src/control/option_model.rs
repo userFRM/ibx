@@ -101,13 +101,22 @@ fn exercise_value(terms: OptionTerms, underlying: f64) -> f64 {
     }
 }
 
-/// The rate at which this model reproduces the venue's own price from the
+/// The carry that makes this model reproduce the venue's own price from the
 /// venue's own volatility.
 ///
-/// The venue states everything else it used. This is the one thing it does
-/// not, and it is found rather than assumed, so that what follows is the
-/// venue's model rather than an imitation of it.
-pub fn rate_the_venue_used(terms: OptionTerms, model: VenueModel) -> Option<f64> {
+/// **Not the venue's interest rate, and not presented as one.** It is a
+/// fitting number: whatever this model needs so that its price for a contract
+/// matches the price the venue published for it. Anything the venue's model
+/// does that this one does not — a different tree, dividends taken discretely,
+/// a borrow cost — is absorbed here, which is exactly what makes a caller's
+/// question answerable as a change to the venue's own answer.
+///
+/// That it is a fit and not a rate is visible on the wire: two contracts on
+/// one underlying, one expiry, one minute, wanted five per cent and twenty per
+/// cent. No interest rate differs by strike. The venue does state a real one,
+/// as a historical series of its own, and taking it from there would replace
+/// this — see the note beside the calls that use it.
+pub fn carry_that_matches_the_venue(terms: OptionTerms, model: VenueModel) -> Option<f64> {
     // Searched only where the tree holds together. A step's worth of growth
     // has to stay inside a step up, or the tree's own odds leave nought-to-one
     // and it prices nothing — and how far that reaches depends on the
@@ -144,7 +153,7 @@ pub fn implied_volatility(
     option_price: f64,
     underlying_price: f64,
 ) -> Option<f64> {
-    let rate = rate_the_venue_used(terms, model)?;
+    let rate = carry_that_matches_the_venue(terms, model)?;
     // Searched from where the tree holds together. A step up has to outrun a
     // step's worth of growth or the tree stops being a tree — its own odds
     // leave nought-to-one — so the smallest volatility worth trying is set by
@@ -174,7 +183,7 @@ pub fn option_price(
     volatility: f64,
     underlying_price: f64,
 ) -> Option<f64> {
-    let rate = rate_the_venue_used(terms, model)?;
+    let rate = carry_that_matches_the_venue(terms, model)?;
     price(
         terms,
         underlying_price,
@@ -250,10 +259,11 @@ mod tests {
         assert!(price >= 100.0 - 0.01, "an American put worth less than exercising it: {price}");
     }
 
-    /// The rate is found from what the venue stated, not assumed. Given a
-    /// price this model produced at a known rate, the rate comes back.
+    /// The carry is fitted to what the venue stated rather than assumed.
+    /// Given a price this model produced at a known rate, that number comes
+    /// back — which is what makes it a fit, not a measurement.
     #[test]
-    fn the_rate_the_venue_used_is_found() {
+    fn the_carry_that_matches_the_venue_is_found() {
         let terms = call(100.0, 1.0);
         let at_four_percent = price(terms, 100.0, 0.25, 0.04, 1.5).expect("it prices");
         let model = VenueModel {
@@ -262,8 +272,8 @@ mod tests {
             underlying_price: 100.0,
             present_value_of_dividends: 1.5,
         };
-        let found = rate_the_venue_used(terms, model).expect("a rate reproduces it");
-        assert!((found - 0.04).abs() < 1e-3, "the rate came back as {found}");
+        let found = carry_that_matches_the_venue(terms, model).expect("a carry matches it");
+        assert!((found - 0.04).abs() < 1e-3, "the carry came back as {found}");
     }
 
     /// A caller's price gives back the volatility that produces it, and the

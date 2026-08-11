@@ -96,7 +96,7 @@ fn main() {
         None => println!("  this client could not price it from the venue's own numbers"),
     }
     // What the solve has to work with, when it cannot work.
-    if let Some(rate) = ibx::control::option_model::rate_the_venue_used(terms, model) {
+    if let Some(rate) = ibx::control::option_model::carry_that_matches_the_venue(terms, model) {
         let step = terms.years_to_expiry / 256.0;
         let floor = (rate.abs() * step.sqrt() * 1.02).max(1e-4);
         println!("  rate={rate:.6} years={:.4} floor={floor:.6}", terms.years_to_expiry);
@@ -115,6 +115,59 @@ fn main() {
             println!("  this client says: vol={ours:.6}  ({off:.6} from the venue's own)");
         }
         None => println!("  this client could not solve it from the venue's own numbers"),
+    }
+
+    // The one number an option model needs that no tick states. The
+    // counterpart's own option tools ask the venue for it as a series, so ask
+    // for it the same way and see whether it answers.
+    #[derive(Default)]
+    struct Heard { bars: Vec<(String, f64)>, said: Vec<String> }
+    impl ibx::api::wrapper::Wrapper for Heard {
+        fn historical_data(&mut self, _req: i64, bar: &ibx::api::types::BarData) {
+            self.bars.push((bar.date.clone(), bar.close));
+        }
+        fn error(&mut self, _req: i64, code: i64, message: &str, _adv: &str) {
+            self.said.push(format!("{code}: {message}"));
+        }
+    }
+    let mut heard = Heard::default();
+    let shapes = [("1 M", "1 day"), ("1 Y", "1 week"), ("5 D", "1 hour"), ("1 D", "1 min")];
+    let mut asked = 2;
+    for (duration, bar) in shapes {
+        asked += 1;
+        println!("  asking {duration} of {bar}");
+        let _ = client.req_historical_data(
+            asked, &resolved, "", duration, bar, "OPTION_EXERCISE_INTEREST_RATE", false, 1, false,
+        );
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            client.process_msgs(&mut heard);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        for (when, rate) in heard.bars.drain(..).take(3) { println!("    {when}  {rate}"); }
+        for said in heard.said.drain(..).take(1) { println!("    the venue says: {said}"); }
+    }
+    match client.req_historical_data(
+        2, &resolved, "", "5 D", "1 day", "OPTION_EXERCISE_INTEREST_RATE", false, 1, false,
+    ) {
+        Ok(()) => {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while Instant::now() < deadline {
+                client.process_msgs(&mut heard);
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            println!("\n  the venue's own rate series:");
+            for (when, rate) in heard.bars.iter().take(5) {
+                println!("    {when}  {rate}");
+            }
+            for said in heard.said.iter().take(3) {
+                println!("    the venue says: {said}");
+            }
+            if heard.bars.is_empty() && heard.said.is_empty() {
+                println!("    nothing arrived");
+            }
+        }
+        Err(e) => println!("  the rate series could not be asked for: {e}"),
     }
 
     client.disconnect();

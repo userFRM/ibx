@@ -18,6 +18,7 @@ pub enum BarDataType {
     AdjustedLast,
     HistoricalVolatility,
     ImpliedVolatility,
+    OptionInterestRate,
 }
 
 impl BarDataType {
@@ -35,11 +36,16 @@ impl BarDataType {
             "ADJUSTED_LAST" => Self::AdjustedLast,
             "HISTORICAL_VOLATILITY" => Self::HistoricalVolatility,
             "OPTION_IMPLIED_VOLATILITY" => Self::ImpliedVolatility,
+            // The rate the venue prices options at, as a series of its own.
+            // Not a name the reference client offers — it is what the
+            // counterpart's own option tools ask for, and the one number an
+            // option model needs that no tick states.
+            "OPTION_EXERCISE_INTEREST_RATE" => Self::OptionInterestRate,
             other => {
                 return Err(format!(
                     "Unsupported what_to_show '{other}': expected TRADES, MIDPOINT, \
                      BID, ASK, BID_ASK, ADJUSTED_LAST, HISTORICAL_VOLATILITY \
-                     or OPTION_IMPLIED_VOLATILITY",
+                     OPTION_IMPLIED_VOLATILITY or OPTION_EXERCISE_INTEREST_RATE",
                 ));
             }
         })
@@ -55,6 +61,7 @@ impl BarDataType {
             Self::AdjustedLast => "AdjustedLast",
             Self::HistoricalVolatility => "HV",
             Self::ImpliedVolatility => "IV",
+            Self::OptionInterestRate => "OptExInterestRate",
         }
     }
 }
