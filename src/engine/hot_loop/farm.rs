@@ -165,6 +165,14 @@ fn build_trading_status_subscribe_tags(
 /// The trading-status tick's own number, in place of a request type.
 const TRADING_STATUS_REQUEST_TYPE: u32 = 437;
 
+/// The kind of market data a subscription asks for, on tag 264.
+///
+/// A book is `Deep`; `BidAsk` is the top of one venue's book. The two are not
+/// interchangeable: a book asked for as a quote is acknowledged with the
+/// number of levels the venue holds and then never sent.
+const DEEP_REQUEST: &str = "0";
+const BID_ASK_REQUEST: &str = "442";
+
 /// What the venue counts an instrument's sizes in, as its acknowledgement
 /// states it: the last field, after the increment prices move in.
 ///
@@ -1219,7 +1227,7 @@ impl FarmState {
                     self.depth_fanout_map.push((sub_req, req_id));
                     self.depth_fanout_exchange.push((sub_req, (*exch).to_string()));
                     let sub_req_str = sub_req.to_string();
-                    self.send_depth_one(conn, &sub_req_str, &con_id_str, exch, fix_sec_type);
+                    self.send_depth_one(conn, &sub_req_str, &con_id_str, exch, fix_sec_type, true);
                 }
                 log::info!("SmartDepth fan-out: req={} con_id={} -> {} exchanges", req_id, con_id, exchanges.len());
             } else {
@@ -1229,7 +1237,7 @@ impl FarmState {
                     other => other,
                 };
                 let req_id_str = req_id.to_string();
-                self.send_depth_one(conn, &req_id_str, &con_id_str, fix_exchange, fix_sec_type);
+                self.send_depth_one(conn, &req_id_str, &con_id_str, fix_exchange, fix_sec_type, false);
                 log::info!("Depth subscribe: req={req_id} con_id={con_id} exchange={fix_exchange}");
             }
             hb.last_farm_sent = Instant::now();
@@ -1290,9 +1298,22 @@ impl FarmState {
     }
 
     /// Send a single depth subscribe for one exchange.
-    fn send_depth_one(&self, conn: &mut Connection, req_id_str: &str, con_id_str: &str, exchange: &str, sec_type: &str) {
-        let is_direct = matches!(exchange, "NASDAQ" | "BATS" | "ARCA" | "BEX" | "NYSE" | "IEX"
-            | "BYX" | "NYSENAT" | "T24X");
+    /// What the venue calls a book, and what it calls a quote.
+    ///
+    /// Tag 264 names the kind of market data a subscription is for. A book is
+    /// `Deep`; `BidAsk` is the top of one venue's book and is what a smart
+    /// book is gathered from.
+    fn send_depth_one(
+        &self, conn: &mut Connection, req_id_str: &str, con_id_str: &str,
+        exchange: &str, sec_type: &str, fanned_out: bool,
+    ) {
+        // A venue a smart book is gathered from is asked for the top of its
+        // own book, whichever kind of venue it is. Nine of the eighteen used
+        // to be asked for their whole book instead, and were refused for an
+        // entitlement the aggregate never needed.
+        let is_direct = !fanned_out
+            && matches!(exchange, "NASDAQ" | "BATS" | "ARCA" | "BEX" | "NYSE" | "IEX"
+                | "BYX" | "NYSENAT" | "T24X");
         if is_direct {
             let _ = conn.send_fixcomp(&[
                 (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
@@ -1300,13 +1321,31 @@ impl FarmState {
                 (6008, con_id_str), (207, exchange), (167, sec_type),
                 (264, "0"), (9830, "1"),
             ]);
-        } else {
-            // Socket exchanges (DRCTEDGE, MEMX, PEARL, AMEX, CHX, LTSE, PSX, ISE, EDGEA, etc.)
+        } else if fanned_out {
+            // One of the US equity venues a smart book is gathered from.
+            // These are asked for the top of their own book, which is what
+            // the aggregate is made of.
             let _ = conn.send_fixcomp(&[
                 (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
                 (263, "1"), (146, "1"), (262, req_id_str),
                 (6008, con_id_str), (207, exchange), (167, sec_type),
-                (264, "442"), (6088, "Socket"), (9830, "1"),
+                (264, BID_ASK_REQUEST), (6088, "Socket"), (9830, "1"),
+            ]);
+        } else {
+            // A book on one named venue: a future on its exchange, a crypto
+            // on its own. Asked for under the request type that means a book.
+            //
+            // These used to be asked for under the type that means a quote,
+            // which the venue acknowledged with the number of levels it holds
+            // and then never sent: a caller asking for the book of anything
+            // that is not a US equity waited on silence. Asked for as a book,
+            // the venue answers — with the book, or by refusing the
+            // entitlement, and either reaches the caller.
+            let _ = conn.send_fixcomp(&[
+                (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
+                (263, "1"), (146, "1"), (262, req_id_str),
+                (6008, con_id_str), (207, exchange), (167, sec_type),
+                (264, DEEP_REQUEST), (6088, "Socket"), (9830, "1"),
             ]);
         }
     }
