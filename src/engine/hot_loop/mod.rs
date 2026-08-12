@@ -896,11 +896,21 @@ impl HotLoop {
                         self.hmds.send_schedule_request(req_id, con_id, &sec_type, &exchange, &end_date_time, &duration, use_rth, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
-                ControlCommand::SubscribeDepth { req_id, con_id, exchange, sec_type, num_rows, is_smart_depth, .. } => {
+                ControlCommand::SubscribeDepth { req_id, con_id, exchange, sec_type, num_rows, is_smart_depth, filters, .. } => {
+                    // Which venues offer a book is the server's to say, and it
+                    // is asked once. Asked here rather than at logon so a
+                    // session that never wants a book never asks.
+                    if self.shared.reference.depth_exchanges().is_empty() {
+                        self.ccp.send_mkt_depth_exchanges_request(
+                            &mut self.ccp_conn, &mut self.hb, &self.shared,
+                        );
+                    }
                     self.farm.send_depth_subscribe(
-                        req_id, con_id, &exchange, &sec_type, num_rows, is_smart_depth,
+                        req_id, con_id, &exchange, &filters.primary_exchange, &sec_type,
+                        num_rows, is_smart_depth,
                         &mut self.farm_conn,
                         &mut self.hb,
+                        &self.shared,
                     );
                 }
                 ControlCommand::UnsubscribeDepth { req_id } => {
@@ -1111,6 +1121,7 @@ impl HotLoop {
             &mut self.farm_conn,
             &mut self.context, &mut self.hb,
             replay,
+            &self.shared,
         );
     }
 

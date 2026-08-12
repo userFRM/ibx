@@ -32,7 +32,7 @@ recorded as the result.
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | Top of book | ✅ Supported | Streaming and snapshot; US equities and FX; `scripts/sdk_sweep.py`, `tests/python/test_live_quotes.py`. Concurrent subscribers on one contract share one wire subscription |
-| Market depth (L2) | ✅ Supported | SMART fan-out across 18 US venues, each level attributed to its exchange; `tests/python/test_live_depth.py`, `tests/python/test_live_session_features.py::test_l2_smart_depth`. A book on one named venue is asked for as a book: a future returns the entitlement response for the account, where the request previously went unanswered |
+| Market depth (L2) | ✅ Supported | Gathered from the venues the server publishes — 203 of them, worldwide — filtered to the security type and the aggregation group of the exchange the contract is listed on. A London book returns EUIBSI, BATEUK, AQXEUK and TRQXUK; a US book returns EDGX, ARCA and NASDAQ. Each level names its venue; `tests/python/test_live_depth.py`, `tests/python/test_live_session_features.py::test_l2_smart_depth`. A book on one named venue is asked for as a book: a future returns the entitlement response for the account, where the request previously went unanswered |
 | Historical bars | ✅ Supported | 9 markets in one session (`src/bin/capture_global.rs`); `keepUpToDate` verified in `tests/python/test_issue_100.py` |
 | Historical ticks and schedules | ✅ Supported | `scripts/sdk_sweep.py`; unsupported tick types return an error rather than substituting another series |
 | Tick-by-tick quotes | ✅ Supported | FX and US equities, concurrent streams, each record carrying its request id; `tests/python/test_live_python_wrappers.py` |

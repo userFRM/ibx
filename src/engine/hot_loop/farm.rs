@@ -90,7 +90,7 @@ pub(crate) struct FarmState {
     /// SmartDepth fan-out: maps internal sub_req → user's original req_id.
     depth_fanout_map: Vec<(u32, u32)>,
     /// Primary depth subscription params for reconnect: (req_id, con_id, exchange, sec_type, num_rows, is_smart_depth).
-    depth_resub_info: Vec<(u32, i64, String, String, i32, bool)>,
+    depth_resub_info: Vec<(u32, i64, String, String, String, i32, bool)>,
     md_resub_info: Vec<MdResubInfo>,
     /// The option-model subscriptions and what they were taken out on, so one
     /// can be withdrawn the same way it was asked for.
@@ -1181,64 +1181,110 @@ impl FarmState {
         hb.last_farm_sent = Instant::now();
     }
 
+    /// The venues a book is gathered from, as the server named them.
+    ///
+    /// Every exchange that offers a book states the security type it offers it
+    /// for and the group it aggregates into. A book asked for on no particular
+    /// venue is gathered from the venues in the same group as the one the
+    /// contract is listed on — which is what a group is for, and what makes
+    /// this work for a market nobody wrote down.
+    fn depth_venues_for(
+        &self, sec_type: &str, listed_on: &str, shared: &SharedState,
+    ) -> Vec<String> {
+        let published = shared.reference.depth_exchanges();
+        let of_this_kind = |d: &&crate::types::DepthMktDataDescription| {
+            d.sec_type.eq_ignore_ascii_case(sec_type)
+        };
+        let Some(group) = published
+            .iter()
+            .filter(of_this_kind)
+            .find(|d| d.exchange.eq_ignore_ascii_case(listed_on))
+            .map(|d| d.agg_group)
+        else {
+            return Vec::new();
+        };
+        published
+            .iter()
+            .filter(of_this_kind)
+            .filter(|d| d.agg_group == group)
+            .map(|d| d.exchange.clone())
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_depth_subscribe(
         &mut self,
         req_id: u32,
         con_id: i64,
         exchange: &str,
+        primary_exchange: &str,
         sec_type: &str,
         _num_rows: i32,
         is_smart_depth: bool,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
+        shared: &SharedState,
     ) {
         let fix_sec_type = match sec_type {
             "STK" => "CS", "FUT" => "FUT", "OPT" => "OPT", "IND" => "IND",
             "CASH" => "CASH", other => other,
         };
         self.depth_subs.push((req_id, is_smart_depth));
-        self.depth_resub_info.push((req_id, con_id, exchange.to_string(), sec_type.to_string(), _num_rows, is_smart_depth));
+        self.depth_resub_info.push((
+            req_id, con_id, exchange.to_string(), primary_exchange.to_string(),
+            sec_type.to_string(), _num_rows, is_smart_depth,
+        ));
 
-        // SmartDepth requires per-exchange fan-out. The server ACKs a BEST/SMART
-        // subscribe but never sends data for it. Data only arrives for individual exchanges.
-        // Auto-enable fan-out when exchange is SMART/BEST (aggregated routing), since
-        // single-exchange depth to SMART returns nothing.
-        let needs_fanout = is_smart_depth || matches!(exchange, "SMART" | "BEST" | "");
-        let exchanges: &[&str] = if needs_fanout {
-            // US equity exchanges that the gateway fans out to
-            &["NASDAQ", "IEX", "BATS", "ARCA", "BEX", "NYSE", "BYX", "NYSENAT", "T24X",
-              "DRCTEDGE", "MEMX", "PEARL", "AMEX", "CHX", "LTSE", "PSX", "ISE", "EDGEA"]
+        // Which venues a book is gathered from is the server's to say: it
+        // publishes every exchange that offers one, for every security type,
+        // with the group each aggregates into. A list of venue names written
+        // here would be a list of the markets this client cannot reach.
+        let on_no_venue = is_smart_depth || matches!(exchange, "SMART" | "BEST" | "");
+        let gathered = if on_no_venue {
+            self.depth_venues_for(sec_type, primary_exchange, shared)
         } else {
-            // Single exchange subscribe
-            static SINGLE: [&str; 0] = [];
-            &SINGLE
+            Vec::new()
+        };
+        // A book asked for on no particular venue, before the server has said
+        // which venues offer one, is asked for where the contract is listed.
+        // One venue's book is less than the aggregate and is a book; the
+        // request the aggregate would have needed reaches nothing at all.
+        let exchange = if on_no_venue && gathered.is_empty() && !primary_exchange.is_empty() {
+            log::info!(
+                "the venues offering a book are not known yet, so req={req_id} is asked for \
+                 where the contract is listed ({primary_exchange})",
+            );
+            primary_exchange
+        } else {
+            exchange
         };
 
         if let Some(conn) = farm_conn.as_mut() {
             let con_id_str = (con_id as u32).to_string();
 
-            if !exchanges.is_empty() {
-                // SmartDepth: fan-out to individual exchanges.
-                // Each sub gets a unique req_id tracked as a depth subscription.
-                for exch in exchanges {
+            if !gathered.is_empty() {
+                // Each venue is asked for the top of its own book, which is
+                // what the aggregate is made of.
+                for venue in &gathered {
                     let sub_req = self.next_md_req_id;
                     self.next_md_req_id += 1;
                     self.depth_subs.push((sub_req, is_smart_depth));
                     self.depth_fanout_map.push((sub_req, req_id));
-                    self.depth_fanout_exchange.push((sub_req, (*exch).to_string()));
-                    let sub_req_str = sub_req.to_string();
-                    self.send_depth_one(conn, &sub_req_str, &con_id_str, exch, fix_sec_type, true);
+                    self.depth_fanout_exchange.push((sub_req, venue.clone()));
+                    self.send_depth_one(
+                        conn, &sub_req.to_string(), &con_id_str, venue, fix_sec_type, true,
+                    );
                 }
-                log::info!("SmartDepth fan-out: req={} con_id={} -> {} exchanges", req_id, con_id, exchanges.len());
+                log::info!(
+                    "Book gathered for req={req_id} con_id={con_id} from {} venues the server named",
+                    gathered.len(),
+                );
             } else {
-                // Single exchange
-                let fix_exchange = match exchange {
-                    "ISLAND" => "NASDAQ",
-                    other => other,
-                };
-                let req_id_str = req_id.to_string();
-                self.send_depth_one(conn, &req_id_str, &con_id_str, fix_exchange, fix_sec_type, false);
-                log::info!("Depth subscribe: req={req_id} con_id={con_id} exchange={fix_exchange}");
+                // A book on one named venue.
+                self.send_depth_one(
+                    conn, &req_id.to_string(), &con_id_str, exchange, fix_sec_type, false,
+                );
+                log::info!("Depth subscribe: req={req_id} con_id={con_id} exchange={exchange}");
             }
             hb.last_farm_sent = Instant::now();
         }
@@ -1260,7 +1306,7 @@ impl FarmState {
         if !found { return; }
 
         // Remove reconnect params
-        self.depth_resub_info.retain(|(id, _, _, _, _, _)| *id != req_id);
+        self.depth_resub_info.retain(|(id, ..)| *id != req_id);
 
         // Collect SmartDepth fan-out sub_reqs that map to this user req_id
         let fanout_reqs: Vec<u32> = self.depth_fanout_map.iter()
@@ -1307,30 +1353,11 @@ impl FarmState {
         &self, conn: &mut Connection, req_id_str: &str, con_id_str: &str,
         exchange: &str, sec_type: &str, fanned_out: bool,
     ) {
-        // A venue a smart book is gathered from is asked for the top of its
-        // own book, whichever kind of venue it is. Nine of the eighteen used
-        // to be asked for their whole book instead, and were refused for an
-        // entitlement the aggregate never needed.
-        let is_direct = !fanned_out
-            && matches!(exchange, "NASDAQ" | "BATS" | "ARCA" | "BEX" | "NYSE" | "IEX"
-                | "BYX" | "NYSENAT" | "T24X");
-        if is_direct {
-            let _ = conn.send_fixcomp(&[
-                (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                (263, "1"), (146, "1"), (262, req_id_str),
-                (6008, con_id_str), (207, exchange), (167, sec_type),
-                (264, "0"), (9830, "1"),
-            ]);
-        } else if fanned_out {
-            // One of the US equity venues a smart book is gathered from.
-            // These are asked for the top of their own book, which is what
-            // the aggregate is made of.
-            let _ = conn.send_fixcomp(&[
-                (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                (263, "1"), (146, "1"), (262, req_id_str),
-                (6008, con_id_str), (207, exchange), (167, sec_type),
-                (264, BID_ASK_REQUEST), (6088, "Socket"), (9830, "1"),
-            ]);
+        // One shape, and the kind of data is the only thing that varies: a
+        // venue gathered into an aggregate is asked for the top of its own
+        // book, and a venue asked for by name is asked for the book itself.
+        let wanted = if fanned_out { BID_ASK_REQUEST } else { DEEP_REQUEST };
+        if false {
         } else {
             // A book on one named venue: a future on its exchange, a crypto
             // on its own. Asked for under the request type that means a book.
@@ -1345,7 +1372,7 @@ impl FarmState {
                 (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
                 (263, "1"), (146, "1"), (262, req_id_str),
                 (6008, con_id_str), (207, exchange), (167, sec_type),
-                (264, DEEP_REQUEST), (6088, "Socket"), (9830, "1"),
+                (264, wanted), (6088, "Socket"), (9830, "1"),
             ]);
         }
     }
@@ -1688,6 +1715,7 @@ impl FarmState {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn reconnect(
         &mut self,
         conn: Connection,
@@ -1695,6 +1723,7 @@ impl FarmState {
         context: &mut Context,
         hb: &mut HeartbeatState,
         replay: ReplayPacing,
+        shared: &SharedState,
     ) {
         *farm_conn = Some(conn);
         self.disconnected = false;
@@ -1725,10 +1754,12 @@ impl FarmState {
         // Re-subscribe depth subscriptions (depth_resub_info survived disconnect)
         let depth_params: Vec<_> = self.depth_resub_info.drain(..).collect();
         let depth_count = depth_params.len();
-        for (req_id, con_id, exchange, sec_type, num_rows, is_smart_depth) in depth_params {
+        for (req_id, con_id, exchange, listed_on, sec_type, num_rows, is_smart_depth)
+            in depth_params
+        {
             self.send_depth_subscribe(
-                req_id, con_id, &exchange, &sec_type, num_rows, is_smart_depth,
-                farm_conn, hb,
+                req_id, con_id, &exchange, &listed_on, &sec_type, num_rows, is_smart_depth,
+                farm_conn, hb, shared,
             );
         }
 
