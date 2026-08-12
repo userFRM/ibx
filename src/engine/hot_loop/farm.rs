@@ -75,6 +75,13 @@ type MdResubInfo = (InstrumentId, String, String, String, String, f64, String, S
 type MdResubTarget = (InstrumentId, i64, String, String, String, String, f64, String, String, i32);
 
 pub(crate) struct FarmState {
+    /// The next id this client asks under for a stream of its own.
+    ///
+    /// Above anything a caller states. These ids share a table with the ones
+    /// callers state, and the venue echoes both back the same way, so an
+    /// overlap makes one indistinguishable from the other: a caller's second
+    /// book was answered under a fan-out subscription's venue because both
+    /// were numbered 2.
     pub(crate) next_md_req_id: u32,
     pub(crate) md_req_to_instrument: Vec<(u32, InstrumentId)>,
     pub(crate) instrument_md_reqs: Vec<(InstrumentId, Vec<u32>)>,
@@ -425,6 +432,14 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
 }
 
 impl FarmState {
+    /// Where this client's own request ids begin.
+    ///
+    /// High enough that nothing a caller states reaches it, and inside the
+    /// range the venue echoes back: asked under an id with the top bits set,
+    /// a subscription was answered by neither an acknowledgement nor a
+    /// refusal, while its neighbours in the same fan-out were refused by name.
+    pub(crate) const FIRST_INTERNAL_REQ_ID: u32 = 1_000_000_000;
+
     /// Whether this instrument still has market-data state that would be
     /// repointed by a slot reuse: a live subscription, or a record kept for the
     /// next reconnect.
@@ -447,7 +462,7 @@ impl FarmState {
 
     pub(crate) fn new() -> Self {
         Self {
-            next_md_req_id: 1,
+            next_md_req_id: Self::FIRST_INTERNAL_REQ_ID,
             md_req_to_instrument: Vec::new(),
             instrument_md_reqs: Vec::new(),
             depth_subs: Vec::new(),
@@ -814,9 +829,18 @@ impl FarmState {
                 .find(|(sub, _)| *sub == req_id)
                 .map(|(_, user)| *user)
                 .unwrap_or(req_id);
+            // Which venue this subscription's levels stand on: the one it was
+            // fanned out to, or — for a book asked for on one named venue —
+            // the one the caller named. Left empty for the second, a book on a
+            // named venue arrived with nothing on it saying where, while the
+            // aggregate over the same venue named it.
             let venue = self.depth_fanout_exchange.iter()
                 .find(|(sub, _)| *sub == req_id)
                 .map(|(_, exch)| exch.clone())
+                .or_else(|| self.depth_resub_info.iter()
+                    .find(|(rid, ..)| *rid == req_id)
+                    .map(|(_, _, exchange, ..)| exchange.clone())
+                    .filter(|named| !matches!(named.as_str(), "SMART" | "BEST" | "")))
                 .unwrap_or_default();
             self.depth_tag_to_req.push((
                 server_tag,
@@ -1434,13 +1458,11 @@ impl FarmState {
             let stag = ((body[pos] as u32) << 16) | ((body[pos+1] as u32) << 8) | (body[pos+2] as u32);
             pos += 3;
 
-            let (req_id, is_smart, min_tick, size_tick, venue) = match self.depth_tag_to_req.iter()
-                .find(|(s, ..)| *s == stag)
-                .map(|(_, r, sm, mt, st, ex)| (*r, *sm, *mt, *st, ex.clone()))
-            {
-                Some(v) => v,
-                None => { continue; }
+            let Some((_, _, min_tick, size_tick, _)) = self.lookup_depth_stag(stag) else {
+                continue;
             };
+            // One venue's stream can belong to several requests.
+            let subscribers = self.depth_subscribers_of(stag);
 
             // What the venue counts this contract's sizes in, the same way
             // min_tick is what it counts its prices in. Stating none means
@@ -1474,10 +1496,12 @@ impl FarmState {
                     let position = if side == 0 { let p = ask_position; ask_position += 1; p }
                                   else { let p = bid_position; bid_position += 1; p };
                     let operation = if is_snapshot { 0 } else { 1 };
-                    shared.market.push_depth_update(DepthUpdate {
-                        req_id, position, market_maker: venue.clone(),
-                        operation, side, price, size, is_smart_depth: is_smart,
-                    });
+                    for (req_id, is_smart, venue) in &subscribers {
+                        shared.market.push_depth_update(DepthUpdate {
+                            req_id: *req_id, position, market_maker: venue.clone(),
+                            operation, side, price, size, is_smart_depth: *is_smart,
+                        });
+                    }
                     has_price = false;
                     has_size = false;
                 }
@@ -1502,10 +1526,12 @@ impl FarmState {
                     let position = if side == 0 { let p = ask_position; ask_position += 1; p }
                                   else { let p = bid_position; bid_position += 1; p };
                     let operation = if is_snapshot { 0 } else { 1 };
-                    shared.market.push_depth_update(DepthUpdate {
-                        req_id, position, market_maker: venue.clone(),
-                        operation, side, price, size, is_smart_depth: is_smart,
-                    });
+                    for (req_id, is_smart, venue) in &subscribers {
+                        shared.market.push_depth_update(DepthUpdate {
+                            req_id: *req_id, position, market_maker: venue.clone(),
+                            operation, side, price, size, is_smart_depth: *is_smart,
+                        });
+                    }
                     has_price = false;
                     has_size = false;
                 }
@@ -1539,14 +1565,13 @@ impl FarmState {
         // belongs to. Starting at zero and pushing regardless handed every
         // level of a book to request zero, which no caller ever asked for and
         // no caller could cancel.
-        let mut req_id: Option<u32> = None;
-        let mut is_smart = false;
+        //
+        // Each subscriber carries the venue this section of the book is from:
+        // the entries below carry no market maker of their own, and a level
+        // with no venue on it is a level a caller cannot place.
+        let mut subscribers: Vec<(u32, bool, String)> = Vec::new();
         let mut min_tick: f64 = 0.01;
         let mut size_tick: f64 = 1.0;
-        // Which venue this section of the book is from. The entries below
-        // carry no market maker of their own, and a level with no venue on it
-        // is a level a caller cannot place.
-        let mut venue = String::new();
         let mut pos = 2;
 
         // Three bytes, the width the venue assigns them in and the width the
@@ -1558,16 +1583,14 @@ impl FarmState {
         } else {
             u32::MAX
         };
-        if let Some((r, sm, mt, st, ex)) = self.lookup_depth_stag(hdr_stag) {
-            req_id = Some(r);
-            is_smart = sm;
+        if let Some((_, _, mt, st, _)) = self.lookup_depth_stag(hdr_stag) {
+            subscribers = self.depth_subscribers_of(hdr_stag);
             min_tick = mt;
             size_tick = st;
-            venue = ex;
             pos = 5;
         }
-        // If header stag didn't match, start scanning from pos=2;
-        // the first stag switch sentinel will set req_id.
+        // If header stag didn't match, start scanning from pos=2; the first
+        // stag switch sentinel names the subscriptions the levels belong to.
 
         while pos < body.len() {
             let b = body[pos];
@@ -1578,12 +1601,13 @@ impl FarmState {
                 let candidate = ((body[pos + 2] as u32) << 16)
                     | ((body[pos + 3] as u32) << 8)
                     | (body[pos + 4] as u32);
-                if let Some((r, sm, mt, st, ex)) = self.lookup_depth_stag(candidate) {
-                    req_id = Some(r);
-                    is_smart = sm;
+                if let Some((_, _, mt, st, _)) = self.lookup_depth_stag(candidate) {
+                    // Every request this section's levels belong to: the venue
+                    // answers a second subscription on a contract and venue it
+                    // already streams with the tag it already uses.
+                    subscribers = self.depth_subscribers_of(candidate);
                     min_tick = mt;
                     size_tick = st;
-                    venue = ex;
                     pos += 5;
                     continue;
                 }
@@ -1598,19 +1622,21 @@ impl FarmState {
                 let book_position = body[pos] as i32;
                 pos += 1;
 
-                if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
-                    && let Some(req_id) = req_id
+                if let Some((price, size, side, is_snapshot)) =
+                    self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
                 {
-                    // The venue's own name for the maker where it states one,
-                    // and otherwise the exchange this section of the book is
-                    // from: a level with neither is a level a caller cannot
-                    // place.
-                    let mm = if mm.is_empty() { venue.clone() } else { mm };
-                    shared.market.push_depth_update(DepthUpdate {
-                        req_id, position: book_position, market_maker: mm,
-                        operation: if is_snapshot { 0 } else { 1 },
-                        side, price, size, is_smart_depth: is_smart,
-                    });
+                    for (req_id, is_smart, venue) in &subscribers {
+                        // The venue's own name for the maker where it states
+                        // one, and otherwise the exchange this section of the
+                        // book is from: a level with neither is a level a
+                        // caller cannot place.
+                        let named = if mm.is_empty() { venue.clone() } else { mm.clone() };
+                        shared.market.push_depth_update(DepthUpdate {
+                            req_id: *req_id, position: book_position, market_maker: named,
+                            operation: if is_snapshot { 0 } else { 1 },
+                            side, price, size, is_smart_depth: *is_smart,
+                        });
+                    }
                 }
                 continue;
             }
@@ -1628,14 +1654,17 @@ impl FarmState {
                     let book_position = body[pos] as i32;
                     pos += 1;
 
-                    if let Some((price, size, side, is_snapshot)) = self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
-                        && let Some(req_id) = req_id
+                    if let Some((price, size, side, is_snapshot)) =
+                        self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
                     {
-                        shared.market.push_depth_update(DepthUpdate {
-                            req_id, position: book_position, market_maker: venue.clone(),
-                            operation: if is_snapshot { 0 } else { 1 },
-                            side, price, size, is_smart_depth: is_smart,
-                        });
+                        for (req_id, is_smart, venue) in &subscribers {
+                            shared.market.push_depth_update(DepthUpdate {
+                                req_id: *req_id, position: book_position,
+                                market_maker: venue.clone(),
+                                operation: if is_snapshot { 0 } else { 1 },
+                                side, price, size, is_smart_depth: *is_smart,
+                            });
+                        }
                     }
                     continue;
                 }
@@ -1644,6 +1673,19 @@ impl FarmState {
             // Unknown byte — skip
             pos += 1;
         }
+    }
+
+    /// Every request this tag's levels belong to, as (req_id, is_smart, venue).
+    ///
+    /// The venue answers a second subscription on a contract and venue it is
+    /// already streaming with the tag it is already using, so a level can
+    /// belong to more than one request. Delivering to the first alone left
+    /// every later caller with a book that never arrived and no word of why.
+    fn depth_subscribers_of(&self, stag: u32) -> Vec<(u32, bool, String)> {
+        self.depth_tag_to_req.iter()
+            .filter(|(s, ..)| *s == stag)
+            .map(|(_, r, sm, _, _, ex)| (*r, *sm, ex.clone()))
+            .collect()
     }
 
     /// Look up a depth server_tag → (req_id, is_smart, min_tick, size_tick, venue).

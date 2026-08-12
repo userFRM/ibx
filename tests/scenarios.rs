@@ -23,11 +23,17 @@ fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<Sha
 }
 
 fn spy() -> Contract {
-    Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() }
+    Contract {
+        con_id: 756733, symbol: "SPY".into(), exchange: "SMART".into(),
+        ..Default::default()
+    }
 }
 
 fn aapl() -> Contract {
-    Contract { con_id: 265598, symbol: "AAPL".into(), ..Default::default() }
+    Contract {
+        con_id: 265598, symbol: "AAPL".into(), exchange: "SMART".into(),
+        ..Default::default()
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1090,13 +1096,16 @@ fn pnl_single_dispatches_position_info() {
 fn account_summary_one_shot_delivery() {
     let (client, _rx, shared) = test_client();
 
-    let acct = AccountState {
-        net_liquidation: 100_000 * PRICE_SCALE,
-        buying_power: 400_000 * PRICE_SCALE,
-        available_funds: 50_000 * PRICE_SCALE,
-        ..AccountState::default()
-    };
-    shared.portfolio.set_account(&acct);
+    // What the venue stated about the account, in the currency it stated it
+    // in. A summary reports these rather than a typed copy of them: an account
+    // held in another currency read as all zeroes when it was read from one.
+    for (key, value) in [
+        ("NetLiquidation", "100000.00"),
+        ("BuyingPower", "400000.00"),
+        ("AvailableFunds", "50000.00"),
+    ] {
+        shared.portfolio.note_account_value(key, value, "USD");
+    }
 
     client.req_account_summary(5, "All", "NetLiquidation,BuyingPower,AvailableFunds");
 
@@ -1142,15 +1151,15 @@ fn cancel_account_summary_prevents_delivery() {
 fn account_summary_empty_tags_returns_all() {
     let (client, _rx, shared) = test_client();
 
-    let acct = AccountState {
-        net_liquidation: 100_000 * PRICE_SCALE,
-        buying_power: 400_000 * PRICE_SCALE,
-        total_cash_value: 50_000 * PRICE_SCALE,
-        ..AccountState::default()
-    };
-    shared.portfolio.set_account(&acct);
+    for (key, value) in [
+        ("NetLiquidation", "100000.00"),
+        ("BuyingPower", "400000.00"),
+        ("TotalCashValue", "50000.00"),
+    ] {
+        shared.portfolio.note_account_value(key, value, "USD");
+    }
 
-    // Empty tags string → all non-zero fields
+    // Empty tags string → everything the venue has stated
     client.req_account_summary(7, "All", "");
 
     let mut w = RecordingWrapper::default();

@@ -1571,6 +1571,10 @@ impl PortfolioState {
     /// the same name in the same currency.
     #[doc(hidden)]
     pub fn note_account_value(&self, key: &str, value: &str, currency: &str) {
+        // A figure the venue stated is account data having arrived. Marked
+        // only when the typed copy was built, a summary asked for in between
+        // was answered with nothing at all.
+        self.account_data_received.store(true, Ordering::Release);
         let mut all = self.stated_account_values.lock().unwrap();
         match all.iter_mut().find(|(k, _, c)| k == key && c == currency) {
             Some(slot) => slot.1 = value.to_string(),
