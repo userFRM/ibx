@@ -140,12 +140,11 @@ Run order and environment are documented in
 
 ## Planned work
 
-[docs/api-alignment-plan.md](docs/api-alignment-plan.md) covers the caller-facing
-conventions still out of line with the client this replaces: refusals that raise
-where the reference client reports them under a code (39 sites, 25 of them on
-request-shaped methods), the distinction between the product surface and the
-adapters over it, and settings that are decided by configuration where the
-server states a grant for them.
+[docs/api-alignment-plan.md](docs/api-alignment-plan.md) lists three items:
+refusals that raise where the reference client reports them under a code (39
+sites, 25 on request-shaped methods); settings decided by configuration where
+the server states a grant for them; and whether the surfaces over this engine
+are three products or one product and two adapters.
 
 ## Release criteria
 
