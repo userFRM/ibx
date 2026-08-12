@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 use std::sync::{Condvar, Mutex};
 
 use std::collections::HashMap;
+
+/// The token the venue grants a session that may name Nasdaq by its older
+/// spelling. Stated on the granted-feature list at logon.
+const ISLAND_FOR_NASDAQ_GRANT: &str = "ISLAND2NASDAQ";
 use crate::control::historical::{HistoricalResponse, HeadTimestampResponse};
 use crate::control::contracts::{ContractDefinition, OptionChainScope, SymbolMatch};
 use crate::control::scanner::ScannerResult;
@@ -757,7 +761,7 @@ pub struct ReferenceState {
     head_timestamps: Mutex<Vec<(u32, HeadTimestampResponse)>>,
     /// Set while the smart-component table is this client's own rather than
     /// the venue's.
-    smart_components_provisional: std::sync::atomic::AtomicBool,
+    smart_components_provisional: AtomicBool,
     contract_details: Mutex<Vec<(u32, ContractDefinition)>>,
     contract_details_end: Mutex<Vec<u32>>,
     matching_symbols: Mutex<Vec<(u32, Vec<SymbolMatch>)>>,
@@ -801,6 +805,10 @@ pub struct ReferenceState {
     /// Feature tokens the venue enables for this account, from logon tag 6542
     /// and from the account configuration that follows it.
     enabled_features: Mutex<Vec<String>>,
+    /// Whether the venue granted the older spelling of Nasdaq. Settled when
+    /// the grants are, because a contract definition is parsed under it and a
+    /// lock and a scan per definition is not what that path is for.
+    island_granted: AtomicBool,
     /// Which algorithms the venue offers, by provider and security type.
     algorithms: Mutex<HashMap<String, Vec<String>>>,
 }
@@ -810,7 +818,7 @@ impl ReferenceState {
         Self {
             historical_data: Mutex::new(Vec::with_capacity(16)),
             head_timestamps: Mutex::new(Vec::with_capacity(8)),
-            smart_components_provisional: std::sync::atomic::AtomicBool::new(false),
+            smart_components_provisional: AtomicBool::new(false),
             contract_details: Mutex::new(Vec::with_capacity(16)),
             contract_details_end: Mutex::new(Vec::with_capacity(8)),
             matching_symbols: Mutex::new(Vec::with_capacity(8)),
@@ -839,6 +847,7 @@ impl ReferenceState {
             misc_urls: Mutex::new(HashMap::new()),
             order_permissions: Mutex::new(HashMap::new()),
             enabled_features: Mutex::new(Vec::new()),
+            island_granted: AtomicBool::new(false),
             algorithms: Mutex::new(HashMap::new()),
         }
     }
@@ -863,12 +872,12 @@ impl ReferenceState {
     /// guess, and a guess that renders confidently is indistinguishable from
     /// knowledge.
     pub fn smart_components_are_provisional(&self) -> bool {
-        self.smart_components_provisional.load(std::sync::atomic::Ordering::Relaxed)
+        self.smart_components_provisional.load(Ordering::Relaxed)
     }
 
     pub fn note_smart_components_provisional(&self, provisional: bool) {
         self.smart_components_provisional
-            .store(provisional, std::sync::atomic::Ordering::Relaxed);
+            .store(provisional, Ordering::Relaxed);
     }
 
     /// The definitions a dispatch loop should deliver, leaving an answering
@@ -1367,6 +1376,21 @@ impl ReferenceState {
                 have.push(token);
             }
         }
+        self.settle_island_grant(&have);
+    }
+
+    /// The token that grants the older spelling of Nasdaq, as the counterpart
+    /// reads it: off the granted list at logon, held on its own from then on.
+    fn settle_island_grant(&self, granted: &[String]) {
+        self.island_granted.store(
+            granted.iter().any(|t| t == ISLAND_FOR_NASDAQ_GRANT),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Whether the venue grants the older spelling of Nasdaq to this account.
+    pub fn island_granted(&self) -> bool {
+        self.island_granted.load(Ordering::Relaxed)
     }
 
     pub fn feature_enabled(&self, token: &str) -> bool {
@@ -1378,6 +1402,7 @@ impl ReferenceState {
     }
 
     #[doc(hidden)] pub fn set_enabled_features(&self, features: Vec<String>) {
+        self.settle_island_grant(&features);
         *self.enabled_features.lock().unwrap() = features;
     }
 
@@ -1695,6 +1720,16 @@ impl SharedState {
     /// What this session runs under.
     pub fn settings(&self) -> std::sync::Arc<crate::api::settings::SessionSettings> {
         self.settings.lock().unwrap().clone()
+    }
+
+    /// Whether a US stock trading on Nasdaq is named by the older spelling.
+    ///
+    /// The setting asks for it and the venue grants it, and it takes both: the
+    /// counterpart reads the same grant off the granted-feature list at logon
+    /// and holds it beside the setting. Read once per contract definition, so
+    /// the grant is settled at logon rather than scanned for here.
+    pub fn island_for_nasdaq(&self) -> bool {
+        self.settings().island_for_nasdaq && self.reference.island_granted()
     }
 
     /// Stated once, as the session opens, before the engine's threads start.
@@ -2112,7 +2147,7 @@ mod tests {
     }
     #[test]
     fn seqquote_no_torn_reads() {
-        use std::sync::atomic::AtomicBool;
+        use AtomicBool;
         use std::sync::Arc;
         use std::thread;
 
@@ -2201,5 +2236,24 @@ mod tests {
         p.apply_fill(9, -10.0, 5 * PRICE_SCALE);
         assert_eq!(p.position_info(9).unwrap().position, -10.0, "a short opens too");
         assert_eq!(p.position_info(9).unwrap().avg_cost, 5 * PRICE_SCALE);
+    }
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+
+    #[test]
+    fn the_older_spelling_takes_the_setting_and_the_grant() {
+        let shared = SharedState::new();
+        // The setting alone asks for it; the venue has granted nothing yet.
+        assert!(shared.settings().island_for_nasdaq, "the counterpart's default");
+        assert!(!shared.island_for_nasdaq(), "and no grant is not a grant");
+
+        shared.reference.set_enabled_features(vec!["NOAMOPTCHK".into()]);
+        assert!(!shared.island_for_nasdaq(), "another grant is not this one");
+
+        shared.reference.add_enabled_features(vec!["ISLAND2NASDAQ".into()]);
+        assert!(shared.island_for_nasdaq(), "asked for and granted");
     }
 }
