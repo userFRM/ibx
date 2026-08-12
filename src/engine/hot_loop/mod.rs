@@ -98,6 +98,9 @@ pub struct HotLoop {
     pub secdef: secdef::SecDefState,
     /// SPSC channel receiver for control plane commands.
     control_rx: Option<Receiver<ControlCommand>>,
+    /// Books asked for on no particular venue, held until the server has said
+    /// which venues offer one.
+    depth_awaiting_venues: Vec<ControlCommand>,
     /// Whether the hot loop should keep running.
     running: bool,
     /// Account ID for order submission.
@@ -205,6 +208,7 @@ impl HotLoop {
             secdef_conn: None,
             secdef: secdef::SecDefState::new(),
             control_rx: None,
+            depth_awaiting_venues: Vec::new(),
             running: true,
             account_id: String::new(),
             hb: HeartbeatState::new(),
@@ -568,6 +572,14 @@ impl HotLoop {
         // Drain the buffer so we can mutably borrow self in the loop body.
         // Requests held for want of a contract id come first: they were asked
         // for before anything still in the buffer.
+        // A book held for want of the list of venues that offer one, now that
+        // the server has named them.
+        if !self.depth_awaiting_venues.is_empty()
+            && !self.shared.reference.depth_exchanges().is_empty()
+        {
+            let held = std::mem::take(&mut self.depth_awaiting_venues);
+            self.cmd_buf.extend(held);
+        }
         let mut cmds: Vec<ControlCommand> = std::mem::take(&mut self.ccp.resolved_named);
         cmds.append(&mut self.cmd_buf);
         for cmd in cmds {
@@ -900,10 +912,23 @@ impl HotLoop {
                     // Which venues offer a book is the server's to say, and it
                     // is asked once. Asked here rather than at logon so a
                     // session that never wants a book never asks.
-                    if self.shared.reference.depth_exchanges().is_empty() {
+                    //
+                    // A book on no particular venue waits for the answer
+                    // rather than going out to the one venue the contract is
+                    // listed on: sent early it gathers from one venue where it
+                    // was meant to gather from all of them, and a caller sees
+                    // a thin book with nothing to say it is thin.
+                    let on_no_venue =
+                        is_smart_depth || matches!(exchange.as_str(), "SMART" | "BEST" | "");
+                    if on_no_venue && self.shared.reference.depth_exchanges().is_empty() {
                         self.ccp.send_mkt_depth_exchanges_request(
                             &mut self.ccp_conn, &mut self.hb, &self.shared,
                         );
+                        self.depth_awaiting_venues.push(ControlCommand::SubscribeDepth {
+                            req_id, con_id, exchange, sec_type, num_rows, is_smart_depth,
+                            filters, currency: String::new(), symbol: String::new(),
+                        });
+                        continue;
                     }
                     self.farm.send_depth_subscribe(
                         req_id, con_id, &exchange, &filters.primary_exchange, &sec_type,
