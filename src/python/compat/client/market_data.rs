@@ -2,6 +2,7 @@
 
 use pyo3::prelude::*;
 
+use crate::api::error_codes::Refusal;
 use crate::types::*;
 use super::{wire_req_id, EClient};
 use super::super::contract::Contract;
@@ -120,6 +121,22 @@ impl EClient {
             Err(why) => return self.report_refusal(py, req_id, why.into()),
         };
 
+        // A stream is asked for by the venue's own id for the contract. Sent
+        // with none, the venue answers "Unknown contract" against a query this
+        // client had not told anyone about, and the caller waited on a stream
+        // that was refused before it began.
+        let named;
+        let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
+            match self.qualify_contract(py, contract) {
+                Ok(found) => { named = found; &named }
+                Err(why) => return self.report_refusal(
+                    py, req_id, Refusal::no_definition(why.value(py).to_string()),
+                ),
+            }
+        } else {
+            contract
+        };
+
         let shared = self.shared_state()?;
         Self::send_control(py, &tx, ControlCommand::RegisterInstrument {
             con_id: contract.con_id,
@@ -146,9 +163,9 @@ impl EClient {
 
     /// Cancel tick-by-tick data.
     fn cancel_tick_by_tick_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        if let Some(instrument) = self.core.req_to_instrument.lock().unwrap().remove(&req_id) {
-            self.core.instrument_to_req.lock().unwrap().remove(&instrument);
-            self.core.forget_instrument(instrument);
+        // Only what this request took out. Removing the contract's quote
+        // mapping here took the quotes away from whoever was watching them.
+        if let Some(instrument) = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id) {
             let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
             Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         }

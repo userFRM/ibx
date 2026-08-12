@@ -907,10 +907,19 @@ fn the_two_trade_streams_are_asked_for_separately() {
 #[test]
 fn cancel_tick_by_tick_data_sends_unsubscribe_tbt() {
     let (client, rx, _shared) = test_client();
-    client.core.req_to_instrument.lock().unwrap().insert(10, 3);
+    // A trade stream is held in its own table. Held in the quote table, a
+    // request for trades was handed the contract's quotes, and withdrawing it
+    // took the quotes away from whoever was watching them.
+    client.core.tbt_to_instrument.lock().unwrap().insert(10, 3);
+    client.core.instrument_to_req.lock().unwrap().insert(3, 99);
     client.cancel_tick_by_tick_data(10).unwrap();
     let cmd = rx.try_recv().unwrap();
     assert!(matches!(cmd, ControlCommand::UnsubscribeTbt { instrument: 3, .. }));
+    assert_eq!(
+        client.core.instrument_to_req.lock().unwrap().get(&3).copied(),
+        Some(99),
+        "and the caller quoting that contract still is",
+    );
 }
 
 #[test]
