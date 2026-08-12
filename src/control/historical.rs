@@ -724,8 +724,12 @@ pub fn decode_bar_payload(payload: &[u8], min_tick: f64) -> Option<crate::types:
 
     // Low price in ticks (31-bit signed)
     let low_ticks = read_bits(&mut pos, 31);
+    // Sign-extended in a width that holds the intermediate. A 31-bit value with
+    // its sign bit set is the raw value less 2^31, and that subtraction does
+    // not fit an i32 — a bar with a low below zero, which a spread has, took
+    // the process down.
     let low_ticks_signed = if low_ticks & (1 << 30) != 0 {
-        low_ticks as i32 - (1 << 31)
+        (low_ticks as i64 - (1i64 << 31)) as i32
     } else {
         low_ticks as i32
     };
