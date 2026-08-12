@@ -1044,14 +1044,8 @@ impl CcpState {
                                 trading_class: def.trading_class.clone(),
                                 ..Default::default()
                             });
-                            shared.reference.set_smart_venues(
-                            def.con_id as i64, def.smart_venues.clone(),
-                        );
-                        identify_position(shared, &def);
-                            shared.reference.set_smart_venues(
-                            def.con_id as i64, def.smart_venues.clone(),
-                        );
-                        identify_position(shared, &def);
+                            identify_position(shared, &def);
+                            identify_position(shared, &def);
                         self.try_release_scanner_enrichments(def.con_id as i64, shared);
                             if self.details_delivered.entry(api_req_id).or_default().insert(def.con_id as i64) {
                                 let for_event = clone_for_event(event_tx, &def);
@@ -1094,9 +1088,6 @@ impl CcpState {
                             trading_class: def.trading_class.clone(),
                             ..Default::default()
                         });
-                        shared.reference.set_smart_venues(
-                            def.con_id as i64, def.smart_venues.clone(),
-                        );
                         identify_position(shared, &def);
                         self.try_release_scanner_enrichments(def.con_id as i64, shared);
                         // A subscription held back for want of an id. Answered
