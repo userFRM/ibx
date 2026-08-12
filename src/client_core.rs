@@ -519,6 +519,8 @@ pub struct ClientCore {
 
     // Historical data keepUpToDate: req_ids that have completed initial batch.
     // Subsequent bars for these req_ids dispatch as historical_data_update.
+    // Cleared when a request is made under the id again — see
+    // `historical_request_is_new`.
     pub hist_initial_complete: Mutex<HashSet<u32>>,
 
     // News subscription state
@@ -753,6 +755,17 @@ impl ClientCore {
         let id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, id);
         Ok(id)
+    }
+
+    /// A request is being made under this id, so whatever a request under it
+    /// finished before is over.
+    ///
+    /// Bars answering a fresh request were delivered as though they continued
+    /// the last one — as updates, with no completion — because the id had
+    /// been marked finished and nothing unmarked it. A caller looping over
+    /// contracts under one id was answered once and never again.
+    pub fn historical_request_is_new(&self, req_id: u32) {
+        self.hist_initial_complete.lock().unwrap().remove(&req_id);
     }
 
     // ── Subscription management ──

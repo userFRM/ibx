@@ -446,3 +446,45 @@ def test_wrapper_account_update_multi():
 def test_wrapper_account_update_multi_end():
     w = EWrapper()
     w.account_update_multi_end(1)
+
+
+def test_a_request_id_answers_more_than_once():
+    """A request id is a caller's label, not a one-shot token.
+
+    Bars answering a fresh request were delivered as though they continued the
+    last one — as updates, with no completion — because the id had been marked
+    finished by the request before and nothing unmarked it. A program looping
+    over contracts under one id was answered once and never again.
+    """
+    class Probe(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.bars = 0
+            self.updates = 0
+            self.ends = 0
+
+        def historical_data(self, req_id, bar):
+            self.bars += 1
+
+        def historical_data_update(self, req_id, bar):
+            self.updates += 1
+
+        def historical_data_end(self, req_id, start, end):
+            self.ends += 1
+
+    w = Probe()
+    c = EClient(w)
+    c._test_connect("DU000000", False)
+
+    spy = Contract()
+    spy.con_id, spy.symbol, spy.sec_type = 756733, "SPY", "STK"
+    spy.exchange, spy.currency = "SMART", "USD"
+
+    for _ in range(2):
+        c.req_historical_data(500, spy, "", "1 D", "1 hour", "TRADES", 1, 1, False, [])
+        c._test_push_historical_data(500, [("20260812 10:00:00", 1.0, 2.0, 0.5, 1.5, 100)], True)
+        c._test_dispatch_once()
+
+    assert w.bars == 2, f"both requests answered with bars, got {w.bars}"
+    assert w.ends == 2, f"and both said they had finished, got {w.ends}"
+    assert w.updates == 0, "and neither was delivered as a continuation of the other"
