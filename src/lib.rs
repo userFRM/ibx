@@ -23,4 +23,5 @@ pub mod engine;
 mod python;
 
 // Re-exports for convenience.
+pub use api::error_codes::Refusal;
 pub use api::{EClient, EClientConfig, Wrapper};
