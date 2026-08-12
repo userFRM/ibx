@@ -60,3 +60,38 @@ def test_an_unmodified_program_runs_on_this_engine():
         assert sum(heard) > 0, "their tickers reached their event"
     finally:
         ib.disconnect()
+
+
+@needs_venue
+def test_an_order_lives_its_whole_life_through_their_api():
+    """Placed, changed and withdrawn, in their objects.
+
+    A limit far under the market, so it rests and nothing trades.
+    """
+    ib = ibx.ib_async.attach(ib_async.IB())
+    ib.connect("no gateway", 0, clientId=1)
+    try:
+        ib.RequestTimeout = 15
+        spy = ib_async.Stock("SPY", "SMART", "USD")
+        (spy,) = ib.qualifyContracts(spy)
+
+        state = ib.whatIfOrder(spy, ib_async.LimitOrder("BUY", 1, 1.00))
+        assert state.status, "the venue prices it without placing it"
+        assert state.commission < 1e300, "their unset is not a commission"
+
+        order = ib_async.LimitOrder("BUY", 10, 100.00)
+        trade = ib.placeOrder(spy, order)
+        ib.sleep(3)
+        assert trade.orderStatus.status in ("PreSubmitted", "Submitted")
+
+        order.lmtPrice = 101.00
+        ib.placeOrder(spy, order)
+        ib.sleep(3)
+        assert trade.order.lmtPrice == 101.00
+
+        ib.cancelOrder(order)
+        ib.sleep(3)
+        assert trade.orderStatus.status == "Cancelled"
+        assert [entry.status for entry in trade.log][-1] == "Cancelled"
+    finally:
+        ib.disconnect()
