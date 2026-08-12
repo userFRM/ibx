@@ -1413,4 +1413,129 @@ mod tick_data_type_tests {
             assert!(tick_data_type(unknown).is_err(), "{unknown} was taken for trades");
         }
     }
+    // ── decode_bar_payload ───────────────────────────────────────────────
+    //
+    // The bit layout, stated as the wire states it. These were written against
+    // a second reading of this format, which is gone: two implementations of
+    // one decoder is how a sign-extension defect survived in the one the
+    // engine calls while the one nothing called was right.
+
+    #[test]
+    fn decode_bar_single_trade() {
+        // count=1: only low is meaningful; open=high=close=low, volume encoded
+        // Build LSB-first bit stream, then reverse within 4-byte groups.
+        //
+        // Layout (LSB first within the reordered buffer):
+        //   4 bits padding (0)
+        //   1 bit count_flag = 1 (short count)
+        //   8 bits count = 1
+        //   31 bits low_ticks = 1000 (positive)
+        //   (no delta fields when count==1)
+        //   1 bit vol_flag = 1 (short volume)
+        //   16 bits volume = 500
+        //
+        // Total: 4+1+8+31+1+16 = 61 bits, 8 bytes
+        let min_tick = 0.01;
+        let mut bits_lsb: Vec<u8> = Vec::new();
+
+        // helper: push n bits from val LSB-first
+        let push_lsb = |bits: &mut Vec<u8>, val: u64, n: usize| {
+            for i in 0..n {
+                bits.push(((val >> i) & 1) as u8);
+            }
+        };
+
+        push_lsb(&mut bits_lsb, 0, 4);     // padding
+        push_lsb(&mut bits_lsb, 1, 1);      // count_flag=1 (8-bit)
+        push_lsb(&mut bits_lsb, 1, 8);      // count=1
+        push_lsb(&mut bits_lsb, 1000, 31);  // low_ticks=1000
+        // count==1: no delta/wap fields
+        push_lsb(&mut bits_lsb, 1, 1);      // vol_flag=1 (16-bit)
+        push_lsb(&mut bits_lsb, 500, 16);   // volume=500
+
+        // Convert bit stream to bytes (LSB first)
+        let byte_count = bits_lsb.len().div_ceil(8);
+        let mut reordered = vec![0u8; byte_count];
+        for (i, &b) in bits_lsb.iter().enumerate() {
+            if b == 1 {
+                reordered[i / 8] |= 1 << (i % 8);
+            }
+        }
+
+        // Reverse within 4-byte groups to produce the wire payload
+        let mut payload = Vec::new();
+        for chunk in reordered.chunks(4) {
+            let mut c = chunk.to_vec();
+            c.reverse();
+            payload.extend_from_slice(&c);
+        }
+
+        let bar = super::decode_bar_payload(&payload, min_tick).unwrap();
+        assert_eq!(bar.count, 1);
+        assert!((bar.low - 10.0).abs() < 1e-9);    // 1000 * 0.01
+        assert!((bar.open - bar.low).abs() < 1e-9);
+        assert!((bar.high - bar.low).abs() < 1e-9);
+        assert!((bar.close - bar.low).abs() < 1e-9);
+        assert_eq!(bar.volume, 500.0);
+    }
+
+    #[test]
+    fn decode_bar_multi_trade_short_deltas() {
+        // count > 1 with narrow (5-bit) deltas
+        let min_tick = 0.01;
+        let mut bits_lsb: Vec<u8> = Vec::new();
+
+        let push_lsb = |bits: &mut Vec<u8>, val: u64, n: usize| {
+            for i in 0..n {
+                bits.push(((val >> i) & 1) as u8);
+            }
+        };
+
+        push_lsb(&mut bits_lsb, 0, 4);     // padding
+        push_lsb(&mut bits_lsb, 1, 1);      // count_flag=1 (8-bit)
+        push_lsb(&mut bits_lsb, 5, 8);      // count=5
+        push_lsb(&mut bits_lsb, 2000, 31);  // low_ticks=2000
+
+        // count > 1: delta fields
+        push_lsb(&mut bits_lsb, 1, 1);      // width_flag=1 → 5-bit deltas
+        push_lsb(&mut bits_lsb, 3, 5);      // delta_open=3
+        push_lsb(&mut bits_lsb, 7, 5);      // delta_high=7
+        push_lsb(&mut bits_lsb, 2, 5);      // delta_close=2
+
+        // wap
+        push_lsb(&mut bits_lsb, 1, 1);      // wap_flag=1 → 18-bit
+        push_lsb(&mut bits_lsb, 100, 18);   // wap_sum=100
+
+        // volume
+        push_lsb(&mut bits_lsb, 1, 1);      // vol_flag=1 → 16-bit
+        push_lsb(&mut bits_lsb, 1000, 16);  // volume=1000
+
+        let byte_count = bits_lsb.len().div_ceil(8);
+        let mut reordered = vec![0u8; byte_count];
+        for (i, &b) in bits_lsb.iter().enumerate() {
+            if b == 1 {
+                reordered[i / 8] |= 1 << (i % 8);
+            }
+        }
+
+        let mut payload = Vec::new();
+        for chunk in reordered.chunks(4) {
+            let mut c = chunk.to_vec();
+            c.reverse();
+            payload.extend_from_slice(&c);
+        }
+
+        let bar = super::decode_bar_payload(&payload, min_tick).unwrap();
+        assert_eq!(bar.count, 5);
+        let low = 2000.0 * min_tick; // 20.00
+        assert!((bar.low - low).abs() < 1e-9);
+        assert!((bar.open - (low + 3.0 * min_tick)).abs() < 1e-9);
+        assert!((bar.high - (low + 7.0 * min_tick)).abs() < 1e-9);
+        assert!((bar.close - (low + 2.0 * min_tick)).abs() < 1e-9);
+        assert_eq!(bar.volume, 1000.0);
+        // wap = low + wap_sum * min_tick / volume = 20.0 + 100*0.01/1000
+        let expected_wap = low + 100.0 * min_tick / 1000.0;
+        assert!((bar.wap - expected_wap).abs() < 1e-9);
+    }
+
 }
