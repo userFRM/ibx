@@ -246,9 +246,32 @@ vanish.
 | --- | --- |
 | Unit tests, 1195 engine and client, 310 Python bindings | The call encodes and decodes as specified |
 | Live session phases against a paper account | The venue accepts the request and returns what is expected |
+| A session held open under load | What only time finds: a connection that stops answering, a stream that stops arriving, a request id that answers once |
+| Malformed input to every wire parser | No frame, however cut or corrupted, takes the process down |
 | Continuous integration on every push | Tests, lint, documentation, and builds for Linux, macOS and Windows |
 
 Test count is not coverage. It states what is checked, not what fraction of venue behaviour is reached.
+
+### Keeping what the venue actually sent
+
+A reading checked only against frames this client made up says nothing about
+the ones that arrive. With `IBX_CAPTURE_WIRE` set, the connections keep what
+they carried, and the capture binaries ask for the traffic worth keeping:
+
+| Binary | What it asks for |
+| --- | --- |
+| `capture_depth` | A book, aggregate and on one named venue, on the same contract |
+| `capture_ticks` | Every trade and quote change on a contract |
+| `capture_status` | The venues that state a trading status |
+| `capture_global` | Contracts and bars across nine markets |
+
+The book capture is what settled where a section names its subscription: the
+tag sits three bytes into the frame, after two bytes and a marker. Read a byte
+earlier — which is what this client did — a section matched no subscription and
+delivered a fraction of the levels it carried. The historical query is kept as
+it goes out for the same reason: a request the venue never received is
+otherwise indistinguishable from one it answered into a callback nobody was
+listening on.
 
 ### Measured against the counterpart's own published schema
 
