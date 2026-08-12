@@ -1261,31 +1261,28 @@ impl FarmState {
             "STK" => "CS", "FUT" => "FUT", "OPT" => "OPT", "IND" => "IND",
             "CASH" => "CASH", other => other,
         };
-        self.depth_subs.push((req_id, is_smart_depth));
+        // The caller's request, kept so a reconnect can ask for it again. What
+        // is registered as a subscription is the id this client asks under,
+        // one per venue, below.
         self.depth_resub_info.push((
             req_id, con_id, exchange.to_string(), primary_exchange.to_string(),
             sec_type.to_string(), _num_rows, is_smart_depth,
         ));
 
-        // Which venues an aggregate book is made of is the server's to say,
-        // and it says it per contract: the definition names the venues SMART
-        // routes this contract to, in the order the exchange mask's bits refer
-        // to. That is the set the aggregate is gathered from.
+        // A book on no particular venue is asked for once, on no particular
+        // venue. The venue aggregates it.
         //
-        // The exchange directory the session opens with is not that set. It
-        // names every exchange the venue knows, in two sections, and reading
-        // the sections as though they were aggregation groups fanned a US
-        // share out over sixty-six venues on four continents, most of which
-        // refused it by name.
+        // Asking each venue the contract is routed to instead — which is what
+        // names the venue on every level — costs one subscription per venue,
+        // and all but one of them is refused by name. Four contracts cycled
+        // that way put seventy-odd subscribes and as many withdrawals on the
+        // connection every minute, and the venue stopped answering it
+        // altogether: no error, no loss, quotes and books both silent. One
+        // request is what the counterpart sends and what the connection can
+        // carry.
         let on_no_venue = is_smart_depth || matches!(exchange, "SMART" | "BEST" | "");
-        let gathered = if on_no_venue {
-            shared.reference.smart_venues(con_id)
-        } else {
-            Vec::new()
-        };
-        // Where the contract is listed, for the case where the venues it is
-        // routed to are not known. The caller may have stated it; the venue
-        // states it on the definition either way.
+        // Where the contract is listed. The caller may have stated it; the
+        // venue states it on the definition either way.
         let listed_on = if primary_exchange.is_empty() {
             shared.reference.get_contract(con_id)
                 .map(|known| known.primary_exchange)
@@ -1297,44 +1294,39 @@ impl FarmState {
         // which venues offer one, is asked for where the contract is listed.
         // One venue's book is less than the aggregate and is a book; the
         // request the aggregate would have needed reaches nothing at all.
-        let exchange = if on_no_venue && gathered.is_empty() && !listed_on.is_empty() {
-            log::info!(
-                "the venues this contract is routed to are not known, so req={req_id} is \
-                 asked for where it is listed ({listed_on})",
-            );
-            listed_on.as_str()
-        } else {
-            exchange
-        };
+        let _ = (on_no_venue, &listed_on);
+
+        // A book on one named venue is a book gathered from one venue. Asking
+        // under an id of this client's own either way is what keeps the two
+        // apart: the venue echoes the id back, and a caller's id sent as it
+        // stands is indistinguishable from one of these. A caller's second
+        // book was answered under another subscription's venue because both
+        // were numbered 2.
+        let venues: Vec<String> = vec![exchange.to_string()];
+        // What the caller asked for is recorded whether or not the socket is
+        // up. Recorded only when it was, a book asked for while the farm was
+        // down could not be withdrawn, and the reconnect asked for it again.
+        let mut asked_under = Vec::with_capacity(venues.len());
+        for venue in &venues {
+            let under = self.next_md_req_id;
+            self.next_md_req_id += 1;
+            self.depth_subs.push((under, is_smart_depth));
+            self.depth_fanout_map.push((under, req_id));
+            self.depth_fanout_exchange.push((under, venue.clone()));
+            asked_under.push(under);
+        }
+        log::info!(
+            "Book for req={req_id} con_id={con_id} gathered from {}",
+            venues.join(", "),
+        );
 
         if let Some(conn) = farm_conn.as_mut() {
             let con_id_str = (con_id as u32).to_string();
-
-            // A book on one named venue is a book gathered from one venue.
-            // Asking under an id of this client's own either way is what keeps
-            // the two apart: the venue echoes the id back, and a caller's id
-            // sent as it stands is indistinguishable from one of these. A
-            // caller's second book was answered under another subscription's
-            // venue because both were numbered 2.
-            let venues: Vec<String> = if gathered.is_empty() {
-                vec![exchange.to_string()]
-            } else {
-                gathered
-            };
-            for venue in &venues {
-                let asked_under = self.next_md_req_id;
-                self.next_md_req_id += 1;
-                self.depth_subs.push((asked_under, is_smart_depth));
-                self.depth_fanout_map.push((asked_under, req_id));
-                self.depth_fanout_exchange.push((asked_under, venue.clone()));
+            for (under, venue) in asked_under.iter().zip(&venues) {
                 self.send_depth_one(
-                    conn, &asked_under.to_string(), &con_id_str, venue, fix_sec_type,
+                    conn, &under.to_string(), &con_id_str, venue, fix_sec_type,
                 );
             }
-            log::info!(
-                "Book for req={req_id} con_id={con_id} gathered from {}",
-                venues.join(", "),
-            );
             hb.last_farm_sent = Instant::now();
         }
     }
@@ -1352,11 +1344,13 @@ impl FarmState {
             .filter(|(_, user)| *user == req_id)
             .map(|(sub, _)| *sub)
             .collect();
+        // Cleared whether or not anything was asked yet: left behind, a book
+        // the caller withdrew was asked for again by the next reconnect.
+        self.depth_resub_info.retain(|(id, ..)| *id != req_id);
         if asked_under.is_empty() {
             return;
         }
 
-        self.depth_resub_info.retain(|(id, ..)| *id != req_id);
         self.depth_subs.retain(|(id, _)| !asked_under.contains(id));
         self.depth_fanout_map.retain(|(_, user)| *user != req_id);
         self.depth_fanout_exchange.retain(|(sub, _)| !asked_under.contains(sub));
@@ -1410,7 +1404,20 @@ impl FarmState {
     /// Parse 35=P depth entries (byte-aligned: [00][3B stag][field tags...][58 terminator]).
     /// SmartDepth entries may contain multiple price+size pairs (bid then ask).
     /// Field tag encoding: bit 5(0x20)=size, bit 3(0x08)=ask, bit 2(0x04)=snapshot, bit 0(0x01)=2-byte.
+    /// Keep a depth frame exactly as the venue sent it, when asked to.
+    ///
+    /// A reading checked only against frames this client made up says nothing
+    /// about the ones that arrive.
+    fn note_depth_wire(&self, kind: &'static str, body: &[u8], shared: &SharedState) {
+        if std::env::var("IBX_CAPTURE_WIRE").is_err() {
+            return;
+        }
+        let hex: String = body.iter().map(|b| format!("{b:02x}")).collect();
+        shared.market.note_unread_wire(kind, hex);
+    }
+
     fn handle_depth_35p(&self, body: &[u8], shared: &SharedState) {
+        self.note_depth_wire("depth-35p", body, shared);
         use crate::types::DepthUpdate;
         let mut pos = 0;
         let mut bid_position: i32 = 0;
@@ -1516,6 +1523,7 @@ impl FarmState {
     ///     C4/80 = continuation, 44/00 = terminal (last entry for this stag section).
     /// Field tag encoding: bit 7=size, bit 5=ask, bit 2=snapshot, bits 0-1=value_len (00=1B,01=2B,10=3B).
     fn handle_depth_35y(&self, msg: &[u8], shared: &SharedState) {
+        self.note_depth_wire("depth-35y", msg, shared);
         use crate::types::DepthUpdate;
         let body = match find_body_after_tag(msg, b"35=Y\x01") {
             Some(b) => b,
@@ -1540,12 +1548,16 @@ impl FarmState {
         let mut size_tick: f64 = 1.0;
         let mut pos = 2;
 
-        // Three bytes, the width the venue assigns them in and the width the
-        // book's other shape already reads. Read as two, no section ever
-        // matched a subscription and every level it carried was delivered
-        // under request zero.
-        let hdr_stag = if body.len() >= 5 {
-            ((body[2] as u32) << 16) | ((body[3] as u32) << 8) | (body[4] as u32)
+        // Two bytes, a marker, then the tag in three — the width the venue
+        // assigns it and the width the book's other shape already reads.
+        //
+        // Read from the marker instead, the tag was a byte early and matched
+        // no subscription, so the section named none and every level it
+        // carried waited for a sentinel further in to name one. Captured
+        // frames put the same three bytes at the same place in every one of
+        // them, whichever marker precedes them.
+        let hdr_stag = if body.len() >= 6 {
+            ((body[3] as u32) << 16) | ((body[4] as u32) << 8) | (body[5] as u32)
         } else {
             u32::MAX
         };
@@ -1553,10 +1565,10 @@ impl FarmState {
             subscribers = self.depth_subscribers_of(hdr_stag);
             min_tick = mt;
             size_tick = st;
-            pos = 5;
+            pos = 6;
         }
-        // If header stag didn't match, start scanning from pos=2; the first
-        // stag switch sentinel names the subscriptions the levels belong to.
+        // If the header named no subscription, scanning starts at 2 and the
+        // first sentinel names the ones its levels belong to.
 
         while pos < body.len() {
             let b = body[pos];
@@ -2775,5 +2787,87 @@ mod trading_status_subscribe_tests {
         let tags = build_trading_status_subscribe_tags(1, 1, "STK", "ARCA", "t");
         let venue = tags.iter().find(|(k, _)| *k == 207).map(|(_, v)| v.as_str());
         assert_eq!(venue, Some("ARCA"), "not a stand-in");
+    }
+}
+
+#[cfg(test)]
+mod depth_identity_tests {
+    use super::*;
+    use crate::bridge::SharedState;
+
+    /// A subscription registered as the ack path registers one.
+    fn acknowledged(farm: &mut FarmState, stag: u32, caller: u32, venue: &str) {
+        farm.depth_tag_to_req.push((stag, caller, true, 0.01, 1.0, venue.to_string()));
+    }
+
+    /// The venue echoes back the id it was asked under, so an id taken from
+    /// the caller cannot be told apart from one this client allocated. Every
+    /// book is asked for under one of ours and mapped back.
+    #[test]
+    fn a_callers_id_is_never_what_the_venue_is_asked_under() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        let mut conn = None;
+        let mut hb = HeartbeatState::new();
+
+        // Two callers, numbered as callers number things.
+        farm.send_depth_subscribe(1, 756733, "IEX", "", "STK", 10, false, &mut conn, &mut hb, &shared);
+        farm.send_depth_subscribe(2, 756733, "ARCA", "", "STK", 10, false, &mut conn, &mut hb, &shared);
+
+        let asked_under: Vec<u32> = farm.depth_fanout_map.iter().map(|(sub, _)| *sub).collect();
+        assert_eq!(asked_under.len(), 2, "one subscription each");
+        assert_ne!(asked_under[0], asked_under[1], "and each under its own id");
+        for (sub, caller) in &farm.depth_fanout_map {
+            let venue = farm.depth_fanout_exchange.iter()
+                .find(|(s, _)| s == sub)
+                .map(|(_, v)| v.as_str())
+                .expect("every subscription names the venue it stands on");
+            match caller {
+                1 => assert_eq!(venue, "IEX"),
+                2 => assert_eq!(venue, "ARCA"),
+                other => panic!("a caller nobody asked for: {other}"),
+            }
+        }
+    }
+
+    /// The venue answers a second subscription on a contract and venue it is
+    /// already streaming with the tag it is already using.
+    #[test]
+    fn one_venue_stream_reaches_every_caller_subscribed_to_it() {
+        let mut farm = FarmState::new();
+        acknowledged(&mut farm, 717550, 1, "IEX");
+        acknowledged(&mut farm, 717550, 2, "IEX");
+        acknowledged(&mut farm, 990000, 3, "ARCA");
+
+        let both = farm.depth_subscribers_of(717550);
+        assert_eq!(both.len(), 2, "a level on this tag belongs to both");
+        assert_eq!(both[0].0, 1);
+        assert_eq!(both[1].0, 2);
+        assert!(both.iter().all(|(_, _, venue)| venue == "IEX"));
+
+        let one = farm.depth_subscribers_of(990000);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].0, 3);
+    }
+
+    /// A book is asked for once and withdrawn once, and what is withdrawn is
+    /// what this client asked under rather than what the caller stated.
+    #[test]
+    fn withdrawing_a_book_withdraws_what_was_asked_for() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        let mut conn = None;
+        let mut hb = HeartbeatState::new();
+
+        farm.send_depth_subscribe(7, 756733, "SMART", "", "STK", 10, true, &mut conn, &mut hb, &shared);
+        assert_eq!(farm.depth_subs.len(), 1, "a book on no venue is one subscription");
+        assert_eq!(farm.depth_fanout_map[0].1, 7, "and it is the caller's");
+        assert_ne!(farm.depth_fanout_map[0].0, 7, "asked under an id of ours");
+
+        farm.send_depth_unsubscribe(7, &mut conn, &mut hb);
+        assert!(farm.depth_fanout_map.is_empty(), "nothing is left asking");
+        assert!(farm.depth_subs.is_empty());
+        assert!(farm.depth_fanout_exchange.is_empty());
+        assert!(farm.depth_resub_info.is_empty(), "and no reconnect asks again");
     }
 }

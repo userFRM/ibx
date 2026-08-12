@@ -794,9 +794,6 @@ pub struct ReferenceState {
     historical_errors: Mutex<Vec<(u32, i32, String)>>,
     market_rules: Mutex<Vec<MarketRule>>,
     depth_exchanges_cache: Mutex<Vec<DepthMktDataDescription>>,
-    /// Contract id → the venues SMART routes that contract to, as its own
-    /// definition states them.
-    smart_venues: Mutex<HashMap<i64, Vec<String>>>,
     depth_exchanges_pending: Mutex<bool>,
     /// Contract cache from CCP exec reports (con_id -> api::Contract).
     contract_cache: Mutex<HashMap<i64, api::Contract>>,
@@ -846,7 +843,6 @@ impl ReferenceState {
             historical_errors: Mutex::new(Vec::with_capacity(4)),
             market_rules: Mutex::new(Vec::new()),
             depth_exchanges_cache: Mutex::new(Vec::new()),
-            smart_venues: Mutex::new(HashMap::new()),
             depth_exchanges_pending: Mutex::new(false),
             contract_cache: Mutex::new(HashMap::new()),
             smart_components: Mutex::new(Vec::new()),
@@ -1268,20 +1264,6 @@ impl ReferenceState {
     /// Read rather than drained: a caller reading the list must not empty it.
     pub fn depth_exchanges(&self) -> Vec<DepthMktDataDescription> {
         self.depth_exchanges_cache.lock().unwrap().clone()
-    }
-
-    /// The venues SMART routes a contract to, which is what its aggregate book
-    /// is made of. Stated on the contract's own definition, so it is per
-    /// contract rather than per market.
-    pub fn smart_venues(&self, con_id: i64) -> Vec<String> {
-        self.smart_venues.lock().unwrap().get(&con_id).cloned().unwrap_or_default()
-    }
-
-    #[doc(hidden)] pub fn set_smart_venues(&self, con_id: i64, venues: Vec<String>) {
-        if venues.is_empty() {
-            return;
-        }
-        self.smart_venues.lock().unwrap().insert(con_id, venues);
     }
 
     #[doc(hidden)] pub fn push_depth_exchanges(&self, descs: Vec<DepthMktDataDescription>) {
