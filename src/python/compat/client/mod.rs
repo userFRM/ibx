@@ -349,6 +349,22 @@ impl EClient {
     }
 
     /// Run the event loop.
+    /// Deliver everything waiting, once, and return.
+    ///
+    /// `run` owns the thread it is called on, which a program with an event
+    /// loop of its own cannot give it: an asyncio framework has to drive the
+    /// callbacks from its own loop, and a blocking loop leaves it nowhere to
+    /// stand. This is one pass of the same dispatch.
+    fn poll(&self, py: Python<'_>) -> PyResult<()> {
+        if !self.connected.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let Some(shared) = self.shared.lock().unwrap().clone() else {
+            return Ok(());
+        };
+        self.dispatch_once(py, &shared)
+    }
+
     fn run(&self, py: Python<'_>) -> PyResult<()> {
         if !self.connected.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err("Not connected. Call connect() first."));
