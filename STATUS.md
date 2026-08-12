@@ -105,6 +105,11 @@ official gateway behaves the same way.
   order constructed against another client round-trips unchanged.
 - **One market-data subscription per contract on the wire.** Multiple callers
   are multiplexed client-side, as the gateway multiplexes across windows.
+- **A caller's request id is not what the venue is asked under.** Every
+  subscription is asked for under an id this client allocates and is mapped
+  back to the caller who wanted it. The venue echoes an id back, so one taken
+  from the caller cannot be told apart from one allocated here. The counterpart
+  allocates the same way, from one upward, and keys its subscriptions on it.
 - **`keepUpToDate` queries are closed on first response.** Continuation is
   provided by folding the 5-second bar stream into the requested bar size.
 - **Historical execution reports require a window within 7 days.** A request
