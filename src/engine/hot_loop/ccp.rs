@@ -973,7 +973,7 @@ impl CcpState {
                             unread.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(","),
                         );
                     }
-                    let all = crate::control::contracts::parse_secdef_responses(msg, shared.settings().island_for_nasdaq);
+                    let all = crate::control::contracts::parse_secdef_responses(msg, shared.island_for_nasdaq());
                     // The venue states which venues SMART routes to, in the
                     // order a quote's exchange bitmask refers to. Taking it
                     // replaces this client's own list, whose order was its own
@@ -1025,7 +1025,7 @@ impl CcpState {
                     })
                 });
                 if let Some(idx) = fanout_idx {
-                    if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.settings().island_for_nasdaq) {
+                    if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
                         let api_req_id = self.pending_fanout[idx].api_req_id;
                         // ibx#229: no con_id is "no definition for this
                         // exchange" — cache nothing and emit no row. The leg
@@ -1073,7 +1073,7 @@ impl CcpState {
                     return;
                 }
 
-                if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.settings().island_for_nasdaq) {
+                if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
                     let is_last_wire = crate::control::contracts::secdef_response_is_last(msg);
                     if def.con_id != 0 {
                         let sec_type_str = def.sec_type.to_api_str();

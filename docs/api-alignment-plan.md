@@ -21,26 +21,23 @@ is a programming error, not a request outcome. So do the synchronous answering
 calls — `contract_details`, `qualify_contract` — which have a return value and
 no shape in the reference API to match.
 
-## 2. Capability is negotiated, not configured
+## 2. Capability is negotiated, not configured — done for the one grant that has a setting
 
-The server states 299 granted features at logon. They are captured
+The server states its granted features at logon. They are captured
 (`src/gateway.rs`, tag 6542) and readable on both clients (`enabled_features`).
-Nothing gates on them.
 
 `island_for_nasdaq` is the one setting with a matching grant. The counterpart
 reads `ISLAND2NASDAQ` off the granted list at logon and holds it in a field of
-its own, beside `NOAMOPTCHK` and `FORCENOCBN`, which is what a setting alone
-does not decide. Here it is decided by the setting alone.
+its own, beside `NOAMOPTCHK` and `FORCENOCBN`. It now takes both here too:
+`SharedState::island_for_nasdaq()` is the setting and the grant, settled at
+logon rather than scanned for on the path that parses a contract definition.
 
 `server_version()` (`src/api/direct.rs:123`) returns the announced build, so a
 program gating a feature on it finds everything available. Deliberate, and a
 divergence a caller should be able to read about where they will look for it.
 
-**Fix.** Gate `island_for_nasdaq` on the grant. Check the remaining settings
-against the grant list. Note the `server_version()` divergence in its own
-documentation.
-
-**Gate.** A test that a setting whose grant is absent does not take effect.
+**Left.** The remaining settings against the grant list — none has a matching
+token so far. The `server_version()` divergence in its own documentation.
 
 ## 3. Nothing about a market is written here
 
