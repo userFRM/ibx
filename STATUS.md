@@ -138,6 +138,15 @@ official gateway behaves the same way.
 Run order and environment are documented in
 [docs/engineering-notes.md](docs/engineering-notes.md).
 
+## Planned work
+
+[docs/api-alignment-plan.md](docs/api-alignment-plan.md) covers the caller-facing
+conventions still out of line with the client this replaces: refusals that raise
+where the reference client reports them under a code (39 sites, 25 of them on
+request-shaped methods), the distinction between the product surface and the
+adapters over it, and settings that are decided by configuration where the
+server states a grant for them.
+
 ## Release criteria
 
 Live sessions are run at market hours until a session produces no new defect.
