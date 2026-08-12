@@ -113,3 +113,25 @@ def test_two_disconnects_in_one_batch_fire_one_1100():
     t.cancel()
     assert w.saw == 1, f"one loss is one 1100, saw {w.saw}"
     assert c.is_connected(), "the reconnected session must survive the second event"
+
+
+def test_a_session_the_caller_ends_is_not_a_session_that_was_lost():
+    """1100 is a loss. The reference client answers `disconnect()` with
+    `connectionClosed` and says nothing on the error channel, so a program
+    that stands down on connectivity loss must not stand down on the session
+    it has just closed."""
+
+    class W(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.codes = []
+
+        def error(self, req_id, code, msg, advanced=""):
+            self.codes.append(code)
+
+    w = W()
+    c = EClient(w)
+    c._test_connect("T")
+    c._test_push_stopped_event()
+    c._test_dispatch_once()
+    assert 1100 not in w.codes, w.codes

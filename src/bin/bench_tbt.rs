@@ -134,7 +134,7 @@ fn collect_tbt_trades(
                     );
                 }
             }
-            Ok(Event::Disconnected) => break,
+            Ok(Event::Disconnected | Event::Stopped) => break,
             Ok(_) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if warmed_up == 0 {
@@ -197,7 +197,7 @@ fn collect_tbt_quotes(
                     );
                 }
             }
-            Ok(Event::Disconnected) => break,
+            Ok(Event::Disconnected | Event::Stopped) => break,
             Ok(_) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if warmed_up == 0 {

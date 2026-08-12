@@ -70,8 +70,15 @@ pub enum Event {
     ContractDetailsEnd(u32),
     /// Position update.
     PositionUpdate { instrument: InstrumentId, con_id: i64, position: f64, avg_cost: Price },
-    /// Connection lost.
+    /// Connection lost, without the caller asking for it.
     Disconnected,
+    /// The session ended because the caller asked it to.
+    ///
+    /// Distinct from a loss: the reference client answers `disconnect()` with
+    /// `connectionClosed` and reports nothing on the error channel, so a
+    /// program that stands down on connectivity loss must not be told it lost
+    /// the session it just closed.
+    Stopped,
     /// A transport that had announced its loss is carrying traffic again, with
     /// the subscriptions the reconnect re-established. Emitted only after a
     /// `Disconnected`, so a client that stood down on one has the signal to
