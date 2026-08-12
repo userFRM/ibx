@@ -96,7 +96,34 @@ Both naming conventions resolve on every type and method: `reqMktData` and
 Both surfaces drive one client and one engine. `ibx.IB` is a facade over
 `EClient`; they share a session, and either may be used.
 
-### ib_async-compatible facade (`ibx.IB`)
+### An existing ib_async program
+
+An unmodified program written against
+[ib_async](https://github.com/ib-api-reloaded/ib_async) runs on this engine
+with its connect call changed. Nothing of ib_async is copied or modified —
+install it as usual, and attach:
+
+```python
+from ib_async import IB, Stock
+import ibx.ib_async
+
+ib = ibx.ib_async.attach(IB(), username="your_user", password="your_pass")
+ib.connect()                      # names no host: there is no gateway
+
+spy = Stock("SPY", "SMART", "USD")
+ib.qualifyContracts(spy)
+bars = ib.reqHistoricalData(spy, "", "2 D", "1 hour", "TRADES", useRTH=True)
+
+ib.pendingTickersEvent += lambda tickers: print(len(tickers), "updates")
+ib.reqMktData(spy)
+ib.sleep(5)
+ib.disconnect()
+```
+
+Their `IB`, their `Wrapper`, their events, their types — this engine
+underneath, and no gateway process.
+
+### The same shape, native (`ibx.IB`)
 
 ```python
 import ibx
