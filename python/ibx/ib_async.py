@@ -109,10 +109,16 @@ class IbxClient:
         self.apiStart.emit()
 
     def disconnect(self):
+        """End the session, as ib_async's own client ends one.
+
+        `connectionClosed` is not called here. Their wrapper treats it as a
+        session that went away underneath them: it fails every request still
+        waiting and raises on their global error event, which is right for a
+        socket that dropped and wrong for a caller who asked to stop.
+        """
         self.connState = IbxClient.DISCONNECTED
         self._stop.set()
         self._client.disconnect()
-        self.wrapper.connectionClosed()
         self.apiEnd.emit()
 
     def _start_pump(self):
@@ -259,6 +265,29 @@ _OUR_NAME = {
 }
 
 
+def _as_their_moment(stated, zone):
+    """A bar's moment, spelled the way ib_async reads one.
+
+    Their own parser decides the shape from the string: eight digits is a day,
+    all digits is a moment in seconds since the epoch, and a date, a time and a
+    zone separated by single spaces is an aware moment. Anything else it reads
+    as naive — and their frame conversion, which is in the first example of
+    their documentation, refuses a naive one.
+
+    This engine states the date and time joined by a dash and carries the zone
+    beside them, so the two are put in the form their parser reads.
+    """
+    if not isinstance(stated, str) or not stated:
+        return stated
+    if stated.isdigit():
+        return stated
+
+    moment = stated.replace("-", " ", 1) if "-" in stated[:9] else stated
+    if not zone or " " not in moment:
+        return moment
+    return f"{moment} {zone}"
+
+
 def _their_type(name):
     """The type of theirs that goes by this name, if there is one."""
     import dataclasses
@@ -296,12 +325,15 @@ def _as_theirs(value):
         return value
 
     made = theirs()
+    zone = getattr(value, "timezone", "")
     for field in dataclasses.fields(theirs):
         ours = getattr(value, field.name, None)
         if ours is None:
             ours = getattr(value, _OUR_NAME.get(field.name, field.name), None)
         if ours is None:
             continue
+        if field.name == "date":
+            ours = _as_their_moment(ours, zone)
         try:
             setattr(made, field.name, _as_theirs(ours))
         except (TypeError, ValueError, AttributeError):

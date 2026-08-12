@@ -2,6 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::api::error_codes::Refusal;
 use crate::api::types::{ExecutionFilter, PRICE_SCALE_F};
 use crate::api::wrapper::Wrapper;
 use crate::client_core::ClientCore;
@@ -58,7 +59,16 @@ impl EClient {
     }
 
     /// Place an order. Matches `placeOrder` in C++.
-    pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), String> {
+    ///
+    /// An order names its contract by the venue's own id. A caller who states
+    /// a description instead of an id — which every example written against
+    /// the reference client does — has it resolved here, once the order itself
+    /// is known to be one the venue would take: an order that names no
+    /// contract is one the venue has nothing to match, and answers with
+    /// nothing at all.
+    pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), Refusal> {
+        ClientCore::validate_order_destination(&contract.exchange)?;
+
         // Validate order params and contract before registering instrument (fail fast).
         ClientCore::validate_order(order, &self.account_id)?;
         ClientCore::validate_supported_instructions(order)?;
@@ -72,6 +82,14 @@ impl EClient {
             ),
         )?;
         self.check_sec_type_permitted(&contract.sec_type)?;
+
+        let named;
+        let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
+            named = self.qualify_contract(contract).map_err(Refusal::no_definition)?;
+            &named
+        } else {
+            contract
+        };
 
         let oid = if order_id > 0 {
             order_id as u64
@@ -94,7 +112,7 @@ impl EClient {
             // An order defined by anything else cannot survive one, so refuse
             // rather than send a message that destroys it.
             if let Some(refusal) = self.core.modify_refusal(oid, order) {
-                return Err(refusal);
+                return Err(refusal.into());
             }
             let price = (order.lmt_price * PRICE_SCALE_F) as i64;
             let qty = order.total_quantity as u32;

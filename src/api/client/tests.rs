@@ -24,7 +24,10 @@ fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<Sha
 
 /// Helper: SPY contract.
 fn spy() -> Contract {
-    Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() }
+    Contract {
+        con_id: 756733, symbol: "SPY".into(), exchange: "SMART".into(),
+        ..Default::default()
+    }
 }
 
 /// Case name paired with the setter that gives an order the named attribute.
@@ -288,7 +291,7 @@ fn a_type_the_replace_cannot_restate_is_not_modified() {
         );
         let err = client.place_order(9201, &spy(), &submit)
             .expect_err("modifying it must be refused");
-        assert!(err.contains("cannot be modified"), "{order_type}: {err}");
+        assert!(err.message.contains("cannot be modified"), "{order_type}: {err}");
         assert!(rx.try_recv().is_err(), "{order_type}: nothing reaches the wire");
     }
 }
@@ -338,7 +341,7 @@ fn an_order_defined_by_more_than_its_type_is_not_modified() {
         );
         let err = client.place_order(9301, &spy(), &order)
             .expect_err("modifying it must be refused");
-        assert!(err.contains("cannot be modified"), "{name}: {err}");
+        assert!(err.message.contains("cannot be modified"), "{name}: {err}");
         assert!(rx.try_recv().is_err(), "{name}: nothing reaches the wire");
     }
 }
@@ -362,7 +365,7 @@ fn a_limit_if_touched_is_not_modified() {
     );
     let err = client.place_order(9302, &spy(), &order)
         .expect_err("a LIT modify must be refused");
-    assert!(err.contains("cannot be modified"), "{err}");
+    assert!(err.message.contains("cannot be modified"), "{err}");
 }
 
 /// The refusal has to read the order the caller is asking for, not only the one
@@ -390,7 +393,7 @@ fn an_attribute_added_by_the_modify_is_refused_too() {
         set(&mut attributed);
         let err = client.place_order(9303, &spy(), &attributed)
             .expect_err("adding it by modify must be refused");
-        assert!(err.contains("cannot be modified"), "{name}: {err}");
+        assert!(err.message.contains("cannot be modified"), "{name}: {err}");
         assert!(rx.try_recv().is_err(), "{name}: nothing reaches the wire");
     }
 }
@@ -451,7 +454,7 @@ fn the_refusal_reads_the_tracked_order_not_the_incoming_one() {
     };
     let err = client.place_order(9702, &spy(), &disguised)
         .expect_err("the tracked type decides, so this is still refused");
-    assert!(err.contains("cannot be modified"), "{err}");
+    assert!(err.message.contains("cannot be modified"), "{err}");
     assert!(rx.try_recv().is_err(), "and nothing reaches the wire");
 }
 
@@ -1312,7 +1315,7 @@ fn place_order_fa_allocation_is_rejected() {
         // The field under test, not a fixed one: asserting "fa_group" for every
         // arm meant three of them only proved that some error was returned.
         let field = name.split(' ').next().unwrap();
-        assert!(err.contains(field), "{name}: the message must name the field — {err}");
+        assert!(err.message.contains(field), "{name}: the message must name the field — {err}");
         assert!(rx.try_recv().is_err(), "{name}: nothing reaches the engine");
     }
 }
@@ -1727,7 +1730,7 @@ fn place_order_unsupported_type_returns_error() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Unsupported order type"));
+    assert!(result.unwrap_err().message.contains("Unsupported order type"));
 }
 
 #[test]
@@ -1739,16 +1742,22 @@ fn place_order_non_stk_contract_rejected() {
     shared.market.set_instrument_count(1);
     // No contract id: an id names one contract on its own and the venue takes
     // an order carrying nothing else, so this is the case the guard is for.
-    let bare = Contract { symbol: "AAPL".into(), sec_type: "OPT".into(), ..Default::default() };
+    let bare = Contract {
+        symbol: "AAPL".into(), sec_type: "OPT".into(), exchange: "SMART".into(),
+        ..Default::default()
+    };
     let order = Order { action: "BUY".into(), total_quantity: 1.0, order_type: "MKT".into(), ..Default::default() };
     let err = client.place_order(1, &bare, &order).expect_err("a chain is not a contract");
-    assert!(err.contains("OPT"), "the refusal names the type: {err}");
+    assert!(err.message.contains("OPT"), "the refusal names the type: {err}");
     assert!(rx.try_recv().is_err(), "and nothing reaches the engine");
 
     // An id says which contract without any of it.
-    let by_id = Contract { con_id: 999001, sec_type: "OPT".into(), ..Default::default() };
+    let by_id = Contract {
+        con_id: 999001, sec_type: "OPT".into(), exchange: "SMART".into(),
+        ..Default::default()
+    };
     let refusal = client.place_order(2, &by_id, &order).unwrap_err();
-    assert!(!refusal.contains("names a whole chain"), "an id is not a chain: {refusal}");
+    assert!(!refusal.message.contains("names a whole chain"), "an id is not a chain: {refusal}");
 
     // The named case is not asserted here: this fixture has no engine, so
     // registering an instrument blocks on a reply that never arrives. That an
@@ -1793,11 +1802,35 @@ fn an_exercise_it_cannot_serve_is_refused_before_anything_is_sent() {
 }
 
 #[test]
+fn an_order_states_where_it_is_to_be_filled() {
+    // The venue does not choose a destination. Without this, a contract stating
+    // only a symbol was looked up and filled on whichever listing the
+    // definition service answered with first.
+    let (client, rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let nowhere = Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() };
+    let order = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "MKT".into(),
+        ..Default::default()
+    };
+
+    let refused = client.place_order(1, &nowhere, &order).expect_err("no destination");
+    assert_eq!(refused.code, crate::api::error_codes::Refusal::VALIDATION);
+    assert!(rx.try_recv().is_err(), "and nothing reaches the engine");
+
+    client.place_order(2, &spy(), &order).expect("a destination is all it lacked");
+    assert!(rx.try_recv().is_ok());
+}
+
+#[test]
 fn place_order_explicit_stk_contract_accepted() {
     // An explicit sec_type="STK" must still be accepted.
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
-    let stk = Contract { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), ..Default::default() };
+    let stk = Contract {
+        con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), ..Default::default()
+    };
     let order = Order { action: "BUY".into(), total_quantity: 100.0, order_type: "MKT".into(), ..Default::default() };
     client.place_order(1, &stk, &order).unwrap();
     assert!(rx.try_recv().is_ok());
@@ -1962,7 +1995,7 @@ fn stp_order_with_zero_aux_price_is_rejected() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("aux_price"));
+    assert!(result.unwrap_err().message.contains("aux_price"));
 }
 
 #[test]
@@ -1988,7 +2021,7 @@ fn stp_lmt_order_with_zero_aux_price_is_rejected() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("aux_price"));
+    assert!(result.unwrap_err().message.contains("aux_price"));
 }
 
 #[test]
@@ -2001,7 +2034,7 @@ fn trail_order_with_zero_amount_and_zero_percent_is_rejected() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("trailing_percent"));
+    assert!(result.unwrap_err().message.contains("trailing_percent"));
 }
 
 #[test]
@@ -2027,7 +2060,7 @@ fn trail_limit_order_with_zero_aux_price_is_rejected() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("aux_price"));
+    assert!(result.unwrap_err().message.contains("aux_price"));
 }
 
 #[test]
@@ -2040,7 +2073,7 @@ fn mit_order_with_zero_aux_price_is_rejected() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("aux_price"));
+    assert!(result.unwrap_err().message.contains("aux_price"));
 }
 
 #[test]
@@ -2053,7 +2086,7 @@ fn stp_prt_order_with_zero_aux_price_is_rejected() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("aux_price"));
+    assert!(result.unwrap_err().message.contains("aux_price"));
 }
 
 #[test]
@@ -2066,7 +2099,7 @@ fn lit_order_with_zero_aux_price_is_rejected() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("aux_price"));
+    assert!(result.unwrap_err().message.contains("aux_price"));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2082,7 +2115,7 @@ fn place_order_rejects_nan_lmt_price() {
         lmt_price: f64::NAN, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("lmt_price"), "got: {err}");
+    assert!(err.message.contains("lmt_price"), "got: {err}");
 }
 
 #[test]
@@ -2094,7 +2127,7 @@ fn place_order_rejects_infinite_lmt_price() {
         lmt_price: f64::INFINITY, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("lmt_price"), "got: {err}");
+    assert!(err.message.contains("lmt_price"), "got: {err}");
 }
 
 #[test]
@@ -2108,7 +2141,7 @@ fn place_order_rejects_lmt_price_that_overflows_the_wire() {
         lmt_price: 1.0e12, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("lmt_price"), "got: {err}");
+    assert!(err.message.contains("lmt_price"), "got: {err}");
 }
 
 #[test]
@@ -2124,7 +2157,7 @@ fn place_order_rejects_lmt_price_at_the_exact_wire_boundary() {
         lmt_price: i64::MAX as f64 / PRICE_SCALE_F, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("lmt_price"), "got: {err}");
+    assert!(err.message.contains("lmt_price"), "got: {err}");
 }
 
 #[test]
@@ -2138,7 +2171,7 @@ fn place_order_rejects_nan_aux_price() {
         aux_price: f64::NAN, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("aux_price"), "got: {err}");
+    assert!(err.message.contains("aux_price"), "got: {err}");
 }
 
 #[test]
@@ -2149,7 +2182,7 @@ fn place_order_rejects_negative_quantity() {
         action: "BUY".into(), total_quantity: -100.0, order_type: "MKT".into(), ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("total_quantity"), "got: {err}");
+    assert!(err.message.contains("total_quantity"), "got: {err}");
 }
 
 #[test]
@@ -2160,7 +2193,7 @@ fn place_order_rejects_nan_quantity() {
         action: "BUY".into(), total_quantity: f64::NAN, order_type: "MKT".into(), ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("total_quantity"), "got: {err}");
+    assert!(err.message.contains("total_quantity"), "got: {err}");
 }
 
 #[test]
@@ -2171,7 +2204,7 @@ fn place_order_rejects_infinite_quantity() {
         action: "BUY".into(), total_quantity: f64::INFINITY, order_type: "MKT".into(), ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("total_quantity"), "got: {err}");
+    assert!(err.message.contains("total_quantity"), "got: {err}");
 }
 
 #[test]
@@ -2183,7 +2216,7 @@ fn place_order_rejects_negative_display_size() {
         lmt_price: 150.0, display_size: -5, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("display_size"), "got: {err}");
+    assert!(err.message.contains("display_size"), "got: {err}");
 }
 
 #[test]
@@ -2195,7 +2228,7 @@ fn place_order_rejects_negative_min_qty() {
         lmt_price: 150.0, min_qty: -5, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("min_qty"), "got: {err}");
+    assert!(err.message.contains("min_qty"), "got: {err}");
 }
 
 #[test]
@@ -2207,7 +2240,7 @@ fn place_order_rejects_negative_parent_id() {
         lmt_price: 150.0, parent_id: -5, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("parent_id"), "got: {err}");
+    assert!(err.message.contains("parent_id"), "got: {err}");
 }
 
 #[test]
@@ -2219,7 +2252,7 @@ fn place_order_rejects_negative_trailing_percent() {
         trailing_percent: -5.0, ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("trailing_percent"), "got: {err}");
+    assert!(err.message.contains("trailing_percent"), "got: {err}");
 }
 
 #[test]
@@ -2233,7 +2266,7 @@ fn place_order_adaptive_rejects_unknown_priority() {
         ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.contains("adaptivePriority"), "got: {err}");
+    assert!(err.message.contains("adaptivePriority"), "got: {err}");
 }
 
 #[test]
@@ -2307,10 +2340,11 @@ fn req_historical_data_sends_fetch_historical() {
             assert!(use_rth);
             // The contract's own fields have to leave the client, or the
             // engine has nothing but the old constants to fall back on
-            // (ibx#305). `spy()` states neither, so both arrive empty and the
-            // engine substitutes — that substitution is tested at its source.
+            // (ibx#305). `spy()` states a destination and no security type, so
+            // the destination arrives as given and the type arrives empty for
+            // the engine to substitute — tested at its source.
             assert_eq!(sec_type, "");
-            assert_eq!(exchange, "");
+            assert_eq!(exchange, "SMART");
         }
         _ => panic!("expected FetchHistorical"),
     }
@@ -3810,7 +3844,7 @@ fn a_modify_to_an_unrepresentable_type_is_refused() {
         };
         let err = client.place_order(9401, &spy(), &converted)
             .expect_err("converting to a type the replace cannot express must be refused");
-        assert!(err.contains("cannot be modified"), "{order_type}: {err}");
+        assert!(err.message.contains("cannot be modified"), "{order_type}: {err}");
         assert!(rx.try_recv().is_err(), "{order_type}: nothing reaches the wire");
     }
 }
