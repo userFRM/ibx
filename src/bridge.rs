@@ -1243,6 +1243,14 @@ impl ReferenceState {
         }
     }
 
+    /// Every venue the server says offers a book, as it stated them.
+    ///
+    /// Read rather than drained: what a subscription is fanned out over comes
+    /// from here, and a caller reading the list must not empty it.
+    pub fn depth_exchanges(&self) -> Vec<DepthMktDataDescription> {
+        self.depth_exchanges_cache.lock().unwrap().clone()
+    }
+
     #[doc(hidden)] pub fn push_depth_exchanges(&self, descs: Vec<DepthMktDataDescription>) {
         self.depth_exchanges_cache.lock().unwrap().extend(descs);
     }
