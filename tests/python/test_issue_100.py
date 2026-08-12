@@ -269,3 +269,4 @@ class TestScanner:
         # Verify ranking order
         ranks = [r[1] for r in results]
         assert ranks == sorted(ranks), "Scanner results should be in rank order"
+

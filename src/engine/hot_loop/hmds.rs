@@ -1085,6 +1085,13 @@ impl HmdsState {
         };
 
         let xml = crate::control::historical::build_query_xml(&req);
+        // The query as it goes out, when asked for. A request the venue does
+        // not answer is only distinguishable from one it never received by
+        // what was actually sent.
+        if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+            shared.market.note_unread_wire("historical-query", xml.clone());
+            log::info!("historical query as sent: {xml}");
+        }
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[

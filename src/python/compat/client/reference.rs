@@ -27,6 +27,10 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = (format_date, chart_options);
+        // Whatever finished under this id before, this is a new request.
+        if let Ok(wire) = wire_req_id(req_id) {
+            self.core.historical_request_is_new(wire);
+        }
         if !what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             if let Err(why) = ClientCore::validate_historical_args(
                 bar_size_setting, what_to_show, keep_up_to_date,
@@ -70,7 +74,10 @@ impl EClient {
     /// Cancel historical data.
     fn cancel_historical_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::CancelHistorical { req_id: wire_req_id(req_id)? })?;
+        let wire = wire_req_id(req_id)?;
+        // A withdrawn stream leaves nothing running under this id.
+        self.core.historical_request_is_new(wire);
+        Self::send_control(py, &tx, ControlCommand::CancelHistorical { req_id: wire })?;
         Ok(())
     }
 
