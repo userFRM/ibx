@@ -892,23 +892,31 @@ impl FarmState {
                 );
             }
             // A depth subscription asks under an id of its own, and one venue's
-            // refusal does not end the request: this client asks several venues
-            // for one book and the others may answer. So the caller is told
-            // which venue refused, and the request stands.
+            // refusal does not end the caller's request: one book is asked for
+            // at several venues and the others may answer. The caller asked
+            // once, so they are told once — when the last venue has refused
+            // and there is no book coming.
             None => {
-                let asked_for = req_id
-                    .and_then(|rid| {
-                        self.depth_fanout_map.iter().find(|(sub, _)| *sub == rid).map(|(_, u)| *u)
-                    })
-                    .or(req_id);
                 log::warn!("The venue refused a subscription: {reason}");
-                if let Some(rid) = asked_for {
-                    shared.reference.push_historical_error(
-                        rid,
-                        DEPTH_VENUE_REFUSED,
-                        format!("the venue refused depth here: {reason}"),
-                    );
+                let Some(rid) = req_id else { return };
+                let fanned_out = self.depth_fanout_map.iter()
+                    .find(|(sub, _)| *sub == rid)
+                    .map(|(_, user)| *user);
+                let (asked_for, still_asking) = match fanned_out {
+                    Some(user) => {
+                        self.depth_fanout_map.retain(|(sub, _)| *sub != rid);
+                        (user, self.depth_fanout_map.iter().any(|(_, u)| *u == user))
+                    }
+                    None => (rid, false),
+                };
+                if still_asking {
+                    return;
                 }
+                shared.reference.push_historical_error(
+                    asked_for,
+                    DEPTH_VENUE_REFUSED,
+                    format!("the venue refused depth here: {reason}"),
+                );
             }
         }
     }
@@ -1225,29 +1233,6 @@ impl FarmState {
     /// venue is gathered from the venues in the same group as the one the
     /// contract is listed on — which is what a group is for, and what makes
     /// this work for a market nobody wrote down.
-    fn depth_venues_for(
-        &self, sec_type: &str, listed_on: &str, shared: &SharedState,
-    ) -> Vec<String> {
-        let published = shared.reference.depth_exchanges();
-        let of_this_kind = |d: &&crate::types::DepthMktDataDescription| {
-            d.sec_type.eq_ignore_ascii_case(sec_type)
-        };
-        let Some(group) = published
-            .iter()
-            .filter(of_this_kind)
-            .find(|d| d.exchange.eq_ignore_ascii_case(listed_on))
-            .map(|d| d.agg_group)
-        else {
-            return Vec::new();
-        };
-        published
-            .iter()
-            .filter(of_this_kind)
-            .filter(|d| d.agg_group == group)
-            .map(|d| d.exchange.clone())
-            .collect()
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_depth_subscribe(
         &mut self,
@@ -1272,26 +1257,42 @@ impl FarmState {
             sec_type.to_string(), _num_rows, is_smart_depth,
         ));
 
-        // Which venues a book is gathered from is the server's to say: it
-        // publishes every exchange that offers one, for every security type,
-        // with the group each aggregates into. A list of venue names written
-        // here would be a list of the markets this client cannot reach.
+        // Which venues an aggregate book is made of is the server's to say,
+        // and it says it per contract: the definition names the venues SMART
+        // routes this contract to, in the order the exchange mask's bits refer
+        // to. That is the set the aggregate is gathered from.
+        //
+        // The exchange directory the session opens with is not that set. It
+        // names every exchange the venue knows, in two sections, and reading
+        // the sections as though they were aggregation groups fanned a US
+        // share out over sixty-six venues on four continents, most of which
+        // refused it by name.
         let on_no_venue = is_smart_depth || matches!(exchange, "SMART" | "BEST" | "");
         let gathered = if on_no_venue {
-            self.depth_venues_for(sec_type, primary_exchange, shared)
+            shared.reference.smart_venues(con_id)
         } else {
             Vec::new()
+        };
+        // Where the contract is listed, for the case where the venues it is
+        // routed to are not known. The caller may have stated it; the venue
+        // states it on the definition either way.
+        let listed_on = if primary_exchange.is_empty() {
+            shared.reference.get_contract(con_id)
+                .map(|known| known.primary_exchange)
+                .unwrap_or_default()
+        } else {
+            primary_exchange.to_string()
         };
         // A book asked for on no particular venue, before the server has said
         // which venues offer one, is asked for where the contract is listed.
         // One venue's book is less than the aggregate and is a book; the
         // request the aggregate would have needed reaches nothing at all.
-        let exchange = if on_no_venue && gathered.is_empty() && !primary_exchange.is_empty() {
+        let exchange = if on_no_venue && gathered.is_empty() && !listed_on.is_empty() {
             log::info!(
-                "the venues offering a book are not known yet, so req={req_id} is asked for \
-                 where the contract is listed ({primary_exchange})",
+                "the venues this contract is routed to are not known, so req={req_id} is \
+                 asked for where it is listed ({listed_on})",
             );
-            primary_exchange
+            listed_on.as_str()
         } else {
             exchange
         };
@@ -1313,7 +1314,7 @@ impl FarmState {
                     );
                 }
                 log::info!(
-                    "Book gathered for req={req_id} con_id={con_id} from {} venues the server named",
+                    "Book gathered for req={req_id} con_id={con_id} from the {} venues it is routed to",
                     gathered.len(),
                 );
             } else {
