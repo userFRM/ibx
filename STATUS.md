@@ -137,8 +137,11 @@ official gateway behaves the same way.
   streams continuously and a historical tick request is answered; equities and
   FX stream throughout. The server holds crypto tick data and does not stream
   it.
-- Tick 437 carries four 32-bit integers; the unit of the second (timestamp) and
-  the meaning of the fourth are not established. Neither is used.
+- Tick 437 carries four 32-bit integers. Three are read — a status mask, a
+  number, and an index naming one status — and the fourth is left alone. The
+  number is kept exactly as stated: its unit is not established, and no reading
+  of it would be found rather than invented. The counterpart reads the same
+  three, keeps the same number, and no code path there reads it either.
 
 ## Test inventory
 
