@@ -39,26 +39,25 @@ divergence a caller should be able to read about where they will look for it.
 **Left.** The remaining settings against the grant list — none has a matching
 token so far. The `server_version()` divergence in its own documentation.
 
-## 3. Nothing about a market is written here
+## 3. Nothing about a market is written here — done
 
 Which venues exist, what they offer, and what they are called is the server's
 to state. A list written into this source is a list of the markets this client
 cannot reach, and it is wrong the day a venue is added.
 
-Two are done. The venues a book is gathered from came from eighteen names
-written here and now come from the two hundred and three the server publishes,
-which is what made a London book reachable. The map from a quote's exchange
-mask to a venue came from a list of seventeen whose order was this client's
-own, and now comes from the contract's own definition.
+Three were removed. The map from a quote's exchange mask to a venue came from a
+list of seventeen whose order was this client's own; it now comes from the tick
+that carries it, `NAME/LETTER` per venue, in the order the mask's bits refer
+to. The server answers it at regular trading hours with 18 venues, and states
+none outside them, so a venue's letter is empty until it does — which is what
+the server has said rather than what this client would have guessed.
 
-The third is the table of eight venue letters that used to sit in
-`src/types.rs`. It is gone. The counterpart carries no such table either: it
-reads the map off the wire, as `NAME/LETTER` per venue, in the order the
-exchange mask's bits refer to, and the tick that carries it is asked for
-alongside the quote. This client asks for it now. What is not yet settled is
-that the server has not answered it in the sessions tried, so a venue's letter
-is empty until it does — which is what the server has said, rather than what
-this client would have guessed.
+The table of eight venue letters in `src/types.rs` is gone.
+
+The venues an aggregate book is gathered from came from eighteen names written
+here, then from a global exchange directory read as though its sections were
+aggregation groups, and now from the contract's own definition, which names the
+venues SMART routes it to.
 
 ## 4. Product surface, or adapter — needs a decision
 

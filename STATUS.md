@@ -32,13 +32,14 @@ recorded as the result.
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | Top of book | ✅ Supported | Streaming and snapshot; US equities and FX; `scripts/sdk_sweep.py`, `tests/python/test_live_quotes.py`. Concurrent subscribers on one contract share one wire subscription |
-| Market depth (L2) | 🔬 Implemented | Gathered from the venues the server publishes — 203 of them, worldwide — filtered to the security type and the aggregation group of the exchange the contract is listed on. A London book returns EUIBSI, BATEUK, AQXEUK and TRQXUK; a US book returns EDGX, ARCA and NASDAQ. Each level names its venue. The account holds no deep-book entitlement on the US equity venues, which answer the request by refusing it, by name, to the caller; `tests/python/test_live_depth.py`, `tests/python/test_live_session_features.py::test_l2_smart_depth`. A book on one named venue is asked for as a book: a future returns the entitlement response for the account, where the request previously went unanswered |
+| Market depth (L2) | ✅ Supported | Gathered from the venues the contract's own definition says SMART routes it to, and each level names the venue it stands on. On this account the US venues refuse a deep book by name, except IEX, whose Level II is fee-waived: a SPY book at regular trading hours returns 33 levels, every one of them IEX. `ES` on CME and a book asked for on NASDAQ are refused by name. A book asked for on one named venue is asked for as a book; `tests/python/test_live_depth.py`, `tests/python/test_live_session_features.py::test_l2_smart_depth` |
 | Historical bars | ✅ Supported | 9 markets in one session (`src/bin/capture_global.rs`); `keepUpToDate` verified in `tests/python/test_issue_100.py` |
 | Historical ticks and schedules | ✅ Supported | `scripts/sdk_sweep.py`; unsupported tick types return an error rather than substituting another series |
 | Tick-by-tick quotes | ✅ Supported | FX and US equities, concurrent streams, each record carrying its request id; `tests/python/test_live_python_wrappers.py` |
 | Tick-by-tick trades | ✅ Supported | 1,027 trades on one session; `Last` and `AllLast` are distinct streams |
 | Trading halt status | ✅ Supported | Tick 437 decoded from status mask and status index; `src/bin/capture_status.rs` |
 | Tick attributes | ✅ Supported | Per-trade `unreported` and `pastLimit` observed to vary within one stream |
+| Venue map behind the exchange mask | ✅ Supported | Asked for beside the quote and answered at regular trading hours with 18 venues, each with the letter the mask's bits refer to. Outside those hours the server states none, and a venue's letter is empty until it does |
 
 ## Orders
 
