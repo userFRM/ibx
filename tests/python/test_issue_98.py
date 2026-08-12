@@ -264,9 +264,13 @@ class TestAccountAndPnL:
         self.wrapper.got_account_download_end.wait(timeout=30)
         self.client.req_account_updates(False, "")
 
+        # The account was asked for and its download ended, so what this
+        # client holds about it is what it was told. Skipped for want of a
+        # snapshot, this passed on a client that kept none.
         snapshot = self.client.account_snapshot()
-        if snapshot is None:
-            pytest.skip("No snapshot data — engine cache not populated")
+        assert snapshot is not None, (
+            "the account stated its figures and this client held none of them"
+        )
 
         assert "net_liquidation" in snapshot
         assert "buying_power" in snapshot

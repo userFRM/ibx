@@ -103,9 +103,10 @@ class TestNews:
     def test_news_providers(self):
         """reqNewsProviders returns available providers."""
         self.client.req_news_providers()
+        # Which providers exist is reference data: stated at any hour, and
+        # not a market's to be closed.
         got = self.wrapper.got_providers.wait(timeout=15)
-        if not got:
-            pytest.skip("No news providers returned")
+        assert got, "the venue was asked which news providers it carries and named none"
 
         providers = self.wrapper.providers
         print(f"  News providers: {len(providers)}")
