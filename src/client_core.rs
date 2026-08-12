@@ -447,6 +447,12 @@ pub struct ClientCore {
     // reqId <-> InstrumentId mapping
     pub req_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     pub instrument_to_req: Mutex<HashMap<InstrumentId, i64>>,
+    /// Which contract each tick-by-tick request is on.
+    ///
+    /// Its own, because a trade stream is not a quote subscription. Kept in
+    /// the quote maps, a request for trades was handed the contract's quotes,
+    /// and withdrawing it took away the quotes another caller was watching.
+    pub tbt_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     /// The other requests watching a contract that is already subscribed.
     ///
     /// One contract holds one subscription on the wire, which is what the
@@ -550,6 +556,7 @@ impl ClientCore {
             readonly: std::sync::atomic::AtomicBool::new(false),
             req_to_instrument: Mutex::new(HashMap::new()),
             instrument_to_req: Mutex::new(HashMap::new()),
+            tbt_to_instrument: Mutex::new(HashMap::new()),
             instrument_followers: Mutex::new(HashMap::new()),
             con_id_to_instrument: Mutex::new(HashMap::new()),
             display_groups: Mutex::new(HashMap::new()),
@@ -605,6 +612,7 @@ impl ClientCore {
     pub fn reset(&self) {
         self.req_to_instrument.lock().unwrap().clear();
         self.instrument_to_req.lock().unwrap().clear();
+        self.tbt_to_instrument.lock().unwrap().clear();
         self.instrument_followers.lock().unwrap().clear();
         self.con_id_to_instrument.lock().unwrap().clear();
         self.last_quotes.lock().unwrap().clear();
@@ -1001,8 +1009,7 @@ impl ClientCore {
 
         let instrument_id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);
-        self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
-        self.instrument_to_req.lock().unwrap().insert(instrument_id, req_id);
+        self.tbt_to_instrument.lock().unwrap().insert(req_id, instrument_id);
         Ok(instrument_id)
     }
 

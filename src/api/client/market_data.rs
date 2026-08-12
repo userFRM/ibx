@@ -92,6 +92,19 @@ impl EClient {
     ) -> Result<(), String> {
         let _ = (number_of_ticks, ignore_size);
         let kind = TbtType::named(tick_type)?;
+
+        // A stream is asked for by the venue's own id for the contract. Sent
+        // with none, the venue answers "Unknown contract" against a query this
+        // client had not told anyone about, and the caller waited on a stream
+        // that was refused before it began.
+        let named;
+        let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
+            named = self.qualify_contract(contract)?;
+            &named
+        } else {
+            contract
+        };
+
         self.core
             .register_tbt(
                 &self.shared,
@@ -109,9 +122,9 @@ impl EClient {
 
     /// Cancel tick-by-tick data. Matches `cancelTickByTickData` in C++.
     pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), String> {
-        if let Some(instrument) = self.core.req_to_instrument.lock().unwrap().remove(&req_id) {
-            self.core.instrument_to_req.lock().unwrap().remove(&instrument);
-            self.core.forget_instrument(instrument);
+        // Only what this request took out. Removing the contract's quote
+        // mapping here took the quotes away from whoever was watching them.
+        if let Some(instrument) = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id) {
             self.send(ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         }
         Ok(())
