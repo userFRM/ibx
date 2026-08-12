@@ -45,6 +45,19 @@ impl SecDefState {
     }
 
     /// Ask what event types the calendar carries.
+    /// Stop waiting on a calendar query the caller no longer wants.
+    ///
+    /// The query is one message and one answer, so there is nothing at the
+    /// venue to withdraw; what is withdrawn is the answer, which would
+    /// otherwise be delivered to a caller who has said they are done with it.
+    /// Answers whether there was one to withdraw, so a cancel naming nothing
+    /// can say so rather than look like it acted.
+    pub(crate) fn withdraw_calendar_request(&mut self, req_id: u32) -> bool {
+        let before = self.pending.len();
+        self.pending.retain(|(_, waiting, ..)| *waiting != req_id);
+        self.pending.len() != before
+    }
+
     pub(crate) fn send_calendar_meta_data_request(
         &mut self,
         req_id: u32,

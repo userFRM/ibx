@@ -7,7 +7,7 @@ did anything. This counts what leaves the machine.
 
 | Kind | Count | Meaning |
 | --- | ---: | --- |
-| wire | 39 | sends a command that reaches the venue |
+| wire | 41 | sends a command that reaches the venue |
 | session | 26 | answered from what the venue pushed to this session |
 | refused | 3 | reports that this client cannot serve it |
 | missing | 0 | should reach the venue and does not |

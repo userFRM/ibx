@@ -1604,6 +1604,9 @@ pub enum ControlCommand {
     FetchCalendarMetaData { req_id: u32 },
     /// Ask the calendar for events, under a filter or for one contract.
     FetchCalendarEvents { req_id: u32, query: Box<crate::control::calendar::CalendarQuery> },
+    /// Stop waiting on a calendar query. One message and one answer, so what
+    /// is withdrawn is the answer.
+    CancelCalendar { req_id: u32 },
     /// Request the option chain of an underlying via auth connection.
     FetchOptionParams {
         req_id: u32,

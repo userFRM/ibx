@@ -93,6 +93,22 @@ impl EClient {
         self.send(ControlCommand::FetchCalendarMetaData { req_id: wire_req_id(req_id)? })
     }
 
+    /// Stop waiting on the event types.
+    ///
+    /// The query is one message and one answer, so there is nothing at the
+    /// venue to withdraw: what is withdrawn is the answer, which would
+    /// otherwise reach a caller who has said they are done with it. A cancel
+    /// naming no waiting request says so rather than returning as though it
+    /// acted.
+    pub fn cancel_wsh_meta_data(&self, req_id: i64) -> Result<(), String> {
+        self.send(ControlCommand::CancelCalendar { req_id: wire_req_id(req_id)? })
+    }
+
+    /// Stop waiting on the calendar's events. As above.
+    pub fn cancel_wsh_event_data(&self, req_id: i64) -> Result<(), String> {
+        self.send(ControlCommand::CancelCalendar { req_id: wire_req_id(req_id)? })
+    }
+
     /// Ask the corporate-events calendar for events.
     ///
     /// A caller either names a contract or writes its own filter. The filter

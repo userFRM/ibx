@@ -135,3 +135,30 @@ def test_ending_a_session_is_not_a_session_that_went_away():
 
     ends = inspect.getsource(IbxClient.disconnect)
     assert "connectionClosed" not in ends.split('"""')[-1]
+
+
+def test_every_call_their_library_makes_is_carried():
+    """Their `IB` calls its transport by name. Each one has to land here.
+
+    Measured against their own source rather than a list kept by hand: a list
+    is right on the day it is written. This found six that were reached by a
+    name this engine does not use — `reqPnL` split on every capital is
+    `req_pn_l` — and two that were not carried at all, so a program asking to
+    stop a calendar query had nothing to call.
+    """
+    import inspect
+    import re
+
+    import ibx
+
+    src = inspect.getsource(ib_async.ib)
+    called = sorted(set(re.findall(r"self\.client\.(\w+)\(", src)))
+    assert len(called) > 50, "their transport surface should be substantial"
+
+    spelled_out = {n for n in dir(ibx.ib_async.IbxClient) if not n.startswith("_")}
+    unrouted = [
+        name for name in called
+        if name not in spelled_out
+        and not hasattr(ibx.EClient, ibx.ib_async._our_name_for(name, ibx.EClient))
+    ]
+    assert not unrouted, f"their library calls what this engine does not carry: {unrouted}"
