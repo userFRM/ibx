@@ -17,7 +17,8 @@
 
 use ibx::control::contracts;
 use ibx::control::{historical, news};
-use ibx::protocol::{fix, ns, tbt_stream, tick_decoder, trading_status};
+use ibx::control::fundamental;
+use ibx::protocol::{fix, fixcomp, ns, tbt_stream, tick_decoder, trading_status, xyz};
 
 /// A byte sequence that is not a frame, from a stated seed. The same seed
 /// always produces the same bytes, so a failure reproduces.
@@ -153,6 +154,27 @@ fn a_session_message_that_arrives_wrong_is_not_fatal() {
 }
 
 #[test]
+fn a_payload_that_must_be_expanded_is_not_fatal() {
+    // A compressed or length-prefixed payload states how much follows it. A
+    // length that overruns what did follow is the shape a truncated read
+    // produces, and it is the one that reads past an end.
+    let frames = [
+        fix_frame(&[("35", "y"), ("95", "64"), ("96", "not really compressed")]),
+        b"\x00\x00\x00\x40\x00\x00\x00\x08payload".to_vec(),
+        b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03truncated gzip".to_vec(),
+    ];
+    for frame in frames {
+        for wrong in every_corruption(&frame) {
+            let _ = fixcomp::fixcomp_decompress(&wrong);
+            let _ = fixcomp::fixcomp_length(&wrong);
+            let _ = xyz::xyz_parse_response(&wrong);
+            let _ = fundamental::decompress_fundamental_data(&wrong);
+            let _ = news::jc_decode(&wrong);
+        }
+    }
+}
+
+#[test]
 fn a_frame_of_pure_noise_is_not_fatal() {
     // Nothing about these is a frame. A parser reached by a resynchronising
     // reader sees exactly this.
@@ -174,6 +196,11 @@ fn a_frame_of_pure_noise_is_not_fatal() {
             let _ = fix::fix_parse(&bytes);
             let _ = ns::ns_parse(&bytes);
             let _ = ns::parse_test_request_timestamp(&bytes);
+            let _ = fixcomp::fixcomp_decompress(&bytes);
+            let _ = fixcomp::fixcomp_length(&bytes);
+            let _ = xyz::xyz_parse_response(&bytes);
+            let _ = fundamental::decompress_fundamental_data(&bytes);
+            let _ = news::jc_decode(&bytes);
         }
     }
 }
