@@ -177,17 +177,22 @@ impl EClient {
         // to send, and the caller is told that rather than told about its
         // account.
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
-        let (action, qty) = ClientCore::validate_exercise(
+        let (action, qty) = match ClientCore::validate_exercise(
             exercise_action, exercise_quantity, account, &self.account(),
-        ).map_err(PyRuntimeError::new_err)?;
-        ClientCore::validate_order_contract(
+        ) {
+            Ok(pair) => pair,
+            Err(why) => return self.report_refusal(py, req_id, why.into()),
+        };
+        if let Err(why) = ClientCore::validate_order_contract(
             contract.con_id,
             &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
                 &contract.right, &contract.multiplier, &contract.currency,
             ),
-        ).map_err(PyRuntimeError::new_err)?;
+        ) {
+            return self.report_refusal(py, req_id, why.into());
+        }
 
         let oid = if req_id > 0 {
             req_id as u64
@@ -216,15 +221,20 @@ impl EClient {
     fn cancel_order_by_perm_id(&self, py: Python<'_>, perm_id: i64) -> PyResult<()> {
         self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
         if perm_id == 0 {
-            return Err(PyRuntimeError::new_err("cancel_order_by_perm_id: perm_id must be non-zero"));
+            return self.report_refusal(py, -1, Refusal::validation(
+                "cancel_order_by_perm_id: perm_id must be non-zero",
+            ));
         }
         let shared = self.shared_state()?;
-        let order_id = self.core.collect_open_orders(&shared)
+        let found = self.core.collect_open_orders(&shared)
             .into_iter()
             .find(|(_, tracked)| tracked.order.perm_id == perm_id)
-            .map(|(oid, _)| oid)
-            .ok_or_else(|| PyRuntimeError::new_err(
-                format!("cancel_order_by_perm_id: permId {perm_id} not found in open orders")))?;
+            .map(|(oid, _)| oid);
+        let Some(order_id) = found else {
+            return self.report_refusal(py, -1, Refusal::validation(
+                format!("cancel_order_by_perm_id: permId {perm_id} not found in open orders"),
+            ));
+        };
         self.cancel_order(py, order_id as i64, "")
     }
 
