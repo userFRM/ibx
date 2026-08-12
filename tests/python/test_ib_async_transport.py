@@ -95,3 +95,43 @@ def test_an_order_lives_its_whole_life_through_their_api():
         assert [entry.status for entry in trade.log][-1] == "Cancelled"
     finally:
         ib.disconnect()
+
+
+def test_a_bar_is_dated_the_way_their_parser_reads_one():
+    """Their own first documented example is `util.df(bars)`.
+
+    ib_async parses the date itself, and decides the shape from the string: a
+    day from eight digits, a moment in seconds from all digits, and an aware
+    moment from a date, a time and a zone separated by single spaces. Anything
+    else it reads as naive, and their frame conversion refuses a naive one.
+    This engine states the date and time joined by a dash, with the zone beside
+    them.
+    """
+    from ib_async.util import parseIBDatetime
+
+    from ibx.ib_async import _as_their_moment
+
+    day = _as_their_moment("20260812", "US/Eastern")
+    assert parseIBDatetime(day).isoformat() == "2026-08-12"
+
+    minute = _as_their_moment("20260812-13:30:00", "US/Eastern")
+    read = parseIBDatetime(minute)
+    assert read.tzinfo is not None, "a naive moment cannot be converted to a zone"
+    assert read.isoformat() == "2026-08-12T13:30:00-04:00"
+
+    # A moment stated in seconds, and anything not a date, are handed over as
+    # they stand.
+    assert _as_their_moment("1786109400", "") == "1786109400"
+    assert _as_their_moment("", "US/Eastern") == ""
+
+
+def test_ending_a_session_is_not_a_session_that_went_away():
+    """Their wrapper's `connectionClosed` fails every waiting request and
+    raises on their global error event. That is a socket that dropped, not a
+    caller who asked to stop, and their own client does not call it here."""
+    import inspect
+
+    from ibx.ib_async import IbxClient
+
+    ends = inspect.getsource(IbxClient.disconnect)
+    assert "connectionClosed" not in ends.split('"""')[-1]
