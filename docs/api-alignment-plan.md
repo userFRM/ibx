@@ -66,7 +66,26 @@ against the grant list. Expose the grants as a call on both clients. Note the
 
 ---
 
-## 3. Product surface, or adapter — needs a decision
+## 3. Nothing about a market is written here
+
+Which venues exist, what they offer, and what they are called is the server's
+to state. A list written into this source is a list of the markets this client
+cannot reach, and it is wrong the day a venue is added.
+
+Two are done. The venues a book is gathered from came from eighteen names
+written here and now come from the two hundred and three the server publishes,
+which is what made a London book reachable. The map from a quote's exchange
+mask to a venue came from a list of seventeen whose order was this client's
+own, and now comes from the contract's own definition.
+
+One is left. `exchange_letter` in `src/types.rs` maps eight venues to the
+single character the reference client reports, and returns nothing for every
+other venue — including most US ones and all others. The server states these,
+in its answer to a request for the components of a smart quote; this client
+answers that request from its own table instead of sending it. Locating that
+request settles it, and deletes the table.
+
+## 4. Product surface, or adapter — needs a decision
 
 Three caller-facing surfaces over one engine:
 
@@ -92,4 +111,4 @@ whether the rust-ibapi shape gets written at all.
 
 ---
 
-Order: 1, then 2. Item 3 before either, if the answer is "three products".
+Order: 1, then 2, then 3. Item 4 before any of them, if the answer is "three products".
