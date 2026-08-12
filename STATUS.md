@@ -173,19 +173,21 @@ Every session to date has produced at least one that the offline suites did not
 detect, including a crash on a live trade stream, a subscription delivering the
 wrong tick type, and a regression affecting every synchronous call.
 
-The most recent session produced eleven, listed here as the caller-visible
+The most recent session produced five, listed here as the caller-visible
 symptom:
 
 | Symptom | Cause |
 | --- | --- |
-| `reqHistoricalData` returned no bars for an unqualified contract | Request sent with contract id 0; no lookup performed |
-| `accountSummary()` returned an empty list | Account not subscribed until an explicit request |
-| Account values all zero for a non-USD account | Values sourced from a local copy rather than server statements |
-| Session opened with no execution history | Server rejects the request without a time window |
-| `reqNewsProviders()` returned one provider containing all others | Field separators inverted |
-| Rust `option_chain()` empty while Python returned 3 | Dispatch drain withheld results from its own synchronous call |
-| `reqTickByTickData(contract, "Last")` returned the other stream, then nothing | Two distinct streams conflated |
-| `reqTickers()` returned previous close, no bid/ask | Snapshot cancelled on first tick of any type |
-| Contract with no bid quoted at −1 | Server's absent-value sentinel treated as a price |
-| `reqHistoricalSchedule()` returned `None` | No return path implemented |
-| Order modify left the order inactive; cancel found nothing | Replace omitted the destination field; server rejected as a mismatch |
+| `place_order` on a contract carrying no id did nothing, and reported nothing | Registered under contract id 0 and sent; the venue has nothing to match and answers nothing |
+| An order stating a symbol and no exchange was filled on a venue the caller never named | No destination required; the definition lookup answered with whichever listing came first |
+| A refused request raised where the reference client reports it | Refusals raised on 25 request-shaped methods; a program written against that client has no exception handling there |
+| A bar whose low is below zero took the process down | 31-bit sign extension performed in an i32, which the intermediate does not fit |
+| `util.df(bars)` refused the bars an ib_async program asked for | The date was handed over in a spelling their parser reads as naive, which their frame conversion rejects |
+
+Two suites were added rather than a symptom fixed: every wire parser is now
+given malformed input (`tests/malformed_input.rs`), which is what found the bar
+decoder; and ib_async's own test suite is run against this engine
+(`tests/ib_async_upstream/conftest.py`).
+
+Outstanding: endurance over a full session, and the eight CI jobs, which run
+offline only — a live job needs credentials held as repository secrets.
