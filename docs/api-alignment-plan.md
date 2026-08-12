@@ -78,12 +78,14 @@ which is what made a London book reachable. The map from a quote's exchange
 mask to a venue came from a list of seventeen whose order was this client's
 own, and now comes from the contract's own definition.
 
-One is left. `exchange_letter` in `src/types.rs` maps eight venues to the
-single character the reference client reports, and returns nothing for every
-other venue — including most US ones and all others. The server states these,
-in its answer to a request for the components of a smart quote; this client
-answers that request from its own table instead of sending it. Locating that
-request settles it, and deletes the table.
+The third is the table of eight venue letters that used to sit in
+`src/types.rs`. It is gone. The counterpart carries no such table either: it
+reads the map off the wire, as `NAME/LETTER` per venue, in the order the
+exchange mask's bits refer to, and the tick that carries it is asked for
+alongside the quote. This client asks for it now. What is not yet settled is
+that the server has not answered it in the sessions tried, so a venue's letter
+is empty until it does — which is what the server has said, rather than what
+this client would have guessed.
 
 ## 4. Product surface, or adapter — needs a decision
 

@@ -165,6 +165,15 @@ fn build_trading_status_subscribe_tags(
 /// The trading-status tick's own number, in place of a request type.
 const TRADING_STATUS_REQUEST_TYPE: u32 = 437;
 
+/// The tick that states which venue each bit of a quote's exchange mask means.
+///
+/// The server sends the map itself — every venue's name and the character it
+/// is reported under, in the order the bits refer to. This client used to
+/// carry a table of eight venues written into its own source, which named
+/// nothing for any other venue and could not be checked against what the
+/// server assigns.
+const BBO_EXCHANGE_MAP_REQUEST_TYPE: u32 = 626;
+
 /// The kind of market data a subscription asks for, on tag 264.
 ///
 /// A book is `Deep`; `BidAsk` is the top of one venue's book. The two are not
@@ -563,6 +572,9 @@ impl FarmState {
         match msg_type {
             b"P" => self.handle_tick_data(msg, context, shared, event_tx),
             b"Q" => {
+                if std::env::var("IBX_TRACE_Q").is_ok() {
+                    log::info!("35=Q body: {}", String::from_utf8_lossy(msg).replace('\x01', "|"));
+                }
                 log::info!("Farm 35=Q subscription ack received");
                 self.handle_subscription_ack(msg, context);
             }
@@ -980,6 +992,11 @@ impl FarmState {
         self.md_req_to_instrument.push((bid_ask_id, instrument));
         self.md_req_to_instrument.push((status_req_id, instrument));
         self.generic_tick_reqs.push((status_req_id, TRADING_STATUS_REQUEST_TYPE));
+
+        let venue_map_req_id = self.next_md_req_id;
+        self.next_md_req_id += 1;
+        self.md_req_to_instrument.push((venue_map_req_id, instrument));
+        self.generic_tick_reqs.push((venue_map_req_id, BBO_EXCHANGE_MAP_REQUEST_TYPE));
         if realtime {
             self.md_req_to_instrument.push((last_id, instrument));
         }
@@ -995,11 +1012,16 @@ impl FarmState {
             Some((_, reqs)) => {
                 reqs.push(bid_ask_id);
                 reqs.push(status_req_id);
+                reqs.push(venue_map_req_id);
                 if realtime { reqs.push(last_id); }
                 if let Some(id) = greeks_req_id { reqs.push(id); }
             }
             None => {
-                let mut reqs = if realtime { vec![bid_ask_id, last_id, status_req_id] } else { vec![bid_ask_id, status_req_id] };
+                let mut reqs = if realtime {
+                    vec![bid_ask_id, last_id, status_req_id, venue_map_req_id]
+                } else {
+                    vec![bid_ask_id, status_req_id, venue_map_req_id]
+                };
                 if let Some(id) = greeks_req_id { reqs.push(id); }
                 self.instrument_md_reqs.push((instrument, reqs));
             }
@@ -1055,6 +1077,20 @@ impl FarmState {
                 );
                 let refs: Vec<(u32, &str)> =
                     tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
+                let _ = conn.send_fixcomp(&refs);
+
+                // And which venue each bit of the exchange mask means, which
+                // the server states rather than this client assuming.
+                let mut venue_map = build_trading_status_subscribe_tags(
+                    venue_map_req_id, con_id, sec_type, exchange, &ts,
+                );
+                for (tag, value) in venue_map.iter_mut() {
+                    if *tag == 264 {
+                        *value = BBO_EXCHANGE_MAP_REQUEST_TYPE.to_string();
+                    }
+                }
+                let refs: Vec<(u32, &str)> =
+                    venue_map.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
                 let _ = conn.send_fixcomp(&refs);
             } else {
                 // No con_id — send descriptive fields
@@ -1800,6 +1836,30 @@ impl FarmState {
                         comp.instrument = instrument;
                         shared.market.push_option_computation(comp);
                         emit(event_tx, Event::OptionComputation(comp));
+                    }
+                }
+                BBO_EXCHANGE_MAP_REQUEST_TYPE => {
+                    // Every venue, in the order the mask's bits refer to:
+                    // `NAME/LETTER` per venue, one after another.
+                    let stated = String::from_utf8_lossy(payload);
+                    let venues: Vec<crate::types::SmartComponent> = stated
+                        .split(';')
+                        .filter(|entry| !entry.trim().is_empty())
+                        .enumerate()
+                        .map(|(bit, entry)| {
+                            let (exchange, letter) =
+                                entry.split_once('/').unwrap_or((entry, ""));
+                            crate::types::SmartComponent {
+                                bit_number: bit as i32,
+                                exchange: exchange.trim().to_string(),
+                                exchange_letter: letter.trim().to_string(),
+                            }
+                        })
+                        .collect();
+                    if !venues.is_empty() {
+                        log::info!("the server names {} venues for the exchange mask", venues.len());
+                        shared.reference.set_smart_components(venues);
+                        shared.reference.note_smart_components_provisional(false);
                     }
                 }
                 TRADING_STATUS_REQUEST_TYPE => {

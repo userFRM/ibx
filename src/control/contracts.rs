@@ -2679,19 +2679,18 @@ mod smart_venue_tests {
         assert!(def.smart_venues.is_empty());
     }
 
-    /// The letters are this client's knowledge of how each venue is
-    /// abbreviated, and are not taken from the first letter of the name.
+    /// A venue's letter is the server's to state, and nothing is stated for
+    /// one it has not named.
+    ///
+    /// This client used to answer from a table of eight venues written into
+    /// its own source. That table named nothing for every other venue — most
+    /// of the United States, and all of everywhere else — and nothing checked
+    /// it against what the server assigns. The counterpart carries no such
+    /// table either: it reads the map off the wire.
     #[test]
-    fn a_venues_letter_is_not_the_first_letter_of_its_name() {
+    fn a_venues_letter_is_not_this_clients_to_invent() {
         use crate::types::exchange_letter;
-        // From the counterpart's own table, not from memory: two of these
-        // were written here wrongly, and one is not a single letter.
-        assert_eq!(exchange_letter("NASDAQ"), "O", "not Q");
-        assert_eq!(exchange_letter("ARCA"), "Ar", "two characters, and not P");
-        assert_eq!(exchange_letter("PSE"), "P", "P belongs to PSE");
-        assert_eq!(exchange_letter("NYSE"), "N");
-        // A venue with no known abbreviation gets none rather than one that
-        // would collide with a venue that has one.
+        assert_eq!(exchange_letter("NASDAQ"), "");
         assert_eq!(exchange_letter("SOMEWHERE"), "");
     }
 }
