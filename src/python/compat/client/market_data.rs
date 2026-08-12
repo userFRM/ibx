@@ -48,6 +48,24 @@ impl EClient {
         mode_9887: i32,
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+
+        // A contract's news is asked for by the venue's id for the contract,
+        // and the caller may have stated a description instead. Resolved only
+        // when news is what was asked for: a quote on a description is asked
+        // for by description and the venue names it itself.
+        let wants_news = generic_tick_list.split(',').any(|t| t.trim().ends_with("292"));
+        let named;
+        let contract = if wants_news && contract.con_id == 0 && !contract.symbol.is_empty() {
+            match self.qualify_contract(py, contract) {
+                Ok(found) => { named = found; &named }
+                Err(why) => return self.report_refusal(
+                    py, req_id, Refusal::no_definition(why.value(py).to_string()),
+                ),
+            }
+        } else {
+            contract
+        };
+
         let shared = self.shared_state()?;
 
         // The engine can take up to REGISTRATION_TIMEOUT to reply; release
