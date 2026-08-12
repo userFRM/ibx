@@ -32,7 +32,7 @@ recorded as the result.
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | Top of book | ✅ Supported | Streaming and snapshot; US equities and FX; `scripts/sdk_sweep.py`, `tests/python/test_live_quotes.py`. Concurrent subscribers on one contract share one wire subscription |
-| Market depth (L2) | ✅ Supported | Gathered from the venues the server publishes — 203 of them, worldwide — filtered to the security type and the aggregation group of the exchange the contract is listed on. A London book returns EUIBSI, BATEUK, AQXEUK and TRQXUK; a US book returns EDGX, ARCA and NASDAQ. Each level names its venue; `tests/python/test_live_depth.py`, `tests/python/test_live_session_features.py::test_l2_smart_depth`. A book on one named venue is asked for as a book: a future returns the entitlement response for the account, where the request previously went unanswered |
+| Market depth (L2) | 🔬 Implemented | Gathered from the venues the server publishes — 203 of them, worldwide — filtered to the security type and the aggregation group of the exchange the contract is listed on. A London book returns EUIBSI, BATEUK, AQXEUK and TRQXUK; a US book returns EDGX, ARCA and NASDAQ. Each level names its venue. The account holds no deep-book entitlement on the US equity venues, which answer the request by refusing it, by name, to the caller; `tests/python/test_live_depth.py`, `tests/python/test_live_session_features.py::test_l2_smart_depth`. A book on one named venue is asked for as a book: a future returns the entitlement response for the account, where the request previously went unanswered |
 | Historical bars | ✅ Supported | 9 markets in one session (`src/bin/capture_global.rs`); `keepUpToDate` verified in `tests/python/test_issue_100.py` |
 | Historical ticks and schedules | ✅ Supported | `scripts/sdk_sweep.py`; unsupported tick types return an error rather than substituting another series |
 | Tick-by-tick quotes | ✅ Supported | FX and US equities, concurrent streams, each record carrying its request id; `tests/python/test_live_python_wrappers.py` |
@@ -119,9 +119,12 @@ official gateway behaves the same way.
   resolves, the model's carry term is fitted rather than read, and absorbs
   model differences: two contracts on one underlying and expiry fitted 4.9% and
   20.1%.
-- A crypto's book is acknowledged and produces no rows, and no response of any
-  kind. The same request against a future is answered — with the book, or with
-  the entitlement — so the request itself is the shape the server expects.
+- A crypto's book and its tick-by-tick stream are acknowledged and produce
+  nothing, with no response of any kind. The client this replaces sends the
+  same request for a crypto as for a share: the only field that differs is the
+  security type, and the same request against a future is answered with the
+  entitlement, so the shape reaches the server and is understood. The silence
+  is the venue's, not the request's.
 - Crypto tick-by-tick subscriptions are acknowledged with both increments and
   produce no records. In the same session and on the same contract, top of book
   streams continuously and a historical tick request is answered; equities and

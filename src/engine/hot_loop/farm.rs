@@ -176,11 +176,12 @@ const BBO_EXCHANGE_MAP_REQUEST_TYPE: u32 = 626;
 
 /// The kind of market data a subscription asks for, on tag 264.
 ///
-/// A book is `Deep`; `BidAsk` is the top of one venue's book. The two are not
-/// interchangeable: a book asked for as a quote is acknowledged with the
-/// number of levels the venue holds and then never sent.
+/// A book is `Deep`. A quote is asked for under other numbers, and the two are
+/// not interchangeable in either direction: a book asked for as a quote is
+/// acknowledged and never sent, and the quote frames a venue does answer with
+/// are not a book — read as one they become a bid of 143.87 and an ask of a
+/// penny on a share trading at 772.
 const DEEP_REQUEST: &str = "0";
-const BID_ASK_REQUEST: &str = "442";
 
 /// What the venue counts an instrument's sizes in, as its acknowledgement
 /// states it: the last field, after the increment prices move in.
@@ -1389,10 +1390,12 @@ impl FarmState {
         &self, conn: &mut Connection, req_id_str: &str, con_id_str: &str,
         exchange: &str, sec_type: &str, fanned_out: bool,
     ) {
-        // One shape, and the kind of data is the only thing that varies: a
-        // venue gathered into an aggregate is asked for the top of its own
-        // book, and a venue asked for by name is asked for the book itself.
-        let wanted = if fanned_out { BID_ASK_REQUEST } else { DEEP_REQUEST };
+        // A book, whether the venue was named by the caller or gathered into
+        // an aggregate. Asked for as a quote instead, the venue answers with
+        // quote frames, which this client read with its book reader: a bid of
+        // 143.87 and an ask of a penny on a share trading at 772 — a book made
+        // of misread quotes, which is worse than no book.
+        let _ = fanned_out;
         if false {
         } else {
             // A book on one named venue: a future on its exchange, a crypto
@@ -1408,7 +1411,7 @@ impl FarmState {
                 (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
                 (263, "1"), (146, "1"), (262, req_id_str),
                 (6008, con_id_str), (207, exchange), (167, sec_type),
-                (264, wanted), (6088, "Socket"), (9830, "1"),
+                (264, DEEP_REQUEST), (6088, "Socket"), (9830, "1"),
             ]);
         }
     }
