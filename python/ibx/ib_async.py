@@ -72,13 +72,15 @@ class IbxClient:
         # The engine, with ib_async's own wrapper as the callback target: this
         # client already resolves a callback under the reference client's
         # spelling, which is the spelling ib_async's wrapper uses.
-        self._client = _ibx.EClient(_LoopBound(wrapper))
+        self._callbacks = _LoopBound(wrapper)
+        self._client = _ibx.EClient(self._callbacks)
 
     # ── connection ──
 
     async def connectAsync(self, host, port, clientId, timeout=2.0):
         """Open the session. Host and port name a gateway; there is none."""
         self.host, self.port, self.clientId = host, int(port), int(clientId)
+        self._callbacks._client_id = self.clientId
         self.connState = IbxClient.CONNECTING
         self._loop = asyncio.get_running_loop()
         self.wrapper.__dict__.setdefault("clientId", self.clientId)
@@ -247,6 +249,16 @@ class IbxClient:
         return forwarding
 
 
+#: Where the two name the same figure differently. Their order state was
+#: written before the venue renamed a commission to include its fees.
+_OUR_NAME = {
+    "commission": "commissionAndFees",
+    "minCommission": "minCommissionAndFees",
+    "maxCommission": "maxCommissionAndFees",
+    "commissionCurrency": "commissionAndFeesCurrency",
+}
+
+
 def _their_type(name):
     """The type of theirs that goes by this name, if there is one."""
     import dataclasses
@@ -287,6 +299,8 @@ def _as_theirs(value):
     for field in dataclasses.fields(theirs):
         ours = getattr(value, field.name, None)
         if ours is None:
+            ours = getattr(value, _OUR_NAME.get(field.name, field.name), None)
+        if ours is None:
             continue
         try:
             setattr(made, field.name, _as_theirs(ours))
@@ -308,9 +322,43 @@ class _LoopBound:
     _SIZE_OF = {1: 0, 2: 3, 4: 5, 66: 69, 67: 70, 68: 71}
     _PRICE_OF = {size: price for price, size in _SIZE_OF.items()}
 
-    def __init__(self, wrapper):
+    def __init__(self, wrapper, client_id=0):
         self._wrapper = wrapper
+        self._client_id = client_id
         self._quotes: dict[int, dict[int, float]] = {}
+
+    def histogram_data(self, req_id, items):
+        """The spread of trades across prices, in their own type.
+
+        This engine hands over each entry as a price and a count; their
+        wrapper reads two named fields off it.
+        """
+        from ib_async.objects import HistogramData
+
+        self._wrapper.histogramData(
+            req_id,
+            [
+                item
+                if hasattr(item, "price")
+                else HistogramData(price=item[0], count=item[1])
+                for item in items
+            ],
+        )
+
+    def order_status(self, order_id, status, filled, remaining, avg_fill_price,
+                     perm_id, parent_id, last_fill_price, client_id, why_held,
+                     mkt_cap_price):
+        """Stamped with the client this session opened under.
+
+        Their wrapper holds a trade under the client that placed it, and looks
+        it up the same way; stamped with a client the session never used, the
+        status reaches nothing.
+        """
+        self._wrapper.orderStatus(
+            order_id, status, filled, remaining, avg_fill_price, perm_id,
+            parent_id, last_fill_price, self._client_id, why_held,
+            mkt_cap_price,
+        )
 
     def tick_price(self, req_id, tick_type, price, attrib=None):
         """A price, delivered with the size that belongs to it.
@@ -336,9 +384,33 @@ class _LoopBound:
             req_id, price_type, held.get(price_type, 0.0), size
         )
 
+    #: Where their wrapper names a callback something other than the
+    #: reference client does, and the two it does not carry at all: display
+    #: groups belong to a window, and there is none here or there.
+    _THEIR_NAME = {
+        "real_time_bar": "realtimeBar",
+        "commission_and_fees_report": "commissionReport",
+        "display_group_list": None,
+        "display_group_updated": None,
+    }
+
+    # Under both spellings. This engine looks for the reference client's name
+    # first, so a callback answered here under one spelling only would be
+    # reached past — straight to their wrapper, and the translation skipped.
+    orderStatus = order_status
+    tickPrice = tick_price
+    tickSize = tick_size
+    histogramData = histogram_data
+
     def __getattr__(self, name):
         # Under either spelling: this engine calls a callback by the name it
         # holds it under, and their wrapper declares the reference client's.
+        if name in self._THEIR_NAME:
+            named = self._THEIR_NAME[name]
+            if named is None:
+                return lambda *args: None
+            return getattr(self._wrapper, named)
+
         method = getattr(self._wrapper, name, None)
         if method is None:
             words = name.split("_")
@@ -353,13 +425,38 @@ class _LoopBound:
         return carrying
 
 
+#: What they mean by "the caller set nothing". This engine states the same
+#: thing as zero, except on the three fields where it keeps their sentinel
+#: because zero is a value a caller can mean there.
+_UNSET_DOUBLE = 1.7976931348623157e308
+_UNSET_INTEGER = 2147483647
+_KEEPS_THE_SENTINEL = {
+    "trailStopPrice", "lmtPriceOffset", "adjustedTrailingAmount",
+}
+
+
 def _as_ours(value):
     """One of theirs, rebuilt as this engine's own type of the same name."""
     import dataclasses
 
+    if value is None:
+        # Their optional lists arrive as None; every request here takes a
+        # list, and an absent one is an empty one.
+        return []
+
     if not dataclasses.is_dataclass(value):
         return value
-    ours = getattr(_ibx, type(value).__name__, None)
+    # Under its own name, or the name of what it is a kind of: their `Stock`
+    # and `Forex` are contracts, and this engine holds one type for all of
+    # them.
+    ours = next(
+        (
+            found
+            for kind in type(value).__mro__
+            if (found := getattr(_ibx, kind.__name__, None)) is not None
+        ),
+        None,
+    )
     if ours is None:
         return value
     made = ours()
@@ -367,6 +464,10 @@ def _as_ours(value):
         held = getattr(value, field.name, None)
         if held is None:
             continue
+        if held == _UNSET_DOUBLE and field.name not in _KEEPS_THE_SENTINEL:
+            held = 0.0
+        elif isinstance(held, int) and not isinstance(held, bool) and held == _UNSET_INTEGER:
+            held = 0
         try:
             setattr(made, field.name, _as_ours(held))
         except (AttributeError, TypeError, ValueError):
