@@ -175,7 +175,7 @@ Every session to date has produced at least one that the offline suites did not
 detect, including a crash on a live trade stream, a subscription delivering the
 wrong tick type, and a regression affecting every synchronous call.
 
-The most recent session produced seven, listed here as the caller-visible
+The most recent session produced ten, listed here as the caller-visible
 symptom:
 
 | Symptom | Cause |
@@ -187,6 +187,9 @@ symptom:
 | `util.df(bars)` refused the bars an ib_async program asked for | The date was handed over in a spelling their parser reads as naive, which their frame conversion rejects |
 | A SMART book's levels named no venue, so a caller could not tell where any of it stood | Gathered by reading the session's exchange directory as though its sections were aggregation groups; a contract named by its symbol matched no section and gathered from nowhere |
 | `disconnect()` reported connectivity lost | A session the caller ended and a session that went away were the same event |
+| A second book on a venue already streaming returned nothing, and said nothing | The venue answers it with the tag it is already using, and levels were delivered to the first request holding that tag |
+| A caller's book was attributed to a venue they never asked for | This client's own subscription ids were numbered from the same range a caller states |
+| `accountSummary()` was answered with nothing between the first figure and the account being fully stated | Account data counted as received only once the typed copy was built |
 
 Two suites were added rather than a symptom fixed: every wire parser is now
 given malformed input (`tests/malformed_input.rs`), which is what found the bar
