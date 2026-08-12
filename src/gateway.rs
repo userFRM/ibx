@@ -2303,28 +2303,14 @@ impl Gateway {
 
     /// Populate shared state with gateway-local init data parsed from CCP logon.
     pub fn populate_init_data(&self, shared: &SharedState) {
-        use crate::types::{SmartComponent, NewsProvider, SoftDollarTier, FamilyCode};
+        use crate::types::{NewsProvider, SoftDollarTier, FamilyCode};
 
-        // Smart components: this client's own list of the US equity venues
-        // SMART routes to. The session sends no message this can be read from.
-        //
-        // The bit numbers below are this list's order, not the venue's
-        // assignment, and the venue's assignment is what decides which exchange
-        // a quote's bid, ask and last are attributed to. So the table is marked
-        // provisional, and anything rendered from it says so rather than
-        // reading as though the venue had stated it.
-        let smart_components: Vec<SmartComponent> = [
-            ("NASDAQ", "Q"), ("NYSE", "N"), ("ARCA", "P"), ("BATS", "Z"),
-            ("IEX", "V"), ("BEX", "B"), ("BYX", "Y"), ("NYSENAT", "C"),
-            ("DRCTEDGE", "J"), ("MEMX", "U"), ("PEARL", "H"), ("AMEX", "A"),
-            ("CHX", "M"), ("LTSE", "L"), ("PSX", "X"), ("ISE", "I"), ("EDGEA", "K"),
-        ].iter().enumerate().map(|(i, (exch, letter))| SmartComponent {
-            bit_number: i as i32,
-            exchange: exch.to_string(),
-            exchange_letter: letter.to_string(),
-        }).collect();
-        shared.reference.set_smart_components(smart_components);
-        shared.reference.note_smart_components_provisional(true);
+// Which venues SMART routes to, and in what order a quote's exchange
+        // mask refers to them, is stated by the server on a contract's own
+        // definition. Nothing is assumed before it says so: a list written
+        // here carried this client's own order, and the order is the whole of
+        // what the mask means, so every quote's bid, ask and last named the
+        // wrong venue until a definition arrived to correct it.
 
         // News providers, as the logon stated them and only as it stated them.
         //
