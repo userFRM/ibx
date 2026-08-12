@@ -16,8 +16,8 @@
 //! failure is reproducible from the test name and nothing else.
 
 use ibx::control::contracts;
-use ibx::control::{historical, news};
 use ibx::control::fundamental;
+use ibx::control::{historical, news};
 use ibx::protocol::{fix, fixcomp, ns, tbt_stream, tick_decoder, trading_status, xyz};
 
 /// A byte sequence that is not a frame, from a stated seed. The same seed
@@ -69,9 +69,16 @@ fn fix_frame(fields: &[(&str, &str)]) -> Vec<u8> {
 
 fn a_contract_definition() -> Vec<u8> {
     fix_frame(&[
-        ("55", "SPY"), ("6008", "756733"), ("461", "CS"), ("15", "USD"),
-        ("207", "ARCA"), ("6035", "SPY"), ("6177", "ARCA,BATS,NASDAQ"),
-        ("711", "2"), ("311", "US78462F1030"), ("22", "4"),
+        ("55", "SPY"),
+        ("6008", "756733"),
+        ("461", "CS"),
+        ("15", "USD"),
+        ("207", "ARCA"),
+        ("6035", "SPY"),
+        ("6177", "ARCA,BATS,NASDAQ"),
+        ("711", "2"),
+        ("311", "US78462F1030"),
+        ("22", "4"),
     ])
 }
 
@@ -92,8 +99,13 @@ fn a_reference_answer_that_arrives_wrong_is_not_fatal() {
         fix_frame(&[("6503", "26"), ("6504", "0.01"), ("6505", "0.01")]),
         fix_frame(&[("6531", "20260812"), ("6532", "0930"), ("6533", "1600")]),
         fix_frame(&[("55", "SP"), ("6008", "756733"), ("461", "CS"), ("207", "ARCA")]),
-        fix_frame(&[("6183", "SPY"), ("6184", "AMEX"), ("6185", "100"),
-                    ("6186", "20260918,20261016"), ("6187", "400,405,410")]),
+        fix_frame(&[
+            ("6183", "SPY"),
+            ("6184", "AMEX"),
+            ("6185", "100"),
+            ("6186", "20260918,20261016"),
+            ("6187", "400,405,410"),
+        ]),
     ];
     for frame in frames {
         for wrong in every_corruption(&frame) {
@@ -108,8 +120,10 @@ fn a_reference_answer_that_arrives_wrong_is_not_fatal() {
 #[test]
 fn a_news_payload_that_arrives_wrong_is_not_fatal() {
     let frame = fix_frame(&[
-        ("6401", "BRFG$abc123"), ("6402", "20260812-13:30:00"),
-        ("6403", "A headline"), ("6404", "BRFG"),
+        ("6401", "BRFG$abc123"),
+        ("6402", "20260812-13:30:00"),
+        ("6403", "A headline"),
+        ("6404", "BRFG"),
     ]);
     for wrong in every_corruption(&frame) {
         let _ = news::parse_news_payload(&wrong);
@@ -123,8 +137,8 @@ fn a_tick_stream_that_arrives_wrong_is_not_fatal() {
     // the byte with the high bit set. A cut in the middle of one leaves a
     // length that runs past what followed it.
     let stream: Vec<u8> = vec![
-        0x81, 0x02, 0x83, 0xd0, 0x0f, 0x81, 0x84, 0x01, 0x02, 0x03, 0xff,
-        0x80, 0x00, 0x7f, 0xfe, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81,
+        0x81, 0x02, 0x83, 0xd0, 0x0f, 0x81, 0x84, 0x01, 0x02, 0x03, 0xff, 0x80, 0x00, 0x7f, 0xfe,
+        0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81,
     ];
     for wrong in every_corruption(&stream) {
         let _ = tick_decoder::decode_ticks_35p(&wrong);
