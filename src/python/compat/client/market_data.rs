@@ -1,6 +1,5 @@
 //! Market data request/cancel methods.
 
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::types::*;
@@ -64,12 +63,14 @@ impl EClient {
         let right = contract.right.clone();
         let multiplier = contract.multiplier.clone();
         let generic_tick_list = generic_tick_list.to_string();
-        py.detach(|| self.core.register_mkt_data(
+        if let Err(why) = py.detach(|| self.core.register_mkt_data(
             &shared, &tx, req_id,
             con_id, &symbol, &exchange, &sec_type, &currency,
             &last_trade_date, strike, &right, &multiplier,
             snapshot, &generic_tick_list, mode_9887,
-        )).map_err(PyRuntimeError::new_err)?;
+        )) {
+            return self.report_refusal(py, req_id, why.into());
+        }
         self.core.cache_contract(contract.con_id, crate::api::types::Contract {
             con_id: contract.con_id,
             symbol: contract.symbol.clone(),
@@ -114,7 +115,10 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
 
-        let tbt_type = TbtType::named(tick_type).map_err(PyRuntimeError::new_err)?;
+        let tbt_type = match TbtType::named(tick_type) {
+            Ok(named) => named,
+            Err(why) => return self.report_refusal(py, req_id, why.into()),
+        };
 
         let shared = self.shared_state()?;
         Self::send_control(py, &tx, ControlCommand::RegisterInstrument {
@@ -130,10 +134,11 @@ impl EClient {
         let con_id = contract.con_id;
         let symbol = contract.symbol.clone();
         let (sec_type, exchange) = (contract.sec_type.clone(), contract.exchange.clone());
-        py.detach(|| self.core.register_tbt(
+        if let Err(why) = py.detach(|| self.core.register_tbt(
             &shared, &tx, req_id, con_id, &symbol, &sec_type, &exchange, tbt_type,
-        ))
-            .map_err(PyRuntimeError::new_err)?;
+        )) {
+            return self.report_refusal(py, req_id, why.into());
+        }
 
         let _ = (number_of_ticks, ignore_size);
         Ok(())

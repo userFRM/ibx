@@ -234,8 +234,10 @@ def test_exercise_options_refuses_an_action_it_cannot_serve():
     c, w = make_client()
     c._test_connect()
     contract = make_contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(RuntimeError, match="exercise_action 3"):
-        c.exercise_options(1, contract, 3, 100, "TEST123", 0)
+    c.exercise_options(1, contract, 3, 100, "TEST123", 0)
+    req_id, code, message = w.errors[-1]
+    assert (req_id, code) == (1, 321)
+    assert "exercise_action 3" in message
 
 
 def test_exercise_options_refuses_an_account_it_cannot_name():
@@ -244,8 +246,10 @@ def test_exercise_options_refuses_an_account_it_cannot_name():
     c, w = make_client()
     c._test_connect()
     contract = make_contract(con_id=265598, symbol="AAPL")
-    with pytest.raises(RuntimeError, match="DU12345"):
-        c.exercise_options(1, contract, 1, 100, "DU12345", 0)
+    c.exercise_options(1, contract, 1, 100, "DU12345", 0)
+    req_id, code, message = w.errors[-1]
+    assert (req_id, code) == (1, 321)
+    assert "DU12345" in message
 
 
 # ═══════════════════════════════════════════════════════════

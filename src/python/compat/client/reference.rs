@@ -1,6 +1,5 @@
 //! Reference data: contract details, historical data, scanners, news, fundamentals.
 
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::types::*;
@@ -29,8 +28,11 @@ impl EClient {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = (format_date, chart_options);
         if !what_to_show.eq_ignore_ascii_case("SCHEDULE") {
-            ClientCore::validate_historical_args(bar_size_setting, what_to_show, keep_up_to_date)
-                .map_err(PyRuntimeError::new_err)?;
+            if let Err(why) = ClientCore::validate_historical_args(
+                bar_size_setting, what_to_show, keep_up_to_date,
+            ) {
+                return self.report_refusal(py, req_id, why.into());
+            }
         }
         if what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {

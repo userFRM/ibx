@@ -1,7 +1,6 @@
 //! Gateway-local fakes and pure no-op stubs.
 
 use crate::python::compat::client::wire_req_id;
-use pyo3::exceptions::PyRuntimeError;
 use crate::types::ControlCommand;
 use pyo3::prelude::*;
 
@@ -146,9 +145,9 @@ impl EClient {
     /// nothing is refused rather than sent as an empty partition.
     fn request_fa(&self, py: Python<'_>, fa_data_type: i32) -> PyResult<()> {
         let Some(partition) = advisor_partition(fa_data_type) else {
-            return Err(PyRuntimeError::new_err(format!(
-                "no advisor configuration is named by {fa_data_type}"
-            )));
+            return self.report_refusal(py, -1, crate::api::error_codes::Refusal::validation(
+                format!("no advisor configuration is named by {fa_data_type}"),
+            ));
         };
         let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::AdvisorConfig {
@@ -164,9 +163,9 @@ impl EClient {
     fn replace_fa(&self, py: Python<'_>, req_id: i64, fa_data_type: i32, cxml: &str) -> PyResult<()> {
         let _ = req_id;
         let Some(partition) = advisor_partition(fa_data_type) else {
-            return Err(PyRuntimeError::new_err(format!(
-                "no advisor configuration is named by {fa_data_type}"
-            )));
+            return self.report_refusal(py, req_id, crate::api::error_codes::Refusal::validation(
+                format!("no advisor configuration is named by {fa_data_type}"),
+            ));
         };
         let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::AdvisorConfig {
