@@ -60,6 +60,7 @@ jobs:
           --test depth_wire_test
           --test error_edge_concurrency
           --test hot_loop_lifecycle
+          --test malformed_input
           --test protocol_vectors
           --test scenarios
 
