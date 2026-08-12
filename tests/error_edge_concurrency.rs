@@ -26,7 +26,10 @@ fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<Sha
 }
 
 fn spy() -> Contract {
-    Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() }
+    Contract {
+        con_id: 756733, symbol: "SPY".into(), exchange: "SMART".into(),
+        ..Default::default()
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -43,7 +46,7 @@ fn place_order_invalid_action_returns_error() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Invalid action"));
+    assert!(result.unwrap_err().message.contains("Invalid action"));
 }
 
 #[test]
@@ -68,7 +71,7 @@ fn place_order_unsupported_order_type_returns_error() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Unsupported order type"));
+    assert!(result.unwrap_err().message.contains("Unsupported order type"));
 }
 
 #[test]
@@ -83,32 +86,31 @@ fn place_order_unsupported_algo_returns_error() {
     };
     let result = client.place_order(1, &spy(), &order);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Unsupported algo"));
+    assert!(result.unwrap_err().message.contains("Unsupported algo"));
 }
 
 #[test]
-fn place_order_zero_con_id_asks_the_engine_to_name_it() {
-    // A contract with no id of its own cannot be cached under one: caching it
-    // under zero would point every id-less contract at the first one's slot.
-    // So the order asks the engine to name the contract, and this test holds
-    // that the request goes out. It cannot hold that the order is placed,
-    // because no engine is running to answer.
+fn place_order_zero_con_id_asks_the_venue_to_name_it() {
+    // An order names its contract by the venue's id. A contract stating only a
+    // symbol is looked up first, and this test holds that the lookup goes out.
+    // It cannot hold that the order is placed, because no venue is answering.
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
-    let contract = Contract { con_id: 0, symbol: "TEST".into(), ..Default::default() };
+    let contract = Contract {
+        con_id: 0, symbol: "TEST".into(), exchange: "SMART".into(),
+        ..Default::default()
+    };
     let order = Order {
         action: "BUY".into(), total_quantity: 100.0,
         order_type: "MKT".into(), ..Default::default()
     };
-    let result = client.place_order(1, &contract, &order);
-    assert!(
-        result.is_err_and(|e| e.contains("Registration timed out")),
-        "with nothing to answer it, the wait is what the caller is told about",
-    );
+    let refused = client.place_order(1, &contract, &order)
+        .expect_err("with nothing to answer it, the caller is told so");
+    assert_eq!(refused.code, ibx::api::error_codes::Refusal::NO_DEFINITION);
     let asked = rx.try_iter().any(|cmd| matches!(
-        cmd, ControlCommand::RegisterInstrument { ref symbol, .. } if symbol == "TEST"
+        cmd, ControlCommand::FetchContractDetails { ref symbol, .. } if symbol == "TEST"
     ));
-    assert!(asked, "the engine was asked to name the contract");
+    assert!(asked, "the venue was asked to name the contract");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -625,7 +627,7 @@ fn concurrent_place_order_and_process_msgs() {
                 action: "BUY".into(), total_quantity: 1.0,
                 order_type: "MKT".into(), ..Default::default()
             };
-            let _ = client_b.place_order(0, &Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() }, &order);
+            let _ = client_b.place_order(0, &spy(), &order);
         }
     });
 

@@ -472,6 +472,27 @@ impl EClient {
     /// and the call returns normally, which is what the reference client does.
     /// Raising instead made a caller written against that client take a
     /// different path here than it takes there.
+    /// Tell the caller a request will not be sent, under the number the
+    /// reference client reports that class of refusal under.
+    ///
+    /// Reported rather than raised: the reference client answers a request it
+    /// refuses on the error callback and returns, so a program written against
+    /// it handles refusals there and nowhere else.
+    pub(crate) fn report_refusal(
+        &self,
+        py: Python<'_>,
+        req_id: i64,
+        refusal: crate::api::error_codes::Refusal,
+    ) -> PyResult<()> {
+        let _ = self.wrapper.call_method(
+            py,
+            "error",
+            (req_id, refusal.code, refusal.message, ""),
+            None,
+        );
+        Ok(())
+    }
+
     pub(crate) fn tx_or_report(&self, req_id: i64) -> Option<SyncSender<ControlCommand>> {
         match self.control_tx.lock().unwrap().clone() {
             Some(tx) => Some(tx),

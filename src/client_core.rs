@@ -2316,6 +2316,22 @@ impl ClientCore {
         ))
     }
 
+    /// An order states where it is to be filled.
+    ///
+    /// The venue does not choose a destination, and neither does this client:
+    /// looking a contract up without one answers with whichever listing came
+    /// first, which is how an order reaches a venue the caller never named.
+    /// The reference client is refused by the server here, by name.
+    pub fn validate_order_destination(exchange: &str) -> Result<(), String> {
+        if exchange.trim().is_empty() {
+            return Err(
+                "an order states the exchange it is to be filled on, and this one \
+                 names none".to_string(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn validate_order_contract(con_id: i64, sec_type: &str, identity: &str) -> Result<(), String> {
         if con_id != 0 {
             return Ok(());

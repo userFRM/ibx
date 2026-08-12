@@ -1,6 +1,6 @@
 """
 Regression test for issue #115: STP/TRAIL orders with zero aux_price are
-rejected with a clear error instead of silently submitting with stop_price=$0.
+refused with a clear reason instead of silently submitting with stop_price=$0.
 
 Tests both the client-side validation (no server needed) and live server
 round-trips for correctly-formed stop orders.
@@ -105,16 +105,28 @@ def _next_oid(wrapper):
 #  No live connection needed: validation runs inside place_order()
 # ═══════════════════════════════════════════════════════════════════
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def local_client():
-    """Unconnected client — sufficient for testing pre-send validation."""
+    """A client with a channel and no session — enough to see a refusal.
+
+    The connection is checked before anything else, exactly as the reference
+    client checks it, so a client that never opened one answers every request
+    with 504 and validates nothing.
+    """
     wrapper = Wrapper()
     client = EClient(wrapper)
+    client._test_connect("DU000000", False)
     return wrapper, client
 
 
+def refusal(wrapper):
+    """The reason and number the client reported, or None."""
+    errors = wrapper._get_events("error")
+    return (errors[-1][3], errors[-1][2]) if errors else None
+
+
 class TestAuxPriceValidation:
-    """Verify that orders requiring aux_price raise RuntimeError when aux_price=0."""
+    """An order needing aux_price is refused, by name, when it states none."""
 
     def test_stp_order_zero_aux_price_rejected(self, local_client):
         """STP with lmt_price but no aux_price must raise, not silently submit."""
@@ -125,73 +137,87 @@ class TestAuxPriceValidation:
         order.order_type = "STP"
         order.lmt_price = 145.0  # common mistake
         # aux_price deliberately not set (defaults to 0.0)
-        with pytest.raises(RuntimeError, match="aux_price"):
-            client.place_order(1, make_spy(), order)
+        client.place_order(1, make_spy(), order)
+        reason, code = refusal(wrapper)
+        assert "aux_price" in reason
+        assert code == 321
 
     def test_stp_lmt_order_zero_aux_price_rejected(self, local_client):
         """STP LMT with only lmt_price must raise."""
-        _, client = local_client
+        wrapper, client = local_client
         order = Order()
         order.action = "SELL"
         order.total_quantity = 1
         order.order_type = "STP LMT"
         order.lmt_price = 144.0
         # aux_price deliberately not set
-        with pytest.raises(RuntimeError, match="aux_price"):
-            client.place_order(2, make_spy(), order)
+        client.place_order(2, make_spy(), order)
+        reason, code = refusal(wrapper)
+        assert "aux_price" in reason
+        assert code == 321
 
     def test_trail_order_zero_both_rejected(self, local_client):
         """TRAIL with neither trailing_percent nor aux_price must raise."""
-        _, client = local_client
+        wrapper, client = local_client
         order = Order()
         order.action = "SELL"
         order.total_quantity = 1
         order.order_type = "TRAIL"
         # neither trailing_percent nor aux_price set
-        with pytest.raises(RuntimeError, match="trailing_percent"):
-            client.place_order(3, make_spy(), order)
+        client.place_order(3, make_spy(), order)
+        reason, code = refusal(wrapper)
+        assert "trailing_percent" in reason
+        assert code == 321
 
     def test_trail_limit_order_zero_aux_price_rejected(self, local_client):
         """TRAIL LIMIT with only lmt_price must raise."""
-        _, client = local_client
+        wrapper, client = local_client
         order = Order()
         order.action = "SELL"
         order.total_quantity = 1
         order.order_type = "TRAIL LIMIT"
         order.lmt_price = 148.0
-        with pytest.raises(RuntimeError, match="aux_price"):
-            client.place_order(4, make_spy(), order)
+        client.place_order(4, make_spy(), order)
+        reason, code = refusal(wrapper)
+        assert "aux_price" in reason
+        assert code == 321
 
     def test_mit_order_zero_aux_price_rejected(self, local_client):
         """MIT with no aux_price must raise."""
-        _, client = local_client
+        wrapper, client = local_client
         order = Order()
         order.action = "BUY"
         order.total_quantity = 1
         order.order_type = "MIT"
-        with pytest.raises(RuntimeError, match="aux_price"):
-            client.place_order(5, make_spy(), order)
+        client.place_order(5, make_spy(), order)
+        reason, code = refusal(wrapper)
+        assert "aux_price" in reason
+        assert code == 321
 
     def test_lit_order_zero_aux_price_rejected(self, local_client):
         """LIT with only lmt_price must raise."""
-        _, client = local_client
+        wrapper, client = local_client
         order = Order()
         order.action = "BUY"
         order.total_quantity = 1
         order.order_type = "LIT"
         order.lmt_price = 150.0
-        with pytest.raises(RuntimeError, match="aux_price"):
-            client.place_order(6, make_spy(), order)
+        client.place_order(6, make_spy(), order)
+        reason, code = refusal(wrapper)
+        assert "aux_price" in reason
+        assert code == 321
 
     def test_stp_prt_order_zero_aux_price_rejected(self, local_client):
         """STP PRT with no aux_price must raise."""
-        _, client = local_client
+        wrapper, client = local_client
         order = Order()
         order.action = "SELL"
         order.total_quantity = 1
         order.order_type = "STP PRT"
-        with pytest.raises(RuntimeError, match="aux_price"):
-            client.place_order(7, make_spy(), order)
+        client.place_order(7, make_spy(), order)
+        reason, code = refusal(wrapper)
+        assert "aux_price" in reason
+        assert code == 321
 
 
 # ═══════════════════════════════════════════════════════════════════

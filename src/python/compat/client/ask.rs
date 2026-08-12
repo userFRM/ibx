@@ -385,7 +385,7 @@ impl EClient {
     /// resolved to whichever came back first — the same symbol on the same
     /// venue exists in more than one currency, and picking one silently is how
     /// an order reaches the wrong one.
-    fn qualify_contract(&self, py: Python<'_>, contract: &Contract) -> PyResult<Contract> {
+    pub(crate) fn qualify_contract(&self, py: Python<'_>, contract: &Contract) -> PyResult<Contract> {
         let mut found = self.contract_details(py, contract)?;
         match found.len() {
             0 => Err(PyValueError::new_err(format!(

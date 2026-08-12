@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 use crate::api::types::{
     Contract as ApiContract, ExecutionFilter,
 };
+use crate::api::error_codes::Refusal;
 use crate::client_core::ClientCore;
 use crate::types::*;
 use super::EClient;
@@ -16,8 +17,20 @@ use super::super::contract::{Contract, Order, CommissionAndFeesReport, Execution
 #[pymethods]
 impl EClient {
     /// Place an order.
+    ///
+    /// A request the client will not send is reported under the number the
+    /// reference client reports it under, and the call returns. A program
+    /// moved from that client has an `error` handler and no exception
+    /// handling around a request, because nothing it was written against
+    /// raises there.
     fn place_order(&self, py: Python<'_>, order_id: i64, contract: &Contract, order: &Order) -> PyResult<()> {
         self.core.refuse_if_readonly("an order").map_err(PyRuntimeError::new_err)?;
+        let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
+
+        if let Err(why) = ClientCore::validate_order_destination(&contract.exchange) {
+            return self.report_refusal(py, order_id, why.into());
+        }
+
         // Convert and validate order params first (fail fast, no connection needed)
         let mut api_order = order.to_api();
         api_order.conditions = order.convert_conditions(py);
@@ -42,29 +55,54 @@ impl EClient {
         // an order naming one would fill somewhere else whether or not a session
         // exists to compare against.
         let connected = self.account_id.lock().unwrap().clone().unwrap_or_default();
-        ClientCore::validate_order(&api_order, &connected)
-            .map_err(PyRuntimeError::new_err)?;
-        ClientCore::validate_supported_instructions(&api_order).map_err(PyRuntimeError::new_err)?;
-        ClientCore::validate_combo_legs(&contract.sec_type, api_contract.combo_legs.len()).map_err(PyRuntimeError::new_err)?;
-        ClientCore::validate_order_contract(
+        if let Err(why) = ClientCore::validate_order(&api_order, &connected) {
+            return self.report_refusal(py, order_id, why.into());
+        }
+        if let Err(why) = ClientCore::validate_supported_instructions(&api_order) {
+            return self.report_refusal(py, order_id, why.into());
+        }
+        if let Err(why) = ClientCore::validate_combo_legs(
+            &contract.sec_type, api_contract.combo_legs.len(),
+        ) {
+            return self.report_refusal(py, order_id, why.into());
+        }
+        if let Err(why) = ClientCore::validate_order_contract(
             contract.con_id,
             &contract.sec_type,
             &ClientCore::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
                 &contract.right, &contract.multiplier, &contract.currency,
             ),
-        )
-            .map_err(PyRuntimeError::new_err)?;
+        ) {
+            return self.report_refusal(py, order_id, why.into());
+        }
         // The same guard the Rust surface applies. Without it here, whether a
         // caller is protected from an order the venue will refuse in silence
         // depends on which language they wrote in.
         if let Ok(shared) = self.shared_state() {
-            ClientCore::refuse_unpermitted_sec_type(
+            if let Err(why) = ClientCore::refuse_unpermitted_sec_type(
                 &shared.reference.order_permissions(), &contract.sec_type,
-            ).map_err(PyRuntimeError::new_err)?;
+            ) {
+                return self.report_refusal(py, order_id, why.into());
+            }
         }
 
-        let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
+        // An order names its contract by the venue's own id. A caller who
+        // states a description instead — which every example written against
+        // the reference client does — has it resolved here, once the order
+        // itself is known to be one the venue would take: an order carrying no
+        // id names nothing the venue can match, and is answered by silence.
+        let named;
+        let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
+            match self.qualify_contract(py, contract) {
+                Ok(found) => { named = found; &named }
+                Err(why) => return self.report_refusal(
+                    py, order_id, Refusal::no_definition(why.value(py).to_string()),
+                ),
+            }
+        } else {
+            contract
+        };
 
         let oid = if order_id > 0 {
             order_id as u64
@@ -79,7 +117,7 @@ impl EClient {
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one.
             if let Some(refusal) = self.core.modify_refusal(oid, &api_order) {
-                return Err(PyRuntimeError::new_err(refusal));
+                return self.report_refusal(py, order_id, refusal.into());
             }
             let price = (api_order.lmt_price * crate::api::types::PRICE_SCALE_F) as i64;
             let qty = api_order.total_quantity as u32;
@@ -97,8 +135,10 @@ impl EClient {
                 stop_price,
             })
         } else {
-            ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract))
-                .map_err(PyRuntimeError::new_err)?
+            match ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract)) {
+                Ok(built) => built,
+                Err(why) => return self.report_refusal(py, order_id, why.into()),
+            }
         };
         Self::send_control(py, &tx, cmd)?;
 
