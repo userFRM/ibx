@@ -488,3 +488,41 @@ def test_a_request_id_answers_more_than_once():
     assert w.bars == 2, f"both requests answered with bars, got {w.bars}"
     assert w.ends == 2, f"and both said they had finished, got {w.ends}"
     assert w.updates == 0, "and neither was delivered as a continuation of the other"
+
+
+def test_a_trade_stream_is_not_a_quote_subscription():
+    """A stream is held in its own table.
+
+    Held in the quote tables, a request for trades took the contract's quote
+    slot and was handed the contract's quotes; and withdrawing it removed that
+    slot, so it took the quotes away from whoever was watching them.
+    """
+
+    class Quotes(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.prices = 0
+
+        def tick_price(self, req_id, tick_type, price, attrib=None):
+            self.prices += 1
+
+    w = Quotes()
+    c = EClient(w)
+    c._test_connect("DU000000", False)
+    c._test_map_con_id(756733, 3)
+    c._test_map_instrument(900, 3)
+
+    # Someone is quoting the contract.
+    c._test_push_quote(3, 100.0, 101.0, 100.5, 1, 1, 1, 10, 100.0, 101.0, 99.0, 100.0)
+    c._test_dispatch_once()
+    quoted_before = w.prices
+    assert quoted_before > 0, "the quote reaches the caller watching it"
+
+    # A trade stream is withdrawn on the same contract.
+    c.cancel_tick_by_tick_data(901)
+
+    c._test_push_quote(3, 101.0, 102.0, 101.5, 1, 1, 1, 11, 100.0, 102.0, 99.0, 100.0)
+    c._test_dispatch_once()
+    assert w.prices > quoted_before, (
+        "and still does once a stream on the same contract is withdrawn"
+    )
