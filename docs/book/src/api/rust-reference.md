@@ -557,10 +557,10 @@ pub fn algorithms_for(&self, sec_type: &str) -> Vec<String>
 
 #### `place_order`
 
-Place an order.
+Place an order. An order names its contract by the venue's own id. A caller who states a description instead of an id — which every example written against the reference client does — has it resolved here, once the order itself is known to be one the venue would take: an order that names no contract is one the venue has nothing to match, and answers with nothing at all.
 
 ```rust
-pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), String>
+pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -569,7 +569,7 @@ pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> 
 | `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
 | `order` | `&Order` | Order parameters (action, quantity, type, price, TIF, etc.). |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
