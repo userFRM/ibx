@@ -624,6 +624,15 @@ impl HmdsState {
                             } else if let Some(pos) = self.pending_scanner.iter().position(|(q, _)| q == qid) {
                                 let (_, req_id) = self.pending_scanner.remove(pos);
                                 released_req_id = Some(req_id);
+                            } else if let Some(pos) =
+                                self.tbt_subscriptions.iter().position(|sub| &sub.query_id == qid)
+                            {
+                                // A stream the venue refused. Left out of this
+                                // chain, its refusal was logged against a query
+                                // nobody had been told about and the caller
+                                // waited on a stream that was never coming.
+                                let sub = self.tbt_subscriptions.remove(pos);
+                                released_req_id = Some(sub.caller_req_id as u32);
                             }
                         }
                         match released_req_id {
