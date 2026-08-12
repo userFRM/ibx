@@ -71,6 +71,7 @@ recorded as the result.
 | Option chains, symbol search | ✅ Supported | `scripts/sdk_sweep.py` |
 | Scanners, fundamentals | ✅ Supported | 697 KB scanner parameter set, fundamental report; `tests/python/test_issue_100.py` |
 | News | ✅ Supported | 117 providers parsed. Headline retrieval requires a news subscription; this account holds none, and every provider returns an empty result set |
+| Exchange directory | ✅ Supported | 203 exchanges, in the two sections the venue states them in: shares and derivatives. What each carries and which group each aggregates into are not stated by the venue and are not stated here |
 | Corporate events calendar | ✅ Supported | Event types (179 KB) and event queries answered over the security-definition connection; `src/bin/capture_calendar.rs` |
 | Implied volatility, option price | ✅ Supported | Computed in-process; the protocol carries no request for either. Anchored to the server's published model per contract; reproduces the server price to the cent on 2 contracts; `src/bin/capture_option_model.rs` |
 

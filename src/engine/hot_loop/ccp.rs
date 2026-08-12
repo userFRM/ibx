@@ -3153,7 +3153,17 @@ impl CcpState {
         shared.reference.notify_depth_exchanges();
     }
 
-    /// Parse 6040=102 exchange directory from CCP init into DepthMktDataDescription entries.
+    /// The exchange directory the session opens with, as the rows a caller
+    /// asking which exchanges exist is answered with.
+    ///
+    /// The venue states an exchange and the name it goes by, in two sections —
+    /// shares and derivatives. It states neither what kind of data each
+    /// carries nor which group each aggregates into, so neither is stated
+    /// here: a field this client filled in itself was read as though the venue
+    /// had said it, and a book was gathered from sixty-six venues on four
+    /// continents because a section count had been recorded as an aggregation
+    /// group. Which venues a book is gathered from comes from the contract's
+    /// own definition.
     fn handle_exchange_list(&self, msg: &[u8], shared: &SharedState) {
         use crate::types::DepthMktDataDescription;
         let raw = String::from_utf8_lossy(msg);
@@ -3165,18 +3175,16 @@ impl CcpState {
         // We parse all 100/6813 pairs into DepthMktDataDescription entries.
         let mut descs: Vec<DepthMktDataDescription> = Vec::new();
         let mut current_sec_type = "STK".to_string();
-        let mut current_agg_group: i32 = 0;
 
         let mut i = 0;
         while i < fields.len() {
             let f = fields[i];
-            if let Some(val) = f.strip_prefix("8128=") {
-                // Section separator — exchanges above are stocks, below are derivatives
+            if f.starts_with("8128=") {
+                // Section separator — exchanges above are shares, below are
+                // derivatives. The number it carries is how many follow.
                 current_sec_type = "STK".to_string();
-                current_agg_group = val.parse().unwrap_or(0);
-            } else if let Some(val) = f.strip_prefix("8129=") {
+            } else if f.starts_with("8129=") {
                 current_sec_type = "FUT".to_string();
-                current_agg_group = val.parse().unwrap_or(0);
             } else if let Some(exch) = f.strip_prefix("100=") {
                 // Next field should be 6813=name
                 let name = if i + 1 < fields.len() {
@@ -3188,8 +3196,9 @@ impl CcpState {
                     exchange: exch.to_string(),
                     sec_type: current_sec_type.clone(),
                     listing_exch: name.to_string(),
-                    service_data_type: "L1".to_string(),
-                    agg_group: current_agg_group,
+                    // Neither is stated by the venue here.
+                    service_data_type: String::new(),
+                    agg_group: 0,
                 });
                 i += 1; // skip the 6813= field
             }
