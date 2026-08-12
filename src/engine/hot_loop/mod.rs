@@ -2559,9 +2559,11 @@ mod tests {
         engine.poll_once();
         assert!(!engine.is_running(), "hot loop should stop when control channel disconnects");
 
-        // Should emit Disconnected event.
+        // The session ended because the side that owned it went away, which
+        // is a stop and not a loss: nothing is coming back, and a consumer
+        // told it lost connectivity would stand by for a reconnect.
         let events: Vec<Event> = event_rx.try_iter().collect();
-        assert!(events.iter().any(|e| matches!(e, Event::Disconnected)));
+        assert!(events.iter().any(|e| matches!(e, Event::Stopped)));
     }
 
     #[test]
