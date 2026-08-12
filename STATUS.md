@@ -186,12 +186,14 @@ A 20-minute session cycling subscriptions across five contracts — quotes,
 books, trade streams and bars, subscribed and withdrawn every minute — ran 18
 cycles with every stream growing throughout: 3,391 price ticks, 67,785 trades,
 16 bars a cycle, and one error, which is the venue stating that a currency
-pair has no trades to report. Earlier runs of the same session are what found
+pair has no trades to report. A second session placed, moved and withdrew
+three orders a cycle for fifteen cycles: 45 orders, every one reaching
+Cancelled, 270 acceptances and 270 status changes, no error. Earlier runs of the same session are what found
 four of the defects below; none of them was reachable by any offline suite,
 and two were invisible to the live suites as well, because those skipped when
 no data arrived.
 
-The most recent session produced fourteen, listed here as the caller-visible
+The most recent session produced fifteen, listed here as the caller-visible
 symptom:
 
 | Symptom | Cause |
@@ -209,6 +211,7 @@ symptom:
 | Every stream on a session went silent after a minute of subscribing and withdrawing | A book was gathered by asking each venue the contract is routed to; four contracts cycled put seventy subscribes and as many withdrawals on the connection a minute, and the venue stopped answering it |
 | A book on a named venue delivered a fraction of its levels | The section tag was read a byte early, so a section named no subscription and its levels waited for a sentinel further in |
 | Bars stopped arriving after the seventh minute, with every other stream healthy | A request id was marked finished and never unmarked, so bars answering a later request under it were delivered as a continuation of the first |
+| An order was placed and nothing said the venue had taken it | Only the status was answered; the reference client answers an order's every change with the order it holds as well, and its own method for it sends the pair |
 | A trade stream delivered nothing, and a request for one was handed the contract's quotes | The stream went out with contract id 0 and was refused against a query nobody was told about; and it was held in the quote tables, which it also emptied when withdrawn |
 
 Two suites were added rather than a symptom fixed: every wire parser is now
