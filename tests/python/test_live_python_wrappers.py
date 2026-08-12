@@ -335,8 +335,11 @@ class TestMarketData:
         got_tick = wrapper.got_tick.wait(timeout=30)
         client.cancel_mkt_data(4001)
 
-        if not got_tick:
-            pytest.skip("No ticks — market closed")
+        # A subscription that yields nothing at all is broken whatever the
+        # hour: the venue states a close on a market that has one, and states
+        # it whether or not the market is open. Skipped for want of ticks, this
+        # passed on a client that delivered none.
+        assert got_tick, "a subscription on a listed contract delivered nothing"
 
         events = [e for e in wrapper._get_events("tick_price") if e[1] == 4001]
         prices = [e[3] for e in events if e[3] > 0]
@@ -360,11 +363,9 @@ class TestMarketData:
         spy_ticks = [e for e in wrapper._get_events("tick_price") if e[1] == 4002 and e[3] > 0]
         aapl_ticks = [e for e in wrapper._get_events("tick_price") if e[1] == 4003 and e[3] > 0]
 
-        if not spy_ticks and not aapl_ticks:
-            pytest.skip("No ticks — market closed")
-
-        # At least one instrument should have ticks
-        assert len(spy_ticks) > 0 or len(aapl_ticks) > 0
+        assert spy_ticks or aapl_ticks, (
+            "two subscriptions on two listed contracts delivered nothing"
+        )
 
     def test_subscribe_cancel_no_crash(self, ib_connection):
         """Subscribe then immediately cancel — should not crash."""
@@ -596,8 +597,8 @@ class TestAccount:
 
         client.cancel_account_summary(6001)
 
-        if not got_summary:
-            pytest.skip("No account summary received")
+        # The venue states an account's summary on request, at any hour.
+        assert got_summary, "the account was asked for a summary and stated none"
 
         events = [e for e in wrapper._get_events("account_summary") if e[1] == 6001]
         tags = {e[3]: e[4] for e in events}
@@ -631,8 +632,12 @@ class TestAccount:
         got_pnl = wrapper.got_pnl.wait(timeout=15)
         client.cancel_pnl(6002)
 
-        if not got_pnl:
-            pytest.skip("No PnL data received (may need positions)")
+        # What a running profit is reported on is a position. Skipped for
+        # want of one — which is evidence — and failed otherwise.
+        held = [e for e in wrapper._get_events("position") if e[3] != 0]
+        if not got_pnl and not held:
+            pytest.skip("the account holds nothing, so there is no running profit")
+        assert got_pnl, "the account holds a position and no profit was reported on it"
 
         events = [e for e in wrapper._get_events("pnl") if e[1] == 6002]
         assert len(events) > 0
@@ -645,8 +650,8 @@ class TestAccount:
         client.req_account_updates(True, "")
         got_value = wrapper.got_account_value.wait(timeout=15)
 
-        if not got_value:
-            pytest.skip("No account value updates received")
+        # The venue states an account's figures on request, at any hour.
+        assert got_value, "the account was asked for its figures and stated none"
 
         events = wrapper._get_events("update_account_value")
         keys = {e[1] for e in events}
@@ -666,8 +671,8 @@ class TestScanner:
         client.req_scanner_parameters()
         got_params = wrapper.got_scanner_params.wait(timeout=30)
 
-        if not got_params:
-            pytest.skip("No scanner parameters received (historical data server may not be connected)")
+        # The parameter set is reference data, the same at every hour.
+        assert got_params, "the venue was asked for its scanner parameters and sent none"
 
         events = wrapper._get_events("scanner_parameters")
         assert len(events) > 0
@@ -683,15 +688,31 @@ class TestScanner:
 class TestTickByTick:
 
     def test_tbt_last(self, ib_connection):
+        """A trade stream on a contract that is trading.
+
+        Skipped only on evidence that nothing is trading — which is what a
+        quote on the same contract establishes. Skipping whenever no trade
+        arrived made this pass on a client that never delivered one.
+        """
         wrapper, client = ib_connection
         wrapper.got_tbt.clear()
+        wrapper.got_tick.clear()
 
-        client.req_tick_by_tick_data(7001, make_spy_contract(), "Last", 0, False)
-        got_tbt = wrapper.got_tbt.wait(timeout=30)
+        contract = make_spy_contract()
+        client.req_mkt_data(7002, contract, "", False)
+        quoted = wrapper.got_tick.wait(timeout=30)
+
+        client.req_tick_by_tick_data(7001, contract, "Last", 0, False)
+        got_tbt = wrapper.got_tbt.wait(timeout=45)
         client.cancel_tick_by_tick_data(7001)
+        client.cancel_mkt_data(7002)
 
-        if not got_tbt:
-            pytest.skip("No TBT data — market closed or historical data server not streaming")
+        if not quoted:
+            pytest.skip("the venue is quoting nothing, so nothing is trading")
+        assert got_tbt, (
+            "the venue quotes this contract, so it is trading, and a trade "
+            "stream on it delivered nothing"
+        )
 
         events = [e for e in wrapper._get_events("tick_by_tick_all_last") if e[1] == 7001]
         assert len(events) > 0
