@@ -683,6 +683,25 @@ impl HotLoop {
                     self.try_reclaim_instrument(instrument);
                 }
                 ControlCommand::SubscribeTbt { req_id, con_id, symbol, sec_type, exchange, tbt_type, reply_tx } => {
+                    // A stream is asked for by the venue's id for the contract.
+                    // Sent with none, the venue answers "Unknown contract"
+                    // against a query nothing here has told the caller about,
+                    // and the caller waits on a stream that was refused before
+                    // it began. Told here instead — the surfaces resolve a
+                    // description before it reaches this point, and this is
+                    // what catches the one that does not.
+                    if con_id == 0 {
+                        let reason = format!(
+                            "a {sec_type} trade stream on {symbol} was asked for without the \
+                             venue's id for the contract, which is what a stream is asked for by",
+                        );
+                        log::error!("{reason}");
+                        push_hmds_error(&self.shared, req_id.max(0) as u32, reason.clone(), false);
+                        if let Some(tx) = reply_tx.as_ref() {
+                            let _ = tx.send(Err(reason));
+                        }
+                        continue;
+                    }
                     // Registered with what the contract is, so the slot carries
                     // it and the subscription can state it.
                     if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", &reply_tx) {
