@@ -36,7 +36,7 @@ recorded as the result.
 | Historical bars | ✅ Supported | 9 markets in one session (`src/bin/capture_global.rs`); `keepUpToDate` verified in `tests/python/test_issue_100.py` |
 | Historical ticks and schedules | ✅ Supported | `scripts/sdk_sweep.py`; unsupported tick types return an error rather than substituting another series |
 | Tick-by-tick quotes | ✅ Supported | FX and US equities, concurrent streams, each record carrying its request id; `tests/python/test_live_python_wrappers.py` |
-| Tick-by-tick trades | ✅ Supported | 1,027 trades on one session; `Last` and `AllLast` are distinct streams |
+| Tick-by-tick trades | ✅ Supported | 67,785 trades over a 20-minute session; 327 in the first twenty seconds of one subscription. `Last` and `AllLast` are distinct streams, and a stream is asked for by the venue's id for the contract, which is resolved first when the caller states a description |
 | Trading halt status | ✅ Supported | Tick 437 decoded from status mask and status index; `src/bin/capture_status.rs` |
 | Tick attributes | ✅ Supported | Per-trade `unreported` and `pastLimit` observed to vary within one stream |
 | Venue map behind the exchange mask | ✅ Supported | Asked for beside the quote and answered at regular trading hours with 18 venues, each with the letter the mask's bits refer to. Outside those hours the server states none, and a venue's letter is empty until it does |
@@ -178,12 +178,19 @@ adapters.
 
 ## Release criteria
 
-Live sessions are run at market hours until a session produces no new defect.
-Every session to date has produced at least one that the offline suites did not
-detect, including a crash on a live trade stream, a subscription delivering the
-wrong tick type, and a regression affecting every synchronous call.
+Live sessions are run at market hours until a session produces no new defect,
+and a session is held open under load until it produces none.
 
-The most recent session produced ten, listed here as the caller-visible
+A 20-minute session cycling subscriptions across five contracts — quotes,
+books, trade streams and bars, subscribed and withdrawn every minute — ran 18
+cycles with every stream growing throughout: 3,391 price ticks, 67,785 trades,
+16 bars a cycle, and one error, which is the venue stating that a currency
+pair has no trades to report. Earlier runs of the same session are what found
+four of the defects below; none of them was reachable by any offline suite,
+and two were invisible to the live suites as well, because those skipped when
+no data arrived.
+
+The most recent session produced fourteen, listed here as the caller-visible
 symptom:
 
 | Symptom | Cause |
@@ -193,16 +200,27 @@ symptom:
 | A refused request raised where the reference client reports it | Refusals raised on 25 request-shaped methods; a program written against that client has no exception handling there |
 | A bar whose low is below zero took the process down | 31-bit sign extension performed in an i32, which the intermediate does not fit |
 | `util.df(bars)` refused the bars an ib_async program asked for | The date was handed over in a spelling their parser reads as naive, which their frame conversion rejects |
-| A SMART book's levels named no venue, so a caller could not tell where any of it stood | Gathered by reading the session's exchange directory as though its sections were aggregation groups; a contract named by its symbol matched no section and gathered from nowhere |
+| A SMART book's levels named no venue | Gathered by reading the session's exchange directory as though its sections were aggregation groups |
 | `disconnect()` reported connectivity lost | A session the caller ended and a session that went away were the same event |
 | A second book on a venue already streaming returned nothing, and said nothing | The venue answers it with the tag it is already using, and levels were delivered to the first request holding that tag |
 | A caller's book was attributed to a venue they never asked for | This client's own subscription ids were numbered from the same range a caller states |
-| `accountSummary()` was answered with nothing between the first figure and the account being fully stated | Account data counted as received only once the typed copy was built |
+| `accountSummary()` was answered with nothing before the account was fully stated | Account data counted as received only once the typed copy was built |
+| Every stream on a session went silent after a minute of subscribing and withdrawing | A book was gathered by asking each venue the contract is routed to; four contracts cycled put seventy subscribes and as many withdrawals on the connection a minute, and the venue stopped answering it |
+| A book on a named venue delivered a fraction of its levels | The section tag was read a byte early, so a section named no subscription and its levels waited for a sentinel further in |
+| Bars stopped arriving after the seventh minute, with every other stream healthy | A request id was marked finished and never unmarked, so bars answering a later request under it were delivered as a continuation of the first |
+| A trade stream delivered nothing, and a request for one was handed the contract's quotes | The stream went out with contract id 0 and was refused against a query nobody was told about; and it was held in the quote tables, which it also emptied when withdrawn |
 
 Two suites were added rather than a symptom fixed: every wire parser is now
 given malformed input (`tests/malformed_input.rs`), which is what found the bar
 decoder; and ib_async's own test suite is run against this engine
 (`tests/ib_async_upstream/conftest.py`).
 
-Outstanding: endurance over a full session, and the eight CI jobs, which run
-offline only — a live job needs credentials held as repository secrets.
+The live suites now skip on evidence rather than on absence. A quote on a
+contract is what establishes that it is trading, and a position is what
+establishes there is a running profit to report; reference data — providers, a
+symbol search, an account summary, the scanner parameter set — is stated at any
+hour and is checked rather than skipped. Two of the defects above were invisible
+while those tests skipped whenever nothing arrived.
+
+Outstanding: the eight CI jobs run offline only — a live job needs credentials
+held as repository secrets.
