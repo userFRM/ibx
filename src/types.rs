@@ -1340,30 +1340,16 @@ pub struct DepthMktDataDescription {
     pub service_data_type: String,
     pub agg_group: i32,
 }
-
-/// A component exchange in a SMART routing map.
-/// The code a venue is known by on a quote.
+/// The single character the server gives a venue, where it has given one.
 ///
-/// Not this client's invention and not a single letter in every case: the
-/// counterpart keeps this as a table of its own, and two of the codes written
-/// here from memory were wrong. NASDAQ is `O`, not `Q`. ARCA is `Ar`, two
-/// characters, not `P` — `P` belongs to PSE.
-///
-/// A venue the table does not name is left without a code rather than given the
-/// first letter of its name, which would collide with a venue that has one.
-pub fn exchange_letter(exchange: &str) -> &'static str {
-    match exchange {
-        "AMEX" => "A",
-        "NYSE" => "N",
-        "PHLX" => "X",
-        "PSE" => "P",
-        "ISE" => "I",
-        "CBOE" => "C",
-        "ARCA" => "Ar",
-        "NASDAQ" => "O",
-        _ => "",
-    }
+/// This client used to answer with a table of eight venues written here,
+/// which named nothing for every other venue — most of the United States, and
+/// all of everywhere else — and could not be checked against what the server
+/// assigns. A venue is named by the name the server states it under.
+pub fn exchange_letter(_exchange: &str) -> &'static str {
+    ""
 }
+
 
 
 #[derive(Debug, Clone)]
