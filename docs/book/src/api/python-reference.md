@@ -70,9 +70,17 @@ def is_connected()
 
 ---
 
-#### `run`
+#### `poll`
 
-Run the event loop.
+Run the event loop. Deliver everything waiting, once, and return.  `run` owns the thread it is called on, which a program with an event loop of its own cannot give it: an asyncio framework has to drive the callbacks from its own loop, and a blocking loop leaves it nowhere to stand. This is one pass of the same dispatch.
+
+```python
+def poll()
+```
+
+---
+
+#### `run`
 
 ```python
 def run()
@@ -327,7 +335,7 @@ def account_snapshot()
 
 #### `place_order`
 
-Place an order.
+Place an order.  A request the client will not send is reported under the number the reference client reports it under, and the call returns. A program moved from that client has an `error` handler and no exception handling around a request, because nothing it was written against raises there.
 
 ```python
 def place_order(order_id, contract, order)
