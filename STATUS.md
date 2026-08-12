@@ -21,7 +21,7 @@ recorded as the result.
 | Surface | Status | Verification |
 | --- | :---: | --- |
 | `EClient` / `EWrapper` (TWS API shape) | ✅ Supported | `tests/ib_paper_compat`, `tests/python/test_compat_tier1..3.py` |
-| `ib_async`, unmodified | ✅ Supported | Their `IB` on this engine via `ibx.ib_async.attach`; their events, async variants and types, with no gateway. `tests/python/test_ib_async_transport.py` |
+| `ib_async`, unmodified | ✅ Supported | Their `IB` on this engine via `ibx.ib_async.attach`; their events, async variants and types, with no gateway. Their own test suite runs against it: 2 of 3 pass, and `test_request_error_raised` cannot pass against any server, because 321 is in their `warningCodes` and a warning never ends the request it belongs to. `tests/python/test_ib_async_transport.py`, `tests/ib_async_upstream/conftest.py` |
 | `ibx.IB` (ib_async shape) | ✅ Supported | 90/90 methods present; `tests/python/test_ib_facade.py`, `scripts/sdk_sweep.py` |
 | `ibx::api::Client` (Rust) | ✅ Supported | 77/77 callable; 3 return an error naming a local-process facility this client does not have |
 | Gateway settings | ✅ Supported | 17 settings carried, 7 recorded as having no counterpart; `tests/python/test_gateway_settings.py`, `tests/python/test_settings_parity.py`; session opened under a stated build and time zone |
@@ -86,6 +86,11 @@ on drift.
 | No caller-set order field is discarded without notice | 154 fields, 0 dropped | `scripts/gen_order_field_reach.py` |
 | No server field is discarded | Unnamed fields retained under their tag number (49 on an equity definition, 46 on a bond) | `scripts/gen_wire_coverage.py` |
 
+A fourth is enforced by a test rather than a generator: **no wire parser aborts
+on malformed input.** Every parser is given each prefix of a well-formed frame,
+that frame with a byte replaced at each position, and runs that are not frames
+at all (`tests/malformed_input.rs`).
+
 ## Protocol constraints
 
 These are properties of the IBKR protocol, not of this implementation. The
@@ -145,13 +150,21 @@ official gateway behaves the same way.
 Run order and environment are documented in
 [docs/engineering-notes.md](docs/engineering-notes.md).
 
+## Refusals
+
+A request this client will not send is reported through `error(reqId, code,
+message)` and the call returns, as the reference client does. The number is the
+one that client reports for the same class: 321 for a request that fails
+validation, 200 for a contract description that matches nothing, 504 for a call
+with no session. Construction and configuration raise, as does a synchronous
+call with a return value.
+
 ## Planned work
 
-[docs/api-alignment-plan.md](docs/api-alignment-plan.md) lists three items:
-refusals that raise where the reference client reports them under a code (39
-sites, 25 on request-shaped methods); settings decided by configuration where
-the server states a grant for them; and whether the surfaces over this engine
-are three products or one product and two adapters.
+[docs/api-alignment-plan.md](docs/api-alignment-plan.md) lists two open items:
+settings decided by configuration where the server states a grant for them, and
+whether the surfaces over this engine are three products or one product and two
+adapters.
 
 ## Release criteria
 
