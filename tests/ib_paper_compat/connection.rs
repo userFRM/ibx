@@ -102,14 +102,20 @@ pub(super) fn phase_graceful_shutdown(conns: Conns) -> Conns {
         "Shutdown took too long: {shutdown_time:?}"
     );
 
-    // Check that Disconnected event was emitted
-    let mut got_disconnect = false;
+    // The session ended because this asked it to, which is a stop and not a
+    // loss: a caller told it lost connectivity would stand by for a reconnect
+    // that is not coming.
+    let mut said_so = false;
     while let Ok(ev) = event_rx.try_recv() {
-        if matches!(ev, Event::Disconnected) {
-            got_disconnect = true;
+        if matches!(ev, Event::Stopped) {
+            said_so = true;
         }
+        assert!(
+            !matches!(ev, Event::Disconnected),
+            "a session the caller ended was reported as one that went away",
+        );
     }
-    assert!(got_disconnect, "Disconnected event was not emitted during shutdown");
+    assert!(said_so, "the engine said nothing when it was told to stop");
 
     let farm = hl.farm_conn.take().expect("farm_conn missing");
     let ccp = hl.ccp_conn.take().expect("ccp_conn missing");
