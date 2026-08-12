@@ -105,7 +105,7 @@ fn main() {
                     break;
                 }
             }
-            Ok(Event::Disconnected) => {
+            Ok(Event::Disconnected | Event::Stopped) => {
                 println!("Disconnected");
                 break;
             }

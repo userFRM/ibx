@@ -430,4 +430,12 @@ impl EClient {
         let tx = tx.as_ref().ok_or_else(|| PyRuntimeError::new_err("No event channel"))?;
         tx.send(Event::Disconnected).map_err(|e| PyRuntimeError::new_err(format!("{e}")))
     }
+
+    /// Inject an `Event::Stopped` — a session the caller ended (test-only).
+    #[doc(hidden)]
+    fn _test_push_stopped_event(&self) -> PyResult<()> {
+        let tx = self._test_event_tx.lock().unwrap();
+        let tx = tx.as_ref().ok_or_else(|| PyRuntimeError::new_err("No event channel"))?;
+        tx.send(Event::Stopped).map_err(|e| PyRuntimeError::new_err(format!("{e}")))
+    }
 }

@@ -67,6 +67,14 @@ impl EClient {
             self.connected.store(false, Ordering::Release);
             call_wrapper!(self.wrapper, py, "error", (-1i64, 1100i64, "Connectivity between client and server has been lost", ""));
         }
+        // A session the caller ended is not a session that was lost, and is
+        // not announced here: the dispatch loop ends and answers with
+        // `connection_closed`, which is what the reference client answers
+        // `disconnect()` with. Reported as 1100 as well, a program that stands
+        // down on connectivity loss stood down on the session it had closed.
+        if events.iter().any(|e| matches!(e, Event::Stopped)) {
+            self.connected.store(false, Ordering::Release);
+        }
         // 1102 rather than 1101: the reconnect re-establishes the
         // subscriptions itself, so the caller has nothing to re-request. A
         // client that stood down on 1100 and never saw this stayed down.

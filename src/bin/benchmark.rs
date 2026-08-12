@@ -357,7 +357,7 @@ fn main() {
                 }
             }
 
-            Event::Disconnected => {
+            Event::Disconnected | Event::Stopped => {
                 println!("[{:.3}s] Disconnected", start.elapsed().as_secs_f64());
                 break;
             }

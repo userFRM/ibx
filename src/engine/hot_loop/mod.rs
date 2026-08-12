@@ -1003,7 +1003,7 @@ impl HotLoop {
                     }
                     self.running = false;
                     self.shared.set_connection_lost();
-                    emit(&self.event_tx, Event::Disconnected);
+                    emit(&self.event_tx, Event::Stopped);
                 }
             }
         }
@@ -1013,7 +1013,7 @@ impl HotLoop {
             log::warn!("Control channel disconnected — shutting down hot loop");
             self.running = false;
             self.shared.set_connection_lost();
-            emit(&self.event_tx, Event::Disconnected);
+            emit(&self.event_tx, Event::Stopped);
         }
     }
 
