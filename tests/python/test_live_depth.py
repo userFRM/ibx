@@ -96,15 +96,18 @@ class TestLiveDepth:
         self.client.req_mkt_depth(3001, contract, 5, False, [])
 
         got = self.wrapper.got_depth.wait(timeout=30) or self.wrapper.got_depth_l2.wait(timeout=1)
+        refused = [e for e in self.wrapper.errors if e[0] == 3001]
         self.client.cancel_mkt_depth(3001)
 
+        # A book on a venue this account is not entitled to is refused by name,
+        # and that refusal is an answer. Silence is not: a request the venue
+        # neither served nor refused is the failure this exists to catch, and
+        # skipping for want of levels passed on exactly that.
+        assert got or refused, (
+            "the venue neither sent a book nor refused one"
+        )
         if not got:
-            # Print any errors for debugging
-            depth_errors = [e for e in self.wrapper.errors if e[0] == 3001]
-            print(f"Depth errors: {depth_errors}")
-            print(f"All depth updates: {self.wrapper.depth_updates}")
-            print(f"All L2 updates: {self.wrapper.depth_l2_updates}")
-            pytest.skip("No depth updates received — market may be closed or no L2 subscription")
+            pytest.skip(f"the venue refused a book here: {refused[0][2]}")
 
         total = len(self.wrapper.depth_updates) + len(self.wrapper.depth_l2_updates)
         print(f"Received {len(self.wrapper.depth_updates)} L1 + {len(self.wrapper.depth_l2_updates)} L2 depth updates")
