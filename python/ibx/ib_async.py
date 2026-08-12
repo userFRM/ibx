@@ -240,8 +240,7 @@ class IbxClient:
         if name.startswith("_"):
             raise AttributeError(name)
 
-        ours = "".join("_" + c.lower() if c.isupper() else c for c in name)
-        carried = getattr(self._client, ours, None)
+        carried = getattr(self._client, _our_name_for(name, self._client), None)
         if carried is None:
             def missing(*args, **kwargs):
                 raise NotImplementedError(
@@ -286,6 +285,26 @@ def _as_their_moment(stated, zone):
     if not zone or " " not in moment:
         return moment
     return f"{moment} {zone}"
+
+
+def _our_name_for(their_name, carrier):
+    """What this engine calls the request they call `their_name`.
+
+    A capital starts a word, which is enough for every name either side spells
+    out — but not for the ones that run words together. `reqPnL` split that way
+    is `req_pn_l` and matches nothing, so a program asking this engine for a
+    running profit was told it carries none. So the split is a first guess, and
+    what the engine actually carries decides: one name, ignoring where the
+    underscores fell.
+    """
+    split = "".join("_" + c.lower() if c.isupper() else c for c in their_name)
+    if hasattr(carrier, split):
+        return split
+    flattened = their_name.lower()
+    for carried in dir(carrier):
+        if carried.replace("_", "") == flattened:
+            return carried
+    return split
 
 
 def _their_type(name):

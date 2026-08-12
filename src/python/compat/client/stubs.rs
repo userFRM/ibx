@@ -308,6 +308,28 @@ impl EClient {
         })
     }
 
+    /// Stop waiting on the event types.
+    ///
+    /// The query is one message and one answer, so there is nothing at the
+    /// venue to withdraw: what is withdrawn is the answer, which would
+    /// otherwise reach a caller who has said they are done with it. A cancel
+    /// naming no waiting request says so rather than returning as though it
+    /// acted.
+    fn cancel_wsh_meta_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        Self::send_control(py, &tx, ControlCommand::CancelCalendar {
+            req_id: wire_req_id(req_id)?,
+        })
+    }
+
+    /// Stop waiting on the calendar's events. As above.
+    fn cancel_wsh_event_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        Self::send_control(py, &tx, ControlCommand::CancelCalendar {
+            req_id: wire_req_id(req_id)?,
+        })
+    }
+
     /// The calendar's events. Answered on `wshEventData`.
     ///
     /// `wsh_event_data` is the object the public API takes: a contract id, or

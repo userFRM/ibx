@@ -1366,6 +1366,34 @@ def req_wsh_meta_data(req_id)
 
 ---
 
+#### `cancel_wsh_meta_data`
+
+Stop waiting on the event types.  The query is one message and one answer, so there is nothing at the venue to withdraw: what is withdrawn is the answer, which would otherwise reach a caller who has said they are done with it. A cancel naming no waiting request says so rather than returning as though it acted.
+
+```python
+def cancel_wsh_meta_data(req_id)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `int` | Request identifier. Used to match responses to requests. |
+
+---
+
+#### `cancel_wsh_event_data`
+
+Stop waiting on the calendar's events. As above.
+
+```python
+def cancel_wsh_event_data(req_id)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `int` | Request identifier. Used to match responses to requests. |
+
+---
+
 #### `req_wsh_event_data`
 
 The calendar's events. Answered on `wshEventData`.  `wsh_event_data` is the object the public API takes: a contract id, or a filter the caller writes, plus the window and what to fill from.

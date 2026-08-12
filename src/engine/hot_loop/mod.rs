@@ -837,6 +837,15 @@ impl HotLoop {
                         req_id, &query, &mut self.secdef_conn, &mut self.hb, &self.shared,
                     );
                 }
+                ControlCommand::CancelCalendar { req_id } => {
+                    if !self.secdef.withdraw_calendar_request(req_id) {
+                        push_hmds_error(
+                            &self.shared, req_id,
+                            "no calendar request is waiting under this id".to_string(),
+                            false,
+                        );
+                    }
+                }
                 ControlCommand::FetchOptionParams { req_id, symbol, fut_fop_exchange, underlying_sec_type, underlying_con_id } => {
                     self.ccp.send_option_params_request(
                         req_id, &symbol, &fut_fop_exchange, &underlying_sec_type, underlying_con_id,

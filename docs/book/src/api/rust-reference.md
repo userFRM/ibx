@@ -1128,6 +1128,38 @@ pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), String>
 
 ---
 
+#### `cancel_wsh_meta_data`
+
+Stop waiting on the event types. The query is one message and one answer, so there is nothing at the venue to withdraw: what is withdrawn is the answer, which would otherwise reach a caller who has said they are done with it. A cancel naming no waiting request says so rather than returning as though it acted.
+
+```rust
+pub fn cancel_wsh_meta_data(&self, req_id: i64) -> Result<(), String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+
+**Returns:** `Result<(), String>`
+
+---
+
+#### `cancel_wsh_event_data`
+
+Stop waiting on the calendar's events. As above.
+
+```rust
+pub fn cancel_wsh_event_data(&self, req_id: i64) -> Result<(), String>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+
+**Returns:** `Result<(), String>`
+
+---
+
 #### `req_wsh_event_data`
 
 Ask the corporate-events calendar for events. A caller either names a contract or writes its own filter. The filter goes to the venue as written: the venue validates it, and rewriting it here would change what was asked.
