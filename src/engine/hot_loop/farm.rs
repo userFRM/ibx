@@ -75,13 +75,13 @@ type MdResubInfo = (InstrumentId, String, String, String, String, f64, String, S
 type MdResubTarget = (InstrumentId, i64, String, String, String, String, f64, String, String, i32);
 
 pub(crate) struct FarmState {
-    /// The next id this client asks under for a stream of its own.
+    /// The next id this client asks the venue under.
     ///
-    /// Above anything a caller states. These ids share a table with the ones
-    /// callers state, and the venue echoes both back the same way, so an
-    /// overlap makes one indistinguishable from the other: a caller's second
-    /// book was answered under a fan-out subscription's venue because both
-    /// were numbered 2.
+    /// Every subscription is asked for under one of these and mapped back to
+    /// the caller who wanted it. A caller's own id is never sent: the venue
+    /// echoes an id back, and one taken from the caller is indistinguishable
+    /// from one of these — a caller's second book was answered under another
+    /// subscription's venue because both were numbered 2.
     pub(crate) next_md_req_id: u32,
     pub(crate) md_req_to_instrument: Vec<(u32, InstrumentId)>,
     pub(crate) instrument_md_reqs: Vec<(InstrumentId, Vec<u32>)>,
@@ -432,14 +432,6 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
 }
 
 impl FarmState {
-    /// Where this client's own request ids begin.
-    ///
-    /// High enough that nothing a caller states reaches it, and inside the
-    /// range the venue echoes back: asked under an id with the top bits set,
-    /// a subscription was answered by neither an acknowledgement nor a
-    /// refusal, while its neighbours in the same fan-out were refused by name.
-    pub(crate) const FIRST_INTERNAL_REQ_ID: u32 = 1_000_000_000;
-
     /// Whether this instrument still has market-data state that would be
     /// repointed by a slot reuse: a live subscription, or a record kept for the
     /// next reconnect.
@@ -462,7 +454,7 @@ impl FarmState {
 
     pub(crate) fn new() -> Self {
         Self {
-            next_md_req_id: Self::FIRST_INTERNAL_REQ_ID,
+            next_md_req_id: 1,
             md_req_to_instrument: Vec::new(),
             instrument_md_reqs: Vec::new(),
             depth_subs: Vec::new(),
@@ -829,18 +821,12 @@ impl FarmState {
                 .find(|(sub, _)| *sub == req_id)
                 .map(|(_, user)| *user)
                 .unwrap_or(req_id);
-            // Which venue this subscription's levels stand on: the one it was
-            // fanned out to, or — for a book asked for on one named venue —
-            // the one the caller named. Left empty for the second, a book on a
-            // named venue arrived with nothing on it saying where, while the
-            // aggregate over the same venue named it.
+            // Which venue this subscription's levels stand on. Every
+            // subscription is asked for at one named venue, so every level has
+            // one to be placed on.
             let venue = self.depth_fanout_exchange.iter()
                 .find(|(sub, _)| *sub == req_id)
                 .map(|(_, exch)| exch.clone())
-                .or_else(|| self.depth_resub_info.iter()
-                    .find(|(rid, ..)| *rid == req_id)
-                    .map(|(_, _, exchange, ..)| exchange.clone())
-                    .filter(|named| !matches!(named.as_str(), "SMART" | "BEST" | "")))
                 .unwrap_or_default();
             self.depth_tag_to_req.push((
                 server_tag,
@@ -1324,30 +1310,31 @@ impl FarmState {
         if let Some(conn) = farm_conn.as_mut() {
             let con_id_str = (con_id as u32).to_string();
 
-            if !gathered.is_empty() {
-                // Each venue is asked for the top of its own book, which is
-                // what the aggregate is made of.
-                for venue in &gathered {
-                    let sub_req = self.next_md_req_id;
-                    self.next_md_req_id += 1;
-                    self.depth_subs.push((sub_req, is_smart_depth));
-                    self.depth_fanout_map.push((sub_req, req_id));
-                    self.depth_fanout_exchange.push((sub_req, venue.clone()));
-                    self.send_depth_one(
-                        conn, &sub_req.to_string(), &con_id_str, venue, fix_sec_type, true,
-                    );
-                }
-                log::info!(
-                    "Book gathered for req={req_id} con_id={con_id} from the {} venues it is routed to",
-                    gathered.len(),
-                );
+            // A book on one named venue is a book gathered from one venue.
+            // Asking under an id of this client's own either way is what keeps
+            // the two apart: the venue echoes the id back, and a caller's id
+            // sent as it stands is indistinguishable from one of these. A
+            // caller's second book was answered under another subscription's
+            // venue because both were numbered 2.
+            let venues: Vec<String> = if gathered.is_empty() {
+                vec![exchange.to_string()]
             } else {
-                // A book on one named venue.
+                gathered
+            };
+            for venue in &venues {
+                let asked_under = self.next_md_req_id;
+                self.next_md_req_id += 1;
+                self.depth_subs.push((asked_under, is_smart_depth));
+                self.depth_fanout_map.push((asked_under, req_id));
+                self.depth_fanout_exchange.push((asked_under, venue.clone()));
                 self.send_depth_one(
-                    conn, &req_id.to_string(), &con_id_str, exchange, fix_sec_type, false,
+                    conn, &asked_under.to_string(), &con_id_str, venue, fix_sec_type,
                 );
-                log::info!("Depth subscribe: req={req_id} con_id={con_id} exchange={exchange}");
             }
+            log::info!(
+                "Book for req={req_id} con_id={con_id} gathered from {}",
+                venues.join(", "),
+            );
             hb.last_farm_sent = Instant::now();
         }
     }
@@ -1358,34 +1345,25 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        let found = match self.depth_subs.iter().position(|(id, _)| *id == req_id) {
-            Some(idx) => {
-                self.depth_subs.remove(idx);
-                true
-            }
-            None => false,
-        };
-        if !found { return; }
-
-        // Remove reconnect params
-        self.depth_resub_info.retain(|(id, ..)| *id != req_id);
-
-        // Collect SmartDepth fan-out sub_reqs that map to this user req_id
-        let fanout_reqs: Vec<u32> = self.depth_fanout_map.iter()
+        // What this client asked under for the caller's book — one venue or
+        // several. The caller's own id never went to the venue, so it is not
+        // what is withdrawn.
+        let asked_under: Vec<u32> = self.depth_fanout_map.iter()
             .filter(|(_, user)| *user == req_id)
             .map(|(sub, _)| *sub)
             .collect();
+        if asked_under.is_empty() {
+            return;
+        }
 
-        // Remove fan-out entries from depth_subs and depth_fanout_map
-        self.depth_subs.retain(|(id, _)| !fanout_reqs.contains(id));
+        self.depth_resub_info.retain(|(id, ..)| *id != req_id);
+        self.depth_subs.retain(|(id, _)| !asked_under.contains(id));
         self.depth_fanout_map.retain(|(_, user)| *user != req_id);
-
-        // Clear server_tag mappings for this req_id
+        self.depth_fanout_exchange.retain(|(sub, _)| !asked_under.contains(sub));
         self.depth_tag_to_req.retain(|(_, rid, ..)| *rid != req_id);
 
         if let Some(conn) = farm_conn.as_mut() {
-            // Send unsub for each fan-out sub_req (SmartDepth per-exchange)
-            for sub_req in &fanout_reqs {
+            for sub_req in &asked_under {
                 let sub_req_str = sub_req.to_string();
                 let _ = conn.send_fixcomp(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
@@ -1393,15 +1371,11 @@ impl FarmState {
                     (263, "2"),
                 ]);
             }
-            // Send unsub for the primary req_id
-            let req_id_str = req_id.to_string();
-            let _ = conn.send_fixcomp(&[
-                (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                (262, &req_id_str),
-                (263, "2"),
-            ]);
             hb.last_farm_sent = Instant::now();
-            log::info!("Sent depth unsubscribe: req_id={} (+ {} fan-out)", req_id, fanout_reqs.len());
+            log::info!(
+                "Sent depth unsubscribe for req_id={req_id}: {} venue(s)",
+                asked_under.len(),
+            );
         }
     }
 
@@ -1411,34 +1385,26 @@ impl FarmState {
     /// Tag 264 names the kind of market data a subscription is for. A book is
     /// `Deep`; `BidAsk` is the top of one venue's book and is what a smart
     /// book is gathered from.
+    /// Ask one venue for one contract's book.
+    ///
+    /// The same request whether the venue was named by the caller or is one of
+    /// the several an aggregate is gathered from. Asked for as a quote
+    /// instead, the venue answers with quote frames, which this client read
+    /// with its book reader: a bid of 143.87 and an ask of a penny on a share
+    /// trading at 772, a book made of misread quotes, which is worse than no
+    /// book. Under the request type that means a book the venue answers —
+    /// with the book, or by refusing the entitlement, and either reaches the
+    /// caller.
     fn send_depth_one(
         &self, conn: &mut Connection, req_id_str: &str, con_id_str: &str,
-        exchange: &str, sec_type: &str, fanned_out: bool,
+        exchange: &str, sec_type: &str,
     ) {
-        // A book, whether the venue was named by the caller or gathered into
-        // an aggregate. Asked for as a quote instead, the venue answers with
-        // quote frames, which this client read with its book reader: a bid of
-        // 143.87 and an ask of a penny on a share trading at 772 — a book made
-        // of misread quotes, which is worse than no book.
-        let _ = fanned_out;
-        if false {
-        } else {
-            // A book on one named venue: a future on its exchange, a crypto
-            // on its own. Asked for under the request type that means a book.
-            //
-            // These used to be asked for under the type that means a quote,
-            // which the venue acknowledged with the number of levels it holds
-            // and then never sent: a caller asking for the book of anything
-            // that is not a US equity waited on silence. Asked for as a book,
-            // the venue answers — with the book, or by refusing the
-            // entitlement, and either reaches the caller.
-            let _ = conn.send_fixcomp(&[
-                (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                (263, "1"), (146, "1"), (262, req_id_str),
-                (6008, con_id_str), (207, exchange), (167, sec_type),
-                (264, DEEP_REQUEST), (6088, "Socket"), (9830, "1"),
-            ]);
-        }
+        let _ = conn.send_fixcomp(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
+            (263, "1"), (146, "1"), (262, req_id_str),
+            (6008, con_id_str), (207, exchange), (167, sec_type),
+            (264, DEEP_REQUEST), (6088, "Socket"), (9830, "1"),
+        ]);
     }
 
     /// Parse 35=P depth entries (byte-aligned: [00][3B stag][field tags...][58 terminator]).
