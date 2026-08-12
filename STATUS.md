@@ -174,7 +174,7 @@ Every session to date has produced at least one that the offline suites did not
 detect, including a crash on a live trade stream, a subscription delivering the
 wrong tick type, and a regression affecting every synchronous call.
 
-The most recent session produced five, listed here as the caller-visible
+The most recent session produced seven, listed here as the caller-visible
 symptom:
 
 | Symptom | Cause |
@@ -184,6 +184,8 @@ symptom:
 | A refused request raised where the reference client reports it | Refusals raised on 25 request-shaped methods; a program written against that client has no exception handling there |
 | A bar whose low is below zero took the process down | 31-bit sign extension performed in an i32, which the intermediate does not fit |
 | `util.df(bars)` refused the bars an ib_async program asked for | The date was handed over in a spelling their parser reads as naive, which their frame conversion rejects |
+| A SMART book's levels named no venue, so a caller could not tell where any of it stood | Gathered by reading the session's exchange directory as though its sections were aggregation groups; a contract named by its symbol matched no section and gathered from nowhere |
+| `disconnect()` reported connectivity lost | A session the caller ended and a session that went away were the same event |
 
 Two suites were added rather than a symptom fixed: every wire parser is now
 given malformed input (`tests/malformed_input.rs`), which is what found the bar
