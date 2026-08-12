@@ -185,9 +185,9 @@ class TestMultiScanner:
         """reqMatchingSymbols("TSLA") returns cross-exchange matches."""
         self.client.req_matching_symbols(10020, "TSLA")
 
+        # What a symbol matches is reference data, stated at any hour.
         got = self.wrapper.got_symbols.wait(timeout=15)
-        if not got:
-            pytest.skip("No symbol matches returned")
+        assert got, "a symbol search for a listed company matched nothing"
 
         matches = self.wrapper.symbol_matches
         print(f"  TSLA matches: {len(matches)}")
