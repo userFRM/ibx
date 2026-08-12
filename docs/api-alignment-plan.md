@@ -1,70 +1,46 @@
 # Aligning the client surface with the reference client
 
-Three items. Two are defects with known fixes and no decision attached. The
-third needs a decision before any code is written.
+Four items. The first is done. Two are defects with known fixes and no decision
+attached. The last needs a decision before any code is written.
 
 ---
 
-## 1. A refusal is delivered, not thrown
+## 1. A refusal is delivered, not thrown — done
 
-39 refusals in the Python client raise. **25 of them are on request-shaped
-methods** — `place_order`, `req_*`, `cancel_*`, `exercise_options` — where the
-reference client returns and reports `error(reqId, code, message)`. One path
-does it correctly: a call with no connection reports 504
-(`src/python/compat/client/mod.rs:459`).
+Every request-shaped method on the Python client reports a refusal through
+`error(reqId, code, message)` and returns. The number is the one the reference
+client reports for the same class: 321 for a request that fails validation, 200
+for a contract description that matches nothing, 504 for a call with no
+session. The connection is checked first, as it is there.
 
-A program moved from the reference client has an `error()` handler and no
-exception handling around `place_order`, because nothing it was written against
-throws there. Those 25 refusals reach neither.
+`src/api/error_codes.rs` holds the type and the numbers. The Rust client
+returns it, so both surfaces refuse with the same number and the same text.
 
-| File | Raises | On request-shaped methods |
-| --- | ---: | ---: |
-| `client/orders.rs` | 17 | 16 |
-| `client/mod.rs` | 10 | 2 |
-| `client/ask.rs` | 5 | 1 |
-| `client/market_data.rs` | 3 | 3 |
-| `client/stubs.rs` | 2 | 2 |
-| `client/reference.rs` | 1 | 1 |
-| `contract.rs` | 1 | 0 |
-
-**Fix.** One enum in `src/api/error_codes.rs` carrying the reference client's
-numbers and message text. The shared validators in `src/client_core.rs` return
-it. The Python request-shaped methods report and return; the Rust client keeps
-`Result<(), String>` and renders the same error through `Display`, so both
-refuse with the same number without touching 41 signatures.
-
-**Keeps raising, correctly:** the synchronous answering calls
-(`contract_details`, `qualify_contract` — functions with a return value, not the
-reference API's shape); connect and construction (no request id to report
-against); a request id outside the range the wire carries.
-
-**Gate.** `scripts/gen_refusal_reach.py` in CI: every request-shaped method
-classified *reports* or *raises*, raises required to be zero. Codes are
-generated into the API reference from the same enum.
-
----
+Construction and configuration still raise: a read-only client asked to trade
+is a programming error, not a request outcome. So do the synchronous answering
+calls — `contract_details`, `qualify_contract` — which have a return value and
+no shape in the reference API to match.
 
 ## 2. Capability is negotiated, not configured
 
 The server states 299 granted features at logon. They are captured
-(`src/gateway.rs`, tag 6542) and readable (`SharedState::enabled_features`).
+(`src/gateway.rs`, tag 6542) and readable on both clients (`enabled_features`).
 Nothing gates on them.
 
-`island_for_nasdaq` is the one setting with a matching grant
-(`ISLAND2NASDAQ`), and it is decided by the setting alone. The reference client
-requires the grant *and* the setting.
+`island_for_nasdaq` is the one setting with a matching grant. The counterpart
+reads `ISLAND2NASDAQ` off the granted list at logon and holds it in a field of
+its own, beside `NOAMOPTCHK` and `FORCENOCBN`, which is what a setting alone
+does not decide. Here it is decided by the setting alone.
 
 `server_version()` (`src/api/direct.rs:123`) returns the announced build, so a
 program gating a feature on it finds everything available. Deliberate, and a
 divergence a caller should be able to read about where they will look for it.
 
 **Fix.** Gate `island_for_nasdaq` on the grant. Check the remaining settings
-against the grant list. Expose the grants as a call on both clients. Note the
-`server_version()` divergence in its own documentation.
+against the grant list. Note the `server_version()` divergence in its own
+documentation.
 
 **Gate.** A test that a setting whose grant is absent does not take effect.
-
----
 
 ## 3. Nothing about a market is written here
 
@@ -113,4 +89,4 @@ whether the rust-ibapi shape gets written at all.
 
 ---
 
-Order: 1, then 2, then 3. Item 4 before any of them, if the answer is "three products".
+Order: 2, then 3. Item 4 before either, if the answer is "three products".
