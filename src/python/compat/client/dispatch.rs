@@ -223,6 +223,39 @@ impl EClient {
             let parent_id = self.core.tracked_parent_id(update.order_id)
                 .unwrap_or(update.parent_id);
             let avg = update.avg_price as f64 / crate::types::PRICE_SCALE as f64;
+
+            // The order as this client sent it, beside the status it is now
+            // in. The reference client answers an order's every change with
+            // both, from the order it holds — its own method for it sends the
+            // pair — and a program that waits for the order to confirm what it
+            // asked for waited on a callback that only arrived if it asked for
+            // its open orders.
+            if let Some(tracked) = self.core.open_orders.lock().unwrap().get(&update.order_id).cloned() {
+                let contract_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
+                let order_py = Py::new(py, Order {
+                    order_id: tracked.order.order_id,
+                    action: tracked.order.action.clone(),
+                    total_quantity: tracked.order.total_quantity,
+                    order_type: tracked.order.order_type.clone(),
+                    lmt_price: tracked.order.lmt_price,
+                    aux_price: tracked.order.aux_price,
+                    tif: tracked.order.tif.clone(),
+                    account: tracked.order.account.clone(),
+                    perm_id: tracked.order.perm_id,
+                    oca_type: tracked.order.oca_type,
+                    use_price_mgmt_algo: tracked.order.use_price_mgmt_algo,
+                    trail_stop_price: tracked.order.trail_stop_price,
+                    algo_strategy: tracked.order.algo_strategy.clone(),
+                    ..Default::default()
+                })?.into_any();
+                let state_py = Py::new(py, OrderState {
+                    status: status.to_string(),
+                    ..Default::default()
+                })?.into_any();
+                call_wrapper!(self.wrapper, py, "open_order",
+                    (update.order_id as i64, &contract_py, &order_py, &state_py));
+            }
+
             call_wrapper!(self.wrapper, py, "order_status", (update.order_id as i64, status, update.filled_qty,
                  update.remaining_qty, avg, update.perm_id, parent_id, 0.0f64, 0i64, "", 0.0f64));
 
