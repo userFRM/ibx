@@ -121,17 +121,13 @@ pub(super) fn phase_endpoint_coverage(conns: Conns) -> Conns {
         KNOWN_RUST_API_GAPS.len()
     );
 
-    if !KNOWN_CONTROL_COMMAND_GAPS.is_empty() {
-        println!("  Known command gaps:");
-        for (name, why) in KNOWN_CONTROL_COMMAND_GAPS {
-            println!("    - {name}: {why}");
-        }
+    // Each is named above by its count, so the list under it says nothing
+    // when there is nothing in it.
+    for (name, why) in KNOWN_CONTROL_COMMAND_GAPS {
+        println!("    - command gap {name}: {why}");
     }
-    if !KNOWN_RUST_API_GAPS.is_empty() {
-        println!("  Known API gaps:");
-        for (name, why) in KNOWN_RUST_API_GAPS {
-            println!("    - {name}: {why}");
-        }
+    for (name, why) in KNOWN_RUST_API_GAPS {
+        println!("    - API gap {name}: {why}");
     }
 
     assert!(
