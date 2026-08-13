@@ -1521,7 +1521,9 @@ impl FarmState {
             None => return,
         };
 
-        // Header: 2 bytes misc. The stag is set by the first 80 00 [2B stag] sentinel.
+        // Two bytes of header, then a marker and the tag in three. A frame
+        // short of that whole opening names no subscription, and the sentinels
+        // below name one for the levels that follow them.
         if body.len() < 4 { return; }
 
         // Nothing is delivered until a section names the subscription it
@@ -1550,8 +1552,9 @@ impl FarmState {
         while pos < body.len() {
             let b = body[pos];
 
-            // Stag switch sentinel: 80 00 [2B stag] — bid_size=0 repurposed.
-            // Also detect 00 00 [2B stag] (3-byte stag with high byte 0x00, at message boundaries).
+            // Stag switch sentinel: [80|00][00][3B stag_be] — bid_size=0
+            // repurposed. Both markers carry the tag in the same three bytes;
+            // 0x00 is the one that turns up at a message boundary.
             if (b == 0x80 || b == 0x00) && pos + 5 <= body.len() && body[pos + 1] == 0x00 {
                 let candidate = ((body[pos + 2] as u32) << 16)
                     | ((body[pos + 3] as u32) << 8)
