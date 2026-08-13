@@ -56,10 +56,25 @@ pub(super) fn phase_extra_farms(
     // file would be a guess at something already stated — and it was: six of
     // the eight names it used to carry were asked for on the session's own
     // host and closed without a word, because they live elsewhere.
+    // One farm per server, not all of them.
+    //
+    // What this phase proves is that a farm is reached where the venue says it
+    // is, and the part of that which can be wrong is the server. Sixteen
+    // logons prove it no better than four and cost the session sixteen: a run
+    // that connected every named farm left the next test unable to open a
+    // session at all, its own farm logon closed on it. The suite is a
+    // passenger on this account, not the only thing using it.
     let named = routed.farms();
-    let mut farms: Vec<(&str, &str, u16)> =
+    let mut per_host: Vec<(&str, &str, u16)> = Vec::new();
+    let mut all: Vec<(&str, &str, u16)> =
         named.iter().map(|(f, (h, p))| (*f, *h, *p)).collect();
-    farms.sort();
+    all.sort();
+    for (farm, host, port) in all {
+        if !per_host.iter().any(|(_, seen, _)| *seen == host) {
+            per_host.push((farm, host, port));
+        }
+    }
+    let farms = per_host;
     let mut connected = 0;
     let mut answered: Vec<&str> = Vec::new();
     // Where this session actually is. The venue names which server the account
@@ -103,7 +118,7 @@ pub(super) fn phase_extra_farms(
         ccp_keepalive(ccp);
     }
 
-    println!("  {}/{} extra farms answered", connected, farms.len());
+    println!("  {}/{} farms answered, one per server the venue named", connected, farms.len());
 
     // Not every farm serves every account, and the ones that do not say so by
     // accepting the connection, staying silent, and closing it about ten
@@ -125,8 +140,8 @@ pub(super) fn phase_extra_farms(
     assert_eq!(
         connected,
         farms.len(),
-        "the venue named {} farms and {connected} answered. The ones that did: \
-         {answered:?}",
+        "one farm was tried on each of {} servers the venue named, and \
+         {connected} answered. The ones that did: {answered:?}",
         farms.len(),
     );
     println!("  PASS\n");
