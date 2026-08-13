@@ -130,6 +130,13 @@ pub struct Connection {
     pub read_key: Vec<u8>,
     /// IV for verifying inbound messages (chains across messages).
     pub read_iv: Vec<u8>,
+    /// How often this connection's far side expects to hear from the session,
+    /// where it said so in its answer to the logon.
+    ///
+    /// `None` where it named none, which leaves the interval this client
+    /// proposed. The number it answers with is the one the session is held to,
+    /// and the one it proposed is not.
+    pub heartbeat_secs: Option<u64>,
     /// What the venue answered this connection's routing request with.
     ///
     /// Sent once, right after logon, on the connection that asked — so it
@@ -176,6 +183,7 @@ impl Connection {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
         })
@@ -411,6 +419,7 @@ impl Connection {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
         };
@@ -670,6 +679,7 @@ mod tests {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
         }
