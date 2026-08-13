@@ -1285,8 +1285,12 @@ pub struct ExecutionFilter {
     pub client_id: i64,
     /// Only fills on this account.
     pub acct_code: String,
-    /// Only fills after this moment. The venue holds a week, and a
-    /// request reaching further back is refused in full.
+    /// Only fills after this moment.
+    ///
+    /// The venue keeps a limited window and refuses in full a request reaching
+    /// past it, rather than answering with the part it still holds. How far
+    /// back that reaches is the venue's and is not stated on the session, so a
+    /// caller wanting older fills reads them from a statement instead.
     pub time: String,
     /// Only fills on this symbol.
     pub symbol: String,
@@ -1532,7 +1536,8 @@ pub struct ContractDetails {
     pub puttable: bool,
     /// Whether it converts to equity.
     pub convertible: bool,
-    /// Whether it may be exercised in part.
+    /// Whether that call or put redeems part of the principal rather than
+    /// all of it.
     pub next_option_partial: bool,
     /// Whether it is closed.
     pub fund_closed: bool,
