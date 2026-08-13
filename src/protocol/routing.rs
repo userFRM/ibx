@@ -157,13 +157,23 @@ impl RoutingTable {
     ///
     /// Which name is the venue's to state, so it is read off the endpoints it
     /// listed rather than assumed.
+    ///
+    /// Where a market serves more than one, the richest is taken first: an
+    /// aggregated book, then the second-generation one, then the exchange's
+    /// own, then the plain one. That is the order the counterpart offers a
+    /// contract, and it asks in that order for the same reason — a market
+    /// listing both `Deep2` and `Deep` is offering the better of the two.
     pub fn book_endpoint(&self, exchange: &str, sec_type: &str) -> Option<&str> {
-        self.rows
-            .iter()
-            .filter(|r| r.exchange == exchange && r.sec_type == sec_type && r.qualifier == "*")
-            .flat_map(|r| r.endpoints.iter())
-            .find(|e| e.starts_with("Deep") || *e == "AggDeep")
-            .map(|e| e.as_str())
+        const RICHEST_FIRST: [&str; 4] = ["AggDeep", "Deep2", "DeepX", "Deep"];
+        let served = |name: &str| {
+            self.rows.iter().any(|r| {
+                r.exchange == exchange
+                    && r.sec_type == sec_type
+                    && r.qualifier == "*"
+                    && r.serves(name)
+            })
+        };
+        RICHEST_FIRST.into_iter().find(|name| served(name))
     }
 
     /// Which server a farm is on, by name.
@@ -268,6 +278,12 @@ mod tests {
         );
         assert_eq!(others.book_endpoint("IBEFP", "COMB"), Some("Deep2"));
         assert_eq!(others.book_endpoint("SEHK", "OPT"), Some("DeepX"));
+
+        // A market offering more than one is offering the better of them, and
+        // the order is the counterpart's rather than the order the row happens
+        // to list.
+        let several = RoutingTable::parse("X,STK,Deep|Deep2,-1,*,h.example,4000,f");
+        assert_eq!(several.book_endpoint("X", "STK"), Some("Deep2"));
 
         // On the exchange the contract trades on, there is one.
         assert!(table.find("IEX", "STK", "Deep").is_some());
