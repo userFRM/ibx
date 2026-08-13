@@ -13,6 +13,16 @@ use ibx::gateway::{connect_farm, reconnect_ccp, Gateway, GatewayConfig, Reconnec
 /// quietly, because a reconnect test that never connected has proved nothing.
 /// A checkout with no credentials skips on purpose with
 /// `IBX_ALLOW_SKIP_NO_CREDS=1`, the same switch the compat suite uses.
+fn redacted(account: &str) -> String {
+    // Printed where a log may be read by anyone the repository can be read by.
+    // Enough to tell two accounts apart, and no more.
+    match account.len() {
+        0 => String::new(),
+        n if n <= 4 => "*".repeat(n),
+        n => format!("{}{}", &account[..2], "*".repeat(n - 2)),
+    }
+}
+
 fn config() -> Option<GatewayConfig> {
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
     let (username, password) = match (var("IB_USERNAME"), var("IB_PASSWORD")) {
@@ -55,7 +65,7 @@ fn farm_reconnect_with_cached_credentials() {
     let hw_info = gw.hw_info.clone();
     let encoded = gw.encoded.clone();
 
-    println!("Full auth: {}ms | Account: {}", full_auth_ms, gw.account_id);
+    println!("Full auth: {}ms | Account: {}", full_auth_ms, redacted(&gw.account_id));
 
     // Phase 2: Drop original farm connection
     drop(farm_conn);

@@ -8,7 +8,7 @@ pub(super) fn phase_ccp_auth(gw: &Gateway, has_hmds: bool, connect_time: Duratio
     println!("--- Phase 1: CCP Auth + Farm Logon ---");
 
     assert!(!gw.account_id.is_empty(), "Account ID should be non-empty after CCP logon");
-    println!("  Account ID: {}", gw.account_id);
+    println!("  Account ID: {}", super::common::redacted(&gw.account_id));
 
     assert!(!gw.server_session_id.is_empty(), "Server session ID should be set");
     if !gw.ccp_token.is_empty() {
