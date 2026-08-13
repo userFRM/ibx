@@ -226,5 +226,15 @@ symbol search, an account summary, the scanner parameter set — is stated at an
 hour and is checked rather than skipped. Two of the defects above were invisible
 while those tests skipped whenever nothing arrived.
 
-Outstanding: the eight CI jobs run offline only — a live job needs credentials
-held as repository secrets.
+A paper account is the same session. `paper` decides one step of the logon — a
+token conversion and which slot its hash occupies — and after the handshake the
+market-data, trading, historical and security-definition connections are the
+same code sending the same messages to the same servers. Every defect above was
+found on one. What differs is that fills are simulated, so what a paper session
+does not establish is a fill against real liquidity.
+
+`.github/workflows/session.yml` runs the paper compatibility suite, the Python
+suites that need a session, and `scripts/endurance.py`, after the New York
+close. It is dormant until `IB_USERNAME` and `IB_PASSWORD` are set as
+repository secrets: without them each job reports that it was not run, rather
+than passing on a session it never opened.

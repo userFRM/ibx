@@ -1,0 +1,120 @@
+name: session
+
+# What only a session finds.
+#
+# Every defect a held-open session has found here was invisible to the offline
+# gates, because none of them opens one: a connection that stops answering, a
+# stream that stops arriving, a request id that answers once. This runs the
+# suites that need a session, against a paper account.
+#
+# A paper account is the same session. `paper` decides one step of the logon —
+# a token conversion and which slot its hash occupies — and after the handshake
+# the market-data, trading, historical and security-definition connections are
+# the same code sending the same messages to the same servers. What differs is
+# that fills are simulated, so nothing here places an order that can fill.
+#
+# Dormant until IB_USERNAME and IB_PASSWORD are set as repository secrets:
+# without them every job below reports that it was not run, rather than passing
+# on a session it never opened.
+
+on:
+  schedule:
+    # After the New York close, when the venue is quiet and no other session
+    # of this account is likely to be up. One session at a time: the venue
+    # refuses a second, and a refusal here would read as a defect.
+    - cron: "45 20 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  # Never two of these at once, for the same reason.
+  group: session
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  credentials:
+    name: credentials are available
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - id: check
+        env:
+          IB_USERNAME: ${{ secrets.IB_USERNAME }}
+        run: |
+          if [ -n "$IB_USERNAME" ]; then
+            echo "present=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=no" >> "$GITHUB_OUTPUT"
+            echo "::notice::No paper credentials are set, so no session was opened. \
+            Set IB_USERNAME and IB_PASSWORD as repository secrets to run these."
+          fi
+
+  paper_compat:
+    name: the paper compatibility suite
+    needs: credentials
+    if: needs.credentials.outputs.present == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 137 phases against a paper account
+        env:
+          IB_USERNAME: ${{ secrets.IB_USERNAME }}
+          IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
+        run: cargo test --test ib_paper_compat -- --test-threads=1
+
+  live_python:
+    name: the Python suites that need a session
+    needs: [credentials, paper_compat]
+    if: needs.credentials.outputs.present == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the extension into the environment under test
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+          .venv/bin/maturin develop --release --features python
+      - name: Test
+        env:
+          IB_USERNAME: ${{ secrets.IB_USERNAME }}
+          IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
+        run: .venv/bin/pytest tests/python -q
+
+  endurance:
+    name: a session held open under load
+    needs: [credentials, live_python]
+    if: needs.credentials.outputs.present == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the extension into the environment under test
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin
+          .venv/bin/maturin develop --release --features python
+      - name: Subscribe and withdraw for twenty minutes
+        env:
+          IB_USERNAME: ${{ secrets.IB_USERNAME }}
+          IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
+        run: .venv/bin/python scripts/endurance.py --minutes 20
