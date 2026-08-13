@@ -942,6 +942,23 @@ impl RiskAversion {
 /// Each variant maps to a specific tag 847 algoStrategy with its required params.
 #[derive(Debug, Clone)]
 pub enum AlgoParams {
+    /// An algorithm this client does not model, carried through as the caller
+    /// wrote it.
+    ///
+    /// The venue states which algorithms an account may use — thirteen keys on
+    /// an ordinary session — and refuses an order naming one it does not
+    /// offer. A list of the ones this client happens to parse is a narrower
+    /// answer than the venue's, and refusing on it stops a caller using an
+    /// algorithm the venue would have accepted.
+    ///
+    /// The reference client does not interpret these either: it forwards the
+    /// names and values it was handed.
+    Named {
+        /// The strategy, as the caller named it.
+        strategy: String,
+        /// Its parameters, flattened to name then value, in the order given.
+        params: Vec<String>,
+    },
     /// VWAP: Volume-weighted average price.
     /// Tag 847=Vwap, 849=max_pct_vol.
     Vwap {
