@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crate::api::client::{EClient, EClientConfig};
 use crate::api::types::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
+use crate::api::error_codes::Refusal;
 use crate::api::client::{AccountValue, OptionChain, PositionRow};
 use crate::api::subscription::Subscription;
 use crate::types::{DepthUpdate, RealTimeBar};
@@ -252,20 +253,24 @@ impl Client {
         req_id: i64,
         what: &str,
         take: impl Fn(&SharedState) -> Option<T>,
-    ) -> Result<T, String> {
+    ) -> Result<T, crate::api::error_codes::Refusal> {
+        use crate::api::error_codes::Refusal;
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         loop {
             if let Some(v) = take(&self.inner.shared) {
                 return Ok(v);
             }
             if let Some((code, message)) = self.inner.shared.reference.take_error_for(req_id as u32) {
-                return Err(format!("{message} ({code})"));
+                // Under the number the venue gave it. Written into the text
+                // instead, a caller could only match on prose for something
+                // the reference client hands it to branch on.
+                return Err(Refusal::stated(code, message));
             }
             if Instant::now() >= deadline {
-                return Err(format!(
+                return Err(Refusal::no_answer(format!(
                     "no answer within {}s to {what}",
                     ANSWER_TIMEOUT.as_secs()
-                ));
+                )));
             }
             std::thread::sleep(POLL);
         }
@@ -277,7 +282,7 @@ impl Client {
         contract: &Contract,
         what_to_show: &str,
         use_rth: bool,
-    ) -> Result<String, String> {
+    ) -> Result<String, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1)?;
         let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
@@ -288,7 +293,7 @@ impl Client {
     }
 
     /// Contracts whose symbol or name matches a pattern.
-    pub fn matching_symbols(&self, pattern: &str) -> Result<Vec<crate::control::contracts::SymbolMatch>, String> {
+    pub fn matching_symbols(&self, pattern: &str) -> Result<Vec<crate::control::contracts::SymbolMatch>, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_matching_symbols(req_id, pattern)?;
         let what = format!("a symbol search for {pattern}");
@@ -303,7 +308,7 @@ impl Client {
         contract: &Contract,
         use_rth: bool,
         period: &str,
-    ) -> Result<Vec<crate::control::histogram::HistogramEntry>, String> {
+    ) -> Result<Vec<crate::control::histogram::HistogramEntry>, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_histogram_data(req_id, contract, use_rth, period)?;
         let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
@@ -317,7 +322,7 @@ impl Client {
         &self,
         contract: &Contract,
         report_type: &str,
-    ) -> Result<String, String> {
+    ) -> Result<String, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_fundamental_data(req_id, contract, report_type)?;
         let what = format!("a {report_type} report for {}", contract.symbol);
@@ -504,7 +509,7 @@ impl Client {
         end_date_time: &str,
         duration: &str,
         use_rth: bool,
-    ) -> Result<crate::types::HistoricalScheduleResponse, String> {
+    ) -> Result<crate::types::HistoricalScheduleResponse, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_historical_schedule(req_id, contract, end_date_time, duration, use_rth)?;
         let what = format!("a schedule for {} {}", contract.sec_type, contract.symbol);
