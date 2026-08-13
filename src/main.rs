@@ -44,7 +44,11 @@ fn main() {
         std::process::exit(1);
     });
     let paper = env::var("IB_PAPER").unwrap_or_else(|_| "true".to_string()) == "true";
-    let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
+    // The door every session knocks on, from the one place it is written. The
+    // venue answers by naming which server this account is on, so this is a
+    // starting point rather than a destination.
+    let host = env::var("IB_HOST")
+        .unwrap_or_else(|_| ibx::config::CCP_HOSTS[0].to_string());
 
     let client = EClient::connect(&EClientConfig {
         username,
