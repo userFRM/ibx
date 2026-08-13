@@ -130,6 +130,11 @@ pub struct Connection {
     pub read_key: Vec<u8>,
     /// IV for verifying inbound messages (chains across messages).
     pub read_iv: Vec<u8>,
+    /// What the venue answered this connection's routing request with.
+    ///
+    /// Sent once, right after logon, on the connection that asked — so it
+    /// arrives here and nowhere else. Empty on a connection that did not ask.
+    pub routing: crate::protocol::routing::RoutingTable,
     /// Set once a write has failed. A timed-out or errored `write_all` may
     /// have put part of a frame on the wire, and outbound frames are
     /// HMAC-chained, so anything sent afterwards would be signed from state
@@ -171,6 +176,7 @@ impl Connection {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            routing: Default::default(),
             write_failed: false,
         })
     }
@@ -405,6 +411,7 @@ impl Connection {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            routing: Default::default(),
             write_failed: false,
         };
         (conn, peer)
@@ -663,6 +670,7 @@ mod tests {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            routing: Default::default(),
             write_failed: false,
         }
     }

@@ -30,14 +30,6 @@ fn main() {
         .init();
 
     let asked: Vec<String> = std::env::args().skip(1).collect();
-    let farms: Vec<String> = if asked.is_empty() {
-        ["cashhmds", "secdefil", "fundfarm", "usopt", "cashfarm", "usfuture", "eufarm", "jfarm"]
-            .iter()
-            .map(|f| f.to_string())
-            .collect()
-    } else {
-        asked
-    };
 
     let username = std::env::var("IB_USERNAME").unwrap_or_default();
     let password = std::env::var("IB_PASSWORD").unwrap_or_default();
@@ -78,6 +70,30 @@ fn main() {
     let host = if gw.hmds_host.is_empty() { config.host.clone() } else { gw.hmds_host.clone() };
     println!("session is on {host}\n");
 
+    // The market-data connection the session was routed to answered with the
+    // table of every market the venue serves, and where. A farm named in it is
+    // reached where it says; a farm not named in it can only be guessed at.
+    let routed = session.market_data.routing.clone();
+    if !routed.is_empty() {
+        println!("the venue named {} farms:", routed.farms().len());
+        let mut named: Vec<_> = routed.farms().into_iter().collect();
+        named.sort();
+        for (farm, (h, p)) in &named {
+            println!("  {farm:16} {h}:{p}");
+        }
+        println!();
+    }
+
+    // Every farm the venue named, unless the caller named some itself. A list
+    // written here would be a guess at something the session already states.
+    let farms: Vec<String> = if asked.is_empty() {
+        let mut named: Vec<String> = routed.farms().keys().map(|f| f.to_string()).collect();
+        named.sort();
+        named
+    } else {
+        asked
+    };
+
     for farm in &farms {
         let started = Instant::now();
         let kind = if farm.contains("hmds") {
@@ -85,10 +101,20 @@ fn main() {
         } else {
             ibx::gateway::Farm::MarketData
         };
-        print!("{farm}: ");
+        // Where the venue says this farm is. A farm it did not name can only
+        // be asked for beside the session, on the port that session uses.
+        let (farm_host, farm_port) = routed
+            .host_of(farm)
+            .map(|(h, p)| (h.to_string(), p))
+            .unwrap_or_else(|| (host.clone(), config.settings.port));
+        let where_it_is = ibx::api::settings::SessionSettings {
+            port: farm_port,
+            ..Default::default()
+        };
+        print!("{farm} ({farm_host}:{farm_port}): ");
         match ibx::gateway::connect_farm(
-            &Default::default(),
-            &host,
+            &where_it_is,
+            &farm_host,
             farm,
             &config.username,
             &config.password,

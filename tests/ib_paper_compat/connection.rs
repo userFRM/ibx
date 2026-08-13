@@ -41,19 +41,25 @@ pub(super) fn phase_ccp_auth(gw: &Gateway, has_hmds: bool, connect_time: Duratio
 /// for the server to close a session that no hot loop is pumping yet — this phase
 /// runs before `Conns` is built. The session then dies here and the first
 /// CCP-dependent phase fails far away with a misleading error.
-pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut Connection) {
+pub(super) fn phase_extra_farms(
+    gw: &Gateway,
+    config: &GatewayConfig,
+    ccp: &mut Connection,
+    routed: &ibx::protocol::routing::RoutingTable,
+) {
     println!("--- Phase 18: Additional Farm Connections ---");
 
-    // Named farms, tried on the host this session was routed to.
+    // Every farm the venue named, asked for where it said each one is.
     //
-    // Which of them answer depends on that host: farms are spread across the
-    // venue's servers, and the same name answers in under a second on one and
-    // is closed without a word on another. usopt and usfuture answer on the
-    // host a session is opened against; cashhmds, cashfarm and eufarm answer
-    // on the one it is moved to. So the count below says which farms live
-    // beside this session, not which the account may use, and none of the
-    // names here is asserted on for that reason.
-    let farms = ["cashhmds", "secdefil", "fundfarm", "usopt", "cashfarm", "usfuture", "eufarm", "jfarm"];
+    // Not a list written here. The venue answers the routing request with the
+    // farms it serves and the server each is on, so a list of names in this
+    // file would be a guess at something already stated — and it was: six of
+    // the eight names it used to carry were asked for on the session's own
+    // host and closed without a word, because they live elsewhere.
+    let named = routed.farms();
+    let mut farms: Vec<(&str, &str, u16)> =
+        named.iter().map(|(f, (h, p))| (*f, *h, *p)).collect();
+    farms.sort();
     let mut connected = 0;
     let mut answered: Vec<&str> = Vec::new();
     // Where this session actually is. The venue names which server the account
@@ -62,18 +68,24 @@ pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut 
     let host = if gw.hmds_host.is_empty() { config.host.clone() } else { gw.hmds_host.clone() };
     println!("  session is on {host}");
 
-    for farm in &farms {
+    for (farm, farm_host, farm_port) in &farms {
         // Pump before each attempt as well as after: the heartbeat has to land
         // inside the window, and the attempt itself is what blocks.
         ccp_keepalive(ccp);
         let start = Instant::now();
-        let kind = if *farm == "ushmds" {
+        let kind = if farm.contains("hmds") {
             ibx::gateway::Farm::Historical
         } else {
             ibx::gateway::Farm::MarketData
         };
-        match ibx::gateway::connect_farm(&Default::default(),
-            &host, farm,
+        // The port the venue stated for this farm, not the one this file would
+        // otherwise assume.
+        let where_it_is = ibx::api::settings::SessionSettings {
+            port: *farm_port,
+            ..Default::default()
+        };
+        match ibx::gateway::connect_farm(&where_it_is,
+            farm_host, farm,
             &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token,
             &gw.hw_info, &gw.encoded, kind,
@@ -84,8 +96,8 @@ pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut 
                 println!("  {}: CONNECTED ({:.3}s)", farm, start.elapsed().as_secs_f64());
             }
             Err(e) => {
-                println!("  {}: not served on this account: {} ({:.3}s)",
-                    farm, e, start.elapsed().as_secs_f64());
+                println!("  {}: {} on {} ({:.3}s)",
+                    farm, e, farm_host, start.elapsed().as_secs_f64());
             }
         }
         ccp_keepalive(ccp);
