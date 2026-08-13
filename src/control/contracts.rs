@@ -448,6 +448,14 @@ pub struct ContractDefinition {
     pub settlement_method: String,
     /// The venues SMART routes it to, in the order a quote's exchange mask
     /// refers to them.
+    ///
+    /// The order is the point. A quote states which venues are on the bid, the
+    /// ask and the last as a bitmask, and the position of a bit is a position
+    /// in this list. A list written by this client can only guess at that, and
+    /// the guess bore no resemblance to what the venue actually sends.
+    ///
+    /// Sent per contract, and only where SMART routing applies, so it is empty
+    /// for a contract listed on one venue.
     pub smart_venues: Vec<String>,
     /// Every field the venue stated that this client does not name, kept
     /// under its tag number so nothing the venue said is discarded.

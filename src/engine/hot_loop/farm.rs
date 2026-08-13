@@ -1490,14 +1490,6 @@ impl FarmState {
         }
     }
 
-    /// Parse 35=Y depth entries (NASDAQ TotalView market-maker level).
-    /// Wire format (from wire capture):
-    ///   Header: [2B misc][2B stag_uint16_be]
-    ///   Stag switch sentinel: [80 00][2B stag_uint16_be]
-    ///   Snapshot entry: [C4|44][4B market_maker][1B position][field_tags...]
-    ///   Compact entry:  [80|00][1B position][field_tags...]
-    ///     C4/80 = continuation, 44/00 = terminal (last entry for this stag section).
-    /// Field tag encoding: bit 7=size, bit 5=ask, bit 2=snapshot, bits 0-1=value_len (00=1B,01=2B,10=3B).
     /// The subscription a 35=Y frame's opening section belongs to.
     ///
     /// Two bytes, a marker, then the tag in three — the width the venue assigns
@@ -1513,6 +1505,14 @@ impl FarmState {
         Some(((tag[0] as u32) << 16) | ((tag[1] as u32) << 8) | (tag[2] as u32))
     }
 
+    /// Parse 35=Y depth entries (NASDAQ TotalView market-maker level).
+    /// Wire format (from wire capture):
+    ///   Header: [2B misc][1B marker][3B stag_be]
+    ///   Stag switch sentinel: [80|00][00][3B stag_be]
+    ///   Snapshot entry: [C4|44][4B market_maker][1B position][field_tags...]
+    ///   Compact entry:  [80|00][1B position][field_tags...]
+    ///     C4/80 = continuation, 44/00 = terminal (last entry for this stag section).
+    /// Field tag encoding: bit 7=size, bit 5=ask, bit 2=snapshot, bits 0-1=value_len (00=1B,01=2B,10=3B).
     fn handle_depth_35y(&self, msg: &[u8], shared: &SharedState) {
         self.note_depth_wire("depth-35y", msg, shared);
         use crate::types::DepthUpdate;
