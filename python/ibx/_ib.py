@@ -422,6 +422,13 @@ class IB:
         The record is returned before the venue has said anything, and its
         status moves under the caller as the venue answers. That is what makes
         it worth holding on to rather than reading a return code.
+
+        A contract with no ``conId`` is resolved before the order is sent, and
+        that resolution is a request and an answer, so this call waits for it.
+        Against a gateway it never waited, because the gateway had resolved the
+        contract before the order reached it. Call ``qualifyContracts`` once and
+        place against the result — which their own examples do — and nothing
+        here waits.
         """
         order_id = getattr(order, "orderId", 0) or self.client.next_order_id()
         try:

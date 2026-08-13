@@ -444,6 +444,10 @@ fn compat_suite() {
     let ran = total_phases - skipped + forex_fallback;
     println!("\n=== {}/{} phases ran ({} skipped, {} forex-fallback, {:?}) in {:.1}s ===",
         ran, total_phases, skipped, forex_fallback, session, suite_start.elapsed().as_secs_f64());
+
+    // Last, and after the count is printed, so a reader sees both the count
+    // this run claims and the reason it does not stand.
+    common::no_phase_lost_the_session_unasked();
 }
 
 /// ibx#186 focused live entry — runs only the QueryError phase so you don't

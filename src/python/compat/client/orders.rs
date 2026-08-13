@@ -92,6 +92,13 @@ impl EClient {
         // the reference client does — has it resolved here, once the order
         // itself is known to be one the venue would take: an order carrying no
         // id names nothing the venue can match, and is answered by silence.
+        //
+        // That resolution is a request and an answer, so this call does not
+        // return until the venue has named the contract. The GIL is released
+        // for the wait, so nothing else in the interpreter is held up — but a
+        // caller placing an order from inside a wrapper callback stalls its own
+        // dispatch loop, because that is the thread it is on. A contract
+        // carrying conId resolves nothing and waits for nothing.
         let named;
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
             match self.qualify_contract(py, contract) {

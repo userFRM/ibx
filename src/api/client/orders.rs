@@ -66,6 +66,16 @@ impl EClient {
     /// is known to be one the venue would take: an order that names no
     /// contract is one the venue has nothing to match, and answers with
     /// nothing at all.
+    ///
+    /// Resolving it costs a request and an answer, so this call does not
+    /// return until the venue has named the contract — up to the answer
+    /// timeout. The reference client never waits here, because a gateway
+    /// resolved the contract before the order reached it; this client is the
+    /// gateway, so the work happens somewhere, and today it happens on the
+    /// caller's thread. A caller placing orders from inside a callback stalls
+    /// its own dispatch loop for that time. Pass a contract carrying `con_id`
+    /// — from `qualify_contract`, or from any contract-details answer — and
+    /// nothing is resolved and nothing waits.
     pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), Refusal> {
         ClientCore::validate_order_destination(&contract.exchange)?;
 

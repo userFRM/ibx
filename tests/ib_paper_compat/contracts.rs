@@ -404,6 +404,7 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
     // not arrive because there was nothing to arrive on says nothing about
     // whether this client reads one.
     if !got_details && shared.take_connection_lost() {
+        super::common::note_lost_session("a contract lookup after the session went away");
         println!("  SKIP: the connection was lost, so nothing could answer\n");
         return conns;
     }
