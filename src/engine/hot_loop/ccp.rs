@@ -872,9 +872,8 @@ impl CcpState {
                     }
                     else if let Some(ticker_id_str) = crate::control::historical::parse_ticker_id(xml_tag) {
                         let ticker_id: u32 = ticker_id_str.parse().unwrap_or(0);
-                        let min_tick = crate::control::historical::extract_xml_tag(xml_tag, "minTick")
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .unwrap_or(0.01);
+                        let min_tick =
+                            crate::control::historical::min_tick_of(xml_tag, &ticker_id_str);
                         // Match ticker to a pending keepUpToDate query
                         for (qid, req_id) in &self.pending_kut_historical {
                             if xml_tag.contains(qid) {

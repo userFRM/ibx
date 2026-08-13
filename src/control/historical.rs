@@ -416,6 +416,29 @@ pub fn build_cancel_request(ticker_id: &str, seq: u32) -> Vec<u8> {
     )
 }
 
+/// The smallest price move the venue states for a contract, or a penny.
+///
+/// Every price on the contract is decoded against this, so the wrong one does
+/// not fail — it scales every price by a constant and reports the result as
+/// the venue's own. A penny is the right answer for a US share and wrong for a
+/// currency pair, a future, and anything quoted in yen.
+///
+/// The venue states it on the definition, so a definition that does not is the
+/// interesting case and says so rather than passing quietly as a share.
+pub fn min_tick_of(xml_tag: &str, ticker_id: &str) -> f64 {
+    match extract_xml_tag(xml_tag, "minTick").and_then(|s| s.parse::<f64>().ok()) {
+        Some(tick) => tick,
+        None => {
+            log::warn!(
+                "no minTick stated for ticker {ticker_id}; decoding its prices \
+                 as though they move in pennies, which is wrong for anything \
+                 that does not",
+            );
+            0.01
+        }
+    }
+}
+
 /// Extract a simple XML tag value: `<tag>value</tag>` → `value`.
 pub fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     let open = format!("<{tag}>");
