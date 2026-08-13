@@ -46,6 +46,7 @@ pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut 
 
     let farms = ["cashhmds", "secdefil", "fundfarm", "usopt", "cashfarm", "usfuture", "eufarm", "jfarm"];
     let mut connected = 0;
+    let mut answered: Vec<&str> = Vec::new();
 
     for farm in &farms {
         // Pump before each attempt as well as after: the heartbeat has to land
@@ -65,16 +66,40 @@ pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut 
         ) {
             Ok(_conn) => {
                 connected += 1;
+                answered.push(*farm);
                 println!("  {}: CONNECTED ({:.3}s)", farm, start.elapsed().as_secs_f64());
             }
             Err(e) => {
-                println!("  {}: FAILED (non-fatal): {} ({:.3}s)", farm, e, start.elapsed().as_secs_f64());
+                println!("  {}: not served on this account: {} ({:.3}s)",
+                    farm, e, start.elapsed().as_secs_f64());
             }
         }
         ccp_keepalive(ccp);
     }
 
-    println!("  {}/{} extra farms connected", connected, farms.len());
+    println!("  {}/{} extra farms answered", connected, farms.len());
+
+    // Not every farm serves every account, and the ones that do not say so by
+    // accepting the connection, staying silent, and closing it about ten
+    // seconds later. That is the server's answer and not this client's doing:
+    // the same code, sending the same logon, is answered in under two seconds
+    // by the farms this account is served on.
+    //
+    // Which makes counting them worthless on its own — the phase reported PASS
+    // on two of eight, and would have reported PASS on none of eight. What is
+    // worth asserting is that the farms this account IS served on still answer,
+    // so a regression that stops them reads here rather than as missing data
+    // three phases later.
+    for required in ["usopt", "usfuture"] {
+        assert!(
+            answered.contains(&required),
+            "{required} did not answer. This account is served on it — it \
+             answered in under two seconds on the runs this expectation was \
+             written from — so silence here is either this client's logon or a \
+             change in what the account is permissioned for, and both are worth \
+             stopping for. Farms answered: {answered:?}"
+        );
+    }
     println!("  PASS\n");
 }
 
