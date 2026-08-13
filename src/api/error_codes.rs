@@ -22,6 +22,13 @@ impl Refusal {
     pub const VALIDATION: i32 = 321;
     /// Nothing the venue holds matches the contract described.
     pub const NO_DEFINITION: i32 = 200;
+    /// The venue said nothing at all before the wait ran out.
+    ///
+    /// This client's own number rather than the venue's: the reference client
+    /// has none, because it does not wait — it hands a request over and leaves
+    /// the caller to decide how long to care. A caller that wants to tell
+    /// silence apart from a refusal branches on this; the venue never sends it.
+    pub const NO_ANSWER: i32 = -1;
 
     /// The request is malformed or contradicts itself.
     pub fn validation(message: impl Into<String>) -> Self {
@@ -31,6 +38,20 @@ impl Refusal {
     /// Nothing the venue holds matches the contract described.
     pub fn no_definition(message: impl Into<String>) -> Self {
         Self { code: Self::NO_DEFINITION, message: message.into() }
+    }
+
+    /// The venue said nothing before the wait ran out.
+    pub fn no_answer(message: impl Into<String>) -> Self {
+        Self { code: Self::NO_ANSWER, message: message.into() }
+    }
+
+    /// A refusal exactly as the venue stated it, under its own number.
+    ///
+    /// The number is the point: a caller branches on it the way it would
+    /// against the reference client, which reports the same one on its error
+    /// callback. Flattened into text it can only be matched on prose.
+    pub fn stated(code: i32, message: impl Into<String>) -> Self {
+        Self { code, message: message.into() }
     }
 }
 
@@ -65,6 +86,29 @@ mod tests {
         let refusal: Refusal = "quantity must be positive".to_string().into();
         assert_eq!(refusal.code, Refusal::VALIDATION);
         assert_eq!(refusal.to_string(), "quantity must be positive");
+    }
+
+    /// A refusal the venue stated keeps the venue's number.
+    ///
+    /// Flattened into text — which is what happened to every answer the
+    /// waiting calls returned — the number is still readable by a person and
+    /// no longer branchable by a program. A caller against the reference
+    /// client gets it on the error callback and switches on it.
+    #[test]
+    fn a_refusal_the_venue_stated_keeps_its_number() {
+        let refused = Refusal::stated(10197, "no market data during competing session");
+        assert_eq!(refused.code, 10197);
+        assert_eq!(refused.to_string(), "no market data during competing session");
+
+        // Silence is this client's own answer, not the venue's, and says so
+        // with a number the venue never sends.
+        let quiet = Refusal::no_answer("no answer within 15s to head timestamp");
+        assert_eq!(quiet.code, Refusal::NO_ANSWER);
+        assert!(quiet.code < 0, "not a number the venue can state");
+        assert_ne!(quiet.code, Refusal::VALIDATION, "silence is not a bad request");
+
+        // And it still reads as prose wherever a caller wants prose.
+        assert_eq!(String::from(refused), "no market data during competing session");
     }
 
     #[test]
