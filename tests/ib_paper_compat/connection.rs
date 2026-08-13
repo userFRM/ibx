@@ -116,16 +116,18 @@ pub(super) fn phase_extra_farms(
     // worth asserting is that the farms this account IS served on still answer,
     // so a regression that stops them reads here rather than as missing data
     // three phases later.
-    // The farm the venue routed this session to, on the host it named for it.
-    // That pair is the venue's own answer rather than a guess, so it is the
-    // one thing here worth asserting: if the farm this session was routed to
-    // stops answering, nothing above it can work.
-    assert!(
-        answered.contains(&gw.hmds_farm.as_str()) || gw.hmds_farm.is_empty(),
-        "{} is the farm this session was routed to and it did not answer. \
-         Everything that reads historical data goes through it. Farms that \
-         answered on {}: {answered:?}",
-        gw.hmds_farm, host,
+    // Every farm the venue named answers, because it was asked for where the
+    // venue said it is. That is the whole of what this phase now checks, and
+    // it can fail two ways worth stopping for: the lookup broke and a farm was
+    // asked for somewhere else again, or the account stopped being served
+    // somewhere it was. Both look like data that never arrives, later and
+    // further away.
+    assert_eq!(
+        connected,
+        farms.len(),
+        "the venue named {} farms and {connected} answered. The ones that did: \
+         {answered:?}",
+        farms.len(),
     );
     println!("  PASS\n");
 }
