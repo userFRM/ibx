@@ -365,6 +365,11 @@ impl EClient {
         self.dispatch_once(py, &shared)
     }
 
+    /// Deliver callbacks until the session ends.
+    ///
+    /// Blocks the calling thread. Everything a program receives arrives from
+    /// here, so it runs on a thread of its own or is the last call a program
+    /// makes. `poll` does one pass instead, for a program that owns its loop.
     fn run(&self, py: Python<'_>) -> PyResult<()> {
         if !self.connected.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err("Not connected. Call connect() first."));
