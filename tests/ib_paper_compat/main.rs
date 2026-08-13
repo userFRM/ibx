@@ -76,7 +76,7 @@ fn compat_suite() {
     let connect_time = start.elapsed();
 
     connection::phase_ccp_auth(&gw, hmds_conn.is_some(), connect_time);
-    connection::phase_extra_farms(&gw, &config, &mut ccp_conn);
+    connection::phase_extra_farms(&gw, &config, &mut ccp_conn, &farm_conn.routing);
 
     let mut conns = Conns {
         farm: farm_conn,
