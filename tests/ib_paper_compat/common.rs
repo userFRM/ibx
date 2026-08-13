@@ -93,7 +93,7 @@ pub(super) static RECOVERY_AUTH: std::sync::OnceLock<gateway::ReconnectAuth> =
 
 /// Remember what a reconnect will need. Call once, after `Gateway::connect`.
 pub(super) fn remember_recovery_auth(gw: &gateway::Gateway, config: &GatewayConfig) {
-    let _ = RECOVERY_AUTH.set(gw.reconnect_auth(gateway::CallerAuth {
+    let mut auth = gw.reconnect_auth(gateway::CallerAuth {
         settings: Default::default(),
         host: config.host.clone(),
         username: config.username.clone(),
@@ -102,7 +102,22 @@ pub(super) fn remember_recovery_auth(gw: &gateway::Gateway, config: &GatewayConf
         code_provider: config.code_provider.clone(),
         ib_key_timeout_secs: config.ib_key_timeout_secs,
         ib_key_token_sub_type: config.ib_key_token_sub_type.clone(),
-    }));
+    });
+
+    // No phase here asks for the calendar, and every phase builds an engine of
+    // its own. An engine told where the security-definition farm is rebuilds
+    // it on startup, so a run of a hundred and twenty-nine phases logged on to
+    // that farm about thirty times — a full authentication each, on a session
+    // that never used it once.
+    //
+    // A real client builds one engine and connects it once. This is the
+    // harness paying for its own shape, so the harness stops asking: name no
+    // such farm, and nothing rebuilds one. A phase that wants the calendar has
+    // to open it, which is the right way round.
+    auth.secdef_host.clear();
+    auth.secdef_farm.clear();
+
+    let _ = RECOVERY_AUTH.set(auth);
 }
 
 /// Run a hot loop in a background thread, returning the HotLoop for connection reclamation.
