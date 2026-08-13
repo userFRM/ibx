@@ -7,6 +7,26 @@ use ibx::gateway::{Gateway, GatewayConfig};
 pub(super) fn phase_ccp_auth(gw: &Gateway, has_hmds: bool, connect_time: Duration) {
     println!("--- Phase 1: CCP Auth + Farm Logon ---");
 
+    // Nobody else on the account.
+    //
+    // The venue permits one logon at a time and takes the account from the
+    // older session without saying so. A suite that starts while something
+    // else holds the account is not testing this client — it is racing
+    // whatever else is running, and the phases that lose report a market that
+    // went quiet. It names the other session in its answer to the connect, so
+    // this is answerable before a single phase runs.
+    if let Some(other) = &gw.competing {
+        panic!(
+            "another session already held this account when the suite connected, \
+             from {} since {}{}. This account takes one logon at a time and the \
+             venue does not say which one it drops. Stop the other session — a \
+             suite run, a capture tool, or the scheduled workflow — and start again.",
+            other.ip,
+            other.since,
+            if other.read_only { ", and this one may not trade" } else { "" },
+        );
+    }
+
     assert!(!gw.account_id.is_empty(), "Account ID should be non-empty after CCP logon");
     println!("  Account ID: {}", super::common::redacted(&gw.account_id));
 
