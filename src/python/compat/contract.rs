@@ -2854,6 +2854,42 @@ impl DepthMktDataDescriptionPy {
     }
 }
 
+/// One step of a contract's price ladder: where it starts, and what the price
+/// moves in above it.
+///
+/// A pair of numbers is what this used to hand over, and the reference client
+/// hands over an object with names on it — so did the Rust surface here, while
+/// the Python one did not, and a program reading `lowEdge` off what it was
+/// given found a tuple.
+#[pyclass(from_py_object, name = "PriceIncrement")]
+#[derive(Debug, Clone)]
+pub struct PriceIncrementPy {
+    #[pyo3(get, set)]
+    pub low_edge: f64,
+    #[pyo3(get, set)]
+    pub increment: f64,
+}
+
+#[pymethods]
+impl PriceIncrementPy {
+    #[new]
+    #[pyo3(signature = (low_edge=0.0, increment=0.0))]
+    fn new(low_edge: f64, increment: f64) -> Self {
+        Self { low_edge, increment }
+    }
+
+    /// The name the reference client gives it. Both spellings resolve on
+    /// every type here, so a program written against either reads it.
+    #[getter(lowEdge)]
+    fn low_edge_camel(&self) -> f64 {
+        self.low_edge
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PriceIncrement(lowEdge={}, increment={})", self.low_edge, self.increment)
+    }
+}
+
 /// Register all compat contract/order classes on the module.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Contract>()?;
@@ -2877,6 +2913,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NewsProviderPy>()?;
     m.add_class::<SoftDollarTierPy>()?;
     m.add_class::<DepthMktDataDescriptionPy>()?;
+    m.add_class::<PriceIncrementPy>()?;
     Ok(())
 }
 

@@ -21,11 +21,15 @@ CON_ID = 756733
 class Recorder(EWrapper):
     def __init__(self):
         self.parents = []
+        self.previewed = []
 
     def order_status(self, order_id, status, filled, remaining, avg_fill_price,
                      perm_id, parent_id, last_fill_price, client_id, why_held,
                      mkt_cap_price):
         self.parents.append((order_id, parent_id))
+
+    def open_order(self, order_id, contract, order, order_state):
+        self.previewed.append((order_id, order.parent_id))
 
 
 def tracked_child():
@@ -53,13 +57,17 @@ def test_a_fill_reports_the_parent_the_child_was_given():
 
 
 def test_a_what_if_preview_reports_the_parent_the_child_was_given():
-    """The margin preview emits a third order_status, which hard-coded zero."""
+    """The margin preview reports the parent the child was given."""
     w, c = tracked_child()
     c._test_push_what_if(CHILD_ID, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     c._test_dispatch_once()
 
-    assert w.parents, "a preview must produce an order_status"
-    assert w.parents[0] == (CHILD_ID, PARENT_ID)
+    # On the order, which is where the reference client carries it. A preview
+    # is not an order, so a status naming its parent is a status for an order
+    # that was never placed — which their own wrapper says when it gets one.
+    assert w.previewed, "a preview must report the order it previewed"
+    assert w.previewed[0] == (CHILD_ID, PARENT_ID)
+    assert not w.parents, "and must not report a status for an order never placed"
 
 
 def test_an_order_this_client_did_not_place_keeps_the_engines_answer():

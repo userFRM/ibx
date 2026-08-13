@@ -454,6 +454,11 @@ impl EClient {
                     aux_price: t.order.aux_price,
                     tif: t.order.tif,
                     what_if: t.order.what_if,
+                    // What the child was given. On the order, which is where
+                    // the reference client carries it — a preview is not an
+                    // order, so a status naming its parent is a status for an
+                    // order that was never placed.
+                    parent_id: self.core.tracked_parent_id(wi.order_id).unwrap_or(0),
                     ..Default::default()
                 };
                 (Py::new(py, c)?.into_any(), Py::new(py, o)?.into_any())
@@ -462,11 +467,12 @@ impl EClient {
                  Py::new(py, Order::default())?.into_any())
             };
             let state_py = Py::new(py, state)?.into_any();
+            // A preview and nothing else. The venue answers what an order
+            // would cost on the order itself, and a status besides it is a
+            // status for an order that was never placed — which is what the
+            // reference client's own wrapper says when it receives one.
             call_wrapper!(self.wrapper, py, "open_order",
                 (wi.order_id as i64, &contract_py, &order_py, &state_py));
-            let parent_id = self.core.tracked_parent_id(wi.order_id).unwrap_or(0);
-            call_wrapper!(self.wrapper, py, "order_status", (wi.order_id as i64, "PreSubmitted", 0.0f64, 0.0f64,
-                 0.0f64, 0i64, parent_id, 0.0f64, 0i64, "", 0.0f64));
             self.core.open_orders.lock().unwrap().remove(&wi.order_id);
         }
 
