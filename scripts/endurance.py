@@ -29,6 +29,10 @@ from ibx import Contract, EClient, EWrapper
 
 #: Liquid enough to be quoting whenever a market is open, and spread across two
 #: asset classes so one venue going quiet does not read as the client stalling.
+#: Where a book is asked for. Any exchange the contract trades on serves one;
+#: the venue's smart destination does not, for a share.
+BOOK_EXCHANGE = "ISLAND"
+
 SUBJECTS = [
     ("SPY", "STK", "SMART"),
     ("TSLA", "STK", "SMART"),
@@ -165,7 +169,15 @@ def main():
             what = contract(symbol, sec_type, exchange)
             client.req_mkt_data(base + n, what, "", False, False)
             if sec_type == "STK":
-                client.req_mkt_depth(base + 50 + n, what, 10, True)
+                # A book is asked for on the exchange the contract trades on.
+                # The venue serves no book on its smart destination for a
+                # share — it lists the top of one there and nothing deeper —
+                # so a book asked for on SMART reached nothing and the silence
+                # read as a quiet market. It is refused outright now, which is
+                # how this was noticed.
+                client.req_mkt_depth(
+                    base + 50 + n, contract(symbol, sec_type, BOOK_EXCHANGE), 10, False,
+                )
                 client.req_tick_by_tick_data(base + 70 + n, what, "AllLast", 0, False)
             client.req_historical_data(
                 base + 90 + n, what, "", "1 D", "1 hour", "TRADES", 1, 1, False, [],
