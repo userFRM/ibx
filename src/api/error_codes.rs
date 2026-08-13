@@ -13,6 +13,7 @@ use std::fmt;
 pub struct Refusal {
     /// The number the reference client reports this class of refusal under.
     pub code: i32,
+    /// What was wrong, in words a caller can read.
     pub message: String,
 }
 
@@ -22,10 +23,12 @@ impl Refusal {
     /// Nothing the venue holds matches the contract described.
     pub const NO_DEFINITION: i32 = 200;
 
+    /// The request is malformed or contradicts itself.
     pub fn validation(message: impl Into<String>) -> Self {
         Self { code: Self::VALIDATION, message: message.into() }
     }
 
+    /// Nothing the venue holds matches the contract described.
     pub fn no_definition(message: impl Into<String>) -> Self {
         Self { code: Self::NO_DEFINITION, message: message.into() }
     }

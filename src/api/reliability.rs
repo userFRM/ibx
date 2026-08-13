@@ -36,6 +36,7 @@ pub enum ReconnectPolicy {
 /// something that repeating cannot fix.
 #[derive(Debug, Clone)]
 pub struct ReconnectConfig {
+    /// What to do when a connection goes away.
     pub policy: ReconnectPolicy,
     /// Attempts allowed before recovery is abandoned, counted since the last
     /// stable period. `None` keeps trying for as long as the reason is one that
@@ -52,6 +53,7 @@ pub struct ReconnectConfig {
     /// pause between bursts. A server that has just come up is the least able
     /// to take everything at once.
     pub replay_burst: usize,
+    /// How fast subscriptions are asked for again once it comes back.
     pub replay_pace: Duration,
 }
 
@@ -106,6 +108,7 @@ impl Default for RecoveryBudget {
 }
 
 impl RecoveryBudget {
+    /// A budget that has spent nothing.
     pub fn new() -> Self {
         Self { attempts: 0, started: None, healthy_since: None }
     }
@@ -134,6 +137,7 @@ impl RecoveryBudget {
             }
     }
 
+    /// How many times recovery has been tried.
     pub fn attempts(&self) -> u32 {
         self.attempts
     }

@@ -32,10 +32,15 @@ use super::Contract;
 /// recorded, because a caller of this shape has no callback to hand them to.
 #[derive(Default)]
 pub struct Recorded {
+    /// Everything the venue said, as request, number and words.
     pub errors: Vec<(i64, i64, String)>,
+    /// The venue's clock, once it has been asked for.
     pub current_time: Option<i64>,
+    /// Every account this login may act for.
     pub managed_accounts: Option<String>,
+    /// The providers this account may read.
     pub news_providers: Vec<String>,
+    /// The scan definitions the venue publishes.
     pub scanner_parameters: Option<String>,
 }
 
@@ -178,10 +183,12 @@ impl Client {
         self.recorded.lock().unwrap()
     }
 
+    /// Whether a session is open.
     pub fn is_connected(&self) -> bool {
         self.inner.is_connected()
     }
 
+    /// End the session. The engine's thread is joined before this returns.
     pub fn disconnect(&self) {
         self.inner.disconnect();
     }
@@ -388,6 +395,7 @@ impl Client {
         Ok(order_id)
     }
 
+    /// Withdraw one order.
     pub fn cancel_order(&self, order_id: i64) -> Result<(), String> {
         self.inner.cancel_order(order_id, "")
     }
@@ -413,61 +421,77 @@ impl Client {
         self.inner.req_open_orders(&mut *r);
     }
 
+    /// Every open order, including those placed elsewhere.
     pub fn all_open_orders(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_all_open_orders(&mut *r);
     }
 
+    /// Orders that are done — filled, cancelled or expired.
     pub fn completed_orders(&self, api_only: bool) {
         let _ = api_only;
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_completed_orders(&mut *r);
     }
 
+    /// The account families this login belongs to.
     pub fn family_codes(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_family_codes(&mut *r);
     }
 
+    /// Which news providers this account may read.
     pub fn news_providers(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_news_providers(&mut *r);
     }
 
+    /// The price ladder a contract trades on. Rules arrive with the details of
+    /// a contract that uses one, so a rule this session has not seen is refused
+    /// rather than left unanswered.
     pub fn market_rule(&self, market_rule_id: i32) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_market_rule(market_rule_id, &mut *r);
     }
 
+    /// Ask for the next order id this session may use.
     pub fn next_order_id(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_ids(&mut *r);
     }
 
+    /// Every scan the venue offers, and what each can be filtered by.
     pub fn scanner_parameters(&self) -> Result<(), String> {
         self.inner.req_scanner_parameters()
     }
 
+    /// Every exchange the venue names, in the two sections it names them in.
     pub fn market_depth_exchanges(&self) -> Result<(), String> {
         self.inner.req_mkt_depth_exchanges()
     }
 
+    /// Which feed subscriptions are served from: 1 live, 2 frozen, 3 delayed,
+    /// 4 delayed and frozen.
     pub fn switch_market_data_type(&self, market_data_type: i32) {
         self.inner.req_market_data_type(market_data_type);
     }
 
+    /// The notices the venue broadcasts to everyone.
     pub fn news_bulletins(&self, all_messages: bool) {
         self.inner.req_news_bulletins(all_messages);
     }
 
+    /// Start or stop the account's own figures arriving as they change.
     pub fn account_updates(&self, subscribe: bool, account: &str) {
         self.inner.req_account_updates(subscribe, account);
     }
 
+    /// An account's running profit.
     pub fn pnl(&self, account: &str, model_code: &str) {
         self.inner.req_pnl(self.stream_id(), account, model_code);
     }
 
+    /// The same for one position.
     pub fn pnl_single(&self, account: &str, model_code: &str, con_id: i64) {
         self.inner.req_pnl_single(self.stream_id(), account, model_code, con_id);
     }
@@ -540,35 +564,44 @@ impl Client {
         Ok(req_id)
     }
 
+    /// Stop a scan.
     pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), String> {
         self.inner.cancel_scanner_subscription(req_id)
     }
 
+    /// Fills matching a filter. The venue holds a week, and a request reaching
+    /// further back is refused in full.
     pub fn executions(&self, filter: &crate::api::types::ExecutionFilter) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_executions(self.stream_id(), filter, &mut *r);
     }
 
+    /// Which venue each bit of a quote's exchange mask refers to.
     pub fn smart_components(&self, bbo_exchange: &str) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_smart_components(self.stream_id(), bbo_exchange, &mut *r);
     }
 
+    /// The soft dollar tiers this account may direct commission to.
     pub fn soft_dollar_tiers(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_soft_dollar_tiers(self.stream_id(), &mut *r);
     }
 
+    /// What this login is entitled to.
     pub fn user_info(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_user_info(self.stream_id(), &mut *r);
     }
 
+    /// Positions for one account or model.
     pub fn positions_multi(&self, account: &str, model_code: &str) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_positions_multi(self.stream_id(), account, model_code, &mut *r);
     }
 
+    /// An account's figures for one account or model, and whether to include
+    /// its ledger and net liquidation value.
     pub fn account_updates_multi(&self, account: &str, model_code: &str, ledger_and_nlv: bool) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_account_updates_multi(
@@ -576,10 +609,12 @@ impl Client {
         );
     }
 
+    /// Whether orders placed elsewhere are bound to this session.
     pub fn auto_open_orders(&self, auto_bind: bool) {
         self.inner.req_auto_open_orders(auto_bind);
     }
 
+    /// Watch what a display group is showing.
     pub fn subscribe_to_group_events(&self, group_id: i32) -> i64 {
         let req_id = self.stream_id();
         self.inner.subscribe_to_group_events(req_id, group_id);
@@ -600,6 +635,8 @@ impl Client {
         );
     }
 
+    /// What an option is worth at a stated volatility, under the model the
+    /// venue publishes for that contract.
     pub fn calculate_option_price(&self, contract: &Contract, volatility: f64, under_price: f64) {
         self.inner.calculate_option_price(
             self.stream_id(), contract, volatility, under_price,
@@ -713,15 +750,18 @@ impl Client {
         )
     }
 
+    /// Ask the venue for its own clock.
     pub fn req_current_time(&self) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_current_time(&mut *r);
     }
 
+    /// Every account this login may act for, once the session has stated them.
     pub fn managed_accounts(&self) -> Option<String> {
         self.recorded.lock().unwrap().managed_accounts.clone()
     }
 
+    /// Withdraw every order this session has working.
     pub fn global_cancel(&self) -> Result<(), String> {
         self.inner.req_global_cancel().map_err(|e| e.to_string())
     }

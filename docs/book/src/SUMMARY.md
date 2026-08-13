@@ -27,6 +27,7 @@
 - [Send a Limit Order](./recipes/python/limit-order.md)
 - [Send a Stop Order](./recipes/python/stop-order.md)
 - [Order Lifecycle](./recipes/python/order-lifecycle.md)
+- [An Existing ib_async Program](./recipes/python/ib_async.md)
 
 # API Reference
 
@@ -35,5 +36,6 @@
 
 # Reference
 
+- [What the API Does Not Forward](./reference/beyond-the-api.md)
 - [Endpoint Coverage](./reference/coverage.md)
 - [Wire Coverage](./reference/wire-coverage.md)

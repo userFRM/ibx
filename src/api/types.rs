@@ -5,6 +5,7 @@
 
 use crate::types::*;
 
+/// What a fixed-point price is divided by to reach money.
 pub const PRICE_SCALE_F: f64 = PRICE_SCALE as f64;
 
 // ── ComboLeg ──
@@ -12,13 +13,24 @@ pub const PRICE_SCALE_F: f64 = PRICE_SCALE as f64;
 /// ibapi-compatible ComboLeg for combination orders.
 #[derive(Clone, Debug, Default)]
 pub struct ComboLeg {
+    /// The venue's id for this leg's contract.
     pub con_id: i64,
+    /// How many of this leg go with one of the combination.
     pub ratio: i32,
+    /// `BUY` or `SELL`, for this leg rather than the combination.
     pub action: String,
+    /// Where this leg is to be filled.
     pub exchange: String,
+    /// Whether this leg opens a position or closes one: 0 same as the
+    /// parent, 1 open, 2 close, 3 either.
     pub open_close: i32,
+    /// For a short leg, who is lending: 0 unspecified, 1 the account
+    /// itself, 2 the venue.
     pub shorting_policy: i32,
+    /// Where a short leg's borrow is located. Required by some
+    /// venues for a short sale and empty otherwise.
     pub designated_location: String,
+    /// -1 unless this leg is exempt from the short-sale price test.
     pub exempt_code: i32,
 }
 
@@ -27,8 +39,11 @@ pub struct ComboLeg {
 /// ibapi-compatible DeltaNeutralContract for delta-neutral orders.
 #[derive(Clone, Debug, Default)]
 pub struct DeltaNeutralContract {
+    /// The contract the hedge is placed in.
     pub con_id: i64,
+    /// How much of the hedge goes with one of the order.
     pub delta: f64,
+    /// The price the hedge is struck at.
     pub price: f64,
 }
 
@@ -37,26 +52,60 @@ pub struct DeltaNeutralContract {
 /// ibapi-compatible Contract. Matches C++ `Contract` struct fields.
 #[derive(Clone, Debug, Default)]
 pub struct Contract {
+    /// The venue's own id for this contract, and the only field that
+    /// names one on its own. Every request that carries a contract is answered
+    /// by id; a contract described by symbol has its id looked up first.
     pub con_id: i64,
+    /// The ticker, as the venue lists it.
     pub symbol: String,
+    /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`,
+    /// `CRYPTO`, `BAG` for a combination, and the rest the venue names.
     pub sec_type: String,
+    /// Where an order on it is to be filled, or where a subscription is
+    /// to be taken from. `SMART` lets the venue route.
     pub exchange: String,
+    /// What it is priced in. The same symbol on the same venue exists in
+    /// more than one currency, so this is part of what names the contract.
     pub currency: String,
+    /// An option's expiry or a future's month,
+    /// `YYYYMMDD` or `YYYYMM`. Empty for anything a symbol names completely.
     pub last_trade_date_or_contract_month: String,
+    /// An option's strike. Zero for anything that has none.
     pub strike: f64,
+    /// `C` or `P` for an option, empty otherwise.
     pub right: String,
+    /// How many units one contract is worth — 100 for most US options.
     pub multiplier: String,
+    /// The venue's own name for this contract, which is not the
+    /// symbol for anything but a share.
     pub local_symbol: String,
+    /// Where the contract is listed, as opposed to where an
+    /// order on it may be routed. What decides which venues its book is
+    /// gathered from.
     pub primary_exchange: String,
+    /// Which class within a symbol's chain this contract belongs to.
     pub trading_class: String,
+    /// The last day this contract trades, where the venue states one
+    /// separately from the expiry.
     pub last_trade_date: String,
+    /// Whether a lookup may return a contract that has expired.
+    /// Asking for one without this is answered with nothing.
     pub include_expired: bool,
+    /// Which identifier `sec_id` is: `ISIN`, `CUSIP`.
     pub sec_id_type: String,
+    /// The identifier itself. A lookup carrying one rides the
+    /// identifier and ignores the symbol.
     pub sec_id: String,
+    /// The venue's own description of the contract.
     pub description: String,
+    /// Who issued it, where the venue names an issuer.
     pub issuer_id: String,
+    /// The venue's own description of the legs, as it states
+    /// them back.
     pub combo_legs_descrip: String,
+    /// The legs of a combination. Empty for anything else.
     pub combo_legs: Vec<ComboLeg>,
+    /// The hedge that goes with a delta-neutral order.
     pub delta_neutral_contract: Option<DeltaNeutralContract>,
 }
 
@@ -65,44 +114,103 @@ pub struct Contract {
 /// ibapi-compatible Order. Matches C++ `Order` struct fields.
 #[derive(Clone, Debug)]
 pub struct Order {
+    /// The caller's own number for this order. Every later message about
+    /// it names this, and a modification is the same number placed again.
     pub order_id: i64,
+    /// `BUY` or `SELL`. `SSHORT` where the venue takes one.
     pub action: String,
+    /// How much to trade, in the units the venue counts that contract
+    /// in.
     pub total_quantity: f64,
+    /// What kind of order: `MKT`, `LMT`, `STP`, `STP LMT`, `TRAIL`,
+    /// `MIT`, `LIT`, `REL`, `VWAP` and the rest the venue takes.
     pub order_type: String,
+    /// The limit. What a limit order will not pay above, or accept below.
     pub lmt_price: f64,
+    /// The order's other price, which differs by kind: a stop's trigger,
+    /// a trailing order's amount, a relative order's offset. A stop read from
+    /// `lmt_price` becomes a limit at zero.
     pub aux_price: f64,
+    /// How long it lives: `DAY`, `GTC`, `IOC`, `FOK`, `GTD`, `OPG`, `AUC`.
     pub tif: String,
+    /// Whether it may fill outside regular trading hours.
     pub outside_rth: bool,
+    /// How much of an iceberg is shown at once.
     pub display_size: i32,
+    /// The smallest fill that will be accepted.
     pub min_qty: i32,
+    /// Whether the order is kept off the book entirely.
     pub hidden: bool,
+    /// Not active until this moment, `YYYYMMDD HH:MM:SS` with a zone.
     pub good_after_time: String,
+    /// When a `GTD` order expires, in the same form.
     pub good_till_date: String,
+    /// Which one-cancels-all group this belongs to. A fill on one
+    /// withdraws the rest.
     pub oca_group: String,
+    /// How far a trailing stop follows, as a percentage rather than
+    /// an amount.
     pub trailing_percent: f64,
+    /// Which algorithm runs the order, as the venue names it.
     pub algo_strategy: String,
+    /// What that algorithm was given.
     pub algo_params: Vec<TagValue>,
+    /// Ask what the order would cost without placing it. Answered on
+    /// `open_order` with the margin and commission it would take, and no status,
+    /// because a preview is not an order.
     pub what_if: bool,
+    /// Size the order by money rather than by quantity.
     pub cash_qty: f64,
+    /// The order this one is a child of. A bracket's children name their
+    /// parent, and the venue holds them until it fills.
     pub parent_id: i64,
+    /// Whether the venue acts on the order now. This client sends orders to
+    /// the broker immediately, so there is no staging concept and nothing to
+    /// turn off.
     pub transmit: bool,
+    /// How far past the limit the order may reach, unshown.
     pub discretionary_amt: f64,
+    /// Take liquidity from several venues at once rather than
+    /// resting.
     pub sweep_to_fill: bool,
+    /// Fill in full or not at all.
     pub all_or_none: bool,
+    /// What price trips a stop: 0 the venue's default, 1 double bid or
+    /// ask, 2 last, 3 double last, 4 bid or ask, 7 last or bid or ask, 8
+    /// midpoint.
     pub trigger_method: i32,
+    /// What this order becomes once its trigger is reached.
     pub adjusted_order_type: String,
+    /// The price at which that change happens.
     pub trigger_price: f64,
+    /// The stop the order takes on when it changes.
     pub adjusted_stop_price: f64,
+    /// The limit it takes on with it.
     pub adjusted_stop_limit_price: f64,
+    /// What has to be true before the order is placed — a price, a volume,
+    /// a percentage change, a margin level, another execution, a time. All six
+    /// kinds are held by the venue.
     pub conditions: Vec<OrderCondition>,
+    /// Whether those conditions are measured outside regular
+    /// hours too.
     pub conditions_ignore_rth: bool,
+    /// Whether meeting them withdraws the order instead of
+    /// placing it.
     pub conditions_cancel_order: bool,
     // ── ibapi-parity fields ──
+    /// Which account to trade for. Every message states the session's own
+    /// account, so an order naming another is refused rather than filled
+    /// somewhere unintended.
     pub account: String,
+    /// When a conditional order starts being watched.
     pub active_start_time: String,
+    /// When it stops.
     pub active_stop_time: String,
+    /// Whether that amount is a price or a percentage.
     pub adjustable_trailing_unit: i32,
+    /// How far the adjusted order trails.
     pub adjusted_trailing_amount: f64,
+    /// A venue precaution the caller has chosen to accept.
     pub advanced_error_override: String,
     /// A caller's own name for the algo running this order. **Not carried by
     /// this protocol.** The counterpart declares a field for it and the venue
@@ -110,6 +218,7 @@ pub struct Order {
     /// `Invalid value in field # 8016`. Taken here and kept, so an order built
     /// against another client reads back what it set.
     pub algo_id: String,
+    /// Whether the order may be worked before the venue opens.
     pub allow_pre_open: bool,
     /// Which auction an order competes in.
     ///
@@ -119,7 +228,9 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub auction_strategy: i32,
+    /// A date on which the venue withdraws the order itself.
     pub auto_cancel_date: String,
+    /// Whether cancelling this child cancels its parent too.
     pub auto_cancel_parent: bool,
     /// An offset stated in basis points, and what it is measured against.
     ///
@@ -137,6 +248,7 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub basis_points_type: i32,
+    /// A large order worked as a block.
     pub block_order: bool,
     /// Interest accrued on a bond since its last coupon.
     ///
@@ -146,16 +258,27 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub bond_accrued_interest: String,
+    /// Where the trade clears.
     pub clearing_account: String,
+    /// How it clears: `IB`, `Away`, `PTA`.
     pub clearing_intent: String,
+    /// Which client placed it.
     pub client_id: i32,
+    /// How far a pegged-to-best order may improve on the
+    /// best price.
     pub compete_against_best_offset: f64,
+    /// Whether a volatility order keeps repricing as the
+    /// underlying moves.
     pub continuous_update: bool,
+    /// The end customer an order is placed for.
     pub customer_account: String,
+    /// Whether the order is held inactive.
     pub deactivate: bool,
     /// Stand the order down if the connection goes (tag 6661).
     pub deactivate_on_disconnect: bool,
+    /// The hedge ratio a delta-neutral order is worked at.
     pub delta: f64,
+    /// The hedging leg's own trigger price.
     pub delta_neutral_aux_price: f64,
     /// Where the hedging leg clears.
     ///
@@ -173,6 +296,7 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub delta_neutral_clearing_intent: String,
+    /// The contract the hedge is placed in.
     pub delta_neutral_con_id: i32,
     /// Where the hedging leg's shares are held.
     ///
@@ -189,6 +313,7 @@ pub struct Order {
     /// reaches the venue from nowhere. Taken here and kept, so an order built
     /// against another client still reads back what it set.
     pub delta_neutral_open_close: String,
+    /// What kind of order the hedge is.
     pub delta_neutral_order_type: String,
     /// Who settles the hedging leg.
     ///
@@ -214,7 +339,10 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub delta_neutral_short_sale_slot: i32,
+    /// Where a short sale's borrow is located.
     pub designated_location: String,
+    /// Whether that discretion is measured to the limit
+    /// rather than from it.
     pub discretionary_up_to_limit_price: bool,
     /// Whether the hedge is priced automatically.
     ///
@@ -224,34 +352,68 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub dont_use_auto_price_for_hedge: bool,
+    /// How long a duration-limited order lives, in seconds.
     pub duration: i32,
+    /// -1 unless the order is exempt from the short-sale price test.
     pub exempt_code: i32,
+    /// Who at the firm is operating the order.
     pub ext_operator: String,
+    /// Which advisor group the order is allocated across.
     pub fa_group: String,
+    /// How it is divided among them.
     pub fa_method: String,
+    /// What share each takes, where the method is a percentage.
     pub fa_percentage: String,
+    /// How much has filled, as the venue states it back.
     pub filled_quantity: f64,
+    /// What the hedge is measured by.
     pub hedge_param: String,
+    /// What kind of hedge goes with the order: delta, beta, FX, pair.
     pub hedge_type: String,
+    /// Whether the order stays out of the opening auction.
     pub ignore_open_auction: bool,
+    /// Only fill against an auction imbalance.
     pub imbalance_only: bool,
+    /// Whether the order is worked in the overnight session.
     pub include_overnight: bool,
+    /// Whether the order is a container held by an order management
+    /// system.
     pub is_oms_container: bool,
+    /// Whether a pegged order's reference moving down
+    /// moves it down too.
     pub is_pegged_change_amount_decrease: bool,
+    /// How far a pegged order's limit sits from its reference.
     pub lmt_price_offset: f64,
+    /// Whether a person entered the order rather than a
+    /// program.
     pub manual_order_indicator: i32,
+    /// When they did.
     pub manual_order_time: String,
+    /// How far a midpoint order sits from the midpoint at half
+    /// the spread.
     pub mid_offset_at_half: f64,
+    /// And at the whole spread.
     pub mid_offset_at_whole: f64,
+    /// Under MiFID II, which algorithm decided to trade.
     pub mifid2_decision_algo: String,
+    /// Which person did.
     pub mifid2_decision_maker: String,
+    /// Which algorithm executed it.
     pub mifid2_execution_algo: String,
+    /// Which person did.
     pub mifid2_execution_trader: String,
+    /// The smallest size it will compete against.
     pub min_compete_size: i32,
+    /// The smallest quantity the order will trade in.
     pub min_trade_qty: i32,
+    /// Which model the order belongs to.
     pub model_code: String,
+    /// Whether the venue may use its discretion over the order.
     pub not_held: bool,
+    /// What happens to the rest when one fills: 1 cancel and reduce
+    /// nothing, 2 reduce with block, 3 reduce without.
     pub oca_type: i32,
+    /// Whether the order opens a position or closes one.
     pub open_close: String,
     /// Whether smart routing is declined.
     ///
@@ -261,6 +423,9 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub opt_out_smart_routing: bool,
+    /// A price for each leg of a combination, in the order the legs
+    /// are given. The venue validates the leg order and refuses a spread it
+    /// reads as inverted.
     pub order_combo_legs: Vec<f64>,
     /// Free-form options carried alongside an order.
     ///
@@ -270,6 +435,8 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub order_misc_options: Vec<TagValue>,
+    /// The caller's own label, carried back on every message about the
+    /// order.
     pub order_ref: String,
     /// Who originated the order.
     ///
@@ -295,11 +462,21 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub parent_perm_id: i64,
+    /// How far it moves when the reference does.
     pub pegged_change_amount: f64,
+    /// How far a relative order sits from its reference, as a
+    /// percentage.
     pub percent_offset: f64,
+    /// The venue's own id for the order, stable across sessions where the
+    /// caller's number is not.
     pub perm_id: i64,
+    /// Add liquidity or do not fill at all.
     pub post_only: bool,
+    /// How long to rest on an alternative trading system before
+    /// routing.
     pub post_to_ats: i32,
+    /// Whether that customer is a professional, which the
+    /// venture prices differently.
     pub professional_customer: bool,
     /// The profit-taking leg's id.
     ///
@@ -325,27 +502,46 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub randomize_price: bool,
+    /// Vary the displayed size so the order is harder to read.
     pub randomize_size: bool,
+    /// Which future a volatility order prices against.
     pub ref_futures_con_id: i32,
+    /// How far the reference has to move first.
     pub reference_change_amount: f64,
+    /// Which contract it is pegged to.
     pub reference_contract_id: i32,
+    /// Which venue's price of it to use.
     pub reference_exchange_id: String,
+    /// Which of that venue's prices: 1 the midpoint, 2 the bid
+    /// or ask.
     pub reference_price_type: i32,
+    /// Send a marketable order to the best bid or offer
+    /// rather than working it.
     pub route_marketable_to_bbo: bool,
+    /// What kind of trader this is, under Rule 80A.
     pub rule80a: String,
+    /// Whether the ladder starts again once it is worked through.
     pub scale_auto_reset: bool,
     /// How much of a ladder's first component is already filled. **Not carried
     /// by this protocol.** The venue answers `Can not contain field # 6486` —
     /// not a bad value but a field that does not belong on an order. The
     /// position a ladder starts against, beside it, is taken.
     pub scale_init_fill_qty: i32,
+    /// How much the first level of a scale order trades.
     pub scale_init_level_size: i32,
+    /// The position the ladder starts from.
     pub scale_init_position: i32,
+    /// How often they adjust, in seconds.
     pub scale_price_adjust_interval: i32,
+    /// How far the levels move when they adjust.
     pub scale_price_adjust_value: f64,
+    /// How far apart the levels are priced.
     pub scale_price_increment: f64,
+    /// How far past each level the profit-taking order sits.
     pub scale_profit_offset: f64,
+    /// Whether the level sizes are varied to be harder to read.
     pub scale_random_percent: bool,
+    /// How much each level after it trades.
     pub scale_subs_level_size: i32,
     /// The name of a scale table held by the venue.
     ///
@@ -353,7 +549,10 @@ pub struct Order {
     /// the ladder it stands for and sends the levels, so the venue is never
     /// told the name. Setting the ladder's own fields does the same thing.
     pub scale_table: String,
+    /// Whether the venue may seek a better price than the
+    /// limit.
     pub seek_price_improvement: bool,
+    /// Which firm settles the trade.
     pub settling_firm: String,
     /// The shareholder an order is placed for.
     ///
@@ -363,6 +562,8 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub shareholder: String,
+    /// Who is lending for a short sale: 1 the account, 2 elsewhere,
+    /// which is what `designated_location` then names.
     pub short_sale_slot: i32,
     /// The stop-loss leg's id.
     ///
@@ -388,22 +589,38 @@ pub struct Order {
     /// rather than a search that came up short. Taken here and kept, so an
     /// order built against another client reads back what it set.
     pub smart_combo_routing_params: Vec<TagValue>,
+    /// Which soft dollar tier the commission is directed to.
     pub soft_dollar_tier_name: String,
+    /// What that tier is worth.
     pub soft_dollar_tier_val: String,
     /// What the soft-dollar tier is called on a screen.
     ///
     /// **Not carried by this protocol.** The tier and its value are sent; the
     /// name shown beside them is held by the counterpart and never written.
     pub soft_dollar_tier_display_name: String,
+    /// Whether the order was solicited from the customer.
     pub solicited: bool,
+    /// Where a scale order starts.
     pub starting_price: f64,
+    /// The lowest underlying price a volatility order stays active
+    /// through.
     pub stock_range_lower: f64,
+    /// And the highest.
     pub stock_range_upper: f64,
+    /// The underlying price a volatility order is priced against.
     pub stock_ref_price: f64,
+    /// Who submitted it.
     pub submitter: String,
+    /// Where a trailing stop starts, before it has followed
+    /// anything.
     pub trail_stop_price: f64,
+    /// Whether the venue's own price management algorithm works
+    /// the order.
     pub use_price_mgmt_algo: i32,
+    /// The volatility a volatility order is worked at.
     pub volatility: f64,
+    /// Whether that volatility is daily or annual: 1 daily, 2
+    /// annual.
     pub volatility_type: i32,
     /// Which kind of preview is being asked for.
     ///
@@ -611,6 +828,7 @@ impl Order {
         }
     }
 
+    /// How long the order lives, as the single byte the wire carries it in.
     pub fn tif_byte(&self) -> u8 {
         match self.tif.as_str() {
             "GTC" => b'1',
@@ -909,7 +1127,9 @@ impl Order {
 /// ibapi-compatible TagValue for algo and scanner filter parameters.
 #[derive(Clone, Debug)]
 pub struct TagValue {
+    /// The name of one option a request carries.
     pub tag: String,
+    /// What it is set to.
     pub value: String,
 }
 
@@ -919,48 +1139,87 @@ pub struct TagValue {
 /// Decimal fields are carried as strings to preserve precision.
 #[derive(Clone, Debug, Default)]
 pub struct OrderAllocation {
+    /// Which account this share of an advisor's order is for.
     pub account: String,
+    /// What it holds now.
     pub position: String,
+    /// What it should hold.
     pub position_desired: String,
+    /// What it would hold once this order fills.
     pub position_after: String,
+    /// How much of the order it was meant to take.
     pub desired_alloc_qty: String,
+    /// How much it may take.
     pub allowed_alloc_qty: String,
+    /// Whether those figures are money rather than shares.
     pub is_monetary: bool,
 }
 
 /// ibapi-compatible OrderState (used in openOrder callback).
 #[derive(Clone, Debug, Default)]
 pub struct OrderState {
+    /// Where the order stands, as the venue names it.
     pub status: String,
+    /// What initial margin the account carried before this order.
     pub init_margin_before: String,
+    /// What maintenance margin it carried.
     pub maint_margin_before: String,
+    /// What equity with loan value it carried.
     pub equity_with_loan_before: String,
+    /// What this order would change initial margin by.
     pub init_margin_change: String,
+    /// And maintenance margin.
     pub maint_margin_change: String,
+    /// And equity with loan value.
     pub equity_with_loan_change: String,
+    /// What initial margin the account would carry with this order on.
     pub init_margin_after: String,
+    /// And maintenance margin.
     pub maint_margin_after: String,
+    /// And equity with loan value.
     pub equity_with_loan_after: String,
+    /// What the order would cost, or did.
     pub commission_and_fees: f64,
+    /// The least it could cost, where the venue states a range.
     pub min_commission_and_fees: f64,
+    /// The most.
     pub max_commission_and_fees: f64,
+    /// What those figures are in.
     pub commission_and_fees_currency: String,
+    /// What the venue warns about the order, which rides its own field
+    /// and not the order's text.
     pub warning_text: String,
+    /// When the order finished.
     pub completed_time: String,
+    /// What it finished as.
     pub completed_status: String,
     // ── ibapi-iso extension (2026-04-30): RTH-split margin + allocations ──
+    /// What the margin figures are in.
     pub margin_currency: String,
+    /// The same figure, measured outside regular hours,
+    /// where the venue margins the two differently.
     pub init_margin_before_outside_rth: f64,
+    /// As above.
     pub maint_margin_before_outside_rth: f64,
+    /// As above.
     pub equity_with_loan_before_outside_rth: f64,
+    /// As above.
     pub init_margin_change_outside_rth: f64,
+    /// As above.
     pub maint_margin_change_outside_rth: f64,
+    /// As above.
     pub equity_with_loan_change_outside_rth: f64,
+    /// As above.
     pub init_margin_after_outside_rth: f64,
+    /// As above.
     pub maint_margin_after_outside_rth: f64,
+    /// As above.
     pub equity_with_loan_after_outside_rth: f64,
+    /// A size the venue suggests instead of the one asked for.
     pub suggested_size: String,
+    /// Why the venue refused it, in its own words.
     pub reject_reason: String,
+    /// How an advisor's order divides across accounts.
     pub order_allocations: Vec<OrderAllocation>,
 }
 
@@ -976,23 +1235,44 @@ pub struct Execution {
     /// is kept rather than dropped, so a fact the venue stated about a fill can
     /// be reached under its number instead of waiting to be named.
     pub unnamed_fields: Vec<(u32, String)>,
+    /// The venue's id for this fill. What a commission report is matched
+    /// to it by.
     pub exec_id: String,
+    /// When it filled, as the venue states it.
     pub time: String,
+    /// Which account it filled for.
     pub acct_number: String,
+    /// Where it filled, which is not necessarily where the order was
+    /// sent.
     pub exchange: String,
+    /// `BOT` or `SLD`, as the venue names it.
     pub side: String,
+    /// How much filled.
     pub shares: f64,
+    /// At what price.
     pub price: f64,
+    /// The venue's own id for the order, stable across sessions.
     pub perm_id: i64,
+    /// Which client placed the order.
     pub client_id: i64,
+    /// The id the client placed it under.
     pub order_id: i64,
+    /// How much of the order has filled in total.
     pub cum_qty: f64,
+    /// The average price of everything filled so far.
     pub avg_price: f64,
+    /// Whether this fill added liquidity or took it: 1 added, 2
+    /// took, 3 both.
     pub last_liquidity: i32,
+    /// Whether the venue closed the position rather than the caller.
     pub liquidation: i32,
+    /// Which model the order belongs to, for an advisor.
     pub model_code: String,
+    /// The rule the venue prices an economic-value contract by.
     pub ev_rule: String,
+    /// What that rule multiplies by.
     pub ev_multiplier: f64,
+    /// Whether the venue is still revising this order's price.
     pub pending_price_revision: bool,
 }
 
@@ -1001,12 +1281,20 @@ pub struct Execution {
 /// ibapi-compatible ExecutionFilter (used in reqExecutions).
 #[derive(Clone, Debug, Default)]
 pub struct ExecutionFilter {
+    /// Only fills placed by this client. Zero for all.
     pub client_id: i64,
+    /// Only fills on this account.
     pub acct_code: String,
+    /// Only fills after this moment. The venue holds a week, and a
+    /// request reaching further back is refused in full.
     pub time: String,
+    /// Only fills on this symbol.
     pub symbol: String,
+    /// Only fills on this kind of contract.
     pub sec_type: String,
+    /// Only fills at this venue.
     pub exchange: String,
+    /// Only buys, or only sells.
     pub side: String,
 }
 
@@ -1015,11 +1303,18 @@ pub struct ExecutionFilter {
 /// ibapi-compatible CommissionAndFeesReport.
 #[derive(Clone, Debug, Default)]
 pub struct CommissionAndFeesReport {
+    /// The fill this is the cost of.
     pub exec_id: String,
+    /// What it cost.
     pub commission_and_fees: f64,
+    /// In what currency.
     pub currency: String,
+    /// What closing the position realised, where this fill
+    /// closed one.
     pub realized_pnl: f64,
+    /// A bond's yield at this price.
     pub yield_amount: f64,
+    /// Which redemption that yield is measured to.
     pub yield_redemption_date: String,
 }
 
@@ -1028,8 +1323,11 @@ pub struct CommissionAndFeesReport {
 /// ibapi-compatible TickAttrib for tick_price callback.
 #[derive(Clone, Debug, Default)]
 pub struct TickAttrib {
+    /// Whether this price can be traded against now.
     pub can_auto_execute: bool,
+    /// Whether the price is outside the venue's limits.
     pub past_limit: bool,
+    /// Whether it was stated before the venue opened.
     pub pre_open: bool,
 }
 
@@ -1038,7 +1336,10 @@ pub struct TickAttrib {
 /// ibapi-compatible TickAttribLast for tick_by_tick_all_last callback.
 #[derive(Clone, Debug, Default)]
 pub struct TickAttribLast {
+    /// Whether the trade was outside the venue's limits.
     pub past_limit: bool,
+    /// Whether the trade goes unreported to the tape, which is
+    /// what separates every trade from the ones that print.
     pub unreported: bool,
 }
 
@@ -1047,7 +1348,9 @@ pub struct TickAttribLast {
 /// ibapi-compatible TickAttribBidAsk for tick_by_tick_bid_ask callback.
 #[derive(Clone, Debug, Default)]
 pub struct TickAttribBidAsk {
+    /// Whether the bid is below the day's low.
     pub bid_past_low: bool,
+    /// Whether the ask is above the day's high.
     pub ask_past_high: bool,
 }
 
@@ -1056,13 +1359,22 @@ pub struct TickAttribBidAsk {
 /// ibapi-compatible BarData for historical data callbacks.
 #[derive(Clone, Debug)]
 pub struct BarData {
+    /// When the bar opened. A day for a daily bar, a moment for anything
+    /// shorter, in the zone the bar carries.
     pub date: String,
+    /// The first price in the bar.
     pub open: f64,
+    /// The highest.
     pub high: f64,
+    /// The lowest.
     pub low: f64,
+    /// The last.
     pub close: f64,
+    /// How much traded, in the units the venue counts that contract in.
     pub volume: i64,
+    /// The volume-weighted average price over the bar.
     pub wap: f64,
+    /// How many trades made it.
     pub bar_count: i32,
     /// Timezone of `date` as reported by the reply (ibx#234) — previously
     /// parsed and then discarded, leaving the bare timestamp string as the
@@ -1096,16 +1408,29 @@ impl Default for BarData {
 /// to local time using `time_zone_id` for display.
 #[derive(Clone, Debug, Default)]
 pub struct ContractDetails {
+    /// The contract these details are about.
     pub contract: Contract,
+    /// The venue's own name for the market it trades on.
     pub market_name: String,
+    /// The smallest amount its price can move. What every price on it is
+    /// rounded to.
     pub min_tick: f64,
+    /// Which order types this venue takes for it.
     pub order_types: String,
+    /// Every venue it can be routed to.
     pub valid_exchanges: String,
+    /// The issuer's full name.
     pub long_name: String,
+    /// The last day it trades.
     pub last_trade_date: String,
+    /// How many units one contract is worth.
     pub multiplier: String,
+    /// When the venue is open for it, session by session, in the zone
+    /// below.
     pub trading_hours: Option<String>,
+    /// When it is liquid, which is narrower than when it is open.
     pub liquid_hours: Option<String>,
+    /// The zone both of those are stated in.
     pub time_zone_id: Option<String>,
     /// The price-increment rules this contract trades under, as the venue
     /// names them.
@@ -1124,62 +1449,111 @@ pub struct ContractDetails {
     /// contract whose value follows something other than its own price is
     /// valued wrongly without them.
     pub ev_rule: String,
+    /// What an economic-value contract's rule multiplies by.
     pub ev_multiplier: f64,
     /// What a bond is and what a fund is — terms, ratings, charges and where
     /// it may be sold. A caller asking about either received a symbol.
     pub coupon: f64,
+    /// A future's delivery month.
     pub contract_month: String,
+    /// What kind of contract the underlying is.
     pub under_sec_type: String,
+    /// The venue's id for the underlying.
     pub under_con_id: u32,
+    /// Its ticker.
     pub under_symbol: String,
+    /// And the time of day it stops.
     pub last_trade_time: String,
+    /// When the instrument was issued.
     pub issue_date: String,
+    /// The smallest amount of it that can be traded.
     pub size_increment: f64,
+    /// What the venue suggests trading in.
     pub suggested_size_increment: f64,
+    /// How many decimal places its prices carry.
     pub last_price_precision: f64,
+    /// How many its sizes carry.
     pub last_size_precision: f64,
+    /// How it settles: physically, or in cash.
     pub settlement_method: String,
     /// Every field the venue stated about this contract that this client does
     /// not yet name, as (tag, value). Kept rather than dropped: what is not
     /// named is still a fact the venue stated.
     pub unnamed_fields: Vec<(u32, String)>,
+    /// What the venue notes about a bond.
     pub bond_notes: String,
+    /// What it appends to the description.
     pub desc_append: String,
+    /// What kind of bond it is.
     pub bond_type: String,
+    /// How its coupon is set.
     pub coupon_type: String,
+    /// When the next call or put may be exercised.
     pub next_option_date: String,
+    /// Which of the two it is.
     pub next_option_type: String,
+    /// What the agencies rate it.
     pub ratings: String,
+    /// A fund's name.
     pub fund_name: String,
+    /// The family it belongs to.
     pub fund_family: String,
+    /// What kind of fund it is.
     pub fund_type: String,
+    /// What it charges on the way in.
     pub fund_front_load: String,
+    /// What it charges on the way out.
     pub fund_back_load: String,
+    /// Over what period that exit charge falls away.
     pub fund_back_load_time_interval: String,
+    /// What it charges to run.
     pub fund_management_fee: String,
+    /// The amount above which the fund asks to be told in advance.
     pub fund_notify_amount: String,
+    /// The least that may be bought to open.
     pub fund_minimum_initial_purchase: String,
+    /// The least that may be added.
     pub fund_minimum_subsequent_purchase: String,
+    /// Which US states it may be sold in.
     pub fund_blue_sky_states: String,
+    /// And which territories.
     pub fund_blue_sky_territories: String,
+    /// Whether it distributes income or accumulates
+    /// it.
     pub fund_distribution_policy_indicator: String,
+    /// What it holds.
     pub fund_asset_type: String,
+    /// When it actually expires, where that differs from the last
+    /// day it trades.
     pub real_expiration_date: String,
+    /// Whether the issuer may redeem it early.
     pub callable: bool,
+    /// Whether the holder may demand redemption.
     pub puttable: bool,
+    /// Whether it converts to equity.
     pub convertible: bool,
+    /// Whether it may be exercised in part.
     pub next_option_partial: bool,
+    /// Whether it is closed.
     pub fund_closed: bool,
+    /// Whether it is closed to new investors.
     pub fund_closed_for_new_investors: bool,
+    /// Whether it is closed to new money from existing ones.
     pub fund_closed_for_new_money: bool,
+    /// Which group of venues its book aggregates into.
     pub agg_group: i32,
+    /// What a quoted price is multiplied by to reach money. Not one
+    /// for every contract, and a price read without it is wrong by that factor.
     pub price_magnifier: i32,
     /// What the issuer does, broadest first. The venue states all three in one
     /// field; kept whole, a caller asking for the category was handed all of
     /// them with bars between.
     pub industry: String,
+    /// What sector the issuer is in.
     pub category: String,
+    /// More narrowly.
     pub subcategory: String,
+    /// Where the issuer is.
     pub country: String,
     /// The identifier the contract is known by outside this venue.
     pub isin: String,
@@ -1215,6 +1589,7 @@ impl Contract {
 }
 
 impl ContractDetails {
+    /// Everything the venue stated about a contract, as a caller reads it.
     pub fn from_definition(def: &crate::control::contracts::ContractDefinition) -> Self {
         let c = Contract {
             con_id: def.con_id as i64,
@@ -1316,11 +1691,17 @@ impl ContractDetails {
 /// ibapi-compatible ContractDescription for symbol search results.
 #[derive(Clone, Debug, Default)]
 pub struct ContractDescription {
+    /// The venue's id for the contract found.
     pub con_id: i64,
+    /// Its ticker.
     pub symbol: String,
+    /// What kind of contract it is.
     pub sec_type: String,
+    /// What it is priced in.
     pub currency: String,
+    /// Where it is listed.
     pub primary_exchange: String,
+    /// Which kinds of derivative the venue lists on it.
     pub derivative_sec_types: Vec<String>,
 }
 
@@ -1329,7 +1710,9 @@ pub struct ContractDescription {
 /// ibapi-compatible PriceIncrement for market_rule callback.
 #[derive(Clone, Debug)]
 pub struct PriceIncrement {
+    /// Where this step of the ladder starts.
     pub low_edge: f64,
+    /// What the price moves in above it.
     pub increment: f64,
 }
 

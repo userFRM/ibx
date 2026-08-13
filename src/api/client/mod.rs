@@ -59,8 +59,11 @@ use crate::gateway::{Gateway, GatewayConfig, Session};
 use crate::types::*;
 
 // Re-export as public type names for the API surface
+/// The contract type both surfaces share.
 pub type Contract = ApiContract;
+/// The order type both surfaces share.
 pub type Order = ApiOrder;
+/// One named option carried by a request.
 pub type TagValue = ApiTagValue;
 
 // Re-export public items from submodules
@@ -90,7 +93,9 @@ pub use orders::parse_algo_params;
 /// no pinning happens and there is no conflict.
 #[derive(Default)]
 pub struct EClientConfig {
+    /// The login.
     pub username: String,
+    /// Its password. Held only for the length of the logon.
     pub password: String,
     /// Where to start the session.
     ///
@@ -180,6 +185,7 @@ pub struct EClient {
     pub(crate) shared: Arc<SharedState>,
     pub(crate) control_tx: SyncSender<ControlCommand>,
     pub(crate) thread: Mutex<Option<thread::JoinHandle<()>>>,
+    /// The account this session acts for.
     pub account_id: String,
     /// Every account this login holds, the first being [`EClient::account_id`].
     pub accounts: Vec<String>,
@@ -469,6 +475,10 @@ impl EClient {
         &self.shared
     }
 
+    /// Frames this session kept exactly as the venue sent them, by connection.
+    ///
+    /// Empty unless `IBX_CAPTURE_WIRE` is set. A reading checked only against
+    /// frames this client made up says nothing about the ones that arrive.
     pub fn unread_wire(&self) -> Vec<(&'static str, String)> {
         self.shared.market.unread_wire()
     }
