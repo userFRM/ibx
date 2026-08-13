@@ -30,8 +30,11 @@ const MAGIC: &[u8; 8] = b"IBXSESS\x01";
 pub struct ResumableSession {
     /// The session token, big-endian, as `session_token_bytes` reports it.
     pub token: Vec<u8>,
+    /// The venue's own id for the session being resumed.
     pub server_session_id: String,
+    /// What this machine identified itself as.
     pub hw_info: String,
+    /// What the client string encoded to.
     pub encoded: String,
     /// Account the session belongs to. A file holding someone else's session is
     /// refused rather than offered to the wrong login.

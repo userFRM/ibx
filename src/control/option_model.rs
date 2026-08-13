@@ -33,9 +33,11 @@ pub struct VenueModel {
 /// What the contract is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OptionTerms {
+    /// The strike.
     pub strike: f64,
     /// Years until it expires.
     pub years_to_expiry: f64,
+    /// Whether it is a call.
     pub is_call: bool,
 }
 

@@ -66,13 +66,16 @@ pub struct CalendarQuery {
     pub filter: String,
     /// The window, stated as the venue states dates.
     pub start_date: String,
+    /// Its end.
     pub end_date: String,
     /// How many events at most. Stated as text, which is how the venue takes
     /// it, and left out entirely when the caller set no limit.
     pub total_limit: Option<i64>,
     /// Whether to fill from the watchlist, the portfolio, and competitors.
     pub fill_watchlist: bool,
+    /// Whether to include what the account holds.
     pub fill_portfolio: bool,
+    /// Whether to include the issuer's competitors.
     pub fill_competitors: bool,
 }
 

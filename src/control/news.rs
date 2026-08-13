@@ -9,36 +9,53 @@
 use std::io::Read;
 
 // Tags for news data
+/// FIX tag 6118: the news xml.
 pub const TAG_NEWS_XML: u32 = 6118;
+/// FIX tag 6040: the sub protocol.
 pub const TAG_SUB_PROTOCOL: u32 = 6040;
+/// FIX tag 95: the raw data length.
 pub const TAG_RAW_DATA_LENGTH: u32 = 95;
+/// FIX tag 96: the raw data.
 pub const TAG_RAW_DATA: u32 = 96;
 
 /// Parameters for a historical news request.
 #[derive(Debug, Clone)]
 pub struct HistoricalNewsRequest {
+    /// The name this client gave the query, which the answer echoes.
     pub query_id: String,
+    /// The venue's id for the contract.
     pub con_id: u32,
+    /// Which providers to ask, separated by the venue's own separator.
     pub provider_codes: String,
+    /// The start of the window asked for.
     pub start_time: String,
+    /// Its end.
     pub end_time: String,
+    /// The most rows wanted.
     pub max_results: u32,
 }
 
 /// Parameters for a news article request.
 #[derive(Debug, Clone)]
 pub struct NewsArticleRequest {
+    /// The name this client gave the query, which the answer echoes.
     pub query_id: String,
+    /// Which provider published it.
     pub provider_code: String,
+    /// Its id, for fetching the body.
     pub article_id: String,
 }
 
 /// A single news headline parsed from a response.
 #[derive(Debug, Clone)]
 pub struct NewsHeadline {
+    /// When it was published.
     pub time: String,
+    /// Which provider published it.
     pub provider_code: String,
+    /// Its id, for fetching the body.
     pub article_id: String,
+    /// The headline itself.
     pub headline: String,
 }
 

@@ -3,20 +3,28 @@
 use std::io::Read;
 
 // FIX tags for fundamental data
+/// FIX tag 6118: the fundamental xml.
 pub const TAG_FUNDAMENTAL_XML: u32 = 6118;
+/// FIX tag 6040: the sub protocol.
 pub const TAG_SUB_PROTOCOL: u32 = 6040;
+/// FIX tag 95: the raw data length.
 pub const TAG_RAW_DATA_LENGTH: u32 = 95;
+/// FIX tag 96: the raw data.
 pub const TAG_RAW_DATA: u32 = 96;
 
 /// Report types for fundamental data queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportType {
+    /// A summary of the issuer as it stands.
     Snapshot,
+    /// Its headline figures.
     FinancialSummary,
+    /// Its full statements.
     FinancialStatements,
 }
 
 impl ReportType {
+    /// Which provider supplies this report.
     pub fn provider(&self) -> &'static str {
         match self {
             Self::Snapshot => "Fundamentals",
@@ -25,6 +33,7 @@ impl ReportType {
         }
     }
 
+    /// The name the venue knows the report by.
     pub fn report_type_str(&self) -> &'static str {
         match self {
             Self::Snapshot => "snapshot",
@@ -37,16 +46,22 @@ impl ReportType {
 /// Parameters for a fundamental data request.
 #[derive(Debug, Clone)]
 pub struct FundamentalRequest {
+    /// The venue's id for the contract.
     pub con_id: u32,
+    /// What kind of contract it is.
     pub sec_type: &'static str,
+    /// What currency that is in.
     pub currency: &'static str,
+    /// Which report is wanted.
     pub report_type: ReportType,
 }
 
 /// Parsed fundamental data response.
 #[derive(Debug, Clone)]
 pub struct FundamentalResponse {
+    /// The name this client gave the query, which the answer echoes.
     pub query_id: String,
+    /// The report itself, as the venue sent it.
     pub data: Vec<u8>,
 }
 

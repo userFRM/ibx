@@ -12,6 +12,7 @@ pub struct BitReader<'a> {
 }
 
 impl<'a> BitReader<'a> {
+    /// Read from the start of these bytes.
     pub fn new(data: &'a [u8], total_bits: usize) -> Self {
         let max_bits = data.len() * 8;
         let total_bits = if total_bits > 0 {
@@ -26,6 +27,7 @@ impl<'a> BitReader<'a> {
         }
     }
 
+    /// How many bytes are left unread.
     pub fn remaining(&self) -> usize {
         self.total_bits.saturating_sub(self.bit_pos)
     }
@@ -101,10 +103,15 @@ impl<'a> BitReader<'a> {
 }
 
 // 8=O binary tick type IDs (what comes off the wire in 35=P)
+/// Tick type 0 on the wire: the bid price.
 pub const O_BID_PRICE: u64 = 0;
+/// Tick type 1 on the wire: the ask price.
 pub const O_ASK_PRICE: u64 = 1;
+/// Tick type 2 on the wire: the last price.
 pub const O_LAST_PRICE: u64 = 2;
+/// Tick type 4 on the wire: the bid size.
 pub const O_BID_SIZE: u64 = 4;
+/// Tick type 5 on the wire: the ask size.
 pub const O_ASK_SIZE: u64 = 5;
 /// Size of the trade this record reports, not the day's volume. Measured on a
 /// live front-month future: 120 samples, values 1..6, decreasing 60 times in
@@ -113,6 +120,7 @@ pub const O_LAST_SIZE: u64 = 6;
 /// Session high — 28177.25 on the wire against a daily-bar high of exactly
 /// 28177.25 for the same contract and session (ibx#303).
 pub const O_HIGH_PRICE: u64 = 8;
+/// Tick type 9 on the wire: the low price.
 pub const O_LOW_PRICE: u64 = 9;
 /// Cumulative session volume. Measured: 228 samples, zero decreases across 227
 /// transitions, increments of 1..6 matching the per-trade sizes on type 6
@@ -122,9 +130,13 @@ pub const O_VOLUME: u64 = 10;
 /// 1785325554) and 21 an offset advancing by exactly 1 per wall-clock second
 /// across 164 samples (ibx#303). Neither was decoded before.
 pub const O_TS_BASE: u64 = 20;
+/// Tick type 21 on the wire: the ts offset.
 pub const O_TS_OFFSET: u64 = 21;
+/// Tick type 13 on the wire: the last exch.
 pub const O_LAST_EXCH: u64 = 13;
+/// Tick type 16 on the wire: the bid exch.
 pub const O_BID_EXCH: u64 = 16;
+/// Tick type 17 on the wire: the ask exch.
 pub const O_ASK_EXCH: u64 = 17;
 /// UNVERIFIED. Named for a halt on no evidence — unlike its neighbours, which
 /// cite measurements against daily bars and wall-clock samples.
@@ -161,8 +173,11 @@ pub const O_LAST_TS: u64 = 23;
 /// A single decoded tick from a 35=P message.
 #[derive(Debug, Clone, Copy)]
 pub struct RawTick {
+    /// The venue's own number for the subscription.
     pub server_tag: u32,
+    /// Which tick this is, as the wire numbers it.
     pub tick_type: u64,
+    /// Its value, before the contract's own scale is applied.
     pub magnitude: i64,
 }
 
@@ -347,6 +362,7 @@ pub fn read_hibit_str(data: &[u8], pos: usize) -> (String, usize) {
 
 /// Marker bytes for tick-by-tick 35=E binary entries.
 pub const TBT_MARKER_ALL_LAST: u8 = 0x81;
+/// The byte that starts a bid ask record: 0x82.
 pub const TBT_MARKER_BID_ASK: u8 = 0x82;
 
 /// A decoded tick-by-tick entry from 35=E.
@@ -354,18 +370,28 @@ pub const TBT_MARKER_BID_ASK: u8 = 0x82;
 pub enum TbtEntry {
     /// AllLast trade tick.
     Trade {
+        /// When, as the record states it.
         timestamp: u64,
+        /// How far the price moved from the running one, in cents.
         price_cents_delta: i64,
+        /// How much.
         size: u64,
+        /// Which venue.
         exchange: String,
+        /// What the venue notes about the trade.
         conditions: String,
     },
     /// BidAsk quote tick.
     Quote {
+        /// When, as the record states it.
         timestamp: u64,
+        /// How far the bid moved.
         bid_cents_delta: i64,
+        /// How far the ask moved.
         ask_cents_delta: i64,
+        /// How much at the bid.
         bid_size: u64,
+        /// How much at the ask.
         ask_size: u64,
     },
 }

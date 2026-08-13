@@ -18,9 +18,13 @@
 /// available" and "halted for volatility" would have been one value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TradingStatus {
+    /// The venue is trading.
     ExchangeOpen,
+    /// A regulator stopped it.
     RegulatoryHalt,
+    /// The venue stopped it because the price moved too far.
     VolatilityHalt,
+    /// Short selling is restricted.
     ShortSaleRestriction,
     /// The venue stated no status.
     None,

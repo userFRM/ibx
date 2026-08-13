@@ -8,19 +8,33 @@ use std::io::{self, Read};
 pub const NS_MAGIC: &[u8; 4] = b"#%#%";
 
 // NsMessageType enum values
+/// Error response, as the venue numbers it.
 pub const NS_ERROR_RESPONSE: u32 = 519;
+/// Auth start, as the venue numbers it.
 pub const NS_AUTH_START: u32 = 520;
+/// Connect request, as the venue numbers it.
 pub const NS_CONNECT_REQUEST: u32 = 521;
+/// Connect response, as the venue numbers it.
 pub const NS_CONNECT_RESPONSE: u32 = 523;
+/// Redirect, as the venue numbers it.
 pub const NS_REDIRECT: u32 = 524;
+/// Fix start, as the venue numbers it.
 pub const NS_FIX_START: u32 = 525;
+/// Newcommporttype, as the venue numbers it.
 pub const NS_NEWCOMMPORTTYPE: u32 = 526;
+/// Backup host, as the venue numbers it.
 pub const NS_BACKUP_HOST: u32 = 527;
+/// Misc urls request, as the venue numbers it.
 pub const NS_MISC_URLS_REQUEST: u32 = 528;
+/// Misc urls response, as the venue numbers it.
 pub const NS_MISC_URLS_RESPONSE: u32 = 529;
+/// Secure connect, as the venue numbers it.
 pub const NS_SECURE_CONNECT: u32 = 532;
+/// Secure connection start, as the venue numbers it.
 pub const NS_SECURE_CONNECTION_START: u32 = 533;
+/// Secure message, as the venue numbers it.
 pub const NS_SECURE_MESSAGE: u32 = 534;
+/// Secure error, as the venue numbers it.
 pub const NS_SECURE_ERROR: u32 = 535;
 /// Server keepalive probe sent during second-factor approval wait.
 /// Payload: `MISC{ns_version};530;{server_timestamp};` — the client must echo

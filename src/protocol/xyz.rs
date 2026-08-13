@@ -10,7 +10,9 @@ pub const XYZ_PROTOCOL_VERSION: u32 = 23;
 
 /// XYZ message types.
 pub const XYZ_MSG_SRP: u32 = 777;
+/// Token auth, as the venue numbers it.
 pub const XYZ_MSG_TOKEN_AUTH: u32 = 771;
+/// Soft token, as the venue numbers it.
 pub const XYZ_MSG_SOFT_TOKEN: u32 = 772;
 /// Per-session two-factor approval handshake (IBKey seamless / push notification).
 /// Sent by the client immediately after SRP completes; server reply at state=2
@@ -189,6 +191,7 @@ pub const XYZ_MSG_SECURITY_CODE: u32 = 774;
 /// server answers with 2. Other codes exist on this message; this path sends
 /// and expects only these two.
 pub const SECURITY_CODE_SEND: u32 = 1;
+/// Security code result, as the venue numbers it.
 pub const SECURITY_CODE_RESULT: u32 = 2;
 
 /// Build the security-code frame: msg 774, **message code 1**, carrying the

@@ -13,12 +13,17 @@
 /// which is the difference between a stale constant costing a restart and it
 /// costing an outage, on the day the server stops accepting this one.
 pub const IB_BUILD: &str = "10401";
+/// What this client announces as its version.
 pub const IB_VERSION: &str = "c";
+/// What it announces as its client string.
 pub const IB_ENCODED: &str = "17.0.10.0.101/W/en_US/G";
 
+/// The build this client announces. Overridable for a session that must
+/// match a particular one.
 pub fn ib_build() -> String {
     std::env::var("IBX_BUILD").unwrap_or_else(|_| IB_BUILD.to_string())
 }
+/// The version it announces.
 pub fn ib_version() -> String {
     std::env::var("IBX_VERSION").unwrap_or_else(|_| IB_VERSION.to_string())
 }
@@ -35,25 +40,33 @@ pub const IB_LOCALE: &str = "en_US";
 /// Network ports.
 pub const MISC_PORT: u16 = 4000;
 
+/// Which port the session opens on.
 pub fn misc_port() -> u16 {
     std::env::var("IBX_MISC_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(4000)
 }
+/// A host to use instead of the one the venue routed to, where one
+/// is set.
 pub fn farm_host_override() -> Option<String> {
     std::env::var("IBX_FARM_HOST").ok()
 }
+/// Where the login is made.
 pub const AUTH_PORT: u16 = 4001;
 
 /// Heartbeat intervals (seconds).
 pub const CCP_HEARTBEAT: u64 = 10;
+/// How many seconds between heartbeats on a farm connection.
 pub const FARM_HEARTBEAT: u64 = 30;
 
 /// Recv buffer sizes (bytes).
 pub const CCP_RECV_BUF: usize = 8192;
+/// How much of a farm's traffic is read at once.
 pub const FARM_RECV_BUF: usize = 32768;
+/// How much of a FIX connection's traffic is read at once.
 pub const FIX_RECV_BUF: usize = 4096;
 
 /// Timeouts (seconds).
 pub const TIMEOUT_FIX_LOGON: f64 = 10.0;
+/// How long to wait for a FIX message before giving up, in seconds.
 pub const TIMEOUT_FIX_READ: f64 = 30.0;
 /// Overall wall-clock budget for a farm logon exchange (key exchange excluded).
 /// Raised from 5 s: on a high-latency regional gateway a single response
@@ -64,11 +77,14 @@ pub const TIMEOUT_FARM_LOGON: f64 = 20.0;
 /// TimedOut (os error 35 on macOS) is retried against the deadline instead of
 /// aborting the connection (ibx#237).
 pub const FARM_LOGON_POLL_MS: u64 = 250;
+/// How long the login's handshake may take.
 pub const TIMEOUT_SSL_AUTH: u64 = 20;
+/// How long a farm connection may take to open.
 pub const TIMEOUT_FARM_CONNECT: u64 = 8;
 
 /// Protocol version.
 pub const NS_VERSION: u32 = 50;
+/// The oldest name-service version this client speaks.
 pub const NS_VERSION_MIN: u32 = 38;
 
 /// Stack-allocated FIX timestamp ("YYYYMMDD-HH:MM:SS"). Zero heap allocation.
