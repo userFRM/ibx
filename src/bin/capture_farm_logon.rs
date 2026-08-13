@@ -74,6 +74,19 @@ fn main() {
     // table of every market the venue serves, and where. A farm named in it is
     // reached where it says; a farm not named in it can only be guessed at.
     let routed = session.market_data.routing.clone();
+    // What the venue pushed at logon, under its own names. Read here because
+    // it is stored and never looked at, and a host list that arrives on the
+    // session is a host list this client does not have to be told.
+    if !gw.misc_urls.is_empty() {
+        let mut named: Vec<_> = gw.misc_urls.iter().collect();
+        named.sort();
+        println!("the venue pushed {} named hosts:", named.len());
+        for (name, url) in named {
+            println!("  {name:24} {url}");
+        }
+        println!();
+    }
+
     if !routed.is_empty() {
         println!("the venue named {} farms:", routed.farms().len());
         let mut named: Vec<_> = routed.farms().into_iter().collect();
