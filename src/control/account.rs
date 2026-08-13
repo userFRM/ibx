@@ -8,25 +8,40 @@ use std::collections::HashMap;
 /// Account summary fields.
 #[derive(Debug, Clone, Default)]
 pub struct AccountSummary {
+    /// Which account.
     pub account_id: String,
+    /// What it is worth if everything is closed now.
     pub net_liquidation: f64,
+    /// Its cash, before settlement.
     pub total_cash: f64,
+    /// What it can still buy.
     pub buying_power: f64,
+    /// What the positions are worth, long and short added.
     pub gross_position_value: f64,
+    /// What holding them requires.
     pub maintenance_margin: f64,
+    /// What it may still commit.
     pub available_funds: f64,
+    /// What it holds above its maintenance requirement.
     pub excess_liquidity: f64,
+    /// What currency that is in.
     pub currency: String,
 }
 
 /// A position update.
 #[derive(Debug, Clone)]
 pub struct PositionUpdate {
+    /// Which account.
     pub account_id: String,
+    /// The venue's id for the contract.
     pub con_id: u32,
+    /// Its ticker.
     pub symbol: String,
+    /// How much is held.
     pub position: f64,
+    /// What it cost on average.
     pub avg_cost: f64,
+    /// What the holding is worth.
     pub market_value: f64,
 }
 
@@ -62,14 +77,18 @@ pub struct PositionTracker {
 }
 
 impl PositionTracker {
+    /// Take a position the venue stated, replacing what was held for that
+    /// contract.
     pub fn update(&mut self, pos: PositionUpdate) {
         self.positions.insert(pos.con_id, pos);
     }
 
+    /// The position held in one contract, if any.
     pub fn get(&self, con_id: u32) -> Option<&PositionUpdate> {
         self.positions.get(&con_id)
     }
 
+    /// Every position held.
     pub fn all(&self) -> impl Iterator<Item = &PositionUpdate> {
         self.positions.values()
     }

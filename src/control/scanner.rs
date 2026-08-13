@@ -3,15 +3,21 @@
 use crate::protocol::fix;
 
 // Tags for scanner messages
+/// FIX tag 6118: the scanner xml.
 pub const TAG_SCANNER_XML: u32 = 6118;
+/// FIX tag 6040: the sub protocol.
 pub const TAG_SUB_PROTOCOL: u32 = 6040;
 
 /// Parameters for a scanner subscription request.
 #[derive(Debug, Clone)]
 pub struct ScannerSubscription {
+    /// Which kind of instrument the scan runs over.
     pub instrument: String,
+    /// Which market.
     pub location_code: String,
+    /// Which scan.
     pub scan_code: String,
+    /// The most rows wanted.
     pub max_items: u32,
     /// Filter code / value pairs, named exactly as `req_scanner_parameters` names them
     /// (`priceAbove`, `usdMarketCapAbove`, `stkTypes`, …).
@@ -21,18 +27,26 @@ pub struct ScannerSubscription {
 /// One entry from a scanner result.
 #[derive(Debug, Clone, Default)]
 pub struct ScannerEntry {
+    /// The venue's id for the contract.
     pub con_id: u32,
+    /// Its ticker.
     pub symbol: String,
+    /// What kind of contract it is.
     pub sec_type: String,
+    /// Which venue.
     pub exchange: String,
+    /// What currency that is in.
     pub currency: String,
 }
 
 /// Parsed scanner subscription response.
 #[derive(Debug, Clone)]
 pub struct ScannerResult {
+    /// The contracts the scan returned.
     pub con_ids: Vec<u32>,
+    /// The rows themselves.
     pub entries: Vec<ScannerEntry>,
+    /// When the venue ran it.
     pub scan_time: String,
 }
 

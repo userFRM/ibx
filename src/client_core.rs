@@ -28,23 +28,38 @@ const MDT_DELAYED_FROZEN: i32 = 4;
 
 // ── Tick type constants matching ibapi ──
 
+/// Tick type 1: the bid.
 pub const TICK_BID: i32 = 1;
+/// Tick type 2: the ask.
 pub const TICK_ASK: i32 = 2;
+/// Tick type 4: the last.
 pub const TICK_LAST: i32 = 4;
+/// Tick type 6: the high.
 pub const TICK_HIGH: i32 = 6;
+/// Tick type 7: the low.
 pub const TICK_LOW: i32 = 7;
+/// Tick type 9: the close.
 pub const TICK_CLOSE: i32 = 9;
+/// Tick type 14: the open.
 pub const TICK_OPEN: i32 = 14;
+/// Tick type 0: the bid size.
 pub const TICK_BID_SIZE: i32 = 0;
+/// Tick type 3: the ask size.
 pub const TICK_ASK_SIZE: i32 = 3;
+/// Tick type 5: the last size.
 pub const TICK_LAST_SIZE: i32 = 5;
+/// Tick type 8: the volume.
 pub const TICK_VOLUME: i32 = 8;
+/// Tick type 45: the last timestamp.
 pub const TICK_LAST_TIMESTAMP: i32 = 45;
 /// Whether the venue has halted trading. Stated by the venue and delivered as
 /// a generic tick, which is where the reference client puts it.
 pub const TICK_HALTED: i32 = 49;
+/// Tick type 32: the bid exchange.
 pub const TICK_BID_EXCHANGE: i32 = 32;
+/// Tick type 33: the ask exchange.
 pub const TICK_ASK_EXCHANGE: i32 = 33;
+/// Tick type 84: the last exchange.
 pub const TICK_LAST_EXCHANGE: i32 = 84;
 
 // ── Shared account field definitions ──
@@ -163,8 +178,11 @@ pub fn render_exchange_mask(mask: i64, shared: &SharedState) -> String {
 
 /// A single tick event produced by quote change detection.
 pub struct TickEvent {
+    /// The request this answers.
     pub req_id: i64,
+    /// Which tick this is.
     pub tick_type: i32,
+    /// What it is.
     pub value: f64,
     /// true = tick_price, false = tick_size
     pub is_price: bool,
@@ -172,21 +190,29 @@ pub struct TickEvent {
 
 /// Timestamp tick from quote polling.
 pub struct TimestampTick {
+    /// The request this answers.
     pub req_id: i64,
+    /// When, in nanoseconds since the epoch.
     pub timestamp_ns: i64,
 }
 
 /// String-valued tick (e.g. exchange-code letters for tick_types 32/33/84).
 pub struct StringTickEvent {
+    /// The request this answers.
     pub req_id: i64,
+    /// Which tick this is.
     pub tick_type: i32,
+    /// What it is.
     pub value: String,
 }
 
 /// Result of polling quotes for one instrument.
 pub struct QuotePollResult {
+    /// Numeric ticks that arrived.
     pub ticks: Vec<TickEvent>,
+    /// Ticks whose value is text.
     pub string_ticks: Vec<StringTickEvent>,
+    /// The moment the venue stamped the quote with, if it stated one.
     pub timestamp: Option<TimestampTick>,
     /// true if any tick was delivered (for snapshot detection).
     pub delivered: bool,
@@ -194,31 +220,45 @@ pub struct QuotePollResult {
 
 /// PnL update (account-level).
 pub struct PnlUpdate {
+    /// The request this answers.
     pub req_id: i64,
+    /// What the account has made today.
     pub daily_pnl: f64,
+    /// What its positions have made and not realised.
     pub unrealized_pnl: f64,
+    /// What it has realised.
     pub realized_pnl: f64,
 }
 
 /// PnL single update (per-position).
 pub struct PnlSingleUpdate {
+    /// The request this answers.
     pub req_id: i64,
+    /// How much is held.
     pub pos: f64,
+    /// What the account has made today.
     pub daily_pnl: f64,
+    /// What its positions have made and not realised.
     pub unrealized_pnl: f64,
+    /// What it has realised.
     pub realized_pnl: f64,
+    /// What it is.
     pub value: f64,
 }
 
 /// A single changed account field.
 pub struct AccountFieldUpdate {
+    /// Which figure.
     pub key: String,
+    /// What it is.
     pub value: String,
+    /// What currency it is stated in.
     pub currency: String,
 }
 
 /// Batch of account update results.
 pub struct AccountUpdateBatch {
+    /// Each figure that changed.
     pub fields: Vec<AccountFieldUpdate>,
     /// Whether any field was delivered.
     pub delivered: bool,
@@ -233,12 +273,17 @@ pub struct AccountUpdateBatch {
 
 /// Prepared account summary response.
 pub struct AccountSummaryBatch {
+    /// The request this answers.
     pub req_id: i64,
+    /// Each figure answering the request.
     pub entries: Vec<AccountSummaryEntry>,
 }
 
+/// One figure answering a summary request.
 pub struct AccountSummaryEntry {
+    /// Which figure this is.
     pub tag: &'static str,
+    /// What it is.
     pub value: String,
     /// As the venue stated it for this figure. Owned rather than borrowed
     /// because it is the venue's word, not one of a fixed set known here.
@@ -247,12 +292,19 @@ pub struct AccountSummaryEntry {
 
 /// A single portfolio position update.
 pub struct PortfolioUpdateEntry {
+    /// The contract.
     pub con_id: i64,
+    /// How much is held.
     pub position: f64,
+    /// What it cost on average.
     pub avg_cost: f64,
+    /// What it is worth now, each.
     pub market_price: f64,
+    /// What the holding is worth.
     pub market_value: f64,
+    /// What its positions have made and not realised.
     pub unrealized_pnl: f64,
+    /// What it has realised.
     pub realized_pnl: f64,
 }
 
@@ -390,9 +442,13 @@ fn execution_matches(se: &StoredExecution, filter: &ExecutionFilter) -> bool {
 /// Shared between Rust and Python adapters via `ClientCore`.
 #[derive(Clone)]
 pub struct StoredExecution {
+    /// The request this answers.
     pub req_id: i64,
+    /// The contract it is on.
     pub contract: ApiContract,
+    /// The fill itself.
     pub execution: ApiExecution,
+    /// What the fill cost.
     pub commission_and_fees: ApiCommissionAndFeesReport,
 }
 
@@ -401,11 +457,17 @@ pub struct StoredExecution {
 /// A locally tracked order for `req_open_orders` / dispatch status updates.
 #[derive(Clone)]
 pub struct TrackedOrder {
+    /// The contract it is on.
     pub contract: ApiContract,
+    /// The order as this client sent it.
     pub order: ApiOrder,
+    /// Where it stands.
     pub status: String,
+    /// How much has filled.
     pub filled: f64,
+    /// How much has not.
     pub remaining: f64,
+    /// The engine's own slot for the contract.
     pub instrument: InstrumentId,
     /// True once this order's last transition was a genuine Rejected (FIX
     /// 39=8). Rejected and Inactive both stringify to `status == "Inactive"`
@@ -431,6 +493,8 @@ pub enum GroupEvent {
     Updated(i64, String),
 }
 
+/// What both client surfaces share: which request is on which
+/// contract, what the venue last said, and what is still subscribed.
 pub struct ClientCore {
     /// How long a caller waits for the engine to name an instrument.
     ///
@@ -445,7 +509,10 @@ pub struct ClientCore {
     /// than in their own discipline. Set once when the session opens.
     pub readonly: std::sync::atomic::AtomicBool,
     // reqId <-> InstrumentId mapping
+    /// Which contract each quote request is on.
     pub req_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
+    /// Which request owns each contract's quotes. One per contract:
+    /// later callers follow it rather than opening a second.
     pub instrument_to_req: Mutex<HashMap<InstrumentId, i64>>,
     /// Which contract each tick-by-tick request is on.
     ///
@@ -461,6 +528,7 @@ pub struct ClientCore {
     /// parts of one program could not watch the same contract.
     pub instrument_followers: Mutex<HashMap<InstrumentId, Vec<i64>>>,
     // con_id → InstrumentId for find_or_register_instrument lookup
+    /// The engine slot each contract id was given.
     pub con_id_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     /// What each display group currently holds. The venue knows nothing of
     /// these: they are a way for several callers on one session to agree on a
@@ -473,6 +541,8 @@ pub struct ClientCore {
     /// hears them where it hears everything else.
     pending_group_events: Mutex<Vec<GroupEvent>>,
     // Change detection for quote polling
+    /// The most recent quote per contract, so a caller asking twice is
+    /// answered the same way twice.
     pub last_quotes: Mutex<HashMap<InstrumentId, [i64; 16]>>,
     /// Requests that asked for a snapshot rather than a stream, and when each
     /// last heard something.
@@ -485,20 +555,29 @@ pub struct ClientCore {
     pub snapshot_reqs: Mutex<HashMap<i64, Option<std::time::Instant>>>,
 
     // PnL subscription state
+    /// The request a running profit is reported under.
     pub pnl_req_id: Mutex<Option<i64>>,
+    /// Which contract each single-position profit request is on.
     pub pnl_single_reqs: Mutex<HashMap<i64, i64>>, // req_id → con_id
+    /// The last running profit stated: daily, unrealised, realised.
     pub last_pnl: Mutex<[i64; 3]>, // [daily, unrealized, realized]
     // Per-req_id change detection for pnl_single: [pos, daily, unrealized, realized, value] scaled.
+    /// The same per position.
     pub last_pnl_single: Mutex<HashMap<i64, [i64; 5]>>,
 
     // Account summary subscription state (req_id, tags)
+    /// The summary request waiting to be answered, and the tags it
+    /// asked for.
     pub account_summary_req: Mutex<Option<(i64, Vec<String>)>>,
 
     // News bulletin subscription
+    /// Whether broadcast notices were asked for.
     pub bulletin_subscribed: AtomicBool,
 
     // Account updates subscription
+    /// Whether the account's own figures were asked for.
     pub account_updates_subscribed: AtomicBool,
+    /// The account as last stated.
     pub last_account: Mutex<Option<AccountState>>,
     /// What has already been delivered of what the venue stated, by figure and
     /// currency, so each is delivered once and again when it changes.
@@ -507,16 +586,21 @@ pub struct ClientCore {
     pub account_end_sent: AtomicBool,
     /// When the venue last added a figure to the account.
     pub last_account_field: Mutex<Option<std::time::Instant>>,
+    /// Its positions as last stated.
     pub last_portfolio: Mutex<Option<Vec<PositionInfo>>>,
 
     // Execution replay store
+    /// Fills held for a caller who asks for them again.
     pub executions: Mutex<Vec<StoredExecution>>,
 
     // Open order tracking
+    /// Every order this client placed and the venue has not finished.
     pub open_orders: Mutex<HashMap<u64, TrackedOrder>>,
 
     // Market data type callback tracking
+    /// Which feed subscriptions default to.
     pub market_data_type: AtomicI32,
+    /// Which requests have already been told which feed they are on.
     pub mdt_sent: Mutex<HashSet<i64>>,
     /// The market-data type each subscription was made under. A request that
     /// names its own mode is not described by the type set for everything
@@ -527,13 +611,19 @@ pub struct ClientCore {
     // Subsequent bars for these req_ids dispatch as historical_data_update.
     // Cleared when a request is made under the id again — see
     // `historical_request_is_new`.
+    /// Which historical requests have finished their first batch, so
+    /// a later bar under the same id is a continuation rather than a new answer.
     pub hist_initial_complete: Mutex<HashSet<u32>>,
 
     // News subscription state
+    /// Every provider this account may read.
     pub news_providers: Mutex<String>,
+    /// Which contracts news was asked for on.
     pub news_instruments: Mutex<HashSet<InstrumentId>>,
 
     // Contract cache for enrichment
+    /// What the venue has said about each contract, kept so a second
+    /// request need not ask again.
     pub contract_cache: Mutex<HashMap<i64, ApiContract>>,
 }
 
@@ -544,6 +634,7 @@ impl Default for ClientCore {
 }
 
 impl ClientCore {
+    /// An empty one.
     pub fn new() -> Self {
         Self {
             // What a session that never states one waits. The library's own
@@ -594,6 +685,7 @@ impl ClientCore {
         self.readonly.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Whether this client refuses anything that would trade.
     pub fn is_readonly(&self) -> bool {
         self.readonly.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -609,6 +701,7 @@ impl ClientCore {
         Ok(())
     }
 
+    /// Forget everything this session held, so the next one starts clean.
     pub fn reset(&self) {
         self.req_to_instrument.lock().unwrap().clear();
         self.instrument_to_req.lock().unwrap().clear();
@@ -955,6 +1048,7 @@ impl ClientCore {
         self.con_id_to_instrument.lock().unwrap().retain(|_, iid| *iid != instrument);
     }
 
+    /// Remember which providers the venue named.
     pub fn set_news_providers(&self, providers: &str) {
         *self.news_providers.lock().unwrap() = providers.to_string();
     }
@@ -1028,6 +1122,7 @@ impl ClientCore {
     /// What a group holds when nothing has been put in it.
     const NO_CONTRACT: &'static str = "none";
 
+    /// Ask which display groups exist.
     pub fn query_display_groups(&self, req_id: i64) {
         let groups = (1..=Self::DISPLAY_GROUPS)
             .map(|g| g.to_string())
@@ -1048,6 +1143,7 @@ impl ClientCore {
         self.pending_group_events.lock().unwrap().push(GroupEvent::Updated(req_id, held));
     }
 
+    /// Stop the from group events.
     pub fn unsubscribe_from_group_events(&self, req_id: i64) {
         self.group_subscriptions.lock().unwrap().remove(&req_id);
     }
@@ -1077,12 +1173,14 @@ impl ClientCore {
         Ok(())
     }
 
+    /// Take every group events waiting, leaving none.
     pub fn drain_group_events(&self) -> Vec<GroupEvent> {
         self.pending_group_events.lock().unwrap().drain(..).collect()
     }
 
     // ── PnL subscription management ──
 
+    /// Ask for the pnl.
     pub fn subscribe_pnl(&self, req_id: i64) {
         *self.pnl_req_id.lock().unwrap() = Some(req_id);
         // Nothing has been reported to this subscription yet. Without a value
@@ -1091,6 +1189,7 @@ impl ClientCore {
         *self.last_pnl.lock().unwrap() = [i64::MIN; 3];
     }
 
+    /// Stop the pnl.
     pub fn unsubscribe_pnl(&self, req_id: i64) {
         let mut pnl = self.pnl_req_id.lock().unwrap();
         if *pnl == Some(req_id) {
@@ -1098,10 +1197,12 @@ impl ClientCore {
         }
     }
 
+    /// Ask for the pnl single.
     pub fn subscribe_pnl_single(&self, req_id: i64, con_id: i64) {
         self.pnl_single_reqs.lock().unwrap().insert(req_id, con_id);
     }
 
+    /// Stop the pnl single.
     pub fn unsubscribe_pnl_single(&self, req_id: i64) {
         self.pnl_single_reqs.lock().unwrap().remove(&req_id);
         self.last_pnl_single.lock().unwrap().remove(&req_id);
@@ -1109,6 +1210,7 @@ impl ClientCore {
 
     // ── Account summary subscription management ──
 
+    /// Ask for the account summary.
     pub fn subscribe_account_summary(&self, req_id: i64, tags: &str) {
         let tag_list: Vec<String> = tags.split(',')
             .map(|s| s.trim().to_string())
@@ -1117,6 +1219,7 @@ impl ClientCore {
         *self.account_summary_req.lock().unwrap() = Some((req_id, tag_list));
     }
 
+    /// Stop the account summary.
     pub fn unsubscribe_account_summary(&self, req_id: i64) {
         let mut req = self.account_summary_req.lock().unwrap();
         if req.as_ref().map(|(r, _)| *r) == Some(req_id) {
@@ -1126,6 +1229,7 @@ impl ClientCore {
 
     // ── Account updates subscription management ──
 
+    /// Ask for the account updates.
     pub fn subscribe_account_updates(&self, subscribe: bool) {
         self.account_updates_subscribed.store(subscribe, Ordering::Release);
         if !subscribe {
@@ -1189,14 +1293,17 @@ impl ClientCore {
 
     // ── Bulletin subscription management ──
 
+    /// Ask for the bulletins.
     pub fn subscribe_bulletins(&self) {
         self.bulletin_subscribed.store(true, Ordering::Release);
     }
 
+    /// Stop the bulletins.
     pub fn unsubscribe_bulletins(&self) {
         self.bulletin_subscribed.store(false, Ordering::Release);
     }
 
+    /// Whether broadcast notices are being received.
     pub fn bulletins_subscribed(&self) -> bool {
         self.bulletin_subscribed.load(Ordering::Acquire)
     }
@@ -2352,6 +2459,8 @@ impl ClientCore {
         Ok(())
     }
 
+    /// Refuse an order whose contract does not name one contract:
+    /// a symbol alone names a whole option chain.
     pub fn validate_order_contract(con_id: i64, sec_type: &str, identity: &str) -> Result<(), String> {
         if con_id != 0 {
             return Ok(());
@@ -2470,6 +2579,7 @@ impl ClientCore {
         if v == f64::MAX { 0 } else { (v * PRICE_SCALE_F) as i64 }
     }
 
+    /// Turn what a caller set into the request the engine sends.
     pub fn build_order_request(
         order: &ApiOrder,
         order_id: u64,

@@ -25,6 +25,7 @@ pub struct Bits<'a> {
 }
 
 impl<'a> Bits<'a> {
+    /// Read from the start of these bytes.
     pub fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, at: 0 }
     }
@@ -126,9 +127,13 @@ impl<'a> Bits<'a> {
 /// Which kind of record a subscription carries, and how many fields one has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TbtKind {
+    /// Trades that print to the tape.
     Last,
+    /// Every trade, printed or not.
     AllLast,
+    /// Changes to the top of the book.
     BidAsk,
+    /// Changes to the midpoint.
     MidPoint,
 }
 
@@ -147,33 +152,49 @@ impl TbtKind {
 /// What the venue said about a trade.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TbtTradeRecord {
+    /// The price, in the units the record carries.
     pub price: f64,
+    /// How much.
     pub size: u64,
     /// The venue may still revise this print.
     pub past_limit: bool,
     /// The print did not go to the tape.
     pub unreported: bool,
+    /// Which venue.
     pub exchange: String,
+    /// What the venue notes about the trade.
     pub conditions: String,
 }
 
 /// What the venue said about the top of the book.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TbtQuoteRecord {
+    /// The bid.
     pub bid: f64,
+    /// The ask.
     pub ask: f64,
+    /// How much at the bid.
     pub bid_size: u64,
+    /// How much at the ask.
     pub ask_size: u64,
+    /// Whether the bid is below the day's low.
     pub bid_past_low: bool,
+    /// Whether the ask is above the day's high.
     pub ask_past_high: bool,
 }
 
 /// One record.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TbtRecord {
+    /// A trade.
     Trade(TbtTradeRecord),
+    /// A change to the top of the book.
     Quote(TbtQuoteRecord),
-    MidPoint { price: f64 },
+    /// Changes to the midpoint.
+    MidPoint {
+        /// The midpoint now.
+        price: f64,
+    },
 }
 
 /// The smallest price step this representation can hold.
@@ -209,9 +230,11 @@ pub struct RunningPrice {
 /// A frame: one subscription, one time, and the records that share them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TbtFrame {
+    /// The venue's own number for the stream.
     pub ticker_id: u64,
     /// The venue states seconds; every record in the frame shares this one.
     pub timestamp_ms: u64,
+    /// The records in this frame.
     pub records: Vec<TbtRecord>,
 }
 

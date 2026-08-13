@@ -35,6 +35,7 @@ impl Default for SecureChannel {
 }
 
 impl SecureChannel {
+    /// A fresh one.
     pub fn new() -> Self {
         let mut client_random = [0u8; 32];
         let timestamp = std::time::SystemTime::now()

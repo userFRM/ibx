@@ -31,8 +31,11 @@ use crate::api::types as api;
 /// Enriched order info from CCP execution reports, for open_order / completed_order callbacks.
 #[derive(Clone, Debug)]
 pub struct RichOrderInfo {
+    /// The contract it is on.
     pub contract: api::Contract,
+    /// The order as this client sent it.
     pub order: api::Order,
+    /// What the venue says about it, including what it would cost.
     pub order_state: api::OrderState,
     /// Last execution details from this order's exec reports.
     pub last_exec: api::Execution,
@@ -61,15 +64,39 @@ pub enum Event {
     /// volatility that price implies.
     OptionComputation(crate::types::OptionComputation),
     /// Historical bar data.
-    HistoricalData { req_id: u32, data: HistoricalResponse },
+    HistoricalData {
+        /// The request this answers.
+        req_id: u32,
+        /// What answered it.
+        data: HistoricalResponse,
+    },
     /// Head timestamp response.
-    HeadTimestamp { req_id: u32, data: HeadTimestampResponse },
+    HeadTimestamp {
+        /// The request this answers.
+        req_id: u32,
+        /// What answered it.
+        data: HeadTimestampResponse,
+    },
     /// Contract details response.
-    ContractDetails { req_id: u32, details: Box<ContractDefinition> },
+    ContractDetails {
+        /// The request this answers.
+        req_id: u32,
+        /// What the venue said about the contract.
+        details: Box<ContractDefinition>,
+    },
     /// End of contract details for a request.
     ContractDetailsEnd(u32),
     /// Position update.
-    PositionUpdate { instrument: InstrumentId, con_id: i64, position: f64, avg_cost: Price },
+    PositionUpdate {
+        /// The engine's own slot for the contract.
+        instrument: InstrumentId,
+        /// The venue's id for it.
+        con_id: i64,
+        /// How much is held.
+        position: f64,
+        /// What it cost on average.
+        avg_cost: Price,
+    },
     /// Connection lost, without the caller asking for it.
     Disconnected,
     /// The session ended because the caller asked it to.
@@ -90,7 +117,9 @@ pub enum Event {
     /// gateway does not push a URL set; callers should fall back to a documented literal
     /// (e.g. `api.ibkr.com`) in that case.
     GatewayLogon {
+        /// What a web endpoint expects as a session header.
         ccp_session_id: String,
+        /// Hosts the venue pushed at logon, by name.
         misc_urls: HashMap<String, String>,
     },
 }
@@ -146,6 +175,7 @@ impl Default for SeqQuote {
 }
 
 impl SeqQuote {
+    /// An empty one.
     pub fn new() -> Self {
         Self {
             version: AtomicU64::new(0),
@@ -368,14 +398,17 @@ impl MarketDataState {
         self.instrument_count.load(Ordering::Relaxed) as u32
     }
 
+    /// Take every tbt trades waiting, leaving none.
     pub fn drain_tbt_trades(&self) -> Vec<TbtTrade> {
         self.tbt_trades.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every tbt quotes waiting, leaving none.
     pub fn drain_tbt_quotes(&self) -> Vec<TbtQuote> {
         self.tbt_quotes.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every real time bars waiting, leaving none.
     pub fn drain_real_time_bars(&self) -> Vec<(u32, RealTimeBar)> {
         self.real_time_bars.lock().unwrap().drain(..).collect()
     }
@@ -402,18 +435,22 @@ impl MarketDataState {
         mine
     }
 
+    /// Take every depth updates waiting, leaving none.
     pub fn drain_depth_updates(&self) -> Vec<DepthUpdate> {
         self.depth_updates.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every tick news waiting, leaving none.
     pub fn drain_tick_news(&self) -> Vec<TickNews> {
         self.tick_news.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every news bulletins waiting, leaving none.
     pub fn drain_news_bulletins(&self) -> Vec<NewsBulletin> {
         self.news_bulletins.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every option computations waiting, leaving none.
     pub fn drain_option_computations(&self) -> Vec<crate::types::OptionComputation> {
         self.option_computations.lock().unwrap().drain(..).collect()
     }
@@ -440,6 +477,7 @@ impl MarketDataState {
         self.venue_time.lock().unwrap().clone()
     }
 
+    /// Take every venue errors waiting, leaving none.
     pub fn drain_venue_errors(&self) -> Vec<String> {
         self.venue_errors.lock().unwrap().drain(..).collect()
     }
@@ -448,6 +486,7 @@ impl MarketDataState {
         self.venue_errors.lock().unwrap().push(text);
     }
 
+    /// Take every subscription failures waiting, leaving none.
     pub fn drain_subscription_failures(&self) -> Vec<(crate::types::InstrumentId, String)> {
         self.subscription_failures.lock().unwrap().drain(..).collect()
     }
@@ -572,6 +611,7 @@ impl OrderState {
         }
     }
 
+    /// Take every fills waiting, leaving none.
     pub fn drain_fills(&self) -> Vec<Fill> {
         self.fills.lock().unwrap().drain(..).collect()
     }
@@ -597,6 +637,7 @@ impl OrderState {
             .collect()
     }
 
+    /// Take every cancel rejects waiting, leaving none.
     pub fn drain_cancel_rejects(&self) -> Vec<CancelReject> {
         self.cancel_rejects.lock().unwrap().drain(..).collect()
     }
@@ -607,10 +648,12 @@ impl OrderState {
         self.order_inactive.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every what if responses waiting, leaving none.
     pub fn drain_what_if_responses(&self) -> Vec<WhatIfResponse> {
         self.what_if_responses.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every completed orders waiting, leaving none.
     pub fn drain_completed_orders(&self) -> Vec<CompletedOrder> {
         self.completed_orders.lock().unwrap().drain(..).collect()
     }
@@ -859,14 +902,17 @@ impl ReferenceState {
         }
     }
 
+    /// Take every historical data waiting, leaving none.
     pub fn drain_historical_data(&self) -> Vec<(u32, HistoricalResponse)> {
         self.historical_data.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every head timestamps waiting, leaving none.
     pub fn drain_head_timestamps(&self) -> Vec<(u32, HeadTimestampResponse)> {
         self.head_timestamps.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every contract details waiting, leaving none.
     pub fn drain_contract_details(&self) -> Vec<(u32, ContractDefinition)> {
         self.contract_details.lock().unwrap().drain(..).collect()
     }
@@ -882,6 +928,8 @@ impl ReferenceState {
         self.smart_components_provisional.load(Ordering::Relaxed)
     }
 
+    /// Whether the venue map held is this client's guess or
+    /// the venue's own statement.
     pub fn note_smart_components_provisional(&self, provisional: bool) {
         self.smart_components_provisional
             .store(provisional, Ordering::Relaxed);
@@ -893,38 +941,56 @@ impl ReferenceState {
         Self::drain_dispatchable(&self.contract_details)
     }
 
+    /// Take every historical data a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_historical_data_for_dispatch(&self) -> Vec<(u32, HistoricalResponse)> {
         Self::drain_dispatchable(&self.historical_data)
     }
 
+    /// Take every head timestamps a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_head_timestamps_for_dispatch(&self) -> Vec<(u32, HeadTimestampResponse)> {
         Self::drain_dispatchable(&self.head_timestamps)
     }
 
+    /// Take every calendar meta data a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_calendar_meta_data_for_dispatch(&self) -> Vec<(u32, String)> {
         Self::drain_dispatchable(&self.calendar_meta_data)
     }
 
+    /// Take every calendar events a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_calendar_events_for_dispatch(&self) -> Vec<(u32, String)> {
         Self::drain_dispatchable(&self.calendar_events)
     }
 
+    /// Take every matching symbols a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_matching_symbols_for_dispatch(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
         Self::drain_dispatchable(&self.matching_symbols)
     }
 
+    /// Take every histogram data a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_histogram_data_for_dispatch(&self) -> Vec<(u32, Vec<HistogramEntry>)> {
         Self::drain_dispatchable(&self.histogram_data)
     }
 
+    /// Take every fundamental data a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_fundamental_data_for_dispatch(&self) -> Vec<(u32, String)> {
         Self::drain_dispatchable(&self.fundamental_data)
     }
 
+    /// Take every historical schedules a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_historical_schedules_for_dispatch(&self) -> Vec<(u32, HistoricalScheduleResponse)> {
         Self::drain_dispatchable(&self.historical_schedules)
     }
 
+    /// Take every contract details end a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_contract_details_end_for_dispatch(&self) -> Vec<u32> {
         let mut g = self.contract_details_end.lock().unwrap();
         let mut out = Vec::new();
@@ -935,6 +1001,8 @@ impl ReferenceState {
         out
     }
 
+    /// Take every historical errors a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
     pub fn drain_historical_errors_for_dispatch(&self) -> Vec<(u32, i32, String)> {
         let mut g = self.historical_errors.lock().unwrap();
         let mut out = Vec::new();
@@ -996,10 +1064,12 @@ impl ReferenceState {
         mine
     }
 
+    /// Take the head timestamp answering one request, leaving the rest.
     pub fn take_head_timestamp_for(&self, req_id: u32) -> Option<HeadTimestampResponse> {
         Self::take_one(&self.head_timestamps, req_id)
     }
 
+    /// Take the matching symbols answering one request, leaving the rest.
     pub fn take_matching_symbols_for(&self, req_id: u32) -> Option<Vec<SymbolMatch>> {
         Self::take_one(&self.matching_symbols, req_id)
     }
@@ -1012,14 +1082,17 @@ impl ReferenceState {
         Some((underlying, scopes))
     }
 
+    /// Take the histogram answering one request, leaving the rest.
     pub fn take_histogram_for(&self, req_id: u32) -> Option<Vec<HistogramEntry>> {
         Self::take_one(&self.histogram_data, req_id)
     }
 
+    /// Take the fundamental answering one request, leaving the rest.
     pub fn take_fundamental_for(&self, req_id: u32) -> Option<String> {
         Self::take_one(&self.fundamental_data, req_id)
     }
 
+    /// Take the historical schedule answering one request, leaving the rest.
     pub fn take_historical_schedule_for(&self, req_id: u32) -> Option<HistoricalScheduleResponse> {
         Self::take_one(&self.historical_schedules, req_id)
     }
@@ -1055,22 +1128,27 @@ impl ReferenceState {
         Some((code, msg))
     }
 
+    /// Take every contract details end waiting, leaving none.
     pub fn drain_contract_details_end(&self) -> Vec<u32> {
         self.contract_details_end.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every calendar meta data waiting, leaving none.
     pub fn drain_calendar_meta_data(&self) -> Vec<(u32, String)> {
         self.calendar_meta_data.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every calendar events waiting, leaving none.
     pub fn drain_calendar_events(&self) -> Vec<(u32, String)> {
         self.calendar_events.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every matching symbols waiting, leaving none.
     pub fn drain_matching_symbols(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
         self.matching_symbols.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every option params waiting, leaving none.
     pub fn drain_option_params(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
         self.option_params.lock().unwrap().drain(..).collect()
     }
@@ -1094,14 +1172,17 @@ impl ReferenceState {
         out
     }
 
+    /// Take every scanner params waiting, leaving none.
     pub fn drain_scanner_params(&self) -> Vec<String> {
         self.scanner_params.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every scanner data waiting, leaving none.
     pub fn drain_scanner_data(&self) -> Vec<(u32, ScannerResult)> {
         self.scanner_data.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every historical news waiting, leaving none.
     pub fn drain_historical_news(&self) -> Vec<(u32, Vec<NewsHeadline>, bool)> {
         self.historical_news.lock().unwrap().drain(..).collect()
     }
@@ -1131,26 +1212,32 @@ impl ReferenceState {
         out
     }
 
+    /// Take every news articles waiting, leaving none.
     pub fn drain_news_articles(&self) -> Vec<(u32, i32, String)> {
         self.news_articles.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every fundamental data waiting, leaving none.
     pub fn drain_fundamental_data(&self) -> Vec<(u32, String)> {
         self.fundamental_data.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every histogram data waiting, leaving none.
     pub fn drain_histogram_data(&self) -> Vec<(u32, Vec<HistogramEntry>)> {
         self.histogram_data.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every historical ticks waiting, leaving none.
     pub fn drain_historical_ticks(&self) -> Vec<(u32, HistoricalTickData, String, bool)> {
         self.historical_ticks.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every historical schedules waiting, leaving none.
     pub fn drain_historical_schedules(&self) -> Vec<(u32, HistoricalScheduleResponse)> {
         self.historical_schedules.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every historical errors waiting, leaving none.
     pub fn drain_historical_errors(&self) -> Vec<(u32, i32, String)> {
         self.historical_errors.lock().unwrap().drain(..).collect()
     }
@@ -1249,6 +1336,7 @@ impl ReferenceState {
         }
     }
 
+    /// Take every depth exchanges waiting, leaving none.
     pub fn drain_depth_exchanges(&self) -> Vec<DepthMktDataDescription> {
         let mut pending = self.depth_exchanges_pending.lock().unwrap();
         if *pending {
@@ -1292,22 +1380,27 @@ impl ReferenceState {
 
     // ── Gateway-local init data ──
 
+    /// Which venue each bit of a quote's exchange mask refers to.
     pub fn smart_components(&self) -> Vec<crate::types::SmartComponent> {
         self.smart_components.lock().unwrap().clone()
     }
 
+    /// Every provider this account may read.
     pub fn news_providers(&self) -> Vec<crate::types::NewsProvider> {
         self.news_providers.lock().unwrap().clone()
     }
 
+    /// Every soft dollar tier it may direct commission to.
     pub fn soft_dollar_tiers(&self) -> Vec<crate::types::SoftDollarTier> {
         self.soft_dollar_tiers.lock().unwrap().clone()
     }
 
+    /// Every account family this login belongs to.
     pub fn family_codes(&self) -> Vec<crate::types::FamilyCode> {
         self.family_codes.lock().unwrap().clone()
     }
 
+    /// How the venue brands this login.
     pub fn white_branding_id(&self) -> String {
         self.white_branding_id.lock().unwrap().clone()
     }
@@ -1399,6 +1492,7 @@ impl ReferenceState {
         self.island_granted.load(Ordering::Relaxed)
     }
 
+    /// Whether the venue granted this capability at logon.
     pub fn feature_enabled(&self, token: &str) -> bool {
         self.enabled_features.lock().unwrap().iter().any(|t| t == token)
     }
@@ -1526,6 +1620,7 @@ impl PortfolioState {
         self.values_elsewhere.lock().unwrap().insert((held, name), value);
     }
 
+    /// Every position held, as the caller reads one.
     pub fn position_infos(&self) -> Vec<PositionInfo> {
         self.position_infos.lock().unwrap().values().cloned().collect()
     }
@@ -1697,9 +1792,13 @@ pub struct SharedState {
     /// in: two sessions in one process have their own, and neither can change
     /// the other's mid-flight.
     pub settings: std::sync::Mutex<std::sync::Arc<crate::api::settings::SessionSettings>>,
+    /// Prices, books and streams.
     pub market: MarketDataState,
+    /// Fills, order changes and previews.
     pub orders: OrderState,
+    /// Everything that is not a price: contracts, history, news, scans.
     pub reference: ReferenceState,
+    /// What the account holds and what it is worth.
     pub portfolio: PortfolioState,
     /// Last measured auth-connection round-trip time in nanoseconds
     /// (0 = never measured). Sampled from the test-request/echo cycle —
@@ -1748,6 +1847,7 @@ impl SharedState {
         *self.settings.lock().unwrap() = settings;
     }
 
+    /// An empty one.
     pub fn new() -> Self {
         Self {
             settings: std::sync::Mutex::new(std::sync::Arc::new(Default::default())),

@@ -450,15 +450,23 @@ fn try_frame_farm_msg(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
 /// other did not, and every reconnect scheduler silently refused to run on the
 /// empty host (ibx#378). The compiler asks for them now.
 pub struct CallerAuth {
+    /// What this session runs under.
     pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
+    /// Which host to open the session against.
     pub host: String,
+    /// The login.
     pub username: String,
+    /// Its password, zeroed when dropped.
     pub password: Zeroizing<String>,
+    /// Whether this is a paper session. It decides one step of the logon and
+    /// nothing after it.
     pub paper: bool,
     /// What the second-factor gate needs if the server bumps a reconnect back
     /// to SRP. Without these an unattended client cannot finish that handshake.
     pub code_provider: Option<session::CodeProvider>,
+    /// How long to wait for the second factor before giving up.
     pub ib_key_timeout_secs: u64,
+    /// Which kind of second factor to ask for.
     pub ib_key_token_sub_type: String,
 }
 
@@ -469,24 +477,36 @@ pub struct ReconnectAuth {
     /// session stated when it opened, rather than whatever the process holds
     /// by the time it drops.
     pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
+    /// Which host to open the session against.
     pub host: String,
+    /// The login.
     pub username: String,
     /// Wrapped in `Zeroizing` so the plaintext is wiped from memory on drop.
     pub password: Zeroizing<String>,
+    /// Whether this is a paper session. It decides one step of the logon and
+    /// nothing after it.
     pub paper: bool,
     /// What the second-factor gate needs if the server bumps a reconnect back
     /// to SRP. Without these an unattended client cannot finish that handshake.
     pub code_provider: Option<session::CodeProvider>,
+    /// How long to wait for the second factor before giving up.
     pub ib_key_timeout_secs: u64,
+    /// Which kind of second factor to ask for.
     pub ib_key_token_sub_type: String,
+    /// The key the session was established with.
     pub session_key: BigUint,
+    /// The token it resumes with.
     pub session_token: BigUint,
+    /// The venue's own id for it.
     pub server_session_id: String,
+    /// What this machine identified itself as.
     pub hw_info: String,
+    /// What the client string encoded to.
     pub encoded: String,
     /// Historical-data farm routing parsed from the auth-server response.
     /// Used by HMDS reconnect (ibx#187) — empty when no HMDS route was parsed.
     pub hmds_host: String,
+    /// Which historical farm the venue routed this session to.
     pub hmds_farm: String,
     /// Trading farm routing exactly as parsed from the same response — empty
     /// when the auth server stated none, rather than carrying the fallback the
@@ -494,11 +514,13 @@ pub struct ReconnectAuth {
     /// lets the reconnect use whatever host the session has now, which a
     /// redirect may have changed since (ibx#295).
     pub trading_host: String,
+    /// Which trading farm.
     pub trading_farm: String,
     /// Security-definition farm routing from the same response, empty when the
     /// venue stated none. The calendar rides this one, and without the route a
     /// connection that goes cannot be rebuilt.
     pub secdef_host: String,
+    /// Which security-definition farm.
     pub secdef_farm: String,
 }
 
@@ -530,19 +552,24 @@ fn note_account(accounts: &mut Vec<String>, account: &str) {
 
 /// Full gateway connection.
 pub struct Gateway {
+    /// The account this session acts for.
     pub account_id: String,
     /// Every account this login holds, the first being [`Gateway::account_id`].
     /// A login with one account holds one entry.
     pub accounts: Vec<String>,
+    /// The token it resumes with.
     pub session_token: BigUint,
     /// Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
     /// Sourced from the post-auth FIX logon ACK, falling back to the locally generated
     /// session ID when the gateway does not echo one back.
     pub server_session_id: String,
+    /// What the trading connection authenticates with.
     pub ccp_token: String,
+    /// How often the venue expects to hear from this client.
     pub heartbeat_interval: u64,
     /// Stored for farm reconnection.
     pub hw_info: String,
+    /// What the client string encoded to.
     pub encoded: String,
     /// Raw soft dollar tier data from CCP logon tag 6560.
     pub raw_soft_dollar_tiers: String,
@@ -575,14 +602,17 @@ pub struct Gateway {
     /// Historical-data farm routing parsed from the auth-server response,
     /// retained for HMDS reconnect (ibx#187).
     pub hmds_host: String,
+    /// Which historical farm the venue routed this session to.
     pub hmds_farm: String,
     /// Trading farm routing from the same response, retained so the trading
     /// reconnect uses the route the auth server gave rather than a literal.
     pub trading_host: String,
+    /// Which trading farm.
     pub trading_farm: String,
     /// Security-definition farm routing from the same response, retained so a
     /// connection that goes can be rebuilt. The calendar rides this one.
     pub secdef_host: String,
+    /// Which security-definition farm.
     pub secdef_farm: String,
 }
 
@@ -629,6 +659,7 @@ impl Farm {
 /// Named rather than returned as a row of five, two of which are optional and
 /// none of which said which farm it was.
 pub struct Session {
+    /// The session itself.
     pub gateway: Gateway,
     /// Quotes, depth and the ticks that follow them.
     pub market_data: Connection,
@@ -1130,10 +1161,14 @@ pub struct GatewayConfig {
     /// session in one process used to write its own settings where the first
     /// session's reconnects would find them.
     pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
+    /// The login.
     pub username: String,
     /// Wrapped in `Zeroizing` so the plaintext is wiped from memory on drop.
     pub password: Zeroizing<String>,
+    /// Which host to open the session against.
     pub host: String,
+    /// Whether this is a paper session. It decides one step of the logon and
+    /// nothing after it.
     pub paper: bool,
     /// Accept invalid TLS certificates during auth. Default: `false` (secure).
     /// Only set to `true` for local testing against self-signed gateways.
@@ -2483,6 +2518,7 @@ impl Gateway {
         }
     }
 
+    /// Hand the open connections to the loop that will run them.
     pub fn into_hot_loop_with_farms(
         self,
         shared: Arc<SharedState>,

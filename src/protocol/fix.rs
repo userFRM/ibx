@@ -12,49 +12,84 @@ use std::io::{self, Read};
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 
+/// What separates one field from the next.
 pub const SOH: u8 = 0x01;
 
 // Standard FIX tags
+/// FIX tag 8: the begin string.
 pub const TAG_BEGIN_STRING: u32 = 8;
+/// FIX tag 9: the body length.
 pub const TAG_BODY_LENGTH: u32 = 9;
+/// FIX tag 10: the checksum.
 pub const TAG_CHECKSUM: u32 = 10;
+/// FIX tag 34: the msg seq num.
 pub const TAG_MSG_SEQ_NUM: u32 = 34;
+/// FIX tag 35: the msg type.
 pub const TAG_MSG_TYPE: u32 = 35;
+/// FIX tag 49: the sender comp id.
 pub const TAG_SENDER_COMP_ID: u32 = 49;
+/// FIX tag 52: the sending time.
 pub const TAG_SENDING_TIME: u32 = 52;
 
 /// This file's own text, so a handler can resolve a tag it refers to by name.
 pub const SOURCE: &str = include_str!("fix.rs");
+/// FIX tag 56: the target comp id.
 pub const TAG_TARGET_COMP_ID: u32 = 56;
+/// FIX tag 58: the text.
 pub const TAG_TEXT: u32 = 58;
+/// FIX tag 61: the urgency.
 pub const TAG_URGENCY: u32 = 61;
+/// FIX tag 98: the encrypt method.
 pub const TAG_ENCRYPT_METHOD: u32 = 98;
+/// FIX tag 108: the heartbeat int.
 pub const TAG_HEARTBEAT_INT: u32 = 108;
+/// FIX tag 112: the test req id.
 pub const TAG_TEST_REQ_ID: u32 = 112;
+/// FIX tag 141: the reset seq num.
 pub const TAG_RESET_SEQ_NUM: u32 = 141;
+/// FIX tag 148: the headline.
 pub const TAG_HEADLINE: u32 = 148;
+/// FIX tag 207: the security exchange.
 pub const TAG_SECURITY_EXCHANGE: u32 = 207;
 
 // IB custom tags
+/// FIX tag 6034: the build.
 pub const TAG_IB_BUILD: u32 = 6034;
+/// FIX tag 6040: the comm type.
 pub const TAG_IB_COMM_TYPE: u32 = 6040;
+/// FIX tag 6143: the comp version.
 pub const TAG_IB_COMP_VERSION: u32 = 6143;
+/// FIX tag 6968: the version.
 pub const TAG_IB_VERSION: u32 = 6968;
+/// FIX tag 8349: the hmac signature.
 pub const TAG_HMAC_SIGNATURE: u32 = 8349;
 
 // Message types
+/// Message type `0`: a heartbeat.
 pub const MSG_HEARTBEAT: &str = "0";
+/// Message type `1`: a test request.
 pub const MSG_TEST_REQUEST: &str = "1";
+/// Message type `3`: a reject.
 pub const MSG_REJECT: &str = "3";
+/// Message type `5`: a logout.
 pub const MSG_LOGOUT: &str = "5";
+/// Message type `A`: a logon.
 pub const MSG_LOGON: &str = "A";
+/// Message type `B`: a news item.
 pub const MSG_NEWS: &str = "B";
+/// Message type `U`: one of the venue's own messages.
 pub const MSG_IB_CUSTOM: &str = "U";
+/// Message type `8`: an execution report.
 pub const MSG_EXEC_REPORT: &str = "8";
+/// Message type `9`: a cancel reject.
 pub const MSG_CANCEL_REJECT: &str = "9";
+/// Message type `D`: a new order.
 pub const MSG_NEW_ORDER: &str = "D";
+/// Message type `F`: an order cancel.
 pub const MSG_ORDER_CANCEL: &str = "F";
+/// Message type `G`: an order replace.
 pub const MSG_ORDER_REPLACE: &str = "G";
+/// Message type `V`: a market-data request.
 pub const MSG_MARKET_DATA_REQ: &str = "V";
 
 /// Render a FIX byte buffer with SOH (0x01) shown as `|` and any other

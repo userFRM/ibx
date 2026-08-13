@@ -5,19 +5,29 @@
 use crate::protocol::fix;
 
 // Tags for historical data
+/// FIX tag 6118: the historical xml.
 pub const TAG_HISTORICAL_XML: u32 = 6118;
 
 /// Bar data types for historical queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BarDataType {
+    /// What traded.
     Trades,
+    /// The midpoint between bid and ask.
     Midpoint,
+    /// The bid.
     Bid,
+    /// The ask.
     Ask,
+    /// Both sides.
     BidAsk,
+    /// What traded, adjusted for splits and dividends.
     AdjustedLast,
+    /// The volatility the underlying realised.
     HistoricalVolatility,
+    /// The volatility its options implied.
     ImpliedVolatility,
+    /// The rate the venue's option model carries.
     OptionInterestRate,
 }
 
@@ -51,6 +61,7 @@ impl BarDataType {
         })
     }
 
+    /// The name the venue knows this by.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Trades => "Last",
@@ -69,26 +80,47 @@ impl BarDataType {
 /// Bar size / time step for historical queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BarSize {
+    /// One bar covers a second.
     Sec1,
+    /// One bar covers five seconds.
     Sec5,
+    /// One bar covers ten seconds.
     Sec10,
+    /// One bar covers fifteen seconds.
     Sec15,
+    /// One bar covers thirty seconds.
     Sec30,
+    /// One bar covers a minute.
     Min1,
+    /// One bar covers two minutes.
     Min2,
+    /// One bar covers three minutes.
     Min3,
+    /// One bar covers five minutes.
     Min5,
+    /// One bar covers ten minutes.
     Min10,
+    /// One bar covers fifteen minutes.
     Min15,
+    /// One bar covers twenty minutes.
     Min20,
+    /// One bar covers half an hour.
     Min30,
+    /// One bar covers an hour.
     Hour1,
+    /// One bar covers two hours.
     Hour2,
+    /// One bar covers three hours.
     Hour3,
+    /// One bar covers four hours.
     Hour4,
+    /// One bar covers eight hours.
     Hour8,
+    /// One bar covers a day.
     Day1,
+    /// One bar covers a week.
     Week1,
+    /// One bar covers a month.
     Month1,
 }
 
@@ -170,6 +202,7 @@ impl BarSize {
         }
     }
 
+    /// The name the venue knows this by.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Sec1 => "1 secs",
@@ -200,42 +233,64 @@ impl BarSize {
 /// Parameters for a historical data request.
 #[derive(Debug, Clone)]
 pub struct HistoricalRequest {
+    /// The name this client gave the query, which the answer echoes.
     pub query_id: String,
+    /// The venue's id for the contract.
     pub con_id: u32,
+    /// Its ticker.
     pub symbol: String,
     /// Wire security type and exchange for the contract being requested.
     /// Owned rather than static: they come from the caller's `Contract`, and
     /// hardcoding them described a different contract than was asked for
     /// (ibx#305).
     pub sec_type: String,
+    /// Which venue to answer for.
     pub exchange: String,
+    /// Which series is wanted.
     pub data_type: BarDataType,
+    /// The end of the window. Empty means now.
     pub end_time: String,
+    /// How far back from that end it reaches.
     pub duration: String,
+    /// How long one bar covers.
     pub bar_size: BarSize,
+    /// Whether to count only regular trading hours.
     pub use_rth: bool,
+    /// Whether the venue keeps sending once the window is answered.
     pub keep_up_to_date: bool,
 }
 
 /// A single historical OHLCV bar parsed from XML.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalBar {
+    /// When the bar opened.
     pub time: String,
+    /// Its first price.
     pub open: f64,
+    /// Its highest.
     pub high: f64,
+    /// Its lowest.
     pub low: f64,
+    /// Its last.
     pub close: f64,
+    /// How much traded in it.
     pub volume: i64,
+    /// The volume-weighted average price.
     pub wap: f64,
+    /// How many trades made it.
     pub count: u32,
 }
 
 /// Parsed historical data response.
 #[derive(Debug, Clone)]
 pub struct HistoricalResponse {
+    /// The name this client gave the query, which the answer echoes.
     pub query_id: String,
+    /// The zone the times are stated in.
     pub timezone: String,
+    /// The bars themselves.
     pub bars: Vec<HistoricalBar>,
+    /// Whether this is the last part of the answer.
     pub is_complete: bool,
 }
 
@@ -272,6 +327,7 @@ pub fn normalize_duration(duration: &str) -> String {
     out
 }
 
+/// Build the query the venue reads, as the XML it expects.
 pub fn build_query_xml(req: &HistoricalRequest) -> String {
     let exchange = match req.exchange.as_str() {
         "SMART" => "BEST",
@@ -445,17 +501,24 @@ pub fn parse_ticker_id(xml: &str) -> Option<String> {
 /// Parameters for a head timestamp request.
 #[derive(Debug, Clone)]
 pub struct HeadTimestampRequest {
+    /// The venue's id for the contract.
     pub con_id: u32,
+    /// What kind of contract it is.
     pub sec_type: &'static str,
+    /// Which venue to answer for.
     pub exchange: &'static str,
+    /// Which series is wanted.
     pub data_type: BarDataType,
+    /// Whether to count only regular trading hours.
     pub use_rth: bool,
 }
 
 /// Parsed head timestamp response.
 #[derive(Debug, Clone)]
 pub struct HeadTimestampResponse {
+    /// The earliest moment the venue holds data for.
     pub head_timestamp: String,
+    /// The zone the times are stated in.
     pub timezone: String,
 }
 

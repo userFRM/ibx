@@ -9,11 +9,17 @@
 /// What a corporate action did to the contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdjustmentKind {
+    /// A dividend paid in cash.
     CashDividend,
+    /// A dividend paid in shares.
     StockDividend,
+    /// A share split.
     Split,
+    /// A business spun out as its own listing.
     SpinOff,
+    /// A right to buy new shares.
     RightsOffer,
+    /// A future rolling into the next month.
     FutureRollover,
 }
 
@@ -31,6 +37,7 @@ impl AdjustmentKind {
         }
     }
 
+    /// Read the kind from the code the venue states it as.
     pub fn from_code(code: &str) -> Option<Self> {
         Some(match code {
             "CD" => Self::CashDividend,
@@ -61,12 +68,19 @@ impl AdjustmentKind {
 /// split states no record date, and saying it did would be a date nobody set.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Adjustment {
+    /// What kind of action it is.
     pub kind: Option<AdjustmentKind>,
+    /// When it takes effect.
     pub date: String,
+    /// What the venue states for it.
     pub value: String,
+    /// What currency that is in.
     pub currency: String,
+    /// When it was announced.
     pub announce_date: String,
+    /// The day the holder of record is fixed.
     pub record_date: String,
+    /// The day it is paid.
     pub pay_date: String,
     /// Whether a dividend was the regular one or a special.
     pub payment_type: String,
@@ -77,13 +91,18 @@ pub struct Adjustment {
 /// What a caller asks for.
 #[derive(Debug, Clone)]
 pub struct AdjustmentRequest {
+    /// The name this client gave the query, which the answer echoes.
     pub query_id: String,
+    /// The venue's id for the contract.
     pub con_id: u32,
+    /// What kind of contract it is.
     pub sec_type: String,
+    /// Which venue.
     pub exchange: String,
     /// Both dates as the venue states them back, so a caller can hand back what
     /// it was given.
     pub start_date: String,
+    /// Its end.
     pub end_date: String,
 }
 
@@ -129,8 +148,11 @@ pub fn build_adjustments_cancel_xml(query_id: &str) -> String {
 /// The contract the actions belong to, echoed back beside them.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AdjustedContract {
+    /// The venue's id for the contract.
     pub con_id: String,
+    /// Its ticker.
     pub symbol: String,
+    /// Which venue.
     pub exchange: String,
 }
 

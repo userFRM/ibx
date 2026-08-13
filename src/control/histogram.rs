@@ -9,7 +9,9 @@ use super::historical::TAG_HISTORICAL_XML;
 /// Parameters for a histogram data request.
 #[derive(Debug, Clone)]
 pub struct HistogramRequest {
+    /// The venue's id for the contract.
     pub con_id: u32,
+    /// Whether to count only regular trading hours.
     pub use_rth: bool,
     /// Time period, e.g. "1 week", "3 days", "1 month".
     pub period: String,
@@ -20,7 +22,9 @@ pub struct HistogramRequest {
 /// A single histogram entry (price level and count at that level).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistogramEntry {
+    /// The price, in the units the record carries.
     pub price: f64,
+    /// How much traded there.
     pub count: i64,
 }
 

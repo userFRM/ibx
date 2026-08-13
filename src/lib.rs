@@ -46,6 +46,10 @@
 // satisfy an arbitrary count would put a layer between the caller and the
 // message without making either clearer.
 #![allow(clippy::too_many_arguments)]
+// Every public item says what it is. A field with no statement is one a reader
+// has to infer from its name and a caller has to discover by watching what
+// arrives, which is what most of this used to be.
+#![deny(missing_docs)]
 
 /// The surface a program written against this client touches: its requests,
 /// its callbacks, and the types they carry.
@@ -53,7 +57,6 @@
 /// Documented in full, and required to stay that way. A callback that says
 /// nothing is one a caller has to discover by watching what arrives, which is
 /// what the whole of this surface used to be.
-#[deny(missing_docs)]
 pub mod api;
 pub mod auth;
 pub mod bridge;

@@ -30,8 +30,11 @@ pub struct AuthResult {
     /// Token type discriminator: `"st"`, `"tst"`, or `"zenith"`. Matches the `stoken_type`
     /// field expected by the SSO `Authenticate-TWS` body.
     pub token_type: String,
+    /// The venue's own id for this session.
     pub session_id: String,
+    /// Every capability it granted.
     pub features: Vec<String>,
+    /// Whether the login succeeded.
     pub authenticated: bool,
 }
 
@@ -50,37 +53,62 @@ impl AuthResult {
 
 /// Authenticated auth session.
 pub struct AuthSession {
+    /// The socket it runs on.
     pub stream: TcpStream,
+    /// The cipher both ends agreed.
     pub channel: SecureChannel,
+    /// What the login answered.
     pub auth_result: AuthResult,
+    /// What this machine identified itself as.
     pub hw_info: String,
+    /// What the client string encoded to.
     pub encoded: String,
 }
 
 /// Authenticated farm session.
 pub struct FarmSession {
+    /// The socket it runs on.
     pub stream: TcpStream,
+    /// The cipher both ends agreed.
     pub channel: SecureChannel,
+    /// What the login answered.
     pub auth_result: AuthResult,
+    /// What this machine identified itself as.
     pub hw_info: String,
+    /// What the client string encoded to.
     pub encoded: String,
+    /// Which farm this connection is to.
     pub farm_name: String,
+    /// Which name-service version the venue speaks.
     pub server_ns_version: u32,
 }
 
 // CONNECT_REQUEST flags
+/// Farm flag 1: ok to redirect.
 pub const FLAG_OK_TO_REDIRECT: u32 = 1;
+/// Farm flag 2: is farm.
 pub const FLAG_IS_FARM: u32 = 2;
+/// Farm flag 4: version.
 pub const FLAG_VERSION: u32 = 4;
+/// Farm flag 8: version present.
 pub const FLAG_VERSION_PRESENT: u32 = 8;
+/// Farm flag 16: soft token.
 pub const FLAG_SOFT_TOKEN: u32 = 16;
+/// Farm flag 32: device info.
 pub const FLAG_DEVICE_INFO: u32 = 32;
+/// Farm flag 64: permanent token.
 pub const FLAG_PERMANENT_TOKEN: u32 = 64;
+/// Farm flag 4096: not established.
 pub const FLAG_UNKNOWN_U: u32 = 4096;
+/// Farm flag 8192: paper connect.
 pub const FLAG_PAPER_CONNECT: u32 = 8192;
+/// Farm flag 131072: farm name.
 pub const FLAG_FARM_NAME: u32 = 131072;
+/// Farm flag 524288: not established.
 pub const FLAG_UNKNOWN_19: u32 = 524288;
+/// Farm flag 1048576: not established.
 pub const FLAG_UNKNOWN_20: u32 = 1048576;
+/// Farm flag 1024: twsro token.
 pub const FLAG_TWSRO_TOKEN: u32 = 1024;
 
 /// Generate a session ID: hex(epoch_secs).hex(millis%1000).
@@ -305,15 +333,24 @@ pub fn recv_msg<R: Read>(stream: &mut R) -> io::Result<RecvMsg> {
 /// Classified received message.
 #[derive(Debug)]
 pub enum RecvMsg {
+    /// One of the venue's own name-service messages.
     Ns {
+        /// Which version of that message this is.
         version: u32,
+        /// Which message it is.
         msg_type: u32,
+        /// Its fields, in the order they arrived.
         fields: Vec<String>,
     },
+    /// One of its binary session messages.
     Xyz {
+        /// Which message this is.
         msg_id: u32,
+        /// Which part of it.
         sub_id: u32,
+        /// What state the venue reports.
         state: u32,
+        /// Its fields, in the order they arrived.
         fields: Vec<String>,
     },
 }
@@ -634,7 +671,9 @@ pub struct IbKeyChallenge {
     /// Which factor is being asked for. The two want different codes, so
     /// branch on this before validating what the operator typed.
     pub factor: SecondFactor,
+    /// The code shown on the phone, which the person confirms.
     pub display_id: String,
+    /// Where the approval is confirmed.
     pub avth_url: String,
 }
 
@@ -1277,6 +1316,7 @@ pub enum SoftTokenOutcome {
     Unknown,
 }
 
+/// Exchange the login for a token this session can resume with.
 pub fn do_soft_token(
     stream: &mut TcpStream,
     session_token: &BigUint,
