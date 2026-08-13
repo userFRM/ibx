@@ -1,3 +1,15 @@
+//! The types the engine and the wire share: what a request is, what a
+//! quote is, and the fixed-point scales prices and sizes are held in.
+//!
+//! Prices and sizes are integers here, scaled by [`PRICE_SCALE`] and
+//! [`QTY_SCALE`]. They become floating point at the caller's edge and
+//! nowhere before it.
+//!
+//! Not the caller-facing surface. What a program written against this client
+//! touches is [`crate::api`], which is documented in full and gated on staying
+//! that way. This module is the engine underneath it, exported because the
+//! binaries, benchmarks and integration tests in this repository reach it.
+
 /// Internal instrument identifier. Mapped from IB's conId at subscription time.
 /// Used as an index into pre-allocated arrays, so values are dense and small.
 pub type InstrumentId = u32;
@@ -160,17 +172,29 @@ impl OrderStatus {
 #[repr(C, align(64))]
 #[derive(Default)]
 pub struct Quote {
+    /// The best price anyone is offering to buy at, scaled by `PRICE_SCALE`.
     pub bid: Price,
+    /// The best price anyone is offering to sell at.
     pub ask: Price,
+    /// What it last traded at.
     pub last: Price,
+    /// How much is offered at the bid, scaled by `QTY_SCALE`.
     pub bid_size: Qty,
+    /// How much at the ask.
     pub ask_size: Qty,
+    /// How much last traded.
     pub last_size: Qty,
+    /// How much has traded today.
     pub volume: Qty,
+    /// What it opened at.
     pub open: Price,
+    /// The highest it has traded today.
     pub high: Price,
+    /// The lowest.
     pub low: Price,
+    /// What it closed at, which is what a quiet market states.
     pub close: Price,
+    /// When this quote was read, in nanoseconds since the epoch.
     pub timestamp_ns: u64,
     /// Bid-exchange bitmask. Each set bit indexes into smart_components by bit_number.
     /// Hypothesis pending wire-format confirmation; see deepentropy/ib-agent#120.
@@ -191,13 +215,21 @@ pub struct Quote {
 /// Execution fill report.
 #[derive(Debug, Clone, Copy)]
 pub struct Fill {
+    /// Which contract filled.
     pub instrument: InstrumentId,
+    /// The order it filled against.
     pub order_id: OrderId,
+    /// Whether it bought or sold.
     pub side: Side,
+    /// At what price.
     pub price: Price,
+    /// How much filled on this report.
     pub qty: i64,
+    /// How much of the order is still working.
     pub remaining: i64,
+    /// What it cost.
     pub commission: Price,
+    /// When it filled.
     pub timestamp_ns: u64,
     /// FIX tag 14 CumQty — filled across the whole order, not this print.
     pub cum_qty: i64,
@@ -209,16 +241,24 @@ pub struct Fill {
 /// Order status change notification.
 #[derive(Debug, Clone, Copy)]
 pub struct OrderUpdate {
+    /// The order this is about.
     pub order_id: OrderId,
+    /// The contract it is on.
     pub instrument: InstrumentId,
+    /// Where it stands now.
     pub status: OrderStatus,
+    /// How much has filled.
     pub filled_qty: f64,
+    /// How much has not.
     pub remaining_qty: f64,
     /// What the order has paid on average so far, as the report states it.
     /// Zero when nothing has filled.
     pub avg_price: Price,
+    /// The venue's own id for it, stable across sessions.
     pub perm_id: i64,
+    /// The order it is a child of, where the venue states one.
     pub parent_id: i64,
+    /// When the venue stated this.
     pub timestamp_ns: u64,
 }
 
@@ -230,11 +270,17 @@ pub struct OrderUpdate {
 /// added to them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PositionElsewhere {
+    /// The contract held.
     pub con_id: i64,
+    /// Its ticker.
     pub symbol: String,
+    /// What kind of contract it is.
     pub sec_type: String,
+    /// What it is priced in.
     pub currency: String,
+    /// How much is held.
     pub position: f64,
+    /// What it cost on average.
     pub avg_cost: Price,
     /// Where the venue says it sits.
     pub held: HeldElsewhere,
@@ -258,26 +304,38 @@ pub enum HeldElsewhere {
 /// mark for a value that was not sent. Zero is a real greek.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct OptionComputation {
+    /// The option this models.
     pub instrument: InstrumentId,
+    /// What volatility the price implies.
     pub implied_vol: f64,
+    /// How much the option moves with the underlying.
     pub delta: f64,
+    /// What the model says the option is worth.
     pub opt_price: f64,
+    /// The present value of dividends before expiry.
     pub pv_dividend: f64,
+    /// How much the delta moves with it.
     pub gamma: f64,
+    /// How much the option moves with volatility.
     pub vega: f64,
+    /// How much it loses with time.
     pub theta: f64,
+    /// What the model says the underlying is worth.
     pub und_price: f64,
 }
 
 /// Cancel/modify reject notification (reject message).
 #[derive(Debug, Clone, Copy)]
 pub struct CancelReject {
+    /// The order that was not cancelled.
     pub order_id: OrderId,
+    /// The contract it is on.
     pub instrument: InstrumentId,
     /// 1 = cancel rejected, 2 = modify rejected (FIX tag 434 CxlRejResponseTo).
     pub reject_type: u8,
     /// Numeric reason code (FIX tag 102 CxlRejReason). 0=TooLate, 1=UnknownOrder, etc.
     pub reason_code: i32,
+    /// When the venue said so.
     pub timestamp_ns: u64,
 }
 
@@ -325,20 +383,31 @@ pub fn ord_type_fix_str(t: u8) -> &'static str {
 /// Returned when a what-if order is submitted — the order is NOT placed.
 #[derive(Debug, Clone)]
 pub struct WhatIfResponse {
+    /// The preview this answers.
     pub order_id: OrderId,
+    /// The contract it was previewed on.
     pub instrument: InstrumentId,
+    /// What initial margin the account carried before it.
     pub init_margin_before: Price,
+    /// What maintenance margin.
     pub maint_margin_before: Price,
+    /// What equity with loan value.
     pub equity_with_loan_before: Price,
+    /// What it would carry with the order on.
     pub init_margin_after: Price,
+    /// And maintenance margin.
     pub maint_margin_after: Price,
+    /// And equity with loan value.
     pub equity_with_loan_after: Price,
+    /// What the order would cost.
     pub commission: Price,
     /// Where a commission is given as a range rather than a number, and the
     /// money it is quoted in. A preview that states the margin and not the cost
     /// is half a preview.
     pub min_commission: Price,
+    /// The most.
     pub max_commission: Price,
+    /// What those figures are in.
     pub commission_currency: String,
     /// What the venue warned about, which is its own text and not the order's.
     pub warning_text: String,
@@ -1259,6 +1328,7 @@ impl TbtType {
 /// A single tick-by-tick trade (AllLast) from 35=E.
 #[derive(Debug, Clone)]
 pub struct TbtTrade {
+    /// The contract that traded.
     pub instrument: InstrumentId,
     /// The request this arrived under, as the caller numbered it.
     ///
@@ -1267,9 +1337,12 @@ pub struct TbtTrade {
     /// every quote change — and looking up by contract hands both of them
     /// whichever request was made last.
     pub req_id: i64,
+    /// At what price.
     pub price: Price,
+    /// How much.
     pub size: i64,
     pub timestamp: u64,
+    /// Which venue it printed on.
     pub exchange: String,
     pub conditions: String,
     /// The venue may still revise this print.
@@ -1285,6 +1358,7 @@ pub struct TbtTrade {
 /// A single tick-by-tick bid/ask quote from 35=E.
 #[derive(Debug, Clone, Copy)]
 pub struct TbtQuote {
+    /// The contract quoted.
     pub instrument: InstrumentId,
     /// The request this arrived under, as the caller numbered it.
     ///
@@ -1293,23 +1367,30 @@ pub struct TbtQuote {
     /// every quote change — and looking up by contract hands both of them
     /// whichever request was made last.
     pub req_id: i64,
+    /// The best bid.
     pub bid: Price,
+    /// The best ask.
     pub ask: Price,
+    /// How much at the bid.
     pub bid_size: i64,
+    /// How much at the ask.
     pub ask_size: i64,
     pub timestamp: u64,
     /// The bid is below the day's low, or the ask above its high — the venue's
     /// own words about whether this quote sits outside the day's range.
     pub bid_past_low: bool,
+    /// Whether the ask is above the day's high.
     pub ask_past_high: bool,
 }
 
 /// An IB news bulletin from auth server news bulletin message.
 #[derive(Debug, Clone)]
 pub struct NewsBulletin {
+    /// The venue's number for this notice.
     pub msg_id: i32,
     /// 1=Regular, 2=Exchange unavailable, 3=Exchange available.
     pub msg_type: i32,
+    /// What it says.
     pub message: String,
     pub exchange: String,
 }
@@ -1317,6 +1398,7 @@ pub struct NewsBulletin {
 /// A market depth (L2 order book) update.
 #[derive(Debug, Clone)]
 pub struct DepthUpdate {
+    /// The request these levels answer.
     pub req_id: u32,
     /// Book position (0-based).
     pub position: i32,
@@ -1326,18 +1408,27 @@ pub struct DepthUpdate {
     pub operation: i32,
     /// 0 = ask, 1 = bid.
     pub side: i32,
+    /// At what price.
     pub price: f64,
+    /// How much.
     pub size: f64,
+    /// Whether the book was asked for on no particular venue.
     pub is_smart_depth: bool,
 }
 
 /// Exchange metadata for market depth availability.
 #[derive(Debug, Clone)]
 pub struct DepthMktDataDescription {
+    /// The exchange, as the venue names it.
     pub exchange: String,
+    /// Which kind of contract this row is about.
     pub sec_type: String,
+    /// The exchange's own full name.
     pub listing_exch: String,
+    /// What kind of data it carries. Not stated by the venue
+    /// here, and so not stated.
     pub service_data_type: String,
+    /// Which group it aggregates into. Not stated by the venue here.
     pub agg_group: i32,
 }
 /// The single character the server gives a venue, where it has given one.
@@ -1354,29 +1445,37 @@ pub fn exchange_letter(_exchange: &str) -> &'static str {
 
 #[derive(Debug, Clone)]
 pub struct SmartComponent {
+    /// Which bit of a quote's exchange mask this venue is.
     pub bit_number: i32,
+    /// The venue.
     pub exchange: String,
+    /// The letter it is named by.
     pub exchange_letter: String,
 }
 
 /// A news data provider.
 #[derive(Debug, Clone)]
 pub struct NewsProvider {
+    /// How the venue names the provider.
     pub code: String,
+    /// Its full name.
     pub name: String,
 }
 
 /// A soft dollar tier (commission sharing arrangement).
 #[derive(Debug, Clone)]
 pub struct SoftDollarTier {
+    /// The tier's name.
     pub name: String,
     pub val: String,
+    /// How it is shown.
     pub display_name: String,
 }
 
 /// A family code linking related accounts.
 #[derive(Debug, Clone)]
 pub struct FamilyCode {
+    /// The account.
     pub account_id: String,
     pub family_code_str: String,
 }
@@ -1384,37 +1483,54 @@ pub struct FamilyCode {
 /// A real-time news headline from 8=O|35=G tick type 0x1E90.
 #[derive(Debug, Clone)]
 pub struct TickNews {
+    /// The contract it is about.
     pub instrument: InstrumentId,
+    /// Which provider published it.
     pub provider_code: String,
+    /// Its id, for fetching the body.
     pub article_id: String,
+    /// The headline itself.
     pub headline: String,
+    /// When it was published.
     pub timestamp: u64,
 }
 
 /// A historical tick (midpoint).
 #[derive(Debug, Clone)]
 pub struct HistoricalTickMidpoint {
+    /// When.
     pub time: String,
+    /// The midpoint then.
     pub price: f64,
 }
 
 /// A historical tick (last trade).
 #[derive(Debug, Clone)]
 pub struct HistoricalTickLast {
+    /// When.
     pub time: String,
+    /// What it traded at.
     pub price: f64,
+    /// How much.
     pub size: i64,
+    /// Which venue.
     pub exchange: String,
+    /// What the venue notes about it.
     pub special_conditions: String,
 }
 
 /// A historical tick (bid/ask).
 #[derive(Debug, Clone)]
 pub struct HistoricalTickBidAsk {
+    /// When.
     pub time: String,
+    /// The bid then.
     pub bid_price: f64,
+    /// The ask.
     pub ask_price: f64,
+    /// How much at the bid.
     pub bid_size: i64,
+    /// How much at the ask.
     pub ask_size: i64,
 }
 
@@ -1429,19 +1545,28 @@ pub enum HistoricalTickData {
 /// A real-time 5-second bar.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RealTimeBar {
+    /// When the bar opened.
     pub timestamp: u32,
+    /// Its first price.
     pub open: f64,
+    /// Its highest.
     pub high: f64,
+    /// Its lowest.
     pub low: f64,
+    /// Its last.
     pub close: f64,
+    /// How much traded in it.
     pub volume: f64,
+    /// The volume-weighted average price.
     pub wap: f64,
+    /// How many trades made it.
     pub count: i32,
 }
 
 /// A single trading session from a historical schedule response.
 #[derive(Debug, Clone)]
 pub struct ScheduleSession {
+    /// The day it belongs to.
     pub ref_date: String,
     pub open_time: String,
     pub close_time: String,
@@ -1454,14 +1579,18 @@ pub struct HistoricalScheduleResponse {
     pub timezone: String,
     pub start_date_time: String,
     pub end_date_time: String,
+    /// Each session in the window.
     pub sessions: Vec<ScheduleSession>,
 }
 
 /// A completed order record for req_completed_orders.
 #[derive(Debug, Clone)]
 pub struct CompletedOrder {
+    /// The order.
     pub order_id: OrderId,
+    /// The contract it was on.
     pub instrument: InstrumentId,
+    /// What it finished as.
     pub status: OrderStatus,
     pub filled_qty: i64,
     pub timestamp_ns: u64,
@@ -1471,16 +1600,23 @@ pub struct CompletedOrder {
 /// Empty/zero fields are omitted from the request (ib-agent#171, ibx#229).
 #[derive(Debug, Clone, Default)]
 pub struct SecDefFilters {
+    /// Where the contract is listed.
     pub primary_exchange: String,
+    /// The venue's own name for the contract.
     pub local_symbol: String,
     pub last_trade_date_or_contract_month: String,
+    /// An option's strike.
     pub strike: f64,
+    /// `C` or `P`.
     pub right: String,
+    /// How many units one contract is worth.
     pub multiplier: String,
+    /// Which class of the chain.
     pub trading_class: String,
     /// Identifier lookup (e.g. ISIN): raw identifier and its type. When set, the
     /// lookup rides the identifier instead of the symbol (ib-agent#174).
     pub sec_id: String,
+    /// Which identifier `sec_id` is: ISIN or CUSIP.
     pub sec_id_type: String,
 }
 
@@ -1770,21 +1906,30 @@ pub struct AccountState {
 /// Position with average cost, for P&L computation and reqPositions.
 #[derive(Debug, Clone, Default)]
 pub struct PositionInfo {
+    /// The contract held.
     pub con_id: i64,
     /// The holding exactly as the account states it. Fractional: a holding of
     /// half a share is a holding, and rounding it to a whole number reported
     /// it as flat.
     pub position: f64,
+    /// What it cost on average.
     pub avg_cost: Price,      // per-share avg cost * PRICE_SCALE
+    /// Its ticker.
     pub symbol: String,
+    /// What kind of contract it is.
     pub sec_type: String,
+    /// What it is priced in.
     pub currency: String,
     pub multiplier: String,
     // Per-position marks from the account-updates snapshot (ib-agent#172).
     // Set only by the portfolio-value message, not the lean position feed.
+    /// What it is worth now, each.
     pub market_price: Price,     // per-share mark * PRICE_SCALE
+    /// What the holding is worth.
     pub market_value: Price,     // position mark * PRICE_SCALE
+    /// What it has made and not realised.
     pub unrealized_pnl: Price,   // * PRICE_SCALE
+    /// What has been realised on it.
     pub realized_pnl: Price,     // * PRICE_SCALE
 }
 

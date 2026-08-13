@@ -1,3 +1,46 @@
+//! A client for the Interactive Brokers protocol, with no gateway in between.
+//!
+//! This authenticates against IBKR's servers and holds the four connections a
+//! session runs on — market data, trading, historical, and security
+//! definitions — in one process. There is no gateway to install, no JVM, and
+//! no socket on localhost to connect to, authorise or keep alive.
+//!
+//! # Where to start
+//!
+//! [`api`] is the surface a program touches, and the only part covered by the
+//! compatibility promise. It carries the reference client's own shapes:
+//!
+//! - [`EClient`] for requests and [`Wrapper`] for what arrives
+//! - [`api::direct::Client`] for the same session with answers returned rather
+//!   than delivered on callbacks
+//!
+//! ```no_run
+//! use ibx::api::client::{EClient, EClientConfig};
+//!
+//! let client = EClient::connect(&EClientConfig {
+//!     username: "…".into(),
+//!     password: "…".into(),
+//!     paper: true,
+//!     ..Default::default()
+//! })?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! In Python, the same surface is `ibx.EClient` and `ibx.EWrapper`, and an
+//! unmodified `ib_async` program runs on it through `ibx.ib_async.attach`.
+//!
+//! # Everything else
+//!
+//! The other modules are the engine: how a session is opened, how a message is
+//! framed and read, and what the venue says about things that are not prices.
+//! They are exported because this repository's own binaries, benchmarks and
+//! integration tests reach them, and they are not the compatibility surface.
+//!
+//! # Prices and sizes
+//!
+//! Held as integers, scaled by [`types::PRICE_SCALE`] and [`types::QTY_SCALE`],
+//! and turned into floating point at the caller's edge and nowhere before it.
+
 // A wire message carries the fields the protocol says it carries, and the
 // function that builds one takes them. Splitting a builder into a struct to
 // satisfy an arbitrary count would put a layer between the caller and the
