@@ -2801,6 +2801,16 @@ mod tests {
     /// it out of the frame by its shape rather than by counting fields.
     #[test]
     fn a_competing_session_is_read_out_of_the_connect_response() {
+        // A frame as the venue sends it, from a session with nobody else on
+        // the account: the host and port it routed to, then the bare zero.
+        assert_eq!(
+            super::parse_competing_session(
+                "50;523;zdc1.example:4000;0;TST,ONELOGON;spqili231;aaa;;;;"
+            ),
+            None,
+            "the routed host carries a colon and a port, not a login time",
+        );
+
         // Nobody else: the field is a bare zero, and some sessions carry none.
         assert_eq!(super::parse_competing_session("50;523;0;;2;0;"), None);
         assert_eq!(super::parse_competing_session("50;523;;;;"), None);
