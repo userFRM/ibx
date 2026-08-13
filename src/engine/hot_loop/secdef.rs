@@ -44,7 +44,6 @@ impl SecDefState {
         Self::default()
     }
 
-    /// Ask what event types the calendar carries.
     /// Stop waiting on a calendar query the caller no longer wants.
     ///
     /// The query is one message and one answer, so there is nothing at the
@@ -58,6 +57,7 @@ impl SecDefState {
         self.pending.len() != before
     }
 
+    /// Ask what event types the calendar carries.
     pub(crate) fn send_calendar_meta_data_request(
         &mut self,
         req_id: u32,

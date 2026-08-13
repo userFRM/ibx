@@ -963,7 +963,6 @@ impl HotLoop {
                         num_rows, is_smart_depth,
                         &mut self.farm_conn,
                         &mut self.hb,
-                        &self.shared,
                     );
                 }
                 ControlCommand::UnsubscribeDepth { req_id } => {
@@ -1174,7 +1173,6 @@ impl HotLoop {
             &mut self.farm_conn,
             &mut self.context, &mut self.hb,
             replay,
-            &self.shared,
         );
     }
 

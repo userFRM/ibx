@@ -848,7 +848,7 @@ impl HmdsState {
                         // hundred-millionths for a crypto — and is then held in
                         // the form every reader divides by.
                         size: scaled_size(t.size, size_tick),
-                        timestamp: frame.timestamp_ms,
+                        timestamp: frame.timestamp,
                         exchange: t.exchange.clone(),
                         conditions: t.conditions.clone(),
                         past_limit: t.past_limit,
@@ -865,7 +865,7 @@ impl HmdsState {
                         ask: (q.ask as i64).saturating_mul(mts),
                         bid_size: scaled_size(q.bid_size, size_tick),
                         ask_size: scaled_size(q.ask_size, size_tick),
-                        timestamp: frame.timestamp_ms,
+                        timestamp: frame.timestamp,
                         bid_past_low: q.bid_past_low,
                         ask_past_high: q.ask_past_high,
                     };

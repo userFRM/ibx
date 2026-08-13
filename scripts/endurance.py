@@ -8,8 +8,9 @@ alike.
 
 Subscriptions are taken out and withdrawn every cycle, under request ids that
 repeat, because that is what a program does and it is where the defects were.
-Every stream is required to have grown by the end of every cycle after the
-first: a stream that stalls is the failure, and a run that only printed its
+Quotes and bars are required to have grown by the end of every cycle after the
+first, and a book and a trade stream to have arrived at least once before the
+run ends: a stream that stalls is the failure, and a run that only printed its
 counters would have passed through all of them.
 
 Places no orders. Reads only.
@@ -98,10 +99,15 @@ class Counters(EWrapper):
             return dict(self.seen), dict(self.errors), self.last_error
 
 
-#: What every market owes a session that asked for it. A book and a trade
-#: stream are the venue's to grant, so they are held to arriving at all rather
-#: than to arriving in every cycle.
+#: Held to growing in every cycle after the first: a counter that stops moving
+#: is a stream that stopped.
 REQUIRED_EVERY_CYCLE = ("quotes", "bars")
+
+#: Held to arriving at all, once, before the run ends. A book and a trade
+#: stream are the venue's to grant and are quiet on a contract nobody is
+#: trading, so a cycle without one is not a failure — a whole run without one
+#: is, and a run that only printed its counters would not have said so.
+REQUIRED_AT_LEAST_ONCE = ("book", "trades")
 
 
 def what_stopped(before, now, cycle):
@@ -181,15 +187,20 @@ def main():
             stalled.extend(what_stopped(before, seen, cycle))
         before = seen
 
-    unexpected = {code: n for code, n in watcher.snapshot()[1].items()
+    seen, errors, _ = watcher.snapshot()
+    unexpected = {code: n for code, n in errors.items()
                   if code != NO_TRADES_FOR_A_CURRENCY_PAIR}
+    never_arrived = [kind for kind in REQUIRED_AT_LEAST_ONCE if not seen.get(kind)]
     client.disconnect()
+
+    for kind in never_arrived:
+        print(f"NEVER ARRIVED: {kind} did not arrive once in {asked.minutes} minutes")
 
     for what in stalled:
         print(f"STALLED: {what}")
     if unexpected:
         print(f"ERRORS: {unexpected}")
-    if stalled or unexpected:
+    if stalled or unexpected or never_arrived:
         return 1
     print(f"held open for {asked.minutes} minutes with nothing stopping")
     return 0

@@ -13,9 +13,11 @@ name: session
 # the same code sending the same messages to the same servers. What differs is
 # that fills are simulated, so nothing here places an order that can fill.
 #
-# Dormant until IB_USERNAME and IB_PASSWORD are set as repository secrets:
-# without them every job below reports that it was not run, rather than passing
-# on a session it never opened.
+# Dormant until IB_USERNAME and IB_PASSWORD are both set as repository secrets.
+# Without them the first job says so in an annotation and the rest are skipped,
+# which GitHub renders as a green check on a workflow that opened no session —
+# so a green tick here is not on its own evidence that a session ran. The
+# annotation on the `credentials` job is.
 
 on:
   schedule:
@@ -52,13 +54,15 @@ jobs:
       - id: check
         env:
           IB_USERNAME: ${{ secrets.IB_USERNAME }}
+          IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
         run: |
-          if [ -n "$IB_USERNAME" ]; then
+          if [ -n "$IB_USERNAME" ] && [ -n "$IB_PASSWORD" ]; then
             echo "present=yes" >> "$GITHUB_OUTPUT"
           else
             echo "present=no" >> "$GITHUB_OUTPUT"
-            echo "::notice::No paper credentials are set, so no session was opened. \
-            Set IB_USERNAME and IB_PASSWORD as repository secrets to run these."
+            echo "::notice::No session was opened: IB_USERNAME and IB_PASSWORD \
+            must both be set as repository secrets. The jobs below are skipped, \
+            and a green check on this run means only that they did not run."
           fi
 
   paper_compat:

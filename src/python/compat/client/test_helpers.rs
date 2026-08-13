@@ -12,6 +12,18 @@ use crate::types::*;
 
 use super::EClient;
 
+/// A second a test-injected tick can plausibly have happened in.
+///
+/// The wire states a Unix second and a caller reads it as a moment. Pushing a
+/// small constant instead put every injected tick in 1970, which is a shape no
+/// real tick has, so a test could not tell a correct timestamp from one scaled
+/// by a thousand.
+fn a_recent_second() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 #[pymethods]
 impl EClient {
     /// Create a fake "connected" EClient backed by a SharedState + channel.
@@ -285,7 +297,7 @@ impl EClient {
             instrument,
             price: (price * ps) as i64,
             size: size * crate::types::QTY_SCALE,
-            exchange: exchange.to_string(), conditions: String::new(), timestamp: 12345,
+            exchange: exchange.to_string(), conditions: String::new(), timestamp: a_recent_second(),
             past_limit: false,
             unreported: false,
         });
@@ -305,7 +317,7 @@ impl EClient {
             bid: (bid * ps) as i64, ask: (ask * ps) as i64,
             bid_size: bid_size * crate::types::QTY_SCALE,
             ask_size: ask_size * crate::types::QTY_SCALE,
-            timestamp: 12345,
+            timestamp: a_recent_second(),
             bid_past_low: false,
             ask_past_high: false,
         });
