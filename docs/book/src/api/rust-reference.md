@@ -760,7 +760,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 
 #### `req_mkt_data`
 
-Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) have no emission path, and `tick_generic` never fires (ibx#234). Delayed data cannot be requested either — see `req_market_data_type`.
+Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) have no emission path, and `tick_generic` never fires (ibx#234) — the venue asks for those under numbers of its own rather than the ones this list uses, and this client does not know the mapping. Delayed and frozen data are requested, contrary to what this said: name the type on [`req_market_data_type`](EClient::req_market_data_type) and every subscription after it carries the mode, or state it per request with [`req_mkt_data_ex`](EClient::req_mkt_data_ex). The table there gives the wire shape of each.
 
 ```rust
 pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, ) -> Result<(), String>
