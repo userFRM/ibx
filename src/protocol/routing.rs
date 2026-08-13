@@ -147,6 +147,25 @@ impl RoutingTable {
         })
     }
 
+    /// The name the venue serves a book under for this market, if it serves one.
+    ///
+    /// There is more than one. A book is `Deep` on most markets, `Deep2` on
+    /// some, `DeepX` on others, and `AggDeep` where the venue aggregates one —
+    /// and a market that serves one of them need not serve the others. Two
+    /// markets on a live session serve a book under no other name than `Deep2`
+    /// and `DeepX`, so asking only about `Deep` says they have none.
+    ///
+    /// Which name is the venue's to state, so it is read off the endpoints it
+    /// listed rather than assumed.
+    pub fn book_endpoint(&self, exchange: &str, sec_type: &str) -> Option<&str> {
+        self.rows
+            .iter()
+            .filter(|r| r.exchange == exchange && r.sec_type == sec_type && r.qualifier == "*")
+            .flat_map(|r| r.endpoints.iter())
+            .find(|e| e.starts_with("Deep") || *e == "AggDeep")
+            .map(|e| e.as_str())
+    }
+
     /// Which server a farm is on, by name.
     ///
     /// A farm reached on any other server accepts the connection and closes it
@@ -239,7 +258,16 @@ mod tests {
 
         // Named at all, so the venue does serve this market — just not a book.
         assert!(table.find("BEST", "STK", "Top").is_some());
-        assert!(table.find("BEST", "STK", "Deep").is_none(), "no book on the smart route");
+        assert_eq!(table.book_endpoint("BEST", "STK"), None, "no book on the smart route");
+
+        // A book the venue serves under another name is still a book. Asking
+        // only about `Deep` says these markets have none, and they do.
+        let others = RoutingTable::parse(
+            "IBEFP,COMB,Top|Deep2,-1,*,n.example,4000,usfuture.nj;\
+             SEHK,OPT,DeepX,-1,*,h.example,4000,hfarm"
+        );
+        assert_eq!(others.book_endpoint("IBEFP", "COMB"), Some("Deep2"));
+        assert_eq!(others.book_endpoint("SEHK", "OPT"), Some("DeepX"));
 
         // On the exchange the contract trades on, there is one.
         assert!(table.find("IEX", "STK", "Deep").is_some());
