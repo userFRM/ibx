@@ -74,6 +74,26 @@ pub fn parse_misc_urls(s: &str) -> std::collections::HashMap<String, String> {
 /// Farm name used when the auth server states no trading route.
 pub(crate) const DEFAULT_TRADING_FARM: &str = "usfarm";
 
+
+/// Write out what the venue answered the routing request with, when asked to.
+///
+/// The answer names which farm serves which endpoint, and this client asks for
+/// it, reads it, and does nothing with it. Nothing can be done with it until
+/// its shape is known from a real one rather than guessed, and it does not
+/// appear on a session that is not asked to keep it.
+///
+/// Set `IBX_CAPTURE_WIRE` to keep it.
+fn note_routing_answer(farm_id: &str, parsed: &std::collections::HashMap<u32, String>) {
+    if std::env::var("IBX_CAPTURE_WIRE").is_err() {
+        return;
+    }
+    let mut tags: Vec<(&u32, &String)> = parsed.iter().collect();
+    tags.sort_by_key(|(tag, _)| **tag);
+    for (tag, value) in tags {
+        log::info!("{farm_id} routing answer {tag}={value}");
+    }
+}
+
 /// Parse a farm-route string from the auth-server's routing tags.
 ///
 /// Three accepted shapes (per ib-agent#128):
@@ -885,10 +905,18 @@ pub fn connect_farm(
     }
     // Extract and process all frames (unsign + respond to TestRequests, like Python).
     let frames = conn.extract_frames();
+    if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+        log::info!("{farm_id} routing frames: {}", frames.len());
+    }
     for frame in &frames {
         match frame {
             crate::protocol::connection::Frame::FixComp(raw) => {
-                let Some(unsigned) = conn.unsign(raw) else { continue };
+                let Some(unsigned) = conn.unsign(raw) else {
+                    if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+                        log::info!("{farm_id} routing frame failed to verify");
+                    }
+                    continue
+                };
                 let inner = fixcomp::fixcomp_decompress(&unsigned).unwrap_or_else(|e| {
                     log::warn!("{farm_id}: dropping malformed FIXCOMP frame: {e}");
                     Vec::new()
@@ -897,6 +925,7 @@ pub fn connect_farm(
                     let parsed = fix_parse(m);
                     let mt = parsed.get(&35).map(|s| s.as_str()).unwrap_or("");
                     log::debug!("{farm_id} routing compressed inner 35={mt}");
+                    note_routing_answer(farm_id, &parsed);
                     if mt == "1" {
                         let test_id = parsed.get(&112).cloned().unwrap_or_default();
                         let ts = chrono_free_timestamp();
@@ -913,6 +942,7 @@ pub fn connect_farm(
                 let parsed = fix_parse(&unsigned);
                 let mt = parsed.get(&35).map(|s| s.as_str()).unwrap_or("");
                 log::debug!("{farm_id} routing FIX 35={mt}");
+                note_routing_answer(farm_id, &parsed);
                 if mt == "1" {
                     let test_id = parsed.get(&112).cloned().unwrap_or_default();
                     let ts = chrono_free_timestamp();
@@ -924,8 +954,18 @@ pub fn connect_farm(
                 }
             }
             crate::protocol::connection::Frame::Binary(raw) => {
-                let Some(_unsigned) = conn.unsign(raw) else { continue };
+                let Some(unsigned) = conn.unsign(raw) else { continue };
                 log::info!("{} routing 8=O: {} bytes", farm_id, raw.len());
+                // The routing table arrives here, and nothing reads it. Kept
+                // when asked, so its shape can be established from what the
+                // venue sends rather than from a guess.
+                if let Ok(dir) = std::env::var("IBX_CAPTURE_WIRE")
+                    && dir != "1"
+                {
+                    let path = format!("{dir}/routing-{farm_id}.bin");
+                    let _ = std::fs::write(&path, &unsigned);
+                    log::info!("{farm_id} routing table written to {path}");
+                }
             }
             crate::protocol::connection::Frame::Control(raw) => {
                 // 8=1 / 8=X control state — extracted, not routed (ibx#185).
