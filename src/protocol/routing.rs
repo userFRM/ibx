@@ -90,7 +90,10 @@ impl RoutingTable {
             exchange: f[0].to_string(),
             sec_type: f[1].to_string(),
             endpoints: f[2].split('|').map(|e| e.to_string()).collect(),
-            book: f[3].parse().unwrap_or(-1),
+            // Skipped rather than defaulted: -1 is the venue's own value for
+            // a market's own book, so a row whose book cannot be read would
+            // otherwise be reported as naming one.
+            book: f[3].parse().ok()?,
             qualifier: f[4].to_string(),
             host: f[5].to_string(),
             port: f[6].parse().ok()?,
@@ -111,11 +114,36 @@ impl RoutingTable {
     /// Where to ask about a contract, for one kind of data.
     ///
     /// The first row that names the exchange, the security type and the
-    /// endpoint. Order is the venue's, and a market served from more than one
-    /// place lists the one it prefers first.
+    /// endpoint, and applies to the whole market. Order is the venue's, and a
+    /// market served from more than one place lists the one it prefers first.
+    ///
+    /// A row carrying a qualifier is about one sub-market and is not an answer
+    /// for a contract that is not in it. The venue serves an aggregated book
+    /// on its smart destination for two such sub-markets and for no other
+    /// share; matched without reading the qualifier, those two rows say every
+    /// share on that destination has a book, which is the opposite of what the
+    /// table says.
     pub fn find(&self, exchange: &str, sec_type: &str, endpoint: &str) -> Option<&Route> {
         self.rows.iter().find(|r| {
-            r.exchange == exchange && r.sec_type == sec_type && r.serves(endpoint)
+            r.exchange == exchange
+                && r.sec_type == sec_type
+                && r.qualifier == "*"
+                && r.serves(endpoint)
+        })
+    }
+
+    /// The same, for a contract known to be in a sub-market the venue names.
+    ///
+    /// Only a caller that knows which one can ask this; the qualifier is the
+    /// venue's own name for it.
+    pub fn find_within(
+        &self, exchange: &str, sec_type: &str, endpoint: &str, qualifier: &str,
+    ) -> Option<&Route> {
+        self.rows.iter().find(|r| {
+            r.exchange == exchange
+                && r.sec_type == sec_type
+                && r.qualifier == qualifier
+                && r.serves(endpoint)
         })
     }
 
@@ -217,9 +245,17 @@ mod tests {
         assert!(table.find("IEX", "STK", "Deep").is_some());
         assert!(table.find("ISLAND", "STK", "Deep2").is_some());
 
-        // The aggregated book exists, and only for the sub-market it names.
-        let agg = table.find("BEST", "STK", "AggDeep").expect("served for one market");
-        assert_eq!(agg.qualifier, "PINK", "not for every share on the destination");
+        // The aggregated book exists for one sub-market and is not an answer
+        // for a share that is not in it. Matched without reading the
+        // qualifier, this row says every share on the destination has a book.
+        assert!(
+            table.find("BEST", "STK", "AggDeep").is_none(),
+            "a qualified row is not an answer for the whole market",
+        );
+        let agg = table
+            .find_within("BEST", "STK", "AggDeep", "PINK")
+            .expect("served for the sub-market that names it");
+        assert_eq!(agg.qualifier, "PINK");
 
         // A market the table does not name at all is not evidence of anything,
         // and must not be read as a refusal.
@@ -235,8 +271,11 @@ mod tests {
         assert_eq!(table.rows().len(), 1);
         assert_eq!(table.rows()[0].farm, "eufarm", "the trailer is not part of the name");
 
-        // Short rows, empty rows and a row with a port that is not a number.
-        let ragged = "A,B;;;X,STK,Top,-1,*,h,notaport,f;GOOD,STK,Top,-1,*,h,4000,f";
+        // Short rows, empty rows, a port that is not a number, and a book that
+        // is not one either — the venue writes -1 for a market's own book, so
+        // defaulting to it would report a row as naming a book it never named.
+        let ragged = "A,B;;;X,STK,Top,-1,*,h,notaport,f;\
+             Y,STK,Top,notabook,*,h,4000,f;GOOD,STK,Top,-1,*,h,4000,f";
         let table = RoutingTable::parse(ragged);
         assert_eq!(table.rows().len(), 1, "only the row that reads");
         assert_eq!(table.rows()[0].exchange, "GOOD");
