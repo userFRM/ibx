@@ -284,7 +284,12 @@ impl Client {
         use_rth: bool,
     ) -> Result<String, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1)?;
+        // The id is this facade's own and always fits the wire, so the only
+        // way the request fails to leave is the engine being gone. Under the
+        // number the reference client reports that under, rather than the one
+        // an untyped message would default to, which says the venue refused
+        // something it never saw.
+        self.inner.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1).map_err(Refusal::not_connected)?;
         let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_head_timestamp_for(req_id as u32)
@@ -295,7 +300,7 @@ impl Client {
     /// Contracts whose symbol or name matches a pattern.
     pub fn matching_symbols(&self, pattern: &str) -> Result<Vec<crate::control::contracts::SymbolMatch>, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_matching_symbols(req_id, pattern)?;
+        self.inner.req_matching_symbols(req_id, pattern).map_err(Refusal::not_connected)?;
         let what = format!("a symbol search for {pattern}");
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_matching_symbols_for(req_id as u32)
@@ -310,7 +315,7 @@ impl Client {
         period: &str,
     ) -> Result<Vec<crate::control::histogram::HistogramEntry>, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_histogram_data(req_id, contract, use_rth, period)?;
+        self.inner.req_histogram_data(req_id, contract, use_rth, period).map_err(Refusal::not_connected)?;
         let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_histogram_for(req_id as u32)
@@ -324,7 +329,7 @@ impl Client {
         report_type: &str,
     ) -> Result<String, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_fundamental_data(req_id, contract, report_type)?;
+        self.inner.req_fundamental_data(req_id, contract, report_type).map_err(Refusal::not_connected)?;
         let what = format!("a {report_type} report for {}", contract.symbol);
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_fundamental_for(req_id as u32)
@@ -511,7 +516,7 @@ impl Client {
         use_rth: bool,
     ) -> Result<crate::types::HistoricalScheduleResponse, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_historical_schedule(req_id, contract, end_date_time, duration, use_rth)?;
+        self.inner.req_historical_schedule(req_id, contract, end_date_time, duration, use_rth).map_err(Refusal::not_connected)?;
         let what = format!("a schedule for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_historical_schedule_for(req_id as u32)

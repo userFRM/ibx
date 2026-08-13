@@ -22,6 +22,11 @@ impl Refusal {
     pub const VALIDATION: i32 = 321;
     /// Nothing the venue holds matches the contract described.
     pub const NO_DEFINITION: i32 = 200;
+    /// The session is not up, so nothing can be sent on it.
+    ///
+    /// The number the reference client reports a request made before
+    /// connecting, or after the connection went, under.
+    pub const NOT_CONNECTED: i32 = 504;
     /// The venue said nothing at all before the wait ran out.
     ///
     /// This client's own number rather than the venue's: the reference client
@@ -38,6 +43,11 @@ impl Refusal {
     /// Nothing the venue holds matches the contract described.
     pub fn no_definition(message: impl Into<String>) -> Self {
         Self { code: Self::NO_DEFINITION, message: message.into() }
+    }
+
+    /// Nothing can be sent, because there is no session to send it on.
+    pub fn not_connected(message: impl Into<String>) -> Self {
+        Self { code: Self::NOT_CONNECTED, message: message.into() }
     }
 
     /// The venue said nothing before the wait ran out.
@@ -99,6 +109,14 @@ mod tests {
         let refused = Refusal::stated(10197, "no market data during competing session");
         assert_eq!(refused.code, 10197);
         assert_eq!(refused.to_string(), "no market data during competing session");
+
+        // A request that never left has its own number, and it is the one the
+        // reference client reports for a request made with no session. Left as
+        // an untyped message it became a validation failure, which says the
+        // venue refused something it never saw.
+        let gone = Refusal::not_connected("Engine stopped: sending on a closed channel");
+        assert_eq!(gone.code, 504);
+        assert_ne!(gone.code, Refusal::VALIDATION);
 
         // Silence is this client's own answer, not the venue's, and says so
         // with a number the venue never sends.
