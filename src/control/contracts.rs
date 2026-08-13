@@ -8,33 +8,56 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::protocol::fix::{self, TAG_MSG_TYPE};
 
 // Tags for security definitions
+/// FIX tag 320: the security req id.
 pub const TAG_SECURITY_REQ_ID: u32 = 320;
+/// FIX tag 321: the security req type.
 pub const TAG_SECURITY_REQ_TYPE: u32 = 321;
+/// FIX tag 323: the security response type.
 pub const TAG_SECURITY_RESPONSE_TYPE: u32 = 323;
+/// FIX tag 55: the symbol.
 pub const TAG_SYMBOL: u32 = 55;
+/// FIX tag 167: the security type.
 pub const TAG_SECURITY_TYPE: u32 = 167;
+/// FIX tag 100: the exchange.
 pub const TAG_EXCHANGE: u32 = 100;
+/// FIX tag 15: the currency.
 pub const TAG_CURRENCY: u32 = 15;
+/// FIX tag 200: the last trade date.
 pub const TAG_LAST_TRADE_DATE: u32 = 200;
 /// MaturityDate. Carries a full expiry date where 200 carries a contract
 /// month, so a definition that states one states it here.
 pub const TAG_MATURITY_DATE: u32 = 541;
+/// FIX tag 201: the right.
 pub const TAG_RIGHT: u32 = 201;
+/// FIX tag 202: the strike.
 pub const TAG_STRIKE: u32 = 202;
+/// FIX tag 207: the security exchange.
 pub const TAG_SECURITY_EXCHANGE: u32 = 207;
+/// FIX tag 231: the multiplier.
 pub const TAG_MULTIPLIER: u32 = 231;
+/// FIX tag 306: the long name.
 pub const TAG_LONG_NAME: u32 = 306;
+/// FIX tag 455: the security id.
 pub const TAG_SECURITY_ID: u32 = 455;
+/// FIX tag 456: the security id source.
 pub const TAG_SECURITY_ID_SOURCE: u32 = 456;
 
 // IB custom tags
+/// FIX tag 6008: the con id.
 pub const TAG_IB_CON_ID: u32 = 6008;
+/// FIX tag 6035: the local symbol.
 pub const TAG_IB_LOCAL_SYMBOL: u32 = 6035;
+/// FIX tag 6046: the valid exchanges.
 pub const TAG_IB_VALID_EXCHANGES: u32 = 6046;
+/// FIX tag 6058: the trading class.
 pub const TAG_IB_TRADING_CLASS: u32 = 6058;
+/// FIX tag 6088: the source.
 pub const TAG_IB_SOURCE: u32 = 6088;
+/// FIX tag 6470: the primary exchange.
 pub const TAG_IB_PRIMARY_EXCHANGE: u32 = 6470;
+/// FIX tag 6431: the order types.
 pub const TAG_IB_ORDER_TYPES: u32 = 6431;
+/// FIX tag 6031: the market rule id.
 pub const TAG_IB_MARKET_RULE_ID: u32 = 6031;
 /// The economic-value rule, stated on the definition as its own field.
 pub const TAG_EV_RULE: u32 = 6858;
@@ -49,7 +72,9 @@ pub const TAG_SMART_VENUES: u32 = 6177;
 /// carried was the id of the share it is written on, and the symbol beside it
 /// was that share's symbol.
 pub const TAG_UNDERLYING_CON_ID: u32 = 6346;
+/// FIX tag 6855: the underlying symbol.
 pub const TAG_UNDERLYING_SYMBOL: u32 = 6855;
+/// FIX tag 310: the underlying sec type.
 pub const TAG_UNDERLYING_SEC_TYPE: u32 = 310;
 /// The time of day a contract stops trading, stated beside the date it stops.
 pub const TAG_LAST_TRADE_TIME: u32 = 8584;
@@ -61,22 +86,29 @@ pub const TAG_ISSUE_DATE: u32 = 225;
 /// can be dealt in fractions at all. Stated together; the size without the flag
 /// is not in force.
 pub const TAG_MIN_SIZE: u32 = 8175;
+/// FIX tag 8193: the fractionable.
 pub const TAG_FRACTIONABLE: u32 = 8193;
 /// How many places the venue states a price and a size to.
 pub const TAG_LAST_PRICE_PRECISION: u32 = 8598;
+/// FIX tag 8599: the last size precision.
 pub const TAG_LAST_SIZE_PRECISION: u32 = 8599;
 /// The day a contract really stops trading, where that differs from the month
 /// it is named for.
 pub const TAG_REAL_EXPIRATION_DATE: u32 = 6614;
 /// How a contract settles — by delivery or in cash.
 pub const TAG_SETTLEMENT_METHOD: u32 = 6660;
+/// FIX tag 8077: the stock type.
 pub const TAG_IB_STOCK_TYPE: u32 = 8077;
 
 // Market rule tags.
-pub const TAG_MARKET_RULE_START: u32 = 6019; // value "1" starts a new rule block
-pub const TAG_MARKET_RULE_ID: u32 = 6031;    // rule ID integer
-pub const TAG_LOW_EDGE: u32 = 6023;          // price increment threshold
-pub const TAG_INCREMENT: u32 = 6027;         // tick size at that price level
+/// value "1" starts a new rule block
+pub const TAG_MARKET_RULE_START: u32 = 6019;
+/// rule ID integer
+pub const TAG_MARKET_RULE_ID: u32 = 6031;
+/// price increment threshold
+pub const TAG_LOW_EDGE: u32 = 6023;
+/// tick size at that price level
+pub const TAG_INCREMENT: u32 = 6027;
 /// Opens the table of price increments in a rule. What follows, until the size
 /// table opens, is a low edge and an increment per price band.
 pub const TAG_PRICE_INCREMENT_COUNT: u32 = 6026;
@@ -88,29 +120,53 @@ pub const TAG_SIZE_INCREMENT_COUNT: u32 = 6030;
 /// Security types (IB internal encoding).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityType {
-    Stock,    // CS
-    Option,   // OPT
-    Future,   // FUT
-    Forex,    // CASH
-    Index,    // IND
-    Bond,     // BOND
-    Warrant,  // WAR
-    FutureOption, // FOP
-    Cfd,      // CFD
-    Commodity, // CMDTY
-    Fund,     // FUND
-    Forward,  // FWD
-    Bill,     // BILL
-    Combo,    // BAG
-    Crypto,    // CRYPTO
-    FixedIncome, // FIXED
-    SecuritiesLending, // SLB
-    News,      // NEWS
-    Basket,    // BSK
-    IndexOption, // IOPT
-    IcuContract, // ICU
-    IcsContract, // ICS
-    PhysicalSettlement, // PHYSS
+    /// CS
+    Stock,
+    /// OPT
+    Option,
+    /// FUT
+    Future,
+    /// CASH
+    Forex,
+    /// IND
+    Index,
+    /// BOND
+    Bond,
+    /// WAR
+    Warrant,
+    /// FOP
+    FutureOption,
+    /// CFD
+    Cfd,
+    /// CMDTY
+    Commodity,
+    /// FUND
+    Fund,
+    /// FWD
+    Forward,
+    /// BILL
+    Bill,
+    /// BAG
+    Combo,
+    /// CRYPTO
+    Crypto,
+    /// FIXED
+    FixedIncome,
+    /// SLB
+    SecuritiesLending,
+    /// NEWS
+    News,
+    /// BSK
+    Basket,
+    /// IOPT
+    IndexOption,
+    /// ICU
+    IcuContract,
+    /// ICS
+    IcsContract,
+    /// PHYSS
+    PhysicalSettlement,
+    /// Anything the venue named that this client does not.
     Other,
 }
 
@@ -220,32 +276,52 @@ impl SecurityType {
 /// Option right (call/put).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionRight {
+    /// A call.
     Call,
+    /// A put.
     Put,
 }
 
 /// Full contract definition.
 #[derive(Debug, Clone)]
 pub struct ContractDefinition {
+    /// The venue's own id for this contract.
     pub con_id: u32,
+    /// Its ticker.
     pub symbol: String,
+    /// What kind of contract it is.
     pub sec_type: SecurityType,
+    /// Where it is routed.
     pub exchange: String,
+    /// Where it is listed.
     pub primary_exchange: String,
+    /// What it is priced in.
     pub currency: String,
+    /// The venue's own name for it.
     pub local_symbol: String,
+    /// Which class within its chain.
     pub trading_class: String,
+    /// The issuer's full name.
     pub long_name: String,
+    /// The smallest its price can move.
     pub min_tick: f64,
+    /// How many units one contract is worth.
     pub multiplier: f64,
+    /// Every venue it can be routed to.
     pub valid_exchanges: Vec<String>,
+    /// Which order types the venue takes for it.
     pub order_types: Vec<String>,
+    /// Which price ladder it trades on.
     pub market_rule_id: Option<u32>,
     // Options/futures specific
+    /// The last day it trades.
     pub last_trade_date: String,
+    /// An option's strike.
     pub strike: f64,
+    /// `C` or `P`.
     pub right: Option<OptionRight>,
     // Extended fields
+    /// What kind of share it is.
     pub stock_type: String,
     /// What a quoted price must be multiplied by to be a price. A contract
     /// quoted in a hundredth of the currency states a hundred here, and a price
@@ -253,7 +329,9 @@ pub struct ContractDefinition {
     /// What a bond is: its terms, its ratings, and the option on it. A caller
     /// asking about a bond received a contract with none of what makes it one.
     pub coupon: f64,
+    /// A future's delivery month.
     pub contract_month: String,
+    /// What kind of contract the underlying is.
     pub under_sec_type: String,
     /// The rule the venue evaluates a contract's economic value under. Sent on
     /// the definition, not derived: a contract whose value follows something
@@ -263,44 +341,81 @@ pub struct ContractDefinition {
     /// beside the rule; a rule without its multiplier values the contract by
     /// the wrong factor, which is not a rounding error.
     pub ev_multiplier: f64,
+    /// What the venue notes about a bond.
     pub bond_notes: String,
+    /// What it appends to the description.
     pub desc_append: String,
+    /// What kind of bond it is.
     pub bond_type: String,
+    /// How its coupon is set.
     pub coupon_type: String,
+    /// When the next call or put may be exercised.
     pub next_option_date: String,
+    /// Which of the two it is.
     pub next_option_type: String,
+    /// What the agencies rate it.
     pub ratings: String,
+    /// A fund's name.
     pub fund_name: String,
+    /// The family it belongs to.
     pub fund_family: String,
+    /// What kind of fund it is.
     pub fund_type: String,
+    /// What it charges on the way in.
     pub fund_front_load: String,
+    /// What it charges on the way out.
     pub fund_back_load: String,
+    /// Over what period that exit charge falls away.
     pub fund_back_load_time_interval: String,
+    /// What it charges to run.
     pub fund_management_fee: String,
+    /// The amount above which it asks to be told in advance.
     pub fund_notify_amount: String,
+    /// The least that may be bought to open.
     pub fund_minimum_initial_purchase: String,
+    /// The least that may be added.
     pub fund_minimum_subsequent_purchase: String,
+    /// Which US states it may be sold in.
     pub fund_blue_sky_states: String,
+    /// And which territories.
     pub fund_blue_sky_territories: String,
+    /// Whether it distributes income or accumulates it.
     pub fund_distribution_policy_indicator: String,
+    /// What it holds.
     pub fund_asset_type: String,
+    /// When it actually expires, where that differs from its last trading day.
     pub real_expiration_date: String,
+    /// Whether the issuer may redeem it early.
     pub callable: bool,
+    /// Whether the holder may demand redemption.
     pub puttable: bool,
+    /// Whether it converts to equity.
     pub convertible: bool,
+    /// Whether it may be exercised in part.
     pub next_option_partial: bool,
+    /// Whether it is closed.
     pub fund_closed: bool,
+    /// Whether it is closed to new investors.
     pub fund_closed_for_new_investors: bool,
+    /// Whether it is closed to new money from existing ones.
     pub fund_closed_for_new_money: bool,
+    /// Which group of venues its book aggregates into.
     pub agg_group: i32,
+    /// What a quoted price is multiplied by to reach money. Not one for
+    /// every contract, and a price read without it is wrong by that factor.
     pub price_magnifier: i32,
     /// What the issuer does, from broadest to narrowest. The venue states all
     /// three in one field separated by bars; a caller wants them apart.
     pub industry: String,
+    /// What sector the issuer is in.
     pub category: String,
+    /// More narrowly.
     pub subcategory: String,
+    /// Where the issuer is.
     pub country: String,
+    /// The venue's own name for its market.
     pub market_name: String,
+    /// Its ISIN.
     pub isin: String,
     /// The identifier a contract is known by in the American market. It has no
     /// field of its own on this wire — it is one of the identifiers below,
@@ -330,6 +445,7 @@ pub struct ContractDefinition {
     /// for a contract listed on one venue.
     /// The contract a derivative is written on.
     pub under_con_id: u32,
+    /// The underlying's ticker.
     pub under_symbol: String,
     /// The time of day trading stops, stated separately from the date.
     ///
@@ -341,12 +457,21 @@ pub struct ContractDefinition {
     pub issue_date: String,
     /// The size a contract may be dealt in, from the rule's size table.
     pub size_increment: f64,
+    /// What the venue suggests trading in.
     pub suggested_size_increment: f64,
+    /// How many decimal places its prices carry.
     pub last_price_precision: f64,
+    /// How many its sizes carry.
     pub last_size_precision: f64,
+    /// How it settles: physically, or in cash.
     pub settlement_method: String,
+    /// The venues SMART routes it to, in the order a quote's exchange mask
+    /// refers to them.
     pub smart_venues: Vec<String>,
+    /// Every field the venue stated that this client does not name, kept
+    /// under its tag number so nothing the venue said is discarded.
     pub unnamed_fields: Vec<(u32, String)>,
+    /// The smallest amount of it that can be traded.
     pub min_size: f64,
     /// Trading session string. Populated by merging the paired schedule reply.
     pub trading_hours: Option<String>,
@@ -671,6 +796,8 @@ pub fn unread_definition_tags(data: &[u8]) -> Vec<u32> {
     unread
 }
 
+/// Read one contract definition out of a security-definition
+/// message.
 pub fn parse_secdef_response(
     data: &[u8], island_for_nasdaq: bool,
 ) -> Option<ContractDefinition> {
@@ -995,14 +1122,18 @@ pub fn secdef_response_is_last(data: &[u8]) -> bool {
 /// A price increment rule defining tick sizes at different price levels.
 #[derive(Debug, Clone)]
 pub struct PriceIncrement {
+    /// Where this step starts.
     pub low_edge: f64,
+    /// What the price moves in above it.
     pub increment: f64,
 }
 
 /// A market rule containing a rule ID and its price increment table.
 #[derive(Debug, Clone)]
 pub struct MarketRule {
+    /// Which ladder this is.
     pub rule_id: i32,
+    /// Each step of it.
     pub price_increments: Vec<PriceIncrement>,
     /// The size a contract may be dealt in, per size band.
     ///
@@ -1104,25 +1235,30 @@ pub struct ContractStore {
 }
 
 impl ContractStore {
+    /// Remember a definition, replacing any held under the same id.
     pub fn insert(&mut self, def: ContractDefinition) {
         let key = format!("{}:{}:{}", def.symbol, def.sec_type.to_fix(), def.currency);
         self.by_symbol.insert(key, def.con_id);
         self.by_con_id.insert(def.con_id, def);
     }
 
+    /// The definition held under an id, if there is one.
     pub fn get(&self, con_id: u32) -> Option<&ContractDefinition> {
         self.by_con_id.get(&con_id)
     }
 
+    /// The definition matching a symbol, kind and currency, if there is one.
     pub fn find(&self, symbol: &str, sec_type: SecurityType, currency: &str) -> Option<&ContractDefinition> {
         let key = format!("{}:{}:{}", symbol, sec_type.to_fix(), currency);
         self.by_symbol.get(&key).and_then(|id| self.by_con_id.get(id))
     }
 
+    /// How many definitions are held.
     pub fn len(&self) -> usize {
         self.by_con_id.len()
     }
 
+    /// Whether none are.
     pub fn is_empty(&self) -> bool {
         self.by_con_id.is_empty()
     }
@@ -1132,12 +1268,19 @@ impl ContractStore {
 
 /// Tags for schedule subscription responses.
 pub const TAG_SUB_PROTOCOL: u32 = 6040;
+/// FIX tag 6734: the schedule timezone.
 pub const TAG_SCHEDULE_TIMEZONE: u32 = 6734;
+/// FIX tag 6840: the session count.
 pub const TAG_SESSION_COUNT: u32 = 6840;
+/// FIX tag 6841: the session start.
 pub const TAG_SESSION_START: u32 = 6841;
+/// FIX tag 6842: the session end.
 pub const TAG_SESSION_END: u32 = 6842;
+/// FIX tag 75: the trade date.
 pub const TAG_TRADE_DATE: u32 = 75;
+/// FIX tag 6843: the is trading hours.
 pub const TAG_IS_TRADING_HOURS: u32 = 6843;
+/// FIX tag 6844: the is liquid hours.
 pub const TAG_IS_LIQUID_HOURS: u32 = 6844;
 /// Exchange-path key shared by paired secdef and schedule replies.
 pub const TAG_SCHEDULE_JOIN_KEY: u32 = 6256;
@@ -1149,16 +1292,22 @@ pub const SUB_PROTOCOL_SCHEDULE_REPLY: &str = "107";
 /// A single trading/liquid hours session.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduleSession {
+    /// When the session opened.
     pub start: String,
+    /// When it closed.
     pub end: String,
+    /// The day it belongs to.
     pub trade_date: String,
 }
 
 /// Parsed schedule response.
 #[derive(Debug, Clone)]
 pub struct ContractSchedule {
+    /// The zone these times are stated in.
     pub timezone: String,
+    /// When the venue is open for the contract.
     pub trading_hours: Vec<ScheduleSession>,
+    /// When it is liquid, which is narrower.
     pub liquid_hours: Vec<ScheduleSession>,
 }
 
@@ -1375,20 +1524,31 @@ mod hot_loop_panic_tests {
 
 /// Tags for matching symbols.
 pub const TAG_MATCH_PATTERN: u32 = 58;
+/// FIX tag 146: the match count.
 pub const TAG_MATCH_COUNT: u32 = 146;
+/// FIX tag 6453: the match primary exchange.
 pub const TAG_MATCH_PRIMARY_EXCHANGE: u32 = 6453;
+/// FIX tag 306: the match description.
 pub const TAG_MATCH_DESCRIPTION: u32 = 306;
+/// FIX tag 6070: the match derivative types.
 pub const TAG_MATCH_DERIVATIVE_TYPES: u32 = 6070;
 
 /// A single matching symbol result.
 #[derive(Debug, Clone)]
 pub struct SymbolMatch {
+    /// The venue's own id for this contract.
     pub con_id: u32,
+    /// Its ticker.
     pub symbol: String,
+    /// What kind of contract it is.
     pub sec_type: SecurityType,
+    /// What it is priced in.
     pub currency: String,
+    /// Where it is listed.
     pub primary_exchange: String,
+    /// The venue's own description.
     pub description: String,
+    /// Which kinds of derivative it lists on it.
     pub derivative_types: Vec<String>,
 }
 
@@ -1496,11 +1656,17 @@ static EXPIRATION_FORM_REPORTED: AtomicBool = AtomicBool::new(false);
 /// strikes listed under it, and the expirations of the record it belongs to.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OptionChainScope {
+    /// Its ticker.
     pub symbol: String,
+    /// Where it is routed.
     pub exchange: String,
+    /// Which class within its chain.
     pub trading_class: String,
+    /// How many units one contract is worth.
     pub multiplier: String,
+    /// Every expiry this venue lists.
     pub expirations: Vec<String>,
+    /// Every strike it lists.
     pub strikes: Vec<f64>,
 }
 

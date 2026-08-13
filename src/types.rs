@@ -108,14 +108,18 @@ pub const MAX_INSTRUMENTS: usize = 256;
 const MAX_PENDING_ORDERS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which way a trade goes.
 pub enum Side {
+    /// Buying.
     Buy,
+    /// Selling.
     Sell,
     /// Short sell (FIX tag 54 = "5"). Used for short-selling stocks.
     ShortSell,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where an order stands, as this engine tracks it.
 pub enum OrderStatus {
     /// Locally queued, not yet acknowledged by server.
     PendingSubmit,
@@ -127,9 +131,13 @@ pub enum OrderStatus {
     PendingCancel,
     /// Modify request sent, awaiting confirmation (FIX 39=E).
     PendingReplace,
+    /// Everything asked for has filled.
     Filled,
+    /// Some has.
     PartiallyFilled,
+    /// Withdrawn.
     Cancelled,
+    /// Refused by the venue.
     Rejected,
     /// Server reports order inactive (FIX 39=I).
     Inactive,
@@ -199,7 +207,10 @@ pub struct Quote {
     /// Bid-exchange bitmask. Each set bit indexes into smart_components by bit_number.
     /// Hypothesis pending wire-format confirmation; see deepentropy/ib-agent#120.
     pub bid_exch_mask: i64,
+    /// Which venues are at the ask, as a mask over the contract's own
+    /// list.
     pub ask_exch_mask: i64,
+    /// Which venue the last trade was on.
     pub last_exch_mask: i64,
     /// Whether the venue has halted trading in this contract.
     ///
@@ -342,13 +353,20 @@ pub struct CancelReject {
 /// Multi-char OrdType discriminants (values < 32 to avoid collision with ASCII single-char types).
 /// Used in `Order.ord_type` for order types whose FIX tag 40 value is more than one character.
 pub const ORD_STP_PRT: u8 = 1;   // FIX "SP"  — Stop with Protection
-pub const ORD_MIDPX: u8 = 2;     // FIX "MIDPX" — Mid-Price
-pub const ORD_SNAP_MKT: u8 = 3;  // FIX "SMKT" — Snap to Market
-pub const ORD_SNAP_MID: u8 = 4;  // FIX "SMID" — Snap to Midpoint
-pub const ORD_SNAP_PRI: u8 = 5;  // FIX "SREL" — Snap to Primary
-pub const ORD_PEG_MKT: u8 = 6;   // FIX "P" + ExecInst "P" — Pegged to Market
-pub const ORD_PEG_MID: u8 = 7;   // FIX "P" + ExecInst "M" — Pegged to Midpoint
-pub const ORD_PEG_BENCH: u8 = 8; // FIX "PB" — Pegged to Benchmark
+/// FIX "MIDPX" — Mid-Price
+pub const ORD_MIDPX: u8 = 2;
+/// FIX "SMKT" — Snap to Market
+pub const ORD_SNAP_MKT: u8 = 3;
+/// FIX "SMID" — Snap to Midpoint
+pub const ORD_SNAP_MID: u8 = 4;
+/// FIX "SREL" — Snap to Primary
+pub const ORD_SNAP_PRI: u8 = 5;
+/// FIX "P" + ExecInst "P" — Pegged to Market
+pub const ORD_PEG_MKT: u8 = 6;
+/// FIX "P" + ExecInst "M" — Pegged to Midpoint
+pub const ORD_PEG_MID: u8 = 7;
+/// FIX "PB" — Pegged to Benchmark
+pub const ORD_PEG_BENCH: u8 = 8;
 /// A time-in-force this client does not know. A recovery record with no tag 59
 /// states none, and the order was not placed by this session, so there is
 /// nothing to recover it from. Distinct from every real code, so it reports as
@@ -356,7 +374,8 @@ pub const ORD_PEG_BENCH: u8 = 8; // FIX "PB" — Pegged to Benchmark
 /// than restating a guess as an instruction (ibx#307).
 pub const TIF_UNSTATED: u8 = 0;
 
-pub const ORD_WHAT_IF: u8 = 9;   // Not a real OrdType — marker for what-if orders
+/// Not a real OrdType — marker for what-if orders
+pub const ORD_WHAT_IF: u8 = 9;
 
 /// Convert an `ord_type` discriminant to the FIX tag 40 string.
 /// Single-char types (ASCII >= 32) are stored as-is; multi-char types use constants above.
@@ -419,9 +438,11 @@ impl WhatIfResponse {
     pub fn init_margin_change(&self) -> Price {
         self.init_margin_after - self.init_margin_before
     }
+    /// What the order would change maintenance margin by.
     pub fn maint_margin_change(&self) -> Price {
         self.maint_margin_after - self.maint_margin_before
     }
+    /// What it would change equity with loan value by.
     pub fn equity_with_loan_change(&self) -> Price {
         self.equity_with_loan_after - self.equity_with_loan_before
     }
@@ -430,13 +451,18 @@ impl WhatIfResponse {
 /// Adjusted order type for adjustable stops (FIX tag 6261).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdjustedOrderType {
+    /// It becomes a stop.
     Stop,       // 3
+    /// It becomes a stop limit.
     StopLimit,  // 4
+    /// It becomes a trailing stop.
     Trail,      // 7
+    /// It becomes a trailing stop limit.
     TrailLimit, // 8
 }
 
 impl AdjustedOrderType {
+    /// The code the wire carries this as.
     pub fn fix_code(&self) -> &'static str {
         match self {
             Self::Stop => "3",
@@ -450,12 +476,19 @@ impl AdjustedOrderType {
 /// A tracked open order.
 #[derive(Debug, Clone, Copy)]
 pub struct Order {
+    /// The caller's number for the order.
     pub order_id: OrderId,
+    /// The engine's own slot for the contract.
     pub instrument: InstrumentId,
+    /// Whether it buys or sells.
     pub side: Side,
+    /// The price, scaled by `PRICE_SCALE`.
     pub price: Price,
+    /// How much, scaled by `QTY_SCALE`.
     pub qty: u32,
+    /// How much has filled.
     pub filled: u32,
+    /// Where it stands.
     pub status: OrderStatus,
     /// FIX tag 40 OrdType: b'1'=MKT, b'2'=LMT, b'3'=STP, b'4'=STPLMT, b'P'=TRAIL, etc.
     /// For multi-char OrdTypes (MIDPX, SP, SMKT, etc.), uses ORD_* constants (values < 32).
@@ -476,12 +509,16 @@ impl Order {
 /// Adaptive algo priority level (IB's "adaptivePriority" parameter).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdaptivePriority {
+    /// Work it slowly.
     Patient,
+    /// Work it at the venue's usual pace.
     Normal,
+    /// Work it quickly.
     Urgent,
 }
 
 impl AdaptivePriority {
+    /// The name the venue knows this by.
     pub fn as_str(&self) -> &'static str {
         match self {
             AdaptivePriority::Patient => "Patient",
@@ -496,11 +533,14 @@ impl AdaptivePriority {
 /// What an order was submitted as, kept so a replace can restate it in full.
 #[derive(Debug, Clone)]
 pub struct OrderSpec {
+    /// What kind of order this is, and the prices that kind needs.
     pub kind: OrderKind,
+    /// Everything else the caller set on it.
     pub attrs: OrderAttrs,
 }
 
 #[derive(Debug, Clone)]
+/// Everything a caller set on an order beyond its kind, side and size.
 pub struct OrderAttrs {
     /// Show on book as this many shares (tag 111). 0 = not set (show full qty).
     pub display_size: u32,
@@ -547,12 +587,14 @@ pub struct OrderAttrs {
     pub advanced_error_override: String,
     /// The window an order is live in, on tags 6670 and 6671.
     pub active_start_time: String,
+    /// When a conditional order stops being watched.
     pub active_stop_time: String,
     /// Never take liquidity, on tag 6605.
     pub post_only: bool,
     /// Whether the client asked for this order or the account holder did, on
     /// tags 6488 and 1028 — which is a regulatory statement, not a preference.
     pub solicited: bool,
+    /// Whether a person entered it rather than a program.
     pub manual_order_indicator: i32,
     /// Route to the best bid or offer where the order is marketable, on tag 8265.
     pub route_marketable_to_bbo: bool,
@@ -560,24 +602,32 @@ pub struct OrderAttrs {
     pub imbalance_only: bool,
     /// Take part in the opening auction, or stand out of it, on tags 6524 and 6562.
     pub allow_pre_open: bool,
+    /// Whether it stays out of the opening auction.
     pub ignore_open_auction: bool,
     /// One of several orders the venue treats as a unit, on tag 6406.
     pub is_oms_container: bool,
     /// Who is operating the account and on whose behalf, on tags 8089, 6207 and 6636.
     pub ext_operator: String,
+    /// The end customer it is placed for.
     pub customer_account: String,
+    /// Whether that customer is a professional.
     pub professional_customer: bool,
     /// The future a spread prices against, on tag 6564.
     pub ref_futures_con_id: i32,
     /// Who decided the trade and who executed it, for European transaction
     /// reporting, on tags 8237, 8243, 8254 and 8255.
     pub mifid2_decision_maker: String,
+    /// Under MiFID II, which algorithm decided to trade.
     pub mifid2_decision_algo: String,
+    /// Which person executed it.
     pub mifid2_execution_trader: String,
+    /// Which algorithm did.
     pub mifid2_execution_algo: String,
     /// A midpoint peg's offset stated as a whole-tick part and a half-tick
     /// part, on tags 8403 and 8404. Both set is the other form of the peg.
     pub mid_offset_at_whole: f64,
+    /// How far a midpoint order sits from the midpoint at half the
+    /// spread.
     pub mid_offset_at_half: f64,
     /// Whether to let the venue manage the price of the order, on tag 8339.
     /// Zero is the caller saying nothing.
@@ -587,6 +637,8 @@ pub struct OrderAttrs {
     /// The smallest size worth competing for, on tag 8411, and how far past the
     /// best price to compete, on tag 8412.
     pub min_compete_size: i32,
+    /// How far a pegged-to-best order may improve on the
+    /// best price.
     pub compete_against_best_offset: f64,
     /// Whether the venue keeps re-pricing a volatility order as the underlying
     /// moves, on tag 6275.
@@ -597,6 +649,8 @@ pub struct OrderAttrs {
     /// The band of underlying prices a volatility order stays active within, on
     /// tags 6152 and 6153. `f64::MAX` is this API's "not set" for a price.
     pub stock_range_lower: f64,
+    /// The highest underlying price a volatility order stays active
+    /// through.
     pub stock_range_upper: f64,
     /// Whether the volatility above is daily or annual, on tag 6280. Zero means
     /// the caller set none.
@@ -618,18 +672,23 @@ pub struct OrderAttrs {
     /// Short-sale handling: which slot (6086), where the shares are located
     /// (5700, stated only for slot 2) and the exemption reason (1688).
     pub short_sale_slot: u8,
+    /// Where a short leg's borrow is located.
     pub designated_location: String,
+    /// -1 unless the leg is exempt from the short-sale price test.
     pub exempt_code: i32,
     /// How this order hedges (6665) and the parameter that goes with it: a
     /// beta on 6703, a pair ratio on 6666. Delta and FX hedges take neither.
     pub hedge_type: u8,
+    /// The beta a beta hedge is struck at.
     pub hedge_beta: f64,
+    /// The ratio a pair hedge is struck at.
     pub hedge_ratio: f64,
     /// The soft-dollar arrangement this order's commission goes to: which
     /// tier (tag 6519) and what it is worth (tag 6520). Taken from a caller
     /// and dropped, the commission went wherever the account's default sends
     /// it, which is not what the caller asked for.
     pub soft_dollar_tier_name: String,
+    /// What the soft dollar tier is worth.
     pub soft_dollar_tier_val: String,
     /// The caller's own name for the algo running this order (tag 8016),
     /// which comes back on every report about it.
@@ -662,6 +721,7 @@ pub struct OrderAttrs {
     /// Where this order clears (tag 440) and how (tag 6419). Distinct from the
     /// account it trades in, which the order already names.
     pub clearing_account: String,
+    /// How the trade clears: `IB`, `Away`, `PTA`.
     pub clearing_intent: String,
     /// The legs, when this order is for a combination.
     pub combo_legs: Vec<ComboLegSpec>,
@@ -795,9 +855,13 @@ impl Default for OrderAttrs {
 pub enum OrderCondition {
     /// Trigger when an instrument's price crosses a threshold.
     Price {
+        /// The venue's id for the contract.
         con_id: i64,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// The price, scaled by `PRICE_SCALE`.
         price: Price,
+        /// Whether the condition is met above the value rather than below it.
         is_more: bool,
         /// 0=default, 1=last, 2=bid/ask, 3=bid, 4=ask
         trigger_method: u8,
@@ -806,32 +870,45 @@ pub enum OrderCondition {
     Time {
         /// Format: YYYYMMDD-HH:MM:SS
         time: String,
+        /// Whether the condition is met above the value rather than below it.
         is_more: bool,
     },
     /// Trigger based on margin cushion percentage.
     Margin {
         /// Percentage (e.g., 10 = 10%).
         percent: u32,
+        /// Whether the condition is met above the value rather than below it.
         is_more: bool,
     },
     /// Trigger when a trade executes on a specific instrument.
     Execution {
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
         sec_type: String,
     },
     /// Trigger when volume exceeds a threshold.
     Volume {
+        /// The venue's id for the contract.
         con_id: i64,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// The volume the condition is measured against.
         volume: i64,
+        /// Whether the condition is met above the value rather than below it.
         is_more: bool,
     },
     /// Trigger on percentage price change.
     PercentChange {
+        /// The venue's id for the contract.
         con_id: i64,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// The percentage change the condition is measured against.
         percent: f64,
+        /// Whether the condition is met above the value rather than below it.
         is_more: bool,
     },
 }
@@ -839,13 +916,18 @@ pub enum OrderCondition {
 /// Risk aversion level for Arrival Price and Close Price algos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RiskAversion {
+    /// Finish, whatever it costs.
     GetDone,
+    /// Lean towards finishing.
     Aggressive,
+    /// Neither.
     Neutral,
+    /// Lean towards the price.
     Passive,
 }
 
 impl RiskAversion {
+    /// The name the venue knows this by.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::GetDone => "Get_Done",
@@ -877,34 +959,51 @@ pub enum AlgoParams {
     /// TWAP: Time-weighted average price.
     /// Tag 847=Twap.
     Twap {
+        /// Whether it may keep working past that.
         allow_past_end_time: bool,
+        /// When the algorithm should begin.
         start_time: String,
+        /// When it should stop.
         end_time: String,
     },
     /// Arrival Price: Minimize arrival price impact.
     /// Tag 847=ArrivalPx, 849=max_pct_vol.
     ArrivalPx {
+        /// The most of the market's volume the algorithm may take.
         max_pct_vol: f64,
+        /// How hard it works against the price to finish.
         risk_aversion: RiskAversion,
+        /// Whether it may keep working past that.
         allow_past_end_time: bool,
+        /// Whether it must finish within its window.
         force_completion: bool,
+        /// When the algorithm should begin.
         start_time: String,
+        /// When it should stop.
         end_time: String,
     },
     /// Close Price: Target closing price.
     /// Tag 847=ClosePx, 849=max_pct_vol.
     ClosePx {
+        /// The most of the market's volume the algorithm may take.
         max_pct_vol: f64,
+        /// How hard it works against the price to finish.
         risk_aversion: RiskAversion,
+        /// Whether it must finish within its window.
         force_completion: bool,
+        /// When the algorithm should begin.
         start_time: String,
     },
     /// Dark Ice: Hidden iceberg algo.
     /// Tag 847=DarkIce.
     DarkIce {
+        /// Whether it may keep working past that.
         allow_past_end_time: bool,
+        /// How much of an iceberg is shown at once.
         display_size: u32,
+        /// When the algorithm should begin.
         start_time: String,
+        /// When it should stop.
         end_time: String,
     },
     /// Percentage of Volume: Participate at % of volume.
@@ -912,8 +1011,11 @@ pub enum AlgoParams {
     PctVol {
         /// Target participation rate (0.0-1.0). Sent as param pctVol.
         pct_vol: f64,
+        /// Whether it may only add liquidity.
         no_take_liq: bool,
+        /// When the algorithm should begin.
         start_time: String,
+        /// When it should stop.
         end_time: String,
     },
 }
@@ -925,65 +1027,158 @@ pub enum AlgoParams {
 /// variant (ibx#224).
 #[derive(Debug, Clone)]
 pub enum OrderKind {
+    /// Fill at whatever the market is.
     Market,
-    Limit { price: Price },
-    Stop { stop_price: Price },
-    StopLimit { price: Price, stop_price: Price },
+    /// Fill at this price or better.
+    Limit {
+        /// Fill at this price or better, scaled by `PRICE_SCALE`.
+        price: Price,
+    },
+    /// Become a market order once the trigger is reached.
+    Stop {
+        /// Where it triggers.
+        stop_price: Price,
+    },
+    /// Become a limit order once the trigger is reached.
+    StopLimit {
+        /// Fill at this price or better, scaled by `PRICE_SCALE`.
+        price: Price,
+        /// Where it triggers.
+        stop_price: Price,
+    },
     /// Trailing stop by absolute amount. `trail_stop_price` is the optional
     /// initial stop trigger (tag 6117); 0 = not set.
-    TrailingStop { trail_amt: Price, trail_stop_price: Price },
+    TrailingStop {
+        /// How far it follows, scaled by `PRICE_SCALE`.
+        trail_amt: Price,
+        /// Where it starts before it has followed anything.
+        trail_stop_price: Price,
+    },
     /// Trailing stop limit; `lmt_offset` is the limit-vs-trail offset (tag 6370).
     /// `trail_stop_price` is the optional initial stop trigger (tag 6117); 0 = not set.
-    TrailingStopLimit { lmt_offset: Price, trail_amt: Price, trail_stop_price: Price },
+    TrailingStopLimit {
+        /// How far the limit sits from the trigger.
+        lmt_offset: Price,
+        /// How far it follows, scaled by `PRICE_SCALE`.
+        trail_amt: Price,
+        /// Where it starts before it has followed anything.
+        trail_stop_price: Price,
+    },
     /// Trailing stop by percentage. Basis points: 100 = 1%.
     /// `trail_stop_price` is the optional initial stop trigger (tag 6117); 0 = not set.
-    TrailPct { trail_pct: u32, trail_stop_price: Price },
+    TrailPct {
+        /// How far it follows, as a percentage.
+        trail_pct: u32,
+        /// Where it starts before it has followed anything.
+        trail_stop_price: Price,
+    },
     /// Pegged to a benchmark contract's price.
     ///
     /// `ref_exchange` is where the reference contract is quoted, by name. The
     /// field it travels in refuses a number, and the gateway will not accept
     /// the order without it or without the units field the encoder supplies.
     PegBench {
+        /// The price, scaled by `PRICE_SCALE`.
         price: Price,
+        /// The contract the order is priced against.
         ref_con_id: u32,
+        /// Whether the reference moving down moves the order down too.
         is_peg_decrease: bool,
+        /// How far the order moves when the reference does.
         pegged_change_amount: Price,
+        /// How far the reference must move first.
         ref_change_amount: Price,
+        /// Where the order starts before any of that applies.
         starting_price: Price,
         /// The reference contract's price, which the venue requires alongside
         /// the contract itself.
         stock_ref_price: Price,
+        /// Which venue's price of it to use.
         ref_exchange: String,
     },
+    /// Fill at the closing auction.
     Moc,
-    Loc { price: Price },
-    Mit { stop_price: Price },
-    Lit { price: Price, stop_price: Price },
+    /// Fill at the closing auction, at this price or better.
+    Loc {
+        /// Fill at this price or better, scaled by `PRICE_SCALE`.
+        price: Price,
+    },
+    /// Become a market order once the market touches the trigger.
+    Mit {
+        /// Where it triggers.
+        stop_price: Price,
+    },
+    /// Become a limit order once the market touches the trigger.
+    Lit {
+        /// Fill at this price or better, scaled by `PRICE_SCALE`.
+        price: Price,
+        /// Where it triggers.
+        stop_price: Price,
+    },
+    /// A market order that becomes a limit if it cannot fill at the touch.
     Mtl,
+    /// A market order with the venue's own protection against a bad print.
     MktPrt,
-    StpPrt { stop_price: Price },
-    MidPrice { price_cap: Price },
+    /// A stop with that same protection.
+    StpPrt {
+        /// Where it triggers.
+        stop_price: Price,
+    },
+    /// Fill at the midpoint, no worse than this cap.
+    MidPrice {
+        /// The furthest it will follow.
+        price_cap: Price,
+    },
     /// Snap-to orders carry an offset from the price they snap to, and the
     /// gateway refuses one that does not state it ("Message must contain field
     /// # 211"). Taken from `aux_price`, as the pegged types are.
-    SnapMkt { offset: Price },
-    SnapMid { offset: Price },
-    SnapPri { offset: Price },
+    SnapMkt {
+        /// How far from the reference it sits.
+        offset: Price,
+    },
+    /// The same, measured from the midpoint.
+    SnapMid {
+        /// How far from the reference it sits.
+        offset: Price,
+    },
+    /// The same, measured from the primary venue's price.
+    SnapPri {
+        /// How far from the reference it sits.
+        offset: Price,
+    },
     /// Pegs to the market price, offset by `offset`, with `price_cap` as the
     /// worst price it may reach. The cap rides the limit-price tag, which the
     /// gateway wants on both peg types — a pegged order sent without one is
     /// refused for an invalid limit price. Zero states no cap.
-    PegMkt { offset: Price, price_cap: Price },
+    PegMkt {
+        /// How far from the reference it sits.
+        offset: Price,
+        /// The furthest it will follow.
+        price_cap: Price,
+    },
     /// Pegs to the midpoint of the NBBO, capped the same way.
-    PegMid { offset: Price, price_cap: Price },
-    Rel { offset: Price },
+    PegMid {
+        /// How far from the reference it sits.
+        offset: Price,
+        /// The furthest it will follow.
+        price_cap: Price,
+    },
+    /// Sit at the best bid or offer, improved by this much.
+    Rel {
+        /// How far from the reference it sits.
+        offset: Price,
+    },
     /// Stop that converts to another order type once `trigger_price` is hit.
     /// Tags: 6257=1, 6261=adjusted type, 6258=trigger, 6259=adjusted stop,
     /// 6262=adjusted limit, 6260/6269=trailing amount + unit.
     AdjustableStop {
+        /// Where a stop triggers.
         stop_price: Price,
+        /// The price at which the order becomes the adjusted one.
         trigger_price: Price,
+        /// What it becomes then.
         adjusted_order_type: AdjustedOrderType,
+        /// The stop it takes on with it.
         adjusted_stop_price: Price,
         /// Only used when adjusted_order_type is StopLimit or TrailLimit. 0 = not set.
         adjusted_stop_limit_price: Price,
@@ -997,13 +1192,28 @@ pub enum OrderKind {
     },
     /// Adaptive limit. Tags: 18=e (adaptive wrapper), 847=Adaptive,
     /// 5957/5958/5960 = the single adaptivePriority algo parameter.
-    Adaptive { price: Price, priority: AdaptivePriority },
+    Adaptive {
+        /// Fill at this price or better, scaled by `PRICE_SCALE`.
+        price: Price,
+        /// How hard the venue's adaptive algorithm works it.
+        priority: AdaptivePriority,
+    },
     /// Generic algo limit. Tags: 847=strategy, 5957 + 5958/5960 per parameter.
-    Algo { price: Price, algo: AlgoParams },
+    Algo {
+        /// Fill at this price or better, scaled by `PRICE_SCALE`.
+        price: Price,
+        /// Which algorithm runs it, and what it was given.
+        algo: AlgoParams,
+    },
     /// Margin preview of an order of type `ord_type` (the wire character, tag
     /// 40). Tag 6091=1; the order is tracked under `ORD_WHAT_IF` so the
     /// response is recognised, and never becomes a live order.
-    WhatIf { price: Price, ord_type: u8 },
+    WhatIf {
+        /// Fill at this price or better, scaled by `PRICE_SCALE`.
+        price: Price,
+        /// What kind of order is being previewed.
+        ord_type: u8,
+    },
 }
 
 /// A scale order's ladder: how much to show, how far apart, and how the price
@@ -1039,8 +1249,11 @@ pub struct ScaleAttrs {
 /// The contract an order hedges against: which one, its delta, and its price.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeltaNeutralContractSpec {
+    /// The venue's id for the contract.
     pub con_id: i64,
+    /// How much of the hedge goes with one of the order.
     pub delta: f64,
+    /// The price, scaled by `PRICE_SCALE`.
     pub price: f64,
 }
 
@@ -1064,7 +1277,9 @@ pub struct ComboLegSpec {
     /// Short-sale slot for the leg (tag 6086), where its shares are located
     /// (tag 6216) and the exemption that applies (tag 1689).
     pub short_sale_slot: u8,
+    /// Where a short leg's borrow is located.
     pub designated_location: String,
+    /// -1 unless the leg is exempt from the short-sale price test.
     pub exempt_code: i32,
     /// What this leg is to be done at, where the caller priced the legs
     /// separately rather than pricing the combination (tag 6879).
@@ -1100,14 +1315,23 @@ pub enum OrderRequest {
     /// Bracket order: parent entry + take-profit + stop-loss, linked via OCA.
     /// Generates 3 FIX messages: parent (35=D), TP child (35=D with 6107+583), SL child (35=D with 6107+583).
     SubmitBracket {
+        /// The order this one is a child of.
         parent_id: OrderId,
+        /// The number the take-profit child is placed under.
         tp_id: OrderId,
+        /// The number the stop-loss child is placed under.
         sl_id: OrderId,
+        /// The engine's own slot for the contract.
         instrument: InstrumentId,
+        /// Whether it buys or sells.
         side: Side,
+        /// How much, scaled by `QTY_SCALE`.
         qty: u32,
+        /// Where the parent enters.
         entry_price: Price,
+        /// Where the profit-taking child sits.
         take_profit: Price,
+        /// Where the protective child sits.
         stop_loss: Price,
     },
     /// Extended submission for any order type: `kind` selects the order type
@@ -1115,12 +1339,19 @@ pub enum OrderRequest {
     /// This is how non-LMT types carry parent_id/oca_group/outside_rth/tif
     /// (ibx#224).
     SubmitEx {
+        /// The caller's number for the order.
         order_id: OrderId,
+        /// The engine's own slot for the contract.
         instrument: InstrumentId,
+        /// Whether it buys or sells.
         side: Side,
+        /// How much, scaled by `QTY_SCALE`.
         qty: u32,
+        /// What kind of order this is, and the prices that kind needs.
         kind: OrderKind,
+        /// How long the order lives, as the wire carries it.
         tif: u8,
+        /// Everything else the caller set on it.
         attrs: OrderAttrs,
     },
     /// Limit order for opening auction (TIF=OPG).
@@ -1134,16 +1365,25 @@ pub enum OrderRequest {
     /// Fractional shares limit order. Qty is fixed-point, `QTY_SCALE`, and
     /// goes out on tag 38 as a decimal string.
     SubmitLimitFractional {
+        /// The caller's number for the order.
         order_id: OrderId,
+        /// The engine's own slot for the contract.
         instrument: InstrumentId,
+        /// Whether it buys or sells.
         side: Side,
+        /// How much, scaled by `QTY_SCALE`.
         qty: Qty, // QTY_SCALE fixed-point
+        /// The price, scaled by `PRICE_SCALE`.
         price: Price,
     },
+    /// Withdraw one order.
     Cancel {
+        /// The caller's number for the order.
         order_id: OrderId,
     },
+    /// Withdraw every order on one contract.
     CancelAll {
+        /// The engine's own slot for the contract.
         instrument: InstrumentId,
     },
     /// Replace a working order.
@@ -1153,9 +1393,13 @@ pub enum OrderRequest {
     /// or the trigger has the change reach the gateway (ibx#349, ibx#372).
     /// A zero `tif` states none and leaves the resting value in force.
     Modify {
+        /// The number the replaced order takes.
         new_order_id: OrderId,
+        /// The caller's number for the order.
         order_id: OrderId,
+        /// The price, scaled by `PRICE_SCALE`.
         price: Price,
+        /// How much, scaled by `QTY_SCALE`.
         qty: u32,
         /// Outside-RTH flag from the order the caller resubmitted. The replace
         /// asserts tag 6433 from this rather than from the tracked record,
@@ -1165,6 +1409,7 @@ pub enum OrderRequest {
         /// `Order::ord_type` and `Order::tif`. A replace that restated neither
         /// left the gateway to infer them, and it inferred a plain limit.
         ord_type: u8,
+        /// How long the order lives, as the wire carries it.
         tif: u8,
         /// New trigger price. Zero means the caller did not supply one, in
         /// which case a trigger-only order type takes `price` as its trigger
@@ -1266,12 +1511,14 @@ impl Default for OrderBuffer {
 }
 
 impl OrderBuffer {
+    /// An empty buffer.
     pub fn new() -> Self {
         Self {
             buf: Vec::with_capacity(MAX_PENDING_ORDERS),
         }
     }
 
+    /// Add a request, dropping the oldest if the buffer is full.
     pub fn push(&mut self, req: OrderRequest) {
         debug_assert!(self.buf.len() < MAX_PENDING_ORDERS, "order buffer overflow");
         self.buf.push(req);
@@ -1287,10 +1534,12 @@ impl OrderBuffer {
         self.buf.splice(0..0, reqs);
     }
 
+    /// Take everything buffered.
     pub fn drain(&mut self) -> std::vec::Drain<'_, OrderRequest> {
         self.buf.drain(..)
     }
 
+    /// Whether anything is buffered.
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }
@@ -1341,9 +1590,11 @@ pub struct TbtTrade {
     pub price: Price,
     /// How much.
     pub size: i64,
+    /// When, in nanoseconds since the epoch.
     pub timestamp: u64,
     /// Which venue it printed on.
     pub exchange: String,
+    /// What has to be true before it is placed.
     pub conditions: String,
     /// The venue may still revise this print.
     ///
@@ -1375,6 +1626,7 @@ pub struct TbtQuote {
     pub bid_size: i64,
     /// How much at the ask.
     pub ask_size: i64,
+    /// When, in nanoseconds since the epoch.
     pub timestamp: u64,
     /// The bid is below the day's low, or the ask above its high — the venue's
     /// own words about whether this quote sits outside the day's range.
@@ -1392,6 +1644,7 @@ pub struct NewsBulletin {
     pub msg_type: i32,
     /// What it says.
     pub message: String,
+    /// Where the request is directed, or the contract is listed.
     pub exchange: String,
 }
 
@@ -1444,6 +1697,7 @@ pub fn exchange_letter(_exchange: &str) -> &'static str {
 
 
 #[derive(Debug, Clone)]
+/// One venue behind a quote's exchange mask, and the letter it is named by.
 pub struct SmartComponent {
     /// Which bit of a quote's exchange mask this venue is.
     pub bit_number: i32,
@@ -1467,6 +1721,7 @@ pub struct NewsProvider {
 pub struct SoftDollarTier {
     /// The tier's name.
     pub name: String,
+    /// What it is worth.
     pub val: String,
     /// How it is shown.
     pub display_name: String,
@@ -1477,6 +1732,7 @@ pub struct SoftDollarTier {
 pub struct FamilyCode {
     /// The account.
     pub account_id: String,
+    /// The family, as the venue names it.
     pub family_code_str: String,
 }
 
@@ -1537,8 +1793,11 @@ pub struct HistoricalTickBidAsk {
 /// Historical tick data (one of three types based on whatToShow).
 #[derive(Debug, Clone)]
 pub enum HistoricalTickData {
+    /// Midpoints.
     Midpoint(Vec<HistoricalTickMidpoint>),
+    /// Trades.
     Last(Vec<HistoricalTickLast>),
+    /// Quotes.
     BidAsk(Vec<HistoricalTickBidAsk>),
 }
 
@@ -1568,16 +1827,22 @@ pub struct RealTimeBar {
 pub struct ScheduleSession {
     /// The day it belongs to.
     pub ref_date: String,
+    /// When the session opened.
     pub open_time: String,
+    /// When it closed.
     pub close_time: String,
 }
 
 /// Parsed historical schedule response from historical data connection.
 #[derive(Debug, Clone)]
 pub struct HistoricalScheduleResponse {
+    /// The name this client gave the query, which the answer echoes.
     pub query_id: String,
+    /// The zone the times are stated in.
     pub timezone: String,
+    /// The start of the window asked for.
     pub start_date_time: String,
+    /// The end of the window asked for. Empty means now.
     pub end_date_time: String,
     /// Each session in the window.
     pub sessions: Vec<ScheduleSession>,
@@ -1592,7 +1857,9 @@ pub struct CompletedOrder {
     pub instrument: InstrumentId,
     /// What it finished as.
     pub status: OrderStatus,
+    /// How much filled.
     pub filled_qty: i64,
+    /// When, in nanoseconds since the epoch.
     pub timestamp_ns: u64,
 }
 
@@ -1604,6 +1871,7 @@ pub struct SecDefFilters {
     pub primary_exchange: String,
     /// The venue's own name for the contract.
     pub local_symbol: String,
+    /// An option's expiry or a future's month.
     pub last_trade_date_or_contract_month: String,
     /// An option's strike.
     pub strike: f64,
@@ -1637,41 +1905,113 @@ pub enum ControlCommand {
     /// 0 = REALTIME (absent, default fan-out 264=442 BID_ASK + 264=443 LAST),
     /// 1 = DELAYED, 2 = FROZEN, 3 = DELAYED_FROZEN (single 264=1 TOP + 9887=N).
     Subscribe {
-        con_id: i64, symbol: String, exchange: String, sec_type: String,
+        /// The venue's id for the contract.
+        con_id: i64,
+        /// The contract's ticker.
+        symbol: String,
+        /// Where the subscription is taken from.
+        exchange: String,
+        /// What kind of contract it is.
+        sec_type: String,
         /// Stated so a contract named by symbol resolves to one listing: the
         /// same symbol on the same venue exists in more than one currency.
         currency: String,
-        last_trade_date: String, strike: f64, right: String, multiplier: String,
+        /// An option's expiry or a future's month.
+        last_trade_date: String,
+        /// An option's strike.
+        strike: f64,
+        /// `C` or `P`.
+        right: String,
+        /// How many units one contract is worth.
+        multiplier: String,
+        /// Which feed to serve the subscription from: live, delayed or frozen.
         mode_9887: i32,
+        /// Where the engine sends the slot it registered, for a caller waiting
+        /// on one.
         reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
     },
     /// Unsubscribe from market data for an instrument.
-    Unsubscribe { instrument: InstrumentId },
+    Unsubscribe {
+        /// The engine's own slot for the contract.
+        instrument: InstrumentId,
+    },
     /// Subscribe to tick-by-tick data via historical data connection.
-    SubscribeTbt { req_id: i64, con_id: i64, symbol: String, sec_type: String, exchange: String, tbt_type: TbtType, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
+    SubscribeTbt {
+        /// The caller's number for the request.
+        req_id: i64,
+        /// The venue's id for the contract.
+        con_id: i64,
+        /// The contract's ticker.
+        symbol: String,
+        /// What kind of contract it is.
+        sec_type: String,
+        /// Where the request is directed.
+        exchange: String,
+        /// Which stream is wanted.
+        tbt_type: TbtType,
+        /// Where the engine sends the slot it registered.
+        reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
+    },
     /// Unsubscribe from tick-by-tick data.
     /// Withdraw one tick stream, named by the request that opened it.
     ///
     /// Named by the request and not by the contract: a contract can carry
     /// several streams, and withdrawing "the one on this contract" takes
     /// whichever was opened first and leaves the caller's own running.
-    UnsubscribeTbt { req_id: i64, instrument: InstrumentId },
+    UnsubscribeTbt {
+        /// The caller's number for the request.
+        req_id: i64,
+        /// The engine's own slot for the contract.
+        instrument: InstrumentId,
+    },
     /// Subscribe to per-contract news ticks via CCP (264=292).
-    SubscribeNews { con_id: i64, symbol: String, providers: String, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
+    SubscribeNews {
+        /// The venue's id for the contract.
+        con_id: i64,
+        /// The contract's ticker.
+        symbol: String,
+        /// Which news providers.
+        providers: String,
+        /// Where the engine sends the slot it registered.
+        reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
+    },
     /// Unsubscribe from per-contract news ticks.
-    UnsubscribeNews { instrument: InstrumentId },
+    UnsubscribeNews {
+        /// The engine's own slot for the contract.
+        instrument: InstrumentId,
+    },
     /// Subscribe to whole-account P&L via CCP (6040=142).
-    SubscribePnl { req_id: i64, account: String },
+    SubscribePnl {
+        /// The caller's number for the request.
+        req_id: i64,
+        /// Which account.
+        account: String,
+    },
     /// Ask for, or replace, a partition of the advisor's own configuration.
     ///
     /// `command` says which of asking, replacing or removing is meant;
     /// `partition` names which part — its groups, its allocation profiles, its
     /// models. A replacement carries the configuration as its own document.
-    AdvisorConfig { command: i32, partition: String, document: Option<String> },
+    AdvisorConfig {
+        /// Which operation on the configuration.
+        command: i32,
+        /// Which part of it.
+        partition: String,
+        /// The configuration itself, where one is being written.
+        document: Option<String>,
+    },
     /// Cancel P&L subscription.
-    CancelPnl { req_id: i64 },
+    CancelPnl {
+        /// The caller's number for the request.
+        req_id: i64,
+    },
     /// Update a strategy parameter.
-    UpdateParam { key: String, value: String },
+    UpdateParam {
+        /// Which setting.
+        key: String,
+        /// What to set it to.
+        value: String,
+    },
     /// Submit an order from external caller (bridge mode).
     Order(OrderRequest),
     /// Register an instrument from external caller (bridge mode).
@@ -1680,23 +2020,47 @@ pub enum ControlCommand {
     /// pair, which those four fields do not distinguish. An order names its
     /// contract by the instrument, so the instrument has to know this or the
     /// order goes out unable to say which strike or contract month it means.
-    RegisterInstrument { con_id: i64, symbol: String, sec_type: String, exchange: String, identity: String, reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>> },
+    RegisterInstrument {
+        /// The venue's id for the contract.
+        con_id: i64,
+        /// The contract's ticker.
+        symbol: String,
+        /// What kind of contract it is.
+        sec_type: String,
+        /// Where the request is directed.
+        exchange: String,
+        /// What separates this contract from others sharing its symbol.
+        identity: String,
+        /// Where the engine sends the slot it registered.
+        reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
+    },
     /// Request historical bar data via historical data connection.
     FetchHistorical {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: i64,
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
         /// Security type and exchange from the caller's contract. Hardcoding
         /// these described a stock on SMART regardless of what was asked for,
         /// so anything venue-specific was rejected (ibx#305).
         sec_type: String,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// What the contract is priced in.
         currency: String,
+        /// The end of the window asked for. Empty means now.
         end_date_time: String,
+        /// How far back from that end the window reaches.
         duration: String,
+        /// How long one bar covers.
         bar_size: String,
+        /// Which series is wanted: `TRADES`, `MIDPOINT`, `BID`, `ASK`.
         what_to_show: String,
+        /// Whether to count only regular trading hours.
         use_rth: bool,
+        /// Whether the venue keeps sending once the window is answered.
         keep_up_to_date: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
@@ -1707,16 +2071,27 @@ pub enum ControlCommand {
     /// `SharedState::last_ccp_rtt` when the reply arrives.
     Ping,
     /// Cancel a historical data request.
-    CancelHistorical { req_id: u32 },
+    CancelHistorical {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request head timestamp via historical data connection.
     FetchHeadTimestamp {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: i64,
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
+        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
         sec_type: String,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// What the contract is priced in.
         currency: String,
+        /// Which series is wanted: `TRADES`, `MIDPOINT`, `BID`, `ASK`.
         what_to_show: String,
+        /// Whether to count only regular trading hours.
         use_rth: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
@@ -1724,31 +2099,62 @@ pub enum ControlCommand {
     },
     /// Request contract details via auth connection.
     FetchContractDetails {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: i64,
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
+        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
         sec_type: String,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// What the contract is priced in.
         currency: String,
+        /// What else narrows the lookup: an expiry, a strike, an identifier.
         filters: SecDefFilters,
     },
     /// Cancel a head timestamp request.
-    CancelHeadTimestamp { req_id: u32 },
+    CancelHeadTimestamp {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Search for matching symbols via auth connection.
-    FetchMatchingSymbols { req_id: u32, pattern: String },
+    FetchMatchingSymbols {
+        /// The caller's number for the request.
+        req_id: u32,
+        /// The text to match against.
+        pattern: String,
+    },
     /// Ask what corporate-event types the calendar carries.
-    FetchCalendarMetaData { req_id: u32 },
+    FetchCalendarMetaData {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Ask the calendar for events, under a filter or for one contract.
-    FetchCalendarEvents { req_id: u32, query: Box<crate::control::calendar::CalendarQuery> },
+    FetchCalendarEvents {
+        /// The caller's number for the request.
+        req_id: u32,
+        /// What is being asked of the calendar.
+        query: Box<crate::control::calendar::CalendarQuery>,
+    },
     /// Stop waiting on a calendar query. One message and one answer, so what
     /// is withdrawn is the answer.
-    CancelCalendar { req_id: u32 },
+    CancelCalendar {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request the option chain of an underlying via auth connection.
     FetchOptionParams {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
+        /// Which venue's futures options to answer for, if any.
         fut_fop_exchange: String,
+        /// What kind of contract the underlying is.
         underlying_sec_type: String,
+        /// The venue's id for the underlying.
         underlying_con_id: i64,
     },
     /// Request available exchanges for market depth.
@@ -1757,59 +2163,102 @@ pub enum ControlCommand {
     FetchScannerParams,
     /// Subscribe to a scanner scan via historical data connection.
     SubscribeScanner {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The engine's own slot for the contract.
         instrument: String,
+        /// Which market the scan runs over.
         location_code: String,
+        /// Which scan it is.
         scan_code: String,
+        /// The most rows wanted.
         max_items: u32,
+        /// What else narrows the lookup: an expiry, a strike, an identifier.
         filters: Vec<(String, String)>,
     },
     /// Cancel a scanner subscription.
-    CancelScanner { req_id: u32 },
+    CancelScanner {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request historical news via historical data connection.
     FetchHistoricalNews {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: u32,
+        /// Which news providers to ask, separated by the venue's own
+        /// separator.
         provider_codes: String,
+        /// When the algorithm should begin.
         start_time: String,
+        /// When it should stop.
         end_time: String,
+        /// The most records wanted.
         max_results: u32,
     },
     /// Request a news article via historical data connection.
     FetchNewsArticle {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// Which news provider.
         provider_code: String,
+        /// The venue's id for the article.
         article_id: String,
     },
     /// Request fundamental data via historical data connection.
     FetchFundamentalData {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: u32,
+        /// Which fundamental report.
         report_type: String,
     },
     /// Cancel fundamental data request.
-    CancelFundamentalData { req_id: u32 },
+    CancelFundamentalData {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request histogram data via historical data connection.
     FetchHistogramData {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: u32,
+        /// Whether to count only regular trading hours.
         use_rth: bool,
+        /// Over what window.
         period: String,
     },
     /// Cancel histogram data request.
-    CancelHistogramData { req_id: u32 },
+    CancelHistogramData {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request historical ticks via historical data connection.
     FetchHistoricalTicks {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: i64,
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
+        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
         sec_type: String,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// What the contract is priced in.
         currency: String,
+        /// The start of the window asked for.
         start_date_time: String,
+        /// The end of the window asked for. Empty means now.
         end_date_time: String,
+        /// How many records are wanted.
         number_of_ticks: u32,
+        /// Which series is wanted: `TRADES`, `MIDPOINT`, `BID`, `ASK`.
         what_to_show: String,
+        /// Whether to count only regular trading hours.
         use_rth: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
@@ -1817,30 +2266,50 @@ pub enum ControlCommand {
     },
     /// Subscribe to real-time 5-second bars via historical data connection.
     SubscribeRealTimeBar {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: i64,
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
+        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
         sec_type: String,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// What the contract is priced in.
         currency: String,
+        /// Which series is wanted: `TRADES`, `MIDPOINT`, `BID`, `ASK`.
         what_to_show: String,
+        /// Whether to count only regular trading hours.
         use_rth: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
         filters: SecDefFilters,
     },
     /// Cancel real-time bar subscription.
-    CancelRealTimeBar { req_id: u32 },
+    CancelRealTimeBar {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request historical schedule via historical data connection.
     FetchHistoricalSchedule {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: i64,
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
+        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
         sec_type: String,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// What the contract is priced in.
         currency: String,
+        /// The end of the window asked for. Empty means now.
         end_date_time: String,
+        /// How far back from that end the window reaches.
         duration: String,
+        /// Whether to count only regular trading hours.
         use_rth: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
@@ -1848,28 +2317,53 @@ pub enum ControlCommand {
     },
     /// Subscribe to market depth (L2) for a contract.
     SubscribeDepth {
+        /// The caller's number for the request this answers.
         req_id: u32,
+        /// The venue's id for the contract.
         con_id: i64,
+        /// The contract's ticker, for a request that names one by description.
         symbol: String,
+        /// Where the request is directed, or the contract is listed.
         exchange: String,
+        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
         sec_type: String,
+        /// What the contract is priced in.
         currency: String,
+        /// How many levels of the book are wanted.
         num_rows: i32,
+        /// Whether the book was asked for on no particular venue.
         is_smart_depth: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
         filters: SecDefFilters,
     },
     /// Unsubscribe from market depth.
-    UnsubscribeDepth { req_id: u32 },
+    UnsubscribeDepth {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request news providers list (gateway-local).
-    FetchNewsProviders { req_id: u32 },
+    FetchNewsProviders {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request SMART routing components.
-    FetchSmartComponents { req_id: u32, bbo_exchange: String },
+    FetchSmartComponents {
+        /// The caller's number for the request.
+        req_id: u32,
+        /// The mask whose venues are being asked about.
+        bbo_exchange: String,
+    },
     /// Request soft dollar tiers.
-    FetchSoftDollarTiers { req_id: u32 },
+    FetchSoftDollarTiers {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request user info.
-    FetchUserInfo { req_id: u32 },
+    FetchUserInfo {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// End the session with the venue. Sent before [`ControlCommand::Shutdown`]
     /// by a caller that is disconnecting. A caller that only stops the engine
     /// and keeps its connections does not send it, because a logout ends the
@@ -1882,24 +2376,43 @@ pub enum ControlCommand {
 /// Account-level state.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AccountState {
+    /// What the account is worth if everything is closed now.
     pub net_liquidation: Price,
+    /// What it can still buy.
     pub buying_power: Price,
+    /// What its positions require.
     pub margin_used: Price,
+    /// What its positions have made and not realised.
     pub unrealized_pnl: Price,
+    /// What it has realised.
     pub realized_pnl: Price,
+    /// Cash, before settlement.
     pub total_cash_value: Price,
+    /// Cash that has settled.
     pub settled_cash: Price,
+    /// Interest and dividends accrued and not paid.
     pub accrued_cash: Price,
+    /// What the account is worth counting borrowings.
     pub equity_with_loan: Price,
+    /// What its positions are worth, long and short added.
     pub gross_position_value: Price,
+    /// What opening its positions required.
     pub init_margin_req: Price,
+    /// What holding them requires.
     pub maint_margin_req: Price,
+    /// What it may still commit.
     pub available_funds: Price,
+    /// What it holds above its maintenance requirement.
     pub excess_liquidity: Price,
+    /// How much of that is left, as a fraction scaled by `PRICE_SCALE`.
     pub cushion: Price,        // percentage * PRICE_SCALE (e.g. 0.45 = 45%)
+    /// Its special memorandum account.
     pub sma: Price,
+    /// How many day trades it may still make. -1 means unlimited.
     pub day_trades_remaining: i64,
+    /// How much it is levered, scaled by `PRICE_SCALE`.
     pub leverage: Price,       // ratio * PRICE_SCALE
+    /// What it has made today.
     pub daily_pnl: Price,
 }
 
@@ -1920,6 +2433,7 @@ pub struct PositionInfo {
     pub sec_type: String,
     /// What it is priced in.
     pub currency: String,
+    /// How many units one contract is worth.
     pub multiplier: String,
     // Per-position marks from the account-updates snapshot (ib-agent#172).
     // Set only by the portfolio-value message, not the lean position feed.
@@ -1937,6 +2451,7 @@ pub struct PositionInfo {
 /// Used for client-side daily P&L computation.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MidnightSeed {
+    /// The venue's id for the contract.
     pub con_id: i64,
     /// Position held at midnight. `None` when the row arrived without a
     /// parseable quantity: the position exists but its overnight size is
@@ -1948,7 +2463,9 @@ pub struct MidnightSeed {
     pub cost_midnight: Option<f64>,
     /// Quantity traded since midnight, as the venue states it.
     pub qty_traded: Option<f64>,
+    /// Net cash from today's fills, signed.
     pub money_traded: f64,            // net cash from today's fills (signed)
+    /// What it has realised.
     pub realized_pnl: f64,           // realized P&L since midnight
 }
 
