@@ -277,6 +277,21 @@ pub fn build_farm_encrypted_logon(
     wrapper
 }
 
+
+/// What a farm's logon leaves behind for the connection that follows it.
+pub struct FarmLogon {
+    /// Where verification of inbound frames resumes.
+    pub read_iv: Vec<u8>,
+    /// Where signing of outbound frames resumes.
+    pub sign_iv: Vec<u8>,
+    /// Anything read past the logon answer, to be handed to the connection
+    /// rather than dropped.
+    pub remaining: Vec<u8>,
+    /// How often this farm said it expects to hear from the session, where it
+    /// said anything. `None` leaves the interval this client proposed.
+    pub heartbeat_secs: Option<u64>,
+}
+
 /// Execute farm logon exchange.
 ///
 /// Returns (read_iv, sign_iv, remaining_buf) for message signing/verification.
@@ -288,7 +303,7 @@ pub fn farm_logon_exchange(
     password: &str,
     read_mac_key: &[u8],
     initial_read_iv: &[u8],
-) -> io::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+) -> io::Result<FarmLogon> {
     // Poll on a short read timeout and tolerate transient WouldBlock/TimedOut
     // returns until an overall deadline. A single slow response segment from a
     // high-latency regional gateway must not tear down the connection (ibx#237).
@@ -296,6 +311,8 @@ pub fn farm_logon_exchange(
     let deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
     let mut buf = Vec::new();
     let mut read_iv = initial_read_iv.to_vec();
+    // What the farm says it expects, where it says anything at all.
+    let mut heartbeat_secs: Option<u64> = None;
 
     for _msg_num in 0..20 {
         // Read until we have a complete frame
@@ -393,11 +410,22 @@ pub fn farm_logon_exchange(
                     .write_iv()
                     .map(|iv| iv.to_vec())
                     .unwrap_or_default();
+                // How often this farm expects to hear from the session, if it
+                // says. The logon proposes a number and the answer may name a
+                // different one; read from the answer, because the proposal is
+                // not what the session is held to. The auth connection had the
+                // same shape and was being answered too slowly for it.
+                if let Some(stated) = fields.get(&108).and_then(|v| v.parse::<u64>().ok())
+                    && stated > 0
+                {
+                    log::info!("a farm states a heartbeat interval of {stated}s");
+                    heartbeat_secs = Some(stated);
+                }
                 if !buf.is_empty() {
                     log::warn!("{} bytes remaining in buffer after logon ACK",
                         buf.len());
                 }
-                return Ok((read_iv, sign_iv, buf));
+                return Ok(FarmLogon { read_iv, sign_iv, remaining: buf, heartbeat_secs });
             } else if fields.get(&35).map(|s| s.as_str()) == Some("3") {
                 let text = fields.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 return Err(io::Error::new(
@@ -836,7 +864,8 @@ pub fn connect_farm(
     // Logon exchange: challenge → token auth → logon ACK
     let read_mac_key = channel.key_block().map(|kb| kb[84..104].to_vec()).unwrap_or_default();
     let initial_read_iv = channel.key_block().map(|kb| kb[48..64].to_vec()).unwrap_or_default();
-    let (read_iv, sign_iv, logon_remaining) = farm_logon_exchange(
+    let FarmLogon { read_iv, sign_iv, remaining: logon_remaining, heartbeat_secs: stated_heartbeat } =
+        farm_logon_exchange(
         &mut stream, &mut channel, session_key, username, password,
         &read_mac_key, &initial_read_iv,
     )?;
@@ -888,6 +917,7 @@ pub fn connect_farm(
     // Create Connection (switches to non-blocking), inject routing bytes
     let mut conn = Connection::new_raw(stream)?;
     conn.set_keys(sign_mac_key, final_sign_iv, read_mac_key, read_iv);
+    conn.heartbeat_secs = stated_heartbeat;
     conn.seq = 1; // routing request was seq=1; next send_fix will be seq=2
 
     // Inject logon remaining bytes + routing response into connection buffer.

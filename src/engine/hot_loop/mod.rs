@@ -175,6 +175,15 @@ pub struct HeartbeatState {
     test_req_counter: u32,
 }
 
+/// Half an interval, and never nothing.
+///
+/// A session that answers on the deadline has no margin: one heartbeat delayed
+/// by a slow link or a scheduling hiccup is late. Half leaves room for one to
+/// be lost outright, which is what the counterpart allows itself.
+fn half_of(interval_secs: u64) -> u64 {
+    (interval_secs / 2).max(1)
+}
+
 impl HeartbeatState {
     /// How often to send, given what the venue asked for.
     ///
@@ -186,7 +195,7 @@ impl HeartbeatState {
     /// Never zero, so a venue naming one second is answered every second
     /// rather than on every pass of the loop.
     pub fn ccp_send_every(&self) -> u64 {
-        (self.ccp_interval_secs / 2).max(1)
+        half_of(self.ccp_interval_secs)
     }
 
     /// How long of silence before asking whether the venue is still there.
@@ -1140,7 +1149,11 @@ impl HotLoop {
             let since_sent = now.duration_since(self.hb.last_farm_sent).as_secs();
             let since_recv = now.duration_since(self.hb.last_farm_recv).as_secs();
 
-            if since_sent >= FARM_HEARTBEAT_SECS {
+            // Half of what this farm said it expects, or half of what was
+            // proposed where it said nothing. Answering exactly on the
+            // deadline leaves no room for one heartbeat to be late, which is
+            // the same reason the auth connection sends at half.
+            if since_sent >= half_of(conn.heartbeat_secs.unwrap_or(FARM_HEARTBEAT_SECS)) {
                 let _ = conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT),
                     (fix::TAG_SENDING_TIME, &ts),
@@ -2219,6 +2232,21 @@ mod tests {
         // sending on every pass forever.
         hb.set_ccp_interval(0);
         assert_eq!(hb.ccp_send_every(), 1, "the last stated value stands");
+    }
+
+    /// Half of whatever a connection is held to, and never nothing.
+    ///
+    /// The farms carry their own interval and may name one this client did not
+    /// propose, so the rule cannot live inside the auth side's state.
+    #[test]
+    fn half_an_interval_is_never_nothing() {
+        assert_eq!(super::half_of(30), 15);
+        assert_eq!(super::half_of(10), 5);
+        assert_eq!(super::half_of(6), 3);
+        // A venue naming one second is answered every second rather than on
+        // every pass of the loop.
+        assert_eq!(super::half_of(1), 1);
+        assert_eq!(super::half_of(0), 1);
     }
 
     /// A venue that speaks less often is not a venue that has gone away.
