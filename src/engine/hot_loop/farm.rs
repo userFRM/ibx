@@ -1236,13 +1236,12 @@ impl FarmState {
         hb.last_farm_sent = Instant::now();
     }
 
-    /// The venues a book is gathered from, as the server named them.
+    /// Ask for a book, on the venue the caller named or on none.
     ///
-    /// Every exchange that offers a book states the security type it offers it
-    /// for and the group it aggregates into. A book asked for on no particular
-    /// venue is gathered from the venues in the same group as the one the
-    /// contract is listed on — which is what a group is for, and what makes
-    /// this work for a market nobody wrote down.
+    /// The venue is passed through as the caller stated it: named, and the book
+    /// is that venue's; empty or smart-routed, and the venue aggregates one.
+    /// Either way it is one subscription, asked for under an id of this
+    /// client's own and mapped back to the caller's.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_depth_subscribe(
         &mut self,
@@ -1255,7 +1254,6 @@ impl FarmState {
         is_smart_depth: bool,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
-        shared: &SharedState,
     ) {
         let fix_sec_type = match sec_type {
             "STK" => "CS", "FUT" => "FUT", "OPT" => "OPT", "IND" => "IND",
@@ -1280,22 +1278,6 @@ impl FarmState {
         // altogether: no error, no loss, quotes and books both silent. One
         // request is what the counterpart sends and what the connection can
         // carry.
-        let on_no_venue = is_smart_depth || matches!(exchange, "SMART" | "BEST" | "");
-        // Where the contract is listed. The caller may have stated it; the
-        // venue states it on the definition either way.
-        let listed_on = if primary_exchange.is_empty() {
-            shared.reference.get_contract(con_id)
-                .map(|known| known.primary_exchange)
-                .unwrap_or_default()
-        } else {
-            primary_exchange.to_string()
-        };
-        // A book asked for on no particular venue, before the server has said
-        // which venues offer one, is asked for where the contract is listed.
-        // One venue's book is less than the aggregate and is a book; the
-        // request the aggregate would have needed reaches nothing at all.
-        let _ = (on_no_venue, &listed_on);
-
         // A book on one named venue is a book gathered from one venue. Asking
         // under an id of this client's own either way is what keeps the two
         // apart: the venue echoes the id back, and a caller's id sent as it
@@ -1373,16 +1355,10 @@ impl FarmState {
         }
     }
 
-    /// Send a single depth subscribe for one exchange.
-    /// What the venue calls a book, and what it calls a quote.
+    /// Ask for one contract's book.
     ///
-    /// Tag 264 names the kind of market data a subscription is for. A book is
-    /// `Deep`; `BidAsk` is the top of one venue's book and is what a smart
-    /// book is gathered from.
-    /// Ask one venue for one contract's book.
-    ///
-    /// The same request whether the venue was named by the caller or is one of
-    /// the several an aggregate is gathered from. Asked for as a quote
+    /// The same request whether the caller named a venue or left it to the
+    /// venue to aggregate one. Asked for as a quote
     /// instead, the venue answers with quote frames, which this client read
     /// with its book reader: a bid of 143.87 and an ask of a penny on a share
     /// trading at 772, a book made of misread quotes, which is worse than no
@@ -1401,9 +1377,6 @@ impl FarmState {
         ]);
     }
 
-    /// Parse 35=P depth entries (byte-aligned: [00][3B stag][field tags...][58 terminator]).
-    /// SmartDepth entries may contain multiple price+size pairs (bid then ask).
-    /// Field tag encoding: bit 5(0x20)=size, bit 3(0x08)=ask, bit 2(0x04)=snapshot, bit 0(0x01)=2-byte.
     /// Keep a depth frame exactly as the venue sent it, when asked to.
     ///
     /// A reading checked only against frames this client made up says nothing
@@ -1416,6 +1389,9 @@ impl FarmState {
         shared.market.note_unread_wire(kind, hex);
     }
 
+    /// Parse 35=P depth entries (byte-aligned: [00][3B stag][field tags...][58 terminator]).
+    /// SmartDepth entries may contain multiple price+size pairs (bid then ask).
+    /// Field tag encoding: bit 5(0x20)=size, bit 3(0x08)=ask, bit 2(0x04)=snapshot, bit 0(0x01)=2-byte.
     fn handle_depth_35p(&self, body: &[u8], shared: &SharedState) {
         self.note_depth_wire("depth-35p", body, shared);
         use crate::types::DepthUpdate;
@@ -1522,6 +1498,21 @@ impl FarmState {
     ///   Compact entry:  [80|00][1B position][field_tags...]
     ///     C4/80 = continuation, 44/00 = terminal (last entry for this stag section).
     /// Field tag encoding: bit 7=size, bit 5=ask, bit 2=snapshot, bits 0-1=value_len (00=1B,01=2B,10=3B).
+    /// The subscription a 35=Y frame's opening section belongs to.
+    ///
+    /// Two bytes, a marker, then the tag in three — the width the venue assigns
+    /// it and the width the book's other shape already reads.
+    ///
+    /// Read from the marker instead and the tag is a byte early: it matches no
+    /// subscription, so the section names none and every level it carries waits
+    /// for a sentinel further in to name one. Captured frames put the same
+    /// three bytes at the same place in every one of them, whichever marker
+    /// precedes them.
+    fn header_stag(body: &[u8]) -> Option<u32> {
+        let tag = body.get(3..6)?;
+        Some(((tag[0] as u32) << 16) | ((tag[1] as u32) << 8) | (tag[2] as u32))
+    }
+
     fn handle_depth_35y(&self, msg: &[u8], shared: &SharedState) {
         self.note_depth_wire("depth-35y", msg, shared);
         use crate::types::DepthUpdate;
@@ -1533,8 +1524,6 @@ impl FarmState {
         // Header: 2 bytes misc. The stag is set by the first 80 00 [2B stag] sentinel.
         if body.len() < 4 { return; }
 
-        // Try header stag at body[2..4] (common case).
-        //
         // Nothing is delivered until a section names the subscription it
         // belongs to. Starting at zero and pushing regardless handed every
         // level of a book to request zero, which no caller ever asked for and
@@ -1548,19 +1537,7 @@ impl FarmState {
         let mut size_tick: f64 = 1.0;
         let mut pos = 2;
 
-        // Two bytes, a marker, then the tag in three — the width the venue
-        // assigns it and the width the book's other shape already reads.
-        //
-        // Read from the marker instead, the tag was a byte early and matched
-        // no subscription, so the section named none and every level it
-        // carried waited for a sentinel further in to name one. Captured
-        // frames put the same three bytes at the same place in every one of
-        // them, whichever marker precedes them.
-        let hdr_stag = if body.len() >= 6 {
-            ((body[3] as u32) << 16) | ((body[4] as u32) << 8) | (body[5] as u32)
-        } else {
-            u32::MAX
-        };
+        let hdr_stag = Self::header_stag(body).unwrap_or(u32::MAX);
         if let Some((_, _, mt, st, _)) = self.lookup_depth_stag(hdr_stag) {
             subscribers = self.depth_subscribers_of(hdr_stag);
             min_tick = mt;
@@ -1783,7 +1760,6 @@ impl FarmState {
         context: &mut Context,
         hb: &mut HeartbeatState,
         replay: ReplayPacing,
-        shared: &SharedState,
     ) {
         *farm_conn = Some(conn);
         self.disconnected = false;
@@ -1819,7 +1795,7 @@ impl FarmState {
         {
             self.send_depth_subscribe(
                 req_id, con_id, &exchange, &listed_on, &sec_type, num_rows, is_smart_depth,
-                farm_conn, hb, shared,
+                farm_conn, hb,
             );
         }
 
@@ -2463,6 +2439,27 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    /// The tag a 35=Y frame opens with sits after the marker, not on it.
+    ///
+    /// Read a byte early and the value names no subscription at all, so the
+    /// whole opening section of the book is delivered to nobody. Only a
+    /// captured frame showed which of the two it was, so the byte range is
+    /// pinned here rather than left to be rediscovered the same way.
+    #[test]
+    fn a_depth_frames_opening_tag_is_read_after_the_marker() {
+        // Two bytes, the 0x80 marker, then the tag in three.
+        let body = [0x00, 0x01, 0x80, 0x11, 0x22, 0x33, 0xff];
+        assert_eq!(FarmState::header_stag(&body), Some(0x11_22_33));
+
+        // The marker also arrives as 0x00, and the tag is in the same place.
+        let zero_marker = [0x00, 0x01, 0x00, 0x11, 0x22, 0x33];
+        assert_eq!(FarmState::header_stag(&zero_marker), Some(0x11_22_33));
+
+        // Short of a whole tag, the frame names nothing rather than a value
+        // built out of whatever follows it.
+        assert_eq!(FarmState::header_stag(&[0x00, 0x01, 0x80, 0x11, 0x22]), None);
+    }
+
     fn tag_values(tags: &[(u32, String)], tag: u32) -> Vec<&str> {
         tags.iter().filter(|(t, _)| *t == tag).map(|(_, v)| v.as_str()).collect()
     }
@@ -2793,7 +2790,6 @@ mod trading_status_subscribe_tests {
 #[cfg(test)]
 mod depth_identity_tests {
     use super::*;
-    use crate::bridge::SharedState;
 
     /// A subscription registered as the ack path registers one.
     fn acknowledged(farm: &mut FarmState, stag: u32, caller: u32, venue: &str) {
@@ -2806,13 +2802,12 @@ mod depth_identity_tests {
     #[test]
     fn a_callers_id_is_never_what_the_venue_is_asked_under() {
         let mut farm = FarmState::new();
-        let shared = SharedState::new();
         let mut conn = None;
         let mut hb = HeartbeatState::new();
 
         // Two callers, numbered as callers number things.
-        farm.send_depth_subscribe(1, 756733, "IEX", "", "STK", 10, false, &mut conn, &mut hb, &shared);
-        farm.send_depth_subscribe(2, 756733, "ARCA", "", "STK", 10, false, &mut conn, &mut hb, &shared);
+        farm.send_depth_subscribe(1, 756733, "IEX", "", "STK", 10, false, &mut conn, &mut hb);
+        farm.send_depth_subscribe(2, 756733, "ARCA", "", "STK", 10, false, &mut conn, &mut hb);
 
         let asked_under: Vec<u32> = farm.depth_fanout_map.iter().map(|(sub, _)| *sub).collect();
         assert_eq!(asked_under.len(), 2, "one subscription each");
@@ -2855,11 +2850,10 @@ mod depth_identity_tests {
     #[test]
     fn withdrawing_a_book_withdraws_what_was_asked_for() {
         let mut farm = FarmState::new();
-        let shared = SharedState::new();
         let mut conn = None;
         let mut hb = HeartbeatState::new();
 
-        farm.send_depth_subscribe(7, 756733, "SMART", "", "STK", 10, true, &mut conn, &mut hb, &shared);
+        farm.send_depth_subscribe(7, 756733, "SMART", "", "STK", 10, true, &mut conn, &mut hb);
         assert_eq!(farm.depth_subs.len(), 1, "a book on no venue is one subscription");
         assert_eq!(farm.depth_fanout_map[0].1, 7, "and it is the caller's");
         assert_ne!(farm.depth_fanout_map[0].0, 7, "asked under an id of ours");

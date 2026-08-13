@@ -480,10 +480,6 @@ pub struct TrackedOrder {
 
 // ── ClientCore ──
 
-/// Shared subscription tracking and dispatch preparation logic.
-///
-/// Both Rust and Python EClient own a `ClientCore` and delegate state tracking
-/// and data preparation to it. Only the final callback invocation is language-specific.
 /// An answer owed to a caller about a display group.
 #[derive(Debug, Clone)]
 pub enum GroupEvent {

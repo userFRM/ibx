@@ -7,6 +7,11 @@ use std::time::Instant;
 /// TSC-calibrated clock for hot-path timestamps.
 pub struct Clock {
     start: std::time::Instant,
+    /// What the wall clock read when `start` was taken, in nanoseconds since
+    /// the epoch. Read once, so a timestamp costs an elapsed-time read and an
+    /// addition rather than a syscall, and stays monotonic across a wall-clock
+    /// step that would otherwise move a fill backwards.
+    epoch_base_ns: u64,
 }
 
 impl Default for Clock {
@@ -19,13 +24,20 @@ impl Clock {
     pub fn new() -> Self {
         Self {
             start: std::time::Instant::now(),
+            epoch_base_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos() as u64),
         }
     }
 
-    /// Monotonic nanoseconds since engine start. Fast, no syscall.
+    /// Nanoseconds since the epoch, monotonic. Fast, no syscall.
+    ///
+    /// Anchored to the wall clock once at construction and advanced by elapsed
+    /// time, so a caller can compare it to a time the venue stated while a
+    /// wall-clock adjustment never moves it backwards.
     #[inline(always)]
     pub fn now_ns(&self) -> u64 {
-        self.start.elapsed().as_nanos() as u64
+        self.epoch_base_ns + self.start.elapsed().as_nanos() as u64
     }
 
     /// Wall-clock Unix timestamp in seconds.

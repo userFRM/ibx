@@ -470,13 +470,6 @@ fn is_base_noop(py: Python<'_>, f: &Py<PyAny>) -> bool {
 }
 
 impl EClient {
-    /// Clone the control channel sender, or return "Not connected".
-    /// The control channel, or nothing and the caller told why.
-    ///
-    /// A request issued before connecting is answered on the error callback
-    /// and the call returns normally, which is what the reference client does.
-    /// Raising instead made a caller written against that client take a
-    /// different path here than it takes there.
     /// Tell the caller a request will not be sent, under the number the
     /// reference client reports that class of refusal under.
     ///
@@ -498,6 +491,12 @@ impl EClient {
         Ok(())
     }
 
+    /// The control channel, or nothing and the caller told why.
+    ///
+    /// A request issued before connecting is answered on the error callback
+    /// and the call returns normally, which is what the reference client does.
+    /// Raising instead made a caller written against that client take a
+    /// different path here than it takes there.
     pub(crate) fn tx_or_report(&self, req_id: i64) -> Option<SyncSender<ControlCommand>> {
         match self.control_tx.lock().unwrap().clone() {
             Some(tx) => Some(tx),

@@ -184,11 +184,13 @@ class FullWrapper(EWrapper):
     # ── TBT ──
     def tick_by_tick_all_last(self, req_id, tick_type, time_, price, size,
                               tick_attrib_last, exchange, special_conditions):
+        _a_moment(time_, "tick_by_tick_all_last")
         self._record(("tick_by_tick_all_last", req_id, price, size, exchange))
         self.got_tbt.set()
 
     def tick_by_tick_bid_ask(self, req_id, time_, bid_price, ask_price,
                              bid_size, ask_size, tick_attrib_bid_ask):
+        _a_moment(time_, "tick_by_tick_bid_ask")
         self._record(("tick_by_tick_bid_ask", req_id, bid_price, ask_price))
         self.got_tbt.set()
 
@@ -814,3 +816,17 @@ class TestRobustness:
         """Final sanity check: connection survives all tests."""
         _, client = ib_connection
         assert client.is_connected()
+
+
+def _a_moment(time_, callback):
+    """A tick-by-tick time is a Unix second, which is what the reference
+    client's callback of this name carries and what `datetime.fromtimestamp`
+    reads. Handing it milliseconds put every print in the year 58553, and no
+    test saw it because every wrapper here took the argument and dropped it.
+    """
+    import datetime
+    assert isinstance(time_, int), f"{callback} time is {type(time_).__name__}"
+    when = datetime.datetime.fromtimestamp(time_, datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    assert abs((now - when).total_seconds()) < 86_400, \
+        f"{callback} timed a print at {when.isoformat()}, which is not today"

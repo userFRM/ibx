@@ -423,26 +423,6 @@ pub struct ContractDefinition {
     pub cusip: String,
     /// Every identifier the contract is known by, as the kind and the value.
     pub sec_id_list: Vec<(String, String)>,
-    /// Every field the venue stated that this parser does not name.
-    ///
-    /// A definition carries more than any one client reads, and what was read
-    /// used to be the whole of what survived: the rest was parsed and dropped,
-    /// so a fact the venue had stated about the contract could not be reached
-    /// by anyone, and there was no way to tell it had been sent.
-    ///
-    /// Keeping them costs a short list per contract and means naming a field is
-    /// an improvement rather than a prerequisite — the value is already here,
-    /// under its number, the day the venue starts sending it.
-    /// The venues SMART routes this contract to, in the order the venue lists
-    /// them.
-    ///
-    /// The order is the point. A quote states which venues are on the bid, the
-    /// ask and the last as a bitmask, and the position of a bit is a position
-    /// in this list. A list written by this client can only guess at that, and
-    /// the guess bore no resemblance to what the venue actually sends.
-    ///
-    /// Sent per contract, and only where SMART routing applies, so it is empty
-    /// for a contract listed on one venue.
     /// The contract a derivative is written on.
     pub under_con_id: u32,
     /// The underlying's ticker.

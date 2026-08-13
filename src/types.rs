@@ -1590,7 +1590,9 @@ pub struct TbtTrade {
     pub price: Price,
     /// How much.
     pub size: i64,
-    /// When, in nanoseconds since the epoch.
+    /// When, in seconds since the epoch — the venue's own second, handed on
+    /// unscaled, which is what the reference client's tick-by-tick callbacks
+    /// carry.
     pub timestamp: u64,
     /// Which venue it printed on.
     pub exchange: String,
@@ -1626,7 +1628,9 @@ pub struct TbtQuote {
     pub bid_size: i64,
     /// How much at the ask.
     pub ask_size: i64,
-    /// When, in nanoseconds since the epoch.
+    /// When, in seconds since the epoch — the venue's own second, handed on
+    /// unscaled, which is what the reference client's tick-by-tick callbacks
+    /// carry.
     pub timestamp: u64,
     /// The bid is below the day's low, or the ask above its high — the venue's
     /// own words about whether this quote sits outside the day's range.

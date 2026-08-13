@@ -232,8 +232,9 @@ pub struct RunningPrice {
 pub struct TbtFrame {
     /// The venue's own number for the stream.
     pub ticker_id: u64,
-    /// The venue states seconds; every record in the frame shares this one.
-    pub timestamp_ms: u64,
+    /// Seconds since the epoch, as the venue stated them; every record in the
+    /// frame shares this one.
+    pub timestamp: u64,
     /// The records in this frame.
     pub records: Vec<TbtRecord>,
 }
@@ -288,7 +289,7 @@ pub fn decode_frame(
 
     Some(TbtFrame {
         ticker_id,
-        timestamp_ms: seconds.saturating_mul(1000),
+        timestamp: seconds,
         records,
     })
 }
@@ -483,7 +484,10 @@ mod tests {
         let frame = decode_frame(body, TbtKind::BidAsk, 0.00005, &mut running)
             .expect("the frame decodes");
 
-        assert_eq!(frame.timestamp_ms, 1_786_340_548_000, "the second it happened");
+        // Seconds, as the wire states them and as the reference client's
+        // `tickByTickAllLast` hands them on. Scaling this to milliseconds put
+        // every print in the year 58553 once a caller read it as a moment.
+        assert_eq!(frame.timestamp, 1_786_340_548, "the second it happened");
         assert_eq!(frame.records.len(), 5, "five records share the frame");
 
         match &frame.records[0] {
