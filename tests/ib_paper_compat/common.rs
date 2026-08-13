@@ -619,6 +619,12 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     // while a cancel for the same order is in flight. Losing that race is the
     // outcome under test, not a badly built order.
     "already being cancelled",
+    // The same race, lost by a wider margin: the venue had already cancelled
+    // the order before the replace reached it, which is what happens to a
+    // day order left resting while the market is shut. An order that no
+    // longer exists cannot be replaced, and that is the venue's account of
+    // its own book rather than anything about the message this client built.
+    "too late to replace",
 ];
 
 /// The reason a rejected order was rejected, for a phase that is about to skip.
