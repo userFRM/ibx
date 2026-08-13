@@ -218,3 +218,26 @@ fn a_frame_of_pure_noise_is_not_fatal() {
         }
     }
 }
+
+/// An account number is not published by a run whose log anyone can read.
+///
+/// These suites run in continuous integration, and its logs are readable by
+/// anyone the repository is. A run that prints an account number publishes it —
+/// which one did, three times, before this existed.
+#[test]
+fn an_account_number_is_not_printed_in_full() {
+    fn redacted(account: &str) -> String {
+        match account.len() {
+            0 => String::new(),
+            n if n <= 4 => "*".repeat(n),
+            n => format!("{}{}", &account[..2], "*".repeat(n - 2)),
+        }
+    }
+
+    assert_eq!(redacted("DUQ461244"), "DU*******");
+    assert_eq!(redacted("U123"), "****");
+    assert_eq!(redacted(""), "");
+    // Two accounts stay distinguishable, which is the whole reason to keep any
+    // of it.
+    assert_ne!(redacted("DUQ461244"), redacted("DUQ461244x"));
+}

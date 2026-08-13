@@ -26,6 +26,16 @@ use ibx::types::*;
 
 // ─── Helpers ───
 
+fn redacted(account: &str) -> String {
+    // Printed where a log may be read by anyone the repository can be read by.
+    // Enough to tell two accounts apart, and no more.
+    match account.len() {
+        0 => String::new(),
+        n if n <= 4 => "*".repeat(n),
+        n => format!("{}{}", &account[..2], "*".repeat(n - 2)),
+    }
+}
+
 fn percentile(sorted: &[u64], p: f64) -> u64 {
     if sorted.is_empty() {
         return 0;
@@ -179,7 +189,7 @@ fn main() {
     let ibx::gateway::Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
     let connect_time = connect_start.elapsed();
-    println!("Connected in {:.3}s (account: {})", connect_time.as_secs_f64(), gw.account_id);
+    println!("Connected in {:.3}s (account: {})", connect_time.as_secs_f64(), redacted(&gw.account_id));
 
     // 2. Create hot loop with event channel
     let shared = Arc::new(SharedState::new());

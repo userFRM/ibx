@@ -470,7 +470,11 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
         println!("    order.totalQuantity = {} (GT: 1.0)", o.total_quantity);
         println!("    order.orderType     = '{}' (GT: 'LMT')", o.order_type);
         println!("    order.tif           = '{}' (GT: 'GTC')", o.tif);
-        println!("    order.account       = '{}' (GT: '{}')", o.account, gt_account);
+        println!(
+            "    order.account       = '{}' (GT: '{}')",
+            super::common::redacted(&o.account),
+            super::common::redacted(&gt_account),
+        );
 
         // OrderState fields (GT: status=Cancelled)
         println!("    orderState.status   = '{}' (GT: 'Cancelled')", s.status);
@@ -594,7 +598,7 @@ pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
         println!("    order.totalQuantity = {} (GT: 1.0)", o.total_quantity);
         println!("    order.orderType     = '{}' (GT: 'LMT')", o.order_type);
         println!("    order.tif           = '{}' (GT: 'GTC')", o.tif);
-        println!("    order.account       = '{}'", o.account);
+        println!("    order.account       = '{}'", super::common::redacted(&o.account));
         println!("    order.lmtPrice      = {} (GT: 1.0)", o.lmt_price);
         println!("    orderState.status   = '{}' (GT: 'Submitted')", s.status);
 

@@ -15,6 +15,16 @@ use ibx::api::wrapper::Wrapper;
 
 // ── GT file loader ──
 
+fn redacted(account: &str) -> String {
+    // Printed where a log may be read by anyone the repository can be read by.
+    // Enough to tell two accounts apart, and no more.
+    match account.len() {
+        0 => String::new(),
+        n if n <= 4 => "*".repeat(n),
+        n => format!("{}{}", &account[..2], "*".repeat(n - 2)),
+    }
+}
+
 fn gt_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("test_data")
@@ -459,7 +469,7 @@ fn api_gt_suite() {
     let client = EClient::connect(&config)
         .expect("EClient::connect failed");
 
-    println!("Connected. Account: {}\n", client.account_id);
+    println!("Connected. Account: {}\n", redacted(&client.account_id));
 
     let mut wrapper = RecWrapper::new();
     let mut pass_count = 0;

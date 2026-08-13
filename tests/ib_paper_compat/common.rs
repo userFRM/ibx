@@ -2,6 +2,22 @@
 
 use std::env;
 
+/// An account number, as it may be written down.
+///
+/// These phases run in continuous integration, whose logs are readable by
+/// anyone the repository is readable by. An account number is not a credential
+/// and is not a secret, but it is an account detail, and a run that prints one
+/// publishes it. Enough is kept to tell two accounts apart in a log; the rest
+/// is not.
+pub(super) fn redacted(account: &str) -> String {
+    match account.len() {
+        0 => String::new(),
+        n if n <= 4 => "*".repeat(n),
+        n => format!("{}{}", &account[..2], "*".repeat(n - 2)),
+    }
+}
+
+
 pub(super) use std::sync::Arc;
 pub(super) use std::time::{Duration, Instant};
 
