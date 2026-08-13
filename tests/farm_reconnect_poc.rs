@@ -9,10 +9,7 @@ use std::time::{Duration, Instant};
 use ibx::bridge::SharedState;
 use ibx::gateway::{connect_farm, reconnect_ccp, Gateway, GatewayConfig, ReconnectAuth};
 
-/// The credentials these tests need. Missing credentials fail rather than pass
-/// quietly, because a reconnect test that never connected has proved nothing.
-/// A checkout with no credentials skips on purpose with
-/// `IBX_ALLOW_SKIP_NO_CREDS=1`, the same switch the compat suite uses.
+/// An account number, shortened to what tells two accounts apart.
 fn redacted(account: &str) -> String {
     // Printed where a log may be read by anyone the repository can be read by.
     // Enough to tell two accounts apart, and no more.
@@ -23,6 +20,10 @@ fn redacted(account: &str) -> String {
     }
 }
 
+/// The credentials these tests need. Missing credentials fail rather than pass
+/// quietly, because a reconnect test that never connected has proved nothing.
+/// A checkout with no credentials skips on purpose with
+/// `IBX_ALLOW_SKIP_NO_CREDS=1`, the same switch the compat suite uses.
 fn config() -> Option<GatewayConfig> {
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
     let (username, password) = match (var("IB_USERNAME"), var("IB_PASSWORD")) {
