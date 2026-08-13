@@ -603,8 +603,22 @@ pub(super) fn phase_limit_fok(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
+    // Two answers, both of them the venue's, and this phase verifies whichever
+    // it gets rather than reporting nothing for one of them.
+    //
+    // The order is routed where an unnamed exchange goes, and the venue does
+    // not take this time-in-force there — it says so, and saying so is a
+    // refusal this client has to carry back with the reason attached. Read as
+    // a skip, that half of the phase verified nothing and said PASS to a run
+    // that had not placed an order at all.
     if let Some(id) = rejected_order {
-        println!("  SKIP: FOK order rejected — {}\n", reject_reason(&shared, id));
+        let reason = reject_reason(&shared, id);
+        assert!(
+            reason.to_lowercase().contains("time-in-force"),
+            "the order was refused and the reason reached the caller, but it \
+             is not about the time-in-force this phase set: {reason:?}",
+        );
+        println!("  PASS (refused, and the venue's reason arrived: {reason})\n");
         return conns;
     }
     assert!(order_cancelled, "FOK order was not cancelled (should expire immediately at $1)");
