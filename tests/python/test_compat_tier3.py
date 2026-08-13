@@ -552,6 +552,17 @@ def test_a_session_held_open_notices_what_stopped():
     both = endurance.what_stopped(growing, {"quotes": 100, "bars": 10}, 2)
     assert len(both) == 2, both
 
+    # A book and a trade stream are quiet on a contract nobody is trading, so
+    # they are not held to every cycle — but a whole run without one is a
+    # failure, and the script's own prose said so before the code did.
+    assert endurance.REQUIRED_AT_LEAST_ONCE == ("book", "trades")
+    ran = {"quotes": 200, "bars": 20, "book": 5, "trades": 3}
+    assert [k for k in endurance.REQUIRED_AT_LEAST_ONCE if not ran.get(k)] == []
+    silent = {"quotes": 200, "bars": 20, "book": 0}
+    assert [k for k in endurance.REQUIRED_AT_LEAST_ONCE if not silent.get(k)] == [
+        "book", "trades",
+    ]
+
 
 def test_every_call_and_callback_says_what_it_does():
     """The surface a program touches is documented, all of it.
