@@ -19,10 +19,16 @@ name: session
 
 on:
   schedule:
-    # After the New York close, when the venue is quiet and no other session
-    # of this account is likely to be up. One session at a time: the venue
-    # refuses a second, and a refusal here would read as a defect.
-    - cron: "45 20 * * 1-5"
+    # An hour into the New York session. Phases that need a market — a resting
+    # order, a book, a trade stream — skip outside it, and a day order left
+    # resting while the market is shut is cancelled by the venue before a
+    # phase can replace it. Run before the open, the suite reports mostly
+    # skips and one lost race.
+    #
+    # This holds the account's only session for about ninety minutes: the
+    # venue permits one at a time and refuses a second, and that refusal would
+    # read here as a defect.
+    - cron: "45 14 * * 1-5"
   workflow_dispatch:
 
 concurrency:
