@@ -526,3 +526,28 @@ def test_a_trade_stream_is_not_a_quote_subscription():
     assert w.prices > quoted_before, (
         "and still does once a stream on the same contract is withdrawn"
     )
+
+
+def test_a_session_held_open_notices_what_stopped():
+    """The check that watches a held-open session has to be able to fail.
+
+    Bars stopping after the seventh minute, with every other stream healthy,
+    is what a session found and no offline gate could. A run that printed its
+    counters and passed regardless would have found it too, and said nothing.
+    """
+    import importlib.util
+    import pathlib
+
+    here = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "endurance.py"
+    spec = importlib.util.spec_from_file_location("endurance", here)
+    endurance = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(endurance)
+
+    growing = {"quotes": 100, "bars": 10}
+    assert endurance.what_stopped(growing, {"quotes": 200, "bars": 20}, 3) == []
+
+    stalled = endurance.what_stopped(growing, {"quotes": 200, "bars": 10}, 8)
+    assert stalled == ["bars stopped arriving after cycle 7"], stalled
+
+    both = endurance.what_stopped(growing, {"quotes": 100, "bars": 10}, 2)
+    assert len(both) == 2, both
