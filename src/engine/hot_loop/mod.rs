@@ -2287,6 +2287,7 @@ mod tests {
     fn an_hmds_disconnect_lets_its_reconnect_run() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: "gw.example".into(),
             username: "u".into(),
@@ -2486,6 +2487,7 @@ mod tests {
     fn hmds_keeps_retrying_through_an_outage_longer_than_the_ladder() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: "gw.example".into(),
             username: "u".into(),
@@ -3020,6 +3022,7 @@ mod calendar_farm_reconnect_tests {
     fn a_calendar_connection_that_went_is_scheduled_to_come_back() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: "gw.example".into(),
             username: "u".into(),
@@ -3054,6 +3057,7 @@ mod calendar_farm_reconnect_tests {
     fn a_session_without_that_farm_does_not_try() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: "gw.example".into(),
             username: "u".into(),

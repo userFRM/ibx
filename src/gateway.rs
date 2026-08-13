@@ -500,6 +500,13 @@ pub struct ReconnectAuth {
     pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
     /// Which host to open the session against.
     pub host: String,
+    /// The other auth servers this session reached the venue through.
+    ///
+    /// Tried in order when the first cannot be reached. Every one was named by
+    /// the venue on the way in, so none of them is a guess — a client that
+    /// invented an address to fail over to would be reaching for a server
+    /// nobody said was there.
+    pub alternate_hosts: Vec<String>,
     /// The login.
     pub username: String,
     /// Wrapped in `Zeroizing` so the plaintext is wiped from memory on drop.
@@ -690,6 +697,13 @@ pub struct Gateway {
     /// Another session already logged in on this account when this one
     /// connected, as the venue stated it. `None` when this session is alone.
     pub competing: Option<CompetingSession>,
+    /// The auth servers this session's logon ran through, in the order it
+    /// reached them: the one it knocked on, then each one it was sent to.
+    ///
+    /// Every entry is a host the venue named, so a reconnect that cannot reach
+    /// the one it was last on has somewhere else to try that was stated rather
+    /// than guessed. A session that was never redirected has one.
+    pub auth_hosts: Vec<String>,
     /// Trading farm routing from the same response, retained so the trading
     /// reconnect uses the route the auth server gave rather than a literal.
     pub trading_host: String,
@@ -962,6 +976,16 @@ pub fn connect_farm(
     Ok(conn)
 }
 
+
+/// The hosts left to try, given every host this session reached the venue
+/// through and the one being reconnected to now.
+///
+/// Order is the order they were reached in. The host being tried is not among
+/// them: retrying the one that just failed is not a second attempt.
+fn alternates_to(seen: &[String], current: &str) -> Vec<String> {
+    seen.iter().filter(|host| *host != current).cloned().collect()
+}
+
 /// Reconnect to the CCP (order/auth) server using cached session credentials.
 /// Performs TLS + DH + CONNECT_REQUEST, then attempts SOFT_TOKEN auth with cached K.
 /// If the server signals at AUTH_START that it requires full SRP, transparently
@@ -969,7 +993,23 @@ pub fn connect_farm(
 /// in `ReconnectAuth` (the same path used by `Gateway::connect`).
 pub fn reconnect_ccp(auth: &ReconnectAuth) -> io::Result<Connection> {
     let token_hash = token_short_hash(&auth.session_token);
-    reconnect_ccp_attempt(auth, &token_hash, &auth.host, 0)
+    let first = reconnect_ccp_attempt(auth, &token_hash, &auth.host, 0);
+    let Err(why) = first else { return first };
+
+    // The host this session was on cannot be reached. The others it reached
+    // the venue through still answer for this account — the venue named them
+    // on the way in — so they are tried before the session is given up on.
+    for host in &auth.alternate_hosts {
+        log::warn!("{} did not answer ({why}); trying {host}", auth.host);
+        match reconnect_ccp_attempt(auth, &token_hash, host, 0) {
+            Ok(conn) => {
+                log::info!("reconnected on {host}");
+                return Ok(conn);
+            }
+            Err(next) => log::warn!("{host} did not answer either ({next})"),
+        }
+    }
+    Err(why)
 }
 
 fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, depth: u32) -> io::Result<Connection> {
@@ -1739,7 +1779,14 @@ impl Gateway {
                 let redirect_host = target.split(':').next().unwrap_or(&target);
                 log::info!("Redirected to {redirect_host}, reconnecting...");
                 drop(tls);
-                return Self::connect_to_host(config, redirect_host, redirect_depth + 1);
+                // The host that sent us on still answers for this account, so
+                // it is worth trying if the one it named stops.
+                let knocked = host.to_string();
+                let mut session = Self::connect_to_host(config, redirect_host, redirect_depth + 1)?;
+                if !session.gateway.auth_hosts.contains(&knocked) {
+                    session.gateway.auth_hosts.push(knocked);
+                }
+                return Ok(session);
             }
             Err(e) => return Err(e),
         };
@@ -2445,6 +2492,7 @@ impl Gateway {
 
         let gw = Gateway {
             competing,
+            auth_hosts: vec![host.to_string()],
             account_id,
             accounts,
             session_token: session_key,
@@ -2640,6 +2688,7 @@ impl Gateway {
     pub fn reconnect_auth(&self, caller: CallerAuth) -> ReconnectAuth {
         ReconnectAuth {
             settings: caller.settings,
+            alternate_hosts: alternates_to(&self.auth_hosts, &caller.host),
             host: caller.host,
             username: caller.username,
             password: caller.password,
@@ -2795,6 +2844,35 @@ mod tests {
         // Short or absent field 4 yields no type rather than a wrong one.
         assert_eq!(parse_auth_start_token("a;b;c"), ("".into(), None));
         assert_eq!(parse_auth_start_token(&frame("")), ("".into(), None));
+    }
+
+    /// A reconnect is given the hosts the venue sent this session to, and
+    /// never the one it is already failing on.
+    ///
+    /// Every one of them was named by the venue: the first is the door this
+    /// client knocked on, and each of the rest is where it was sent next. A
+    /// list invented here instead would be reaching for a server nobody said
+    /// was there, which is how a farm asked for on the wrong host spends ten
+    /// seconds being silently closed.
+    #[test]
+    fn a_reconnect_is_given_the_hosts_the_venue_sent_this_session_to() {
+        let seen = ["zdc1.example".to_string(), "cdc1.example".to_string()];
+
+        // Reconnecting to where the session ended up leaves the door it
+        // knocked on first to try.
+        assert_eq!(super::alternates_to(&seen, "zdc1.example"), ["cdc1.example"]);
+
+        // And the other way round. Retrying the host that just failed is not a
+        // second attempt, so it is never in the list.
+        assert_eq!(super::alternates_to(&seen, "cdc1.example"), ["zdc1.example"]);
+
+        // A session that was never redirected has one host and nowhere else to
+        // go, which is the truth rather than a reason to invent somewhere.
+        let one = ["cdc1.example".to_string()];
+        assert!(super::alternates_to(&one, "cdc1.example").is_empty());
+
+        // A host that is not among them is still not retried against itself.
+        assert_eq!(super::alternates_to(&one, "elsewhere.example"), ["cdc1.example"]);
     }
 
     /// The venue names the session that was already logged in, and this reads
@@ -3272,6 +3350,7 @@ mod tests {
 
     fn auth_with(host: &str, trading_host: &str, trading_farm: &str) -> ReconnectAuth {
         ReconnectAuth {
+            alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: host.to_string(),
             username: String::new(),
