@@ -657,6 +657,20 @@ pub(super) fn reject_reason(shared: &SharedState, order_id: u64) -> String {
         .filter(|reason| !reason.is_empty())
         .unwrap_or_else(|| "no reason reported".to_string());
 
+    // Whether the order was well built is only readable while the session is
+    // up. A session that went away takes its own orders with it — a child
+    // whose parent the venue cancelled on the way down was rejected by the
+    // disconnect, not by anything this client put on the wire. Still a
+    // failure, because a run that lost its session verified nothing here;
+    // read as a malformed order it sends the next reader to the order
+    // builder, which is the wrong place.
+    assert!(
+        !shared.connection_lost(),
+        "the session went away before the venue answered for order {order_id}, \
+         so this phase verified nothing and the rejection {reason:?} says \
+         nothing about the order this client built. Diagnose the disconnect."
+    );
+
     let lowered = reason.to_lowercase();
     assert!(
         REJECTED_BY_MARKET_OR_ACCOUNT.iter().any(|known| lowered.contains(known)),
