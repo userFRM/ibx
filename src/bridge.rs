@@ -1878,17 +1878,6 @@ impl SharedState {
         self.connection_lost.swap(false, Ordering::AcqRel)
     }
 
-    /// Whether a loss has been signalled and not yet read, without reading it.
-    ///
-    /// [`take_connection_lost`](Self::take_connection_lost) consumes the
-    /// signal, so a caller that only wants to know whether the session is
-    /// still up would take the announcement away from the caller whose job is
-    /// to act on it.
-    #[inline]
-    pub fn connection_lost(&self) -> bool {
-        self.connection_lost.load(Ordering::Acquire)
-    }
-
     /// Signal that an announced loss has been recovered. Hot-loop side.
     #[doc(hidden)]
     #[inline]
