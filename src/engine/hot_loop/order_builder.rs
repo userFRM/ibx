@@ -111,6 +111,9 @@ pub(crate) fn drain_and_send_orders(
                 let qty_str = format_uint(qty as u64);
                 let symbol = context.market.symbol(instrument).to_string();
                 let (sec_type_str, destination) = context.market.order_routing(instrument);
+                // What the contract is denominated in, not what most of them
+                // happen to be.
+                let currency = context.market.order_currency(instrument);
                 // Versioned ClOrdIDs like every other submit path: a cancel or
                 // replace that has seen no echo yet computes `{id}.{ver}` for
                 // OrigClOrdID, and a bare id would not match. The ids are freshly
@@ -151,7 +154,7 @@ pub(crate) fn drain_and_send_orders(
                     (167, &sec_type_str),
                     (100, &destination),
                     (6210, &destination),
-                    (15, "USD"),
+                    (15, &currency),
                     (204, CUSTOMER),
                 ]);
 
@@ -182,7 +185,7 @@ pub(crate) fn drain_and_send_orders(
                     (167, &sec_type_str),
                     (100, &destination),
                     (6210, &destination),
-                    (15, "USD"),
+                    (15, &currency),
                     (204, CUSTOMER),
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
@@ -212,7 +215,7 @@ pub(crate) fn drain_and_send_orders(
                     (167, &sec_type_str),
                     (100, &destination),
                     (6210, &destination),
-                    (15, "USD"),
+                    (15, &currency),
                     (204, CUSTOMER),
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
@@ -230,6 +233,9 @@ pub(crate) fn drain_and_send_orders(
                 let price_str = format_price(price);
                 let symbol = context.market.symbol(instrument).to_string();
                 let (sec_type_str, destination) = context.market.order_routing(instrument);
+                // What the contract is denominated in, not what most of them
+                // happen to be.
+                let currency = context.market.order_currency(instrument);
                 let now = chrono_free_timestamp();
                 conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
@@ -246,7 +252,7 @@ pub(crate) fn drain_and_send_orders(
                     (167, &sec_type_str),
                     (100, &destination),
                     (6210, &destination),
-                    (15, "USD"),
+                    (15, &currency),
                     (204, CUSTOMER),
                 ])
             }

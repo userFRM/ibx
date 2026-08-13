@@ -363,6 +363,21 @@ impl MarketState {
         }
     }
 
+    /// What an order on this contract is denominated in.
+    ///
+    /// The venue infers this from the contract id on the orders that carry
+    /// one, so most paths state nothing. Where an order does state it, stating
+    /// a literal instead put every leg of a bracket on a European or Japanese
+    /// contract into dollars.
+    ///
+    /// Dollars where the contract never said otherwise, which is what an
+    /// unstated currency has always meant here.
+    pub fn order_currency(&self, id: InstrumentId) -> String {
+        self.order_identity(id)
+            .map(|identity| identity.currency)
+            .unwrap_or_else(|| "USD".to_string())
+    }
+
     pub fn order_identity(&self, id: InstrumentId) -> Option<OrderIdentity> {
         let key = self.option_keys.get(id as usize)?.as_deref()?;
         let mut it = key.split('|');
@@ -660,6 +675,40 @@ mod tests {
     }
 
     // ── ibx#217: routing derivation ──
+
+    /// An order that states a currency states the contract's, not the one most
+    /// contracts happen to use.
+    ///
+    /// Every leg of a bracket carries tag 15. It was the literal `USD`, so a
+    /// bracket on a contract denominated in anything else went out declaring
+    /// dollars — on a contract the venue knows is not.
+    #[test]
+    fn an_order_is_denominated_in_the_contracts_own_currency() {
+        let mut ms = MarketState::new();
+
+        // Nothing stated is dollars, which is what it has always meant here.
+        let bare = ms.register(101);
+        assert_eq!(ms.order_currency(bare), "USD");
+
+        // expiry|strike|right|multiplier|trading class|local symbol|currency
+        let eu = ms
+            .try_register_contract(102, "SAP", "STK", "IBIS", "||||||EUR")
+            .expect("registers");
+        assert_eq!(ms.order_currency(eu), "EUR");
+
+        let jp = ms
+            .try_register_contract(103, "7203", "STK", "TSEJ", "||||||JPY")
+            .expect("registers");
+        assert_eq!(ms.order_currency(jp), "JPY");
+
+        // An identity that names no currency is dollars rather than empty: an
+        // order carrying an empty tag 15 is worse than one carrying the
+        // default that was there before.
+        let unstated = ms
+            .try_register_contract(104, "AAPL", "STK", "SMART", "|||||")
+            .expect("registers");
+        assert_eq!(ms.order_currency(unstated), "USD");
+    }
 
     #[test]
     fn order_routing_rules() {
