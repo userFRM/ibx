@@ -340,22 +340,33 @@ impl HmdsState {
                         return;
                     }
                     Ok(n) => {
-                        log::info!("HMDS recv: {n} bytes");
+                        log::debug!("HMDS recv: {n} bytes");
                         hb.last_hmds_recv = Instant::now();
                         hb.pending_hmds_test = None;
                     }
                 }
                 let frames = conn.extract_frames();
-                // ibx#183 follow-up: frame-extraction tracer. If a recv produces
-                // 0 frames AND buffered_after > 0, the bytes are stuck waiting for
-                // more (incomplete FIXCOMP frame — declared tag-9 length exceeds
-                // received bytes). If buffered_after == 0, the bytes were dropped
-                // outright (no recognized header — buf.clear() path).
-                log::warn!(
-                    "HMDS poll: extracted={} frames, buffered_after={}B",
-                    frames.len(),
-                    conn.buffered(),
-                );
+                // Bytes arrived and nothing came out of them: either they are
+                // stuck waiting for more, when some are still buffered, or
+                // they were dropped outright, when none are. Both are worth
+                // saying; a poll that produced frames is not.
+                //
+                // Said on every poll, this fired about once a second on a
+                // healthy session, which is how a warning stops being read —
+                // including the one beside it about a tick belonging to no
+                // subscription.
+                if frames.is_empty() {
+                    log::warn!(
+                        "HMDS poll: no frames from what arrived, {}B still buffered",
+                        conn.buffered(),
+                    );
+                } else {
+                    log::debug!(
+                        "HMDS poll: extracted={} frames, buffered_after={}B",
+                        frames.len(),
+                        conn.buffered(),
+                    );
+                }
                 let mut msgs = Vec::new();
                 for frame in &frames {
                     match frame {
