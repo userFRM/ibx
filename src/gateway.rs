@@ -403,12 +403,32 @@ pub fn farm_logon_exchange(
                     io::ErrorKind::PermissionDenied,
                     format!("Farm logon rejected: {text}"),
                 ));
+            } else {
+                // Anything else the server says during logon.
+                //
+                // Dropped silently, this reads as the server having said
+                // nothing: the loop waits for a message that has already been
+                // sent and thrown away, the server waits for the answer, and
+                // whoever gives up first ends it — which is the server, with a
+                // close and no reason, about ten seconds in. A logon that fails
+                // that way is indistinguishable from one the server never
+                // answered, so say what arrived.
+                log::warn!(
+                    "farm logon: unhandled message type {:?} — nothing here answers it",
+                    fields.get(&35).map(|s| s.as_str()).unwrap_or("(none)"),
+                );
             }
         } else if msg.starts_with(b"8=1\x01") {
             // Token auth response
             if msg.windows(6).any(|w| w == b"PASSED") {
                 log::info!("Token auth PASSED");
             }
+        } else {
+            log::warn!(
+                "farm logon: unhandled frame, {} bytes, starting {:?}",
+                msg.len(),
+                String::from_utf8_lossy(&msg[..msg.len().min(16)]),
+            );
         }
     }
 
