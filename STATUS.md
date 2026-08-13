@@ -73,7 +73,7 @@ recorded as the result.
 | Scanners, fundamentals | ✅ Supported | 697 KB scanner parameter set, fundamental report; `tests/python/test_issue_100.py` |
 | News | ✅ Supported | 117 providers parsed. Headline retrieval requires a news subscription; this account holds none, and every provider returns an empty result set |
 | Exchange directory | ✅ Supported | 203 exchanges, in the two sections the venue states them in: shares and derivatives. What each carries and which group each aggregates into are not stated by the venue and are not stated here |
-| Corporate events calendar | ✅ Supported | Event types (179 KB) and event queries answered over the security-definition connection; `src/bin/capture_calendar.rs` |
+| Corporate events calendar | ✅ Supported | The calendar states what it carries — 43 event types with their field schemas, 179 KB — over the security-definition connection, and answers an event query with a well-formed result. Events themselves require a Wall Street Horizon subscription; this account holds none, and every query, by contract and by filter, is answered with an empty set. A query can be withdrawn: it is one message and one answer, so what is withdrawn is the answer. `src/bin/capture_calendar.rs` |
 | Implied volatility, option price | ✅ Supported | Computed in-process; the protocol carries no request for either. Anchored to the server's published model per contract; reproduces the server price to the cent on 2 contracts; `src/bin/capture_option_model.rs` |
 
 ---
