@@ -208,7 +208,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # The API is documented by intra-doc links, and a link that stopped
-      # resolving is a page that quietly lost what it pointed at.
+      # resolving is a page that quietly lost what it pointed at. The crate
+      # denies missing documentation, so an item that says nothing fails the
+      # library build above rather than reaching this job.
       - name: Build the docs
         run: cargo doc --no-deps --lib
         env:
