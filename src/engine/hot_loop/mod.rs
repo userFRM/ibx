@@ -152,6 +152,14 @@ pub struct HeartbeatState {
     pub last_hmds_recv: Instant,
     pub last_secdef_sent: Instant,
     pub last_secdef_recv: Instant,
+    /// How often the venue said it expects to hear from this session, in
+    /// seconds, as stated in its answer to the logon.
+    ///
+    /// Proposed by this client and answered by the venue, which may name a
+    /// different number — so the proposal is not what the session is held to.
+    /// Sending on the proposal regardless meant a venue asking for anything
+    /// shorter was answered too slowly, and closed the connection for it.
+    pub ccp_interval_secs: u64,
     /// Pending test request for auth: (test_req_id, sent_at).
     pub pending_ccp_test: Option<(String, Instant)>,
     /// When each connection (re)connected — liveness is not enforced during
@@ -168,6 +176,45 @@ pub struct HeartbeatState {
 }
 
 impl HeartbeatState {
+    /// How often to send, given what the venue asked for.
+    ///
+    /// Half the stated interval, which is what the counterpart sends at: a
+    /// session that answers exactly on the deadline has no margin, and one
+    /// heartbeat delayed by a scheduling hiccup or a slow link is late. Half
+    /// leaves room for one to be lost entirely.
+    ///
+    /// Never zero, so a venue naming one second is answered every second
+    /// rather than on every pass of the loop.
+    pub fn ccp_send_every(&self) -> u64 {
+        (self.ccp_interval_secs / 2).max(1)
+    }
+
+    /// How long of silence before asking whether the venue is still there.
+    ///
+    /// The fixed window, or a multiple of the stated interval where that is
+    /// longer. A venue that speaks every thirty seconds is not silent at
+    /// fifteen, and probing it on that schedule would ask a healthy session to
+    /// prove itself on every gap between its own heartbeats.
+    pub fn ccp_test_after(&self) -> u64 {
+        LIVENESS_TEST_SECS.max(self.ccp_interval_secs.saturating_mul(3) / 2)
+    }
+
+    /// How long of silence before the connection is treated as gone.
+    ///
+    /// Three of the venue's own intervals at least: two heartbeats can be lost
+    /// without the session being dead, and declaring it on a shorter window
+    /// than the venue's own cadence kills connections that are working.
+    pub fn ccp_dead_after(&self) -> u64 {
+        LIVENESS_DEAD_SECS.max(self.ccp_interval_secs.saturating_mul(3))
+    }
+
+    /// Hold this session to the interval the venue stated.
+    pub fn set_ccp_interval(&mut self, secs: u64) {
+        if secs > 0 {
+            self.ccp_interval_secs = secs;
+        }
+    }
+
     fn new() -> Self {
         let now = Instant::now();
         Self {
@@ -179,6 +226,7 @@ impl HeartbeatState {
             last_secdef_sent: now,
             last_secdef_recv: now,
             last_hmds_recv: now,
+            ccp_interval_secs: CCP_HEARTBEAT_SECS,
             pending_ccp_test: None,
             ccp_up_since: Instant::now(),
             farm_up_since: Instant::now(),
@@ -245,6 +293,11 @@ impl HotLoop {
     /// Set the account ID for order submission.
     pub fn set_account_id(&mut self, account_id: String) {
         self.account_id = account_id;
+    }
+
+    /// Hold the auth connection to the heartbeat interval the venue stated.
+    pub fn set_ccp_heartbeat_interval(&mut self, secs: u64) {
+        self.hb.set_ccp_interval(secs);
     }
 
     /// Access the context (for pre-start configuration like registering instruments).
@@ -1054,7 +1107,7 @@ impl HotLoop {
             let since_sent = now.duration_since(self.hb.last_ccp_sent).as_secs();
             let since_recv = now.duration_since(self.hb.last_ccp_recv).as_secs();
 
-            if since_sent >= CCP_HEARTBEAT_SECS {
+            if since_sent >= self.hb.ccp_send_every() {
                 let _ = conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT),
                     (fix::TAG_SENDING_TIME, &ts),
@@ -1063,8 +1116,8 @@ impl HotLoop {
             }
 
             let warmed_up = now.duration_since(self.hb.ccp_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
-            if warmed_up && since_recv > LIVENESS_TEST_SECS {
-                if since_recv > LIVENESS_DEAD_SECS {
+            if warmed_up && since_recv > self.hb.ccp_test_after() {
+                if since_recv > self.hb.ccp_dead_after() {
                     log::error!("CCP liveness timeout ({since_recv}s silent) — connection lost");
                     self.ccp.handle_disconnect(&mut self.context, &self.shared, &self.event_tx);
                 } else if self.hb.pending_ccp_test.is_none() {
@@ -2132,6 +2185,64 @@ fn extract_text_tag(msg: &[u8], tag: u32) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The session is held to the interval the venue named, not the one this
+    /// client proposed at logon.
+    ///
+    /// The proposal is 10 seconds and the venue may answer with anything. Sent
+    /// on the proposal regardless, a venue asking for 6 was answered every 10
+    /// and closed the connection for being slow — which reads as a disconnect
+    /// with no cause, minutes into a session that was working.
+    #[test]
+    fn the_heartbeat_follows_the_interval_the_venue_stated() {
+        let mut hb = HeartbeatState::new();
+        assert_eq!(hb.ccp_interval_secs, CCP_HEARTBEAT_SECS, "the proposal, until answered");
+        assert_eq!(hb.ccp_send_every(), CCP_HEARTBEAT_SECS / 2);
+
+        hb.set_ccp_interval(6);
+        assert_eq!(hb.ccp_send_every(), 3, "half of what the venue asked for");
+
+        // Half, because answering on the deadline leaves no room for one
+        // heartbeat to be late. The counterpart sends at half for the same
+        // reason.
+        hb.set_ccp_interval(30);
+        assert_eq!(hb.ccp_send_every(), 15);
+
+        // A venue naming one second is answered every second, not on every
+        // pass of the loop.
+        hb.set_ccp_interval(1);
+        assert_eq!(hb.ccp_send_every(), 1);
+
+        // Nothing stated leaves the session on what it proposed, rather than
+        // sending on every pass forever.
+        hb.set_ccp_interval(0);
+        assert_eq!(hb.ccp_send_every(), 1, "the last stated value stands");
+    }
+
+    /// A venue that speaks less often is not a venue that has gone away.
+    ///
+    /// The silence windows are fixed numbers chosen against a ten-second
+    /// interval. Left fixed, a venue stating thirty would be probed while it
+    /// was still inside its own cadence, and declared dead at thirty-five
+    /// having missed one heartbeat.
+    #[test]
+    fn silence_is_measured_against_the_venues_own_cadence() {
+        let mut hb = HeartbeatState::new();
+        assert_eq!(hb.ccp_test_after(), LIVENESS_TEST_SECS);
+        assert_eq!(hb.ccp_dead_after(), LIVENESS_DEAD_SECS);
+
+        hb.set_ccp_interval(30);
+        assert_eq!(hb.ccp_test_after(), 45, "not silent inside its own interval");
+        assert_eq!(hb.ccp_dead_after(), 90, "three of its own heartbeats");
+        assert!(hb.ccp_send_every() < hb.ccp_test_after(), "send before probing");
+        assert!(hb.ccp_test_after() < hb.ccp_dead_after(), "probe before declaring");
+
+        // A shorter interval keeps the fixed windows: they are already more
+        // generous than the venue's cadence requires.
+        hb.set_ccp_interval(5);
+        assert_eq!(hb.ccp_test_after(), LIVENESS_TEST_SECS);
+        assert_eq!(hb.ccp_dead_after(), LIVENESS_DEAD_SECS);
+    }
 
     /// A reconnected transport must not inherit the dead session's outstanding
     /// probe. The liveness check only sends a TestRequest when none is pending,

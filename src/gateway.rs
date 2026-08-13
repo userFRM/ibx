@@ -2562,6 +2562,9 @@ impl Gateway {
         hot_loop.set_control_rx(rx);
         hot_loop.set_account_id(self.account_id.clone());
         hot_loop.set_reconnect_auth(reconnect_auth);
+        // Held to the interval the venue named in its answer to the logon, not
+        // to the one this client proposed.
+        hot_loop.set_ccp_heartbeat_interval(self.heartbeat_interval);
         hot_loop.farm_conn = Some(farm_conn);
         hot_loop.ccp_conn = Some(ccp_conn);
         hot_loop.ccp.ccp_sign_key = self.ccp_sign_key.clone();
