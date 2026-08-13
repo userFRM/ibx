@@ -82,6 +82,8 @@ def poll()
 
 #### `run`
 
+Deliver callbacks until the session ends.  Blocks the calling thread. Everything a program receives arrives from here, so it runs on a thread of its own or is the last call a program makes. `poll` does one pass instead, for a program that owns its loop.
+
 ```python
 def run()
 ```
@@ -1091,7 +1093,7 @@ def algorithms_for(sec_type)
 
 #### `calculate_implied_volatility`
 
-Calculate option implied volatility. Not yet implemented.
+What volatility a price implies for an option, under the model the venue publishes for that contract. Answered on `tick_option_computation`.
 
 ```python
 def calculate_implied_volatility(req_id, contract, option_price, under_price, implied_vol_options=Vec::new()))
@@ -1109,7 +1111,7 @@ def calculate_implied_volatility(req_id, contract, option_price, under_price, im
 
 #### `calculate_option_price`
 
-Calculate option theoretical price. Not yet implemented.
+What an option is worth at a stated volatility, under the same model. Answered on `tick_option_computation`.
 
 ```python
 def calculate_option_price(req_id, contract, volatility, under_price, opt_prc_options=Vec::new()))
@@ -1127,7 +1129,7 @@ def calculate_option_price(req_id, contract, volatility, under_price, opt_prc_op
 
 #### `cancel_calculate_implied_volatility`
 
-Cancel implied volatility calculation.
+Stop waiting on an implied-volatility request.
 
 ```python
 def cancel_calculate_implied_volatility(req_id)
@@ -1141,7 +1143,7 @@ def cancel_calculate_implied_volatility(req_id)
 
 #### `cancel_calculate_option_price`
 
-Cancel option price calculation.
+Stop waiting on an option-price request.
 
 ```python
 def cancel_calculate_option_price(req_id)
@@ -1155,7 +1157,7 @@ def cancel_calculate_option_price(req_id)
 
 #### `req_news_bulletins`
 
-Subscribe to news bulletins.
+Ask for the notices the venue broadcasts to everyone. Answered on `update_news_bulletin`.
 
 ```python
 def req_news_bulletins(all_msgs=true))
@@ -1169,7 +1171,7 @@ def req_news_bulletins(all_msgs=true))
 
 #### `cancel_news_bulletins`
 
-Cancel news bulletin subscription.
+Stop receiving broadcast notices.
 
 ```python
 def cancel_news_bulletins()
@@ -1179,7 +1181,7 @@ def cancel_news_bulletins()
 
 #### `req_current_time`
 
-Request current server time.
+Ask the venue for its own clock. Answered on `current_time`.
 
 ```python
 def req_current_time()
@@ -1219,7 +1221,7 @@ def replace_fa(req_id, fa_data_type, cxml))
 
 #### `query_display_groups`
 
-Query display groups.
+Ask which display groups exist. Answered on `display_group_list`.
 
 ```python
 def query_display_groups(req_id)
@@ -1233,7 +1235,7 @@ def query_display_groups(req_id)
 
 #### `subscribe_to_group_events`
 
-Subscribe to display group events.
+Watch what a display group is showing. Answered on `display_group_updated`.
 
 ```python
 def subscribe_to_group_events(req_id, group_id)
@@ -1248,7 +1250,7 @@ def subscribe_to_group_events(req_id, group_id)
 
 #### `unsubscribe_from_group_events`
 
-Unsubscribe from display group events.
+Stop watching a display group.
 
 ```python
 def unsubscribe_from_group_events(req_id)
@@ -1262,7 +1264,7 @@ def unsubscribe_from_group_events(req_id)
 
 #### `update_display_group`
 
-Update display group.
+Tell a display group what to show.
 
 ```python
 def update_display_group(req_id, contract_info)
@@ -1277,7 +1279,7 @@ def update_display_group(req_id, contract_info)
 
 #### `req_smart_components`
 
-Request SMART routing component exchanges.
+Ask which venue each bit of a quote's exchange mask refers to. The venue states the map beside the quote, so a quote has to have been asked for first. Answered on `smart_components`.
 
 ```python
 def req_smart_components(req_id, bbo_exchange)
@@ -1292,7 +1294,7 @@ def req_smart_components(req_id, bbo_exchange)
 
 #### `req_news_providers`
 
-Request available news providers.
+Ask which news providers this account may read. Answered on `news_providers`.
 
 ```python
 def req_news_providers()
@@ -1302,7 +1304,7 @@ def req_news_providers()
 
 #### `req_soft_dollar_tiers`
 
-Request soft dollar tiers.
+Ask which soft dollar tiers this account may direct commission to. Answered on `soft_dollar_tiers`.
 
 ```python
 def req_soft_dollar_tiers(req_id)
@@ -1316,7 +1318,7 @@ def req_soft_dollar_tiers(req_id)
 
 #### `req_family_codes`
 
-Request family codes.
+Ask which account families this login belongs to. Answered on `family_codes`.
 
 ```python
 def req_family_codes()
@@ -1326,7 +1328,7 @@ def req_family_codes()
 
 #### `set_server_log_level`
 
-Set server log level (1=error..5=trace).
+How much the venue should log about this session, 1 to 5.
 
 ```python
 def set_server_log_level(log_level=2))
@@ -1340,7 +1342,7 @@ def set_server_log_level(log_level=2))
 
 #### `req_user_info`
 
-Request user info (white branding ID).
+Ask what this login is entitled to. Answered on `user_info`.
 
 ```python
 def req_user_info(req_id)
@@ -1424,19 +1426,19 @@ Create a new EClient (or EWrapper) instance.
 
 #### `connect_ack`
 
-Connection acknowledged.
+The session is open. Nothing has been asked for yet.
 
 ---
 
 #### `connection_closed`
 
-Connection has been closed.
+The session is over, because this client ended it. A session that went away instead is reported on `error` under 1100.
 
 ---
 
 #### `next_valid_id`
 
-Next valid order ID from the server.
+The first order id this session may use. Each order needs one higher than the last.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1446,7 +1448,7 @@ Next valid order ID from the server.
 
 #### `managed_accounts`
 
-Comma-separated list of managed account IDs.
+Every account this login may act for, separated by commas. One for most logins; an advisor has several.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1456,7 +1458,7 @@ Comma-separated list of managed account IDs.
 
 #### `error`
 
-Error or informational message from the server.
+What the venue said about a request, under the number it says it with. Codes from 2100 to 2200 are notices about a connection rather than failures. `req_id` is -1 for anything that answers no particular request.  A request this client will not send is reported here too, under the same numbers the reference client uses: 321 for a request that fails validation, 200 for a contract description that matches nothing, 504 for a call made with no session.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1469,7 +1471,7 @@ Error or informational message from the server.
 
 #### `current_time`
 
-Current server time (Unix seconds).
+The venue's own clock, in seconds since the epoch.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1479,7 +1481,7 @@ Current server time (Unix seconds).
 
 #### `tick_price`
 
-Price tick update (bid, ask, last, etc.).
+One price of a quote, and which price it is. `tick_type` names it — 1 bid, 2 ask, 4 last, 9 close — and `attrib` says whether it can be traded against and whether it is past its limit. A size arrives on `tick_size` under the type that belongs to it.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1492,7 +1494,7 @@ Price tick update (bid, ask, last, etc.).
 
 #### `tick_size`
 
-Size tick update (bid size, ask size, volume, etc.).
+One size of a quote, and which size it is: 0 bid, 3 ask, 5 last, 8 the day's volume.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1504,7 +1506,7 @@ Size tick update (bid size, ask size, volume, etc.).
 
 #### `tick_string`
 
-String tick (e.g. last trade timestamp).
+A quote's value that is not a number — a timestamp, an exchange map, a set of ids.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1516,7 +1518,7 @@ String tick (e.g. last trade timestamp).
 
 #### `tick_generic`
 
-Generic numeric tick value.
+A quote's value that is a number and is not a price or a size — an implied volatility, an index future's premium, a halt.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1528,7 +1530,7 @@ Generic numeric tick value.
 
 #### `tick_snapshot_end`
 
-Snapshot delivery complete; subscription auto-cancelled.
+A snapshot has stated everything it is going to. Only for a subscription asked for as a snapshot; a streaming one never ends.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1538,7 +1540,7 @@ Snapshot delivery complete; subscription auto-cancelled.
 
 #### `market_data_type`
 
-Market data type changed (1=live, 2=frozen, 3=delayed, 4=delayed-frozen).
+Which feed a subscription is being served from: 1 live, 2 frozen, 3 delayed, 4 delayed and frozen.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1549,7 +1551,7 @@ Market data type changed (1=live, 2=frozen, 3=delayed, 4=delayed-frozen).
 
 #### `order_status`
 
-Order status update (filled, remaining, avg price, etc.).
+Where an order stands now. Fires on every change, and again on each fill. `filled` and `remaining` are shares, `avg_fill_price` the average of what has filled so far.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1569,7 +1571,7 @@ Order status update (filled, remaining, avg price, etc.).
 
 #### `open_order`
 
-Open order details (contract, order, state).
+An order as the venue holds it, and the state it is in. Fires beside every `order_status`, when open orders are asked for, and once for a preview — where the state carries what the order would cost and no status follows, because a preview is not an order.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1582,13 +1584,13 @@ Open order details (contract, order, state).
 
 #### `open_order_end`
 
-End of open orders list.
+Every open order has been stated.
 
 ---
 
 #### `exec_details`
 
-Execution fill details.
+One fill, against the order and contract it filled. What it cost arrives separately, on `commission_and_fees_report`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1600,7 +1602,7 @@ Execution fill details.
 
 #### `exec_details_end`
 
-End of execution details list.
+Every execution answering this request has been stated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1610,7 +1612,7 @@ End of execution details list.
 
 #### `commission_and_fees_report`
 
-Commission and fees report for an execution.
+What a fill cost, matched to it by execution id.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1620,7 +1622,7 @@ Commission and fees report for an execution.
 
 #### `update_account_value`
 
-Account value update (key/value/currency).
+One figure the venue states about an account, in the currency it states it in. An account is stated in several currencies at once, so the same key arrives more than once.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1633,7 +1635,7 @@ Account value update (key/value/currency).
 
 #### `update_portfolio`
 
-Portfolio position update.
+One position, as the venue values it now.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1650,7 +1652,7 @@ Portfolio position update.
 
 #### `update_account_time`
 
-Account update timestamp.
+When the account figures above were last stated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1660,7 +1662,7 @@ Account update timestamp.
 
 #### `account_download_end`
 
-Account data delivery complete.
+The account has been fully stated. Fires once the venue has stopped adding to it, not on the first figure.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1670,7 +1672,7 @@ Account data delivery complete.
 
 #### `account_summary`
 
-Account summary tag/value entry.
+One figure answering `req_account_summary`, in the currency the venue states it in.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1684,7 +1686,7 @@ Account summary tag/value entry.
 
 #### `account_summary_end`
 
-End of account summary.
+Every figure answering this request has been stated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1694,7 +1696,7 @@ End of account summary.
 
 #### `position`
 
-Position entry (account, contract, size, avg cost).
+One position held, on any account this login may act for.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1707,13 +1709,13 @@ Position entry (account, contract, size, avg cost).
 
 #### `position_end`
 
-End of positions list.
+Every position has been stated.
 
 ---
 
 #### `pnl`
 
-Account P&L update (daily, unrealized, realized).
+An account's running profit: today's, what is unrealised, and what has been realised.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1726,7 +1728,7 @@ Account P&L update (daily, unrealized, realized).
 
 #### `pnl_single`
 
-Single-position P&L update.
+The same for one position, with the size held.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1741,7 +1743,7 @@ Single-position P&L update.
 
 #### `historical_data`
 
-Historical OHLCV bar.
+One bar answering a historical request. `bar.date` is a day for a daily bar and a moment for anything shorter, in the zone the bar carries.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1752,7 +1754,7 @@ Historical OHLCV bar.
 
 #### `historical_data_end`
 
-End of historical data delivery.
+Every bar answering this request has been stated, and the window they cover.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1764,7 +1766,7 @@ End of historical data delivery.
 
 #### `historical_data_update`
 
-Real-time bar update (keep_up_to_date=true).
+A bar that continues a `keep_up_to_date` request, after its first batch completed. The bar still forming is restated as it changes.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1775,7 +1777,7 @@ Real-time bar update (keep_up_to_date=true).
 
 #### `head_timestamp`
 
-Earliest available data timestamp.
+The earliest moment the venue holds data for a contract.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1786,7 +1788,7 @@ Earliest available data timestamp.
 
 #### `contract_details`
 
-Contract definition details.
+One contract matching a description, with everything the venue states about it. A description can match more than one.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1797,7 +1799,7 @@ Contract definition details.
 
 #### `contract_details_end`
 
-End of contract details.
+Every contract matching this request has been stated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1807,7 +1809,7 @@ End of contract details.
 
 #### `symbol_samples`
 
-Matching symbol search results.
+Contracts whose symbol or name matches a pattern, across venues.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1818,7 +1820,7 @@ Matching symbol search results.
 
 #### `tick_by_tick_all_last`
 
-Tick-by-tick last trade.
+One trade, as it happens. `tick_attrib_last` says whether it was past a limit and whether it goes unreported to the tape.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1835,7 +1837,7 @@ Tick-by-tick last trade.
 
 #### `tick_by_tick_bid_ask`
 
-Tick-by-tick bid/ask quote.
+One change to the top of the book, as it happens.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1851,7 +1853,7 @@ Tick-by-tick bid/ask quote.
 
 #### `tick_by_tick_mid_point`
 
-Tick-by-tick midpoint.
+One change to the midpoint, as it happens.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1863,7 +1865,7 @@ Tick-by-tick midpoint.
 
 #### `scanner_data`
 
-Scanner result entry (rank, contract, distance).
+One row of a scan, in rank order.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1879,7 +1881,7 @@ Scanner result entry (rank, contract, distance).
 
 #### `scanner_data_end`
 
-End of scanner results.
+Every row of this scan has been stated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1889,7 +1891,7 @@ End of scanner results.
 
 #### `scanner_parameters`
 
-Scanner parameters XML.
+Every scan the venue offers and what each can be filtered by, as the XML the venue publishes.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1899,7 +1901,7 @@ Scanner parameters XML.
 
 #### `news_providers`
 
-Available news providers list.
+Every news provider this account may read.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1909,7 +1911,7 @@ Available news providers list.
 
 #### `news_article`
 
-Full news article text.
+The body of one article. `article_type` is 0 for text and 1 for a binary document.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1921,7 +1923,7 @@ Full news article text.
 
 #### `historical_news`
 
-Historical news headline.
+One headline from the archive.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1935,7 +1937,7 @@ Historical news headline.
 
 #### `historical_news_end`
 
-End of historical news.
+Every headline answering this request has been stated, and whether the archive holds more.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1946,7 +1948,7 @@ End of historical news.
 
 #### `tick_news`
 
-Per-contract news tick.
+A headline about a contract being watched, as it is published.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1961,7 +1963,7 @@ Per-contract news tick.
 
 #### `update_mkt_depth`
 
-L2 book update (single exchange).
+One level of a book that names no venue. `operation` is 0 to insert, 1 to update, 2 to delete; `side` is 0 ask, 1 bid.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1976,7 +1978,7 @@ L2 book update (single exchange).
 
 #### `update_mkt_depth_l2`
 
-L2 book update (with market maker).
+One level of a book that names the venue it stands on. Every level from this client names one.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1993,7 +1995,7 @@ L2 book update (with market maker).
 
 #### `mkt_depth_exchanges`
 
-Available exchanges for market depth.
+Every exchange the venue names, in the two sections it names them in: shares and derivatives.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2003,7 +2005,7 @@ Available exchanges for market depth.
 
 #### `real_time_bar`
 
-Real-time 5-second OHLCV bar.
+One five-second bar of a live stream.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2021,7 +2023,7 @@ Real-time 5-second OHLCV bar.
 
 #### `historical_ticks`
 
-Historical tick data (Last, BidAsk, or Midpoint).
+Historical midpoints, in batches, until `done`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2033,7 +2035,7 @@ Historical tick data (Last, BidAsk, or Midpoint).
 
 #### `historical_ticks_bid_ask`
 
-Historical bid/ask ticks.
+Historical quotes, in batches, until `done`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2045,7 +2047,7 @@ Historical bid/ask ticks.
 
 #### `historical_ticks_last`
 
-Historical last-trade ticks.
+Historical trades, in batches, until `done`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2057,7 +2059,7 @@ Historical last-trade ticks.
 
 #### `tick_option_computation`
 
-Option implied vol / greeks computation.
+The venue's own model for an option: the volatility its price implies, the greeks, and what the model says the option and its underlying are worth.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2077,7 +2079,7 @@ Option implied vol / greeks computation.
 
 #### `security_definition_option_parameter`
 
-Option chain parameters (strikes, expirations).
+One venue's option chain for an underlying: the expiries and strikes it lists.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2093,7 +2095,7 @@ Option chain parameters (strikes, expirations).
 
 #### `security_definition_option_parameter_end`
 
-End of option chain parameters.
+Every venue's chain has been stated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2103,7 +2105,7 @@ End of option chain parameters.
 
 #### `fundamental_data`
 
-Fundamental data (XML/JSON).
+A fundamental report, as the XML the venue publishes.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2114,7 +2116,7 @@ Fundamental data (XML/JSON).
 
 #### `update_news_bulletin`
 
-News bulletin message.
+A notice the venue broadcasts to everyone — an exchange unavailable, a system message.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2127,7 +2129,7 @@ News bulletin message.
 
 #### `receive_fa`
 
-Financial advisor data received.
+A partition of an advisor's configuration, as the XML the venue holds it in.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2138,7 +2140,7 @@ Financial advisor data received.
 
 #### `replace_fa_end`
 
-Financial advisor replace complete.
+An advisor configuration has been replaced.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2149,7 +2151,7 @@ Financial advisor replace complete.
 
 #### `position_multi`
 
-Multi-account position entry.
+One position, for a request naming an account or a model.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2164,7 +2166,7 @@ Multi-account position entry.
 
 #### `position_multi_end`
 
-End of multi-account positions.
+Every position answering this request has been stated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2174,7 +2176,7 @@ End of multi-account positions.
 
 #### `account_update_multi`
 
-Multi-account value update.
+One account figure, for a request naming an account or a model.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2189,7 +2191,7 @@ Multi-account value update.
 
 #### `account_update_multi_end`
 
-End of multi-account updates.
+Every figure answering this request has been stated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2199,7 +2201,7 @@ End of multi-account updates.
 
 #### `display_group_list`
 
-Display group list.
+Which display groups exist, as the venue numbers them.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2210,7 +2212,7 @@ Display group list.
 
 #### `display_group_updated`
 
-Display group updated.
+What a display group is now showing.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2221,7 +2223,7 @@ Display group updated.
 
 #### `market_rule`
 
-Market rule: price increment schedule.
+The price ladder a contract trades on: each step, and what the price moves in above it.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2232,7 +2234,7 @@ Market rule: price increment schedule.
 
 #### `smart_components`
 
-SMART routing component exchanges.
+Which venue each bit of a quote's exchange mask refers to, and the letter that venue is named by.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2243,7 +2245,7 @@ SMART routing component exchanges.
 
 #### `soft_dollar_tiers`
 
-Soft dollar tier list.
+The soft dollar tiers this account may direct commission to.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2254,7 +2256,7 @@ Soft dollar tier list.
 
 #### `family_codes`
 
-Family codes linking related accounts.
+The account families this login belongs to.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2264,7 +2266,7 @@ Family codes linking related accounts.
 
 #### `histogram_data`
 
-Price distribution histogram.
+How much traded at each price over a window.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2275,7 +2277,7 @@ Price distribution histogram.
 
 #### `user_info`
 
-User info (white branding ID).
+What the login is entitled to, as the venue states it.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2286,7 +2288,7 @@ User info (white branding ID).
 
 #### `wsh_meta_data`
 
-Wall Street Horizon metadata.
+What the corporate-events calendar carries: its event types and the fields each one has, as the JSON the venue publishes.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2297,7 +2299,7 @@ Wall Street Horizon metadata.
 
 #### `wsh_event_data`
 
-Wall Street Horizon event data.
+Events from the corporate-events calendar, as the JSON the venue publishes. Events themselves need a Wall Street Horizon subscription; a login without one is answered with an empty set.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2308,7 +2310,7 @@ Wall Street Horizon event data.
 
 #### `completed_order`
 
-Completed (filled/cancelled) order details.
+An order that is done — filled, cancelled or expired — as the venue holds it.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2320,13 +2322,13 @@ Completed (filled/cancelled) order details.
 
 #### `completed_orders_end`
 
-End of completed orders list.
+Every completed order has been stated.
 
 ---
 
 #### `order_bound`
 
-Order bound to a perm ID.
+An order placed elsewhere has been bound to this session, so its changes arrive here.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2338,7 +2340,7 @@ Order bound to a perm ID.
 
 #### `tick_req_params`
 
-Tick parameters: min tick size, BBO exchange, snapshot permissions.
+What a subscription was given: the increment its prices move in, which venues it is served from, and which feed answered.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2351,7 +2353,7 @@ Tick parameters: min tick size, BBO exchange, snapshot permissions.
 
 #### `bond_contract_details`
 
-Bond contract details.
+One bond matching a description, with its terms: what it pays, how and when, whether it can be called or put, whether it converts, what it is rated.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2362,7 +2364,7 @@ Bond contract details.
 
 #### `delta_neutral_validation`
 
-Delta-neutral validation response.
+The contract the venue paired with a delta-neutral order.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2373,7 +2375,7 @@ Delta-neutral validation response.
 
 #### `historical_schedule`
 
-Historical trading schedule (exchange hours).
+When a contract's venue was open over a window, session by session, in the zone the venue keeps.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

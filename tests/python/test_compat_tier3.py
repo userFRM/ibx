@@ -551,3 +551,19 @@ def test_a_session_held_open_notices_what_stopped():
 
     both = endurance.what_stopped(growing, {"quotes": 100, "bars": 10}, 2)
     assert len(both) == 2, both
+
+
+def test_every_call_and_callback_says_what_it_does():
+    """The surface a program touches is documented, all of it.
+
+    Measured rather than reviewed: a callback with no documentation is one a
+    caller has to discover by watching what arrives, and the whole callback
+    surface was in that state.
+    """
+    import ibx
+
+    for named, cls in (("EClient", ibx.EClient), ("EWrapper", ibx.EWrapper)):
+        public = [n for n in dir(cls) if not n.startswith("_")]
+        assert len(public) > 50, f"{named} should carry a substantial surface"
+        silent = [n for n in public if not (getattr(cls, n).__doc__ or "").strip()]
+        assert not silent, f"{named} says nothing about: {sorted(silent)}"

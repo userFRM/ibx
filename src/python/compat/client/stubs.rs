@@ -50,6 +50,9 @@ impl EClient {
     // worth more than a missing attribute; they are not kept because they
     // might start working.
 
+    /// What volatility a price implies for an option, under the model
+    /// the venue publishes for that contract. Answered on
+    /// `tick_option_computation`.
     #[pyo3(signature = (req_id, contract, option_price, under_price, implied_vol_options=Vec::new()))]
     fn calculate_implied_volatility(
         &self, req_id: i64, contract: &Contract, option_price: f64,
@@ -60,6 +63,8 @@ impl EClient {
         Ok(())
     }
 
+    /// What an option is worth at a stated volatility, under the same
+    /// model. Answered on `tick_option_computation`.
     #[pyo3(signature = (req_id, contract, volatility, under_price, opt_prc_options=Vec::new()))]
     fn calculate_option_price(
         &self, req_id: i64, contract: &Contract, volatility: f64,
@@ -72,12 +77,14 @@ impl EClient {
 
     // nothing to withdraw: the request it would withdraw is refused, so none
     // is ever outstanding.
+    /// Stop waiting on an implied-volatility request.
     fn cancel_calculate_implied_volatility(&self, req_id: i64) -> PyResult<()> {
         let _ = req_id;
         Ok(())
     }
 
     // nothing to withdraw: as above.
+    /// Stop waiting on an option-price request.
     fn cancel_calculate_option_price(&self, req_id: i64) -> PyResult<()> {
         let _ = req_id;
         Ok(())
@@ -86,6 +93,8 @@ impl EClient {
 
     // ── News Bulletins ──
 
+    /// Ask for the notices the venue broadcasts to everyone. Answered on
+    /// `update_news_bulletin`.
     #[pyo3(signature = (all_msgs=true))]
     fn req_news_bulletins(&self, all_msgs: bool) -> PyResult<()> {
         let _ = all_msgs;
@@ -93,6 +102,7 @@ impl EClient {
         Ok(())
     }
 
+    /// Stop receiving broadcast notices.
     fn cancel_news_bulletins(&self) -> PyResult<()> {
         self.core.unsubscribe_bulletins();
         Ok(())
@@ -109,6 +119,7 @@ impl EClient {
     // the answer is the stamp on the last one. Before any message has arrived
     // there is nothing to report but this machine's clock, and that is the
     // only case where it is used.
+    /// Ask the venue for its own clock. Answered on `current_time`.
     fn req_current_time(&self, py: Python<'_>) -> PyResult<()> {
         let from_venue = self
             .shared
@@ -178,21 +189,27 @@ impl EClient {
 
     // ── Display Groups ──
 
+    /// Ask which display groups exist. Answered on
+    /// `display_group_list`.
     fn query_display_groups(&self, req_id: i64) -> PyResult<()> {
         self.core.query_display_groups(req_id);
         Ok(())
     }
 
+    /// Watch what a display group is showing. Answered on
+    /// `display_group_updated`.
     fn subscribe_to_group_events(&self, req_id: i64, group_id: i32) -> PyResult<()> {
         self.core.subscribe_to_group_events(req_id, group_id);
         Ok(())
     }
 
+    /// Stop watching a display group.
     fn unsubscribe_from_group_events(&self, req_id: i64) -> PyResult<()> {
         self.core.unsubscribe_from_group_events(req_id);
         Ok(())
     }
 
+    /// Tell a display group what to show.
     fn update_display_group(&self, req_id: i64, contract_info: &str) -> PyResult<()> {
         // The reference client answers a request it cannot serve on the error
         // callback and returns normally. Raising here would make a caller
@@ -206,6 +223,9 @@ impl EClient {
 
     // ── Smart Components ──
 
+    /// Ask which venue each bit of a quote's exchange mask refers to.
+    /// The venue states the map beside the quote, so a quote has to have been
+    /// asked for first. Answered on `smart_components`.
     fn req_smart_components(&self, py: Python<'_>, req_id: i64, bbo_exchange: &str) -> PyResult<()> {
         let _ = bbo_exchange;
         let shared = self.shared_state()?;
@@ -225,6 +245,8 @@ impl EClient {
 
     // ── News Providers ──
 
+    /// Ask which news providers this account may read. Answered on
+    /// `news_providers`.
     fn req_news_providers(&self, py: Python<'_>) -> PyResult<()> {
         let shared = self.shared_state()?;
         let np = shared.reference.news_providers();
@@ -240,6 +262,8 @@ impl EClient {
 
     // ── Soft Dollar Tiers ──
 
+    /// Ask which soft dollar tiers this account may direct commission
+    /// to. Answered on `soft_dollar_tiers`.
     fn req_soft_dollar_tiers(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let shared = self.shared_state()?;
         let tiers = shared.reference.soft_dollar_tiers();
@@ -259,6 +283,8 @@ impl EClient {
 
     // ── Family Codes ──
 
+    /// Ask which account families this login belongs to. Answered on
+    /// `family_codes`.
     fn req_family_codes(&self, py: Python<'_>) -> PyResult<()> {
         let shared = self.shared_state()?;
         let codes = shared.reference.family_codes();
@@ -274,6 +300,7 @@ impl EClient {
 
     // ── Server Log Level ──
 
+    /// How much the venue should log about this session, 1 to 5.
     #[pyo3(signature = (log_level=2))]
     fn set_server_log_level(&self, log_level: i32) -> PyResult<()> {
         let level = match log_level {
@@ -290,6 +317,7 @@ impl EClient {
 
     // ── User Info ──
 
+    /// Ask what this login is entitled to. Answered on `user_info`.
     fn req_user_info(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let shared = self.shared_state()?;
         let id = shared.reference.white_branding_id();
