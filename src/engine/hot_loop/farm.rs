@@ -1281,8 +1281,11 @@ impl FarmState {
             && !conn.routing.is_empty()
             && !sec_type.is_empty()
         {
-            let serves_a_book = conn.routing.find(destination, sec_type, "Deep").is_some()
-                || conn.routing.find(destination, sec_type, "AggDeep").is_some();
+            // Whichever name the venue serves a book under here. Asked only
+            // about one of them, two markets that serve a book under another
+            // read as serving none, and a request the venue would have
+            // answered is refused instead.
+            let serves_a_book = conn.routing.book_endpoint(destination, sec_type).is_some();
             let named_at_all = conn.routing.find(destination, sec_type, "Top").is_some();
             if named_at_all && !serves_a_book {
                 shared.reference.push_historical_error(
