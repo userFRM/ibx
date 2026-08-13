@@ -570,6 +570,68 @@ fn note_account(accounts: &mut Vec<String>, account: &str) {
     }
 }
 
+
+/// Another session already logged in on this account when this one connected.
+///
+/// The venue states this in its answer to the connect, and the counterpart
+/// reads it there: a session that arrives second is told who was already here.
+/// Whether that matters is the caller's to decide — the venue may serve both,
+/// or may hold this one to reading only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompetingSession {
+    /// Where the session that was already logged in connected from.
+    pub ip: String,
+    /// When it logged in, as the venue stated it: `yyyyMMdd-HH:mm:ss`, GMT.
+    pub since: String,
+    /// This session may look but not trade, because the other one holds the
+    /// account.
+    ///
+    /// Worth knowing before an order is sent rather than after it is refused.
+    pub read_only: bool,
+}
+
+/// The suffix the venue adds when the session being told is the one held to
+/// reading only.
+const COMPETING_READ_ONLY: &str = "(RO)";
+
+/// Read a competing session out of the venue's answer to the connect.
+///
+/// The answer carries one field for this, and it is either `0` for nobody
+/// else, or an address and a login time separated by a slash. Found by shape
+/// rather than by position: the field's own form — an address, a slash, a
+/// timestamp the venue writes as `yyyyMMdd-HH:mm:ss` — identifies it, and a
+/// frame that gains a field does not move it.
+pub fn parse_competing_session(frame: &str) -> Option<CompetingSession> {
+    frame.split(';').find_map(|field| {
+        let field = field.trim();
+        if field.is_empty() || field == "0" {
+            return None;
+        }
+        let (ip, rest) = field.split_once('/')?;
+        if ip.is_empty() {
+            return None;
+        }
+        let (since, read_only) = match rest.strip_suffix(COMPETING_READ_ONLY) {
+            Some(stripped) => (stripped, true),
+            None => (rest, false),
+        };
+        // yyyyMMdd-HH:mm:ss, and nothing else in the frame looks like it.
+        let (day, clock) = since.split_once('-')?;
+        if day.len() != 8 || !day.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        if clock.len() != 8 || clock.as_bytes()[2] != b':' || clock.as_bytes()[5] != b':' {
+            return None;
+        }
+        Some(CompetingSession {
+            ip: ip.to_string(),
+            since: since.to_string(),
+            read_only,
+        })
+    })
+}
+
+
 /// Full gateway connection.
 pub struct Gateway {
     /// The account this session acts for.
@@ -624,6 +686,9 @@ pub struct Gateway {
     pub hmds_host: String,
     /// Which historical farm the venue routed this session to.
     pub hmds_farm: String,
+    /// Another session already logged in on this account when this one
+    /// connected, as the venue stated it. `None` when this session is alone.
+    pub competing: Option<CompetingSession>,
     /// Trading farm routing from the same response, retained so the trading
     /// reconnect uses the route the auth server gave rather than a literal.
     pub trading_host: String,
@@ -1058,6 +1123,13 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         let msg_type: u32 = inner_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
 
         if msg_type == ns::NS_CONNECT_RESPONSE {
+            if let Some(other) = parse_competing_session(&inner_text) {
+                log::warn!(
+                    "reconnected onto an account another session holds, from {} at {}{}",
+                    other.ip, other.since,
+                    if other.read_only { ", and this one may not trade" } else { "" },
+                );
+            }
             let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
             session::send_secure(&mut tls, &mut channel, newcomm.as_bytes())?;
         } else if msg_type == ns::NS_FIX_START {
@@ -1730,6 +1802,9 @@ impl Gateway {
         let fix_deadline = std::time::Instant::now()
             + std::time::Duration::from_secs_f64(TIMEOUT_FIX_LOGON * 2.0);
         let mut fix_ready = false;
+        // Whoever was already here when this session arrived, as the venue
+        // said so in its answer to the connect.
+        let mut competing: Option<CompetingSession> = None;
         while std::time::Instant::now() < fix_deadline {
             let (payload, _) = match ns::ns_recv(&mut tls) {
                 Ok(r) => r,
@@ -1775,6 +1850,14 @@ impl Gateway {
 
             if msg_type == ns::NS_CONNECT_RESPONSE {
                 log::info!("NS_CONNECT_RESPONSE: {inner_text}");
+                competing = parse_competing_session(&inner_text);
+                if let Some(other) = &competing {
+                    log::warn!(
+                        "another session was already logged in from {} at {}{}",
+                        other.ip, other.since,
+                        if other.read_only { ", and this one may not trade" } else { "" },
+                    );
+                }
                 // Send port type change (required before data start)
                 let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
                 session::send_secure(&mut tls, &mut channel, newcomm.as_bytes())?;
@@ -2322,6 +2405,7 @@ impl Gateway {
         log::info!("Login holds {} account(s)", accounts.len());
 
         let gw = Gateway {
+            competing,
             account_id,
             accounts,
             session_token: session_key,
@@ -2672,6 +2756,42 @@ mod tests {
         // Short or absent field 4 yields no type rather than a wrong one.
         assert_eq!(parse_auth_start_token("a;b;c"), ("".into(), None));
         assert_eq!(parse_auth_start_token(&frame("")), ("".into(), None));
+    }
+
+    /// The venue names the session that was already logged in, and this reads
+    /// it out of the frame by its shape rather than by counting fields.
+    #[test]
+    fn a_competing_session_is_read_out_of_the_connect_response() {
+        // Nobody else: the field is a bare zero, and some sessions carry none.
+        assert_eq!(super::parse_competing_session("50;523;0;;2;0;"), None);
+        assert_eq!(super::parse_competing_session("50;523;;;;"), None);
+
+        let other = super::parse_competing_session("50;523;192.168.1.9/20260813-15:04:22;2;0;")
+            .expect("a competing session is stated");
+        assert_eq!(other.ip, "192.168.1.9");
+        assert_eq!(other.since, "20260813-15:04:22");
+        assert!(!other.read_only, "nothing said this session may not trade");
+
+        // The suffix is about the session being told, not the other one.
+        let held = super::parse_competing_session("50;523;10.0.0.4/20260813-09:30:00(RO);2;")
+            .expect("a competing session is stated");
+        assert!(held.read_only, "this session may look and not trade");
+        assert_eq!(held.since, "20260813-09:30:00", "the suffix is not part of the time");
+
+        // Position is not what identifies it: a frame that gains a field in
+        // front must not change what is read.
+        let moved = super::parse_competing_session("50;523;x;y;z;10.0.0.4/20260813-09:30:00;")
+            .expect("still found");
+        assert_eq!(moved.ip, "10.0.0.4");
+
+        // Other fields carrying a slash are not login times. A route and a
+        // version both do, and reading either as a competitor would announce
+        // one on every session.
+        assert_eq!(super::parse_competing_session("50;523;zdc1.ibllc.com/ushmds;2;"), None);
+        assert_eq!(super::parse_competing_session("50;523;5.2i/2;0;"), None);
+        assert_eq!(super::parse_competing_session("50;523;/20260813-09:30:00;"), None);
+        assert_eq!(super::parse_competing_session("50;523;1.2.3.4/2026081-09:30:00;"), None);
+        assert_eq!(super::parse_competing_session("50;523;1.2.3.4/20260813-9:30:00;"), None);
     }
 
     /// `recv_secure` clears the outer envelope and stops there. Field 4 of what
