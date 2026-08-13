@@ -99,16 +99,28 @@ pub const UNAVAILABLE: &[(&str, &str)] = &[
 /// session's reconnects picked them up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSettings {
+    /// The zone the session states its times in.
     pub timezone: String,
+    /// The locale it states them for.
     pub locale: String,
+    /// The build this session announces itself as.
     pub build: String,
+    /// The version it announces.
     pub version: String,
+    /// What the session encodes its client string as.
     pub encoded: String,
+    /// What it identifies this machine as. Derived when unset.
     pub hardware_id: Option<String>,
+    /// Which market-data host to use, where the caller names one.
     pub market_data_host: Option<String>,
+    /// Which port the session opens on.
     pub port: u16,
+    /// How long a call waits for the engine to name a contract before giving up.
     pub registration_timeout: std::time::Duration,
+    /// Which executions a session asks for when it opens.
     pub execution_reports: ExecutionReportScope,
+    /// Whether a US stock on Nasdaq is named by the older spelling. Takes the
+    /// venue's grant as well as this setting.
     pub island_for_nasdaq: bool,
 }
 

@@ -13,49 +13,103 @@ use crate::types::HistoricalTickData;
 pub trait Wrapper {
     // ── Connection ──
 
+    /// The session is open. Nothing has been asked for yet.
     fn connect_ack(&mut self) {}
+    /// The session is over, because this client ended it. A session that
+    /// went away instead is reported on `error` under 1100.
     fn connection_closed(&mut self) {}
+    /// The first order id this session may use. Each order needs one
+    /// higher than the last.
     fn next_valid_id(&mut self, order_id: i64) {}
+    /// Every account this login may act for, separated by commas. One
+    /// for most logins; an advisor has several.
     fn managed_accounts(&mut self, accounts_list: &str) {}
+    /// What the venue said about a request, under the number it says it
+    /// with. Codes from 2100 to 2200 are notices about a connection rather than
+    /// failures. `req_id` is -1 for anything that answers no particular request.
+    ///
+    /// A request this client will not send is reported here too, under the same
+    /// numbers the reference client uses: 321 for a request that fails
+    /// validation, 200 for a contract description that matches nothing, 504
+    /// for a call made with no session.
     fn error(&mut self, req_id: i64, error_code: i64, error_string: &str, advanced_order_reject_json: &str) {}
+    /// The venue's own clock, in seconds since the epoch.
     fn current_time(&mut self, time: i64) {}
 
     // ── Market Data ──
 
+    /// One price of a quote, and which price it is. `tick_type` names it —
+    /// 1 bid, 2 ask, 4 last, 9 close — and `attrib` says whether it can be traded
+    /// against and whether it is past its limit. A size arrives on `tick_size`
+    /// under the type that belongs to it.
     fn tick_price(&mut self, req_id: i64, tick_type: i32, price: f64, attrib: &TickAttrib) {}
+    /// One size of a quote, and which size it is: 0 bid, 3 ask, 5 last, 8
+    /// the day's volume.
     fn tick_size(&mut self, req_id: i64, tick_type: i32, size: f64) {}
+    /// A quote's value that is not a number — a timestamp, an exchange
+    /// map, a set of ids.
     fn tick_string(&mut self, req_id: i64, tick_type: i32, value: &str) {}
+    /// A quote's value that is a number and is not a price or a size —
+    /// an implied volatility, an index future's premium, a halt.
     fn tick_generic(&mut self, req_id: i64, tick_type: i32, value: f64) {}
+    /// A snapshot has stated everything it is going to. Only for a
+    /// subscription asked for as a snapshot; a streaming one never ends.
     fn tick_snapshot_end(&mut self, req_id: i64) {}
+    /// Which feed a subscription is being served from: 1 live, 2 frozen,
+    /// 3 delayed, 4 delayed and frozen.
     fn market_data_type(&mut self, req_id: i64, market_data_type: i32) {}
 
     // ── Orders ──
 
+    /// Where an order stands now. Fires on every change, and again on
+    /// each fill. `filled` and `remaining` are shares, `avg_fill_price` the
+    /// average of what has filled so far.
     fn order_status(
         &mut self, order_id: i64, status: &str, filled: f64, remaining: f64,
         avg_fill_price: f64, perm_id: i64, parent_id: i64,
         last_fill_price: f64, client_id: i64, why_held: &str, mkt_cap_price: f64,
     ) {}
 
+    /// An order as the venue holds it, and the state it is in. Fires
+    /// beside every `order_status`, when open orders are asked for, and once for
+    /// a preview — where the state carries what the order would cost and no
+    /// status follows, because a preview is not an order.
     fn open_order(&mut self, order_id: i64, contract: &Contract, order: &Order, order_state: &OrderState) {}
+    /// Every open order has been stated.
     fn open_order_end(&mut self) {}
+    /// One fill, against the order and contract it filled. What it cost
+    /// arrives separately, on `commission_and_fees_report`.
     fn exec_details(&mut self, req_id: i64, contract: &Contract, execution: &Execution) {}
+    /// Every execution answering this request has been stated.
     fn exec_details_end(&mut self, req_id: i64) {}
+    /// What a fill cost, matched to it by execution id.
     fn commission_and_fees_report(&mut self, report: &CommissionAndFeesReport) {}
 
     // ── Account ──
 
+    /// One figure the venue states about an account, in the currency it
+    /// states it in. An account is stated in several currencies at once, so the
+    /// same key arrives more than once.
     fn update_account_value(&mut self, key: &str, value: &str, currency: &str, account_name: &str) {}
+    /// One position, as the venue values it now.
     fn update_portfolio(
         &mut self, contract: &Contract, position: f64, market_price: f64,
         market_value: f64, average_cost: f64, unrealized_pnl: f64,
         realized_pnl: f64, account_name: &str,
     ) {}
+    /// When the account figures above were last stated.
     fn update_account_time(&mut self, timestamp: &str) {}
+    /// The account has been fully stated. Fires once the venue has
+    /// stopped adding to it, not on the first figure.
     fn account_download_end(&mut self, account: &str) {}
+    /// One figure answering `req_account_summary`, in the currency the
+    /// venue states it in.
     fn account_summary(&mut self, req_id: i64, account: &str, tag: &str, value: &str, currency: &str) {}
+    /// Every figure answering this request has been stated.
     fn account_summary_end(&mut self, req_id: i64) {}
+    /// One position held, on any account this login may act for.
     fn position(&mut self, account: &str, contract: &Contract, pos: f64, avg_cost: f64) {}
+    /// Every position has been stated.
     fn position_end(&mut self) {}
     /// A holding, answering `req_positions_multi`. Separate from `position`:
     /// a caller asks per account or model and is answered per request.
@@ -65,6 +119,7 @@ pub trait Wrapper {
     ) {
         let _ = (req_id, account, model_code, contract, pos, avg_cost);
     }
+    /// Every position answering this request has been stated.
     fn position_multi_end(&mut self, req_id: i64) { let _ = req_id; }
     /// An account value, answering `req_account_updates_multi`.
     fn account_update_multi(
@@ -73,60 +128,92 @@ pub trait Wrapper {
     ) {
         let _ = (req_id, account, model_code, key, value, currency);
     }
+    /// Every figure answering this request has been stated.
     fn account_update_multi_end(&mut self, req_id: i64) { let _ = req_id; }
+    /// An account's running profit: today's, what is unrealised, and what
+    /// has been realised.
     fn pnl(&mut self, req_id: i64, daily_pnl: f64, unrealized_pnl: f64, realized_pnl: f64) {}
+    /// The same for one position, with the size held.
     fn pnl_single(&mut self, req_id: i64, pos: f64, daily_pnl: f64, unrealized_pnl: f64, realized_pnl: f64, value: f64) {}
 
     // ── Historical Data ──
 
+    /// One bar answering a historical request. `bar.date` is a day for a
+    /// daily bar and a moment for anything shorter, in the zone the bar carries.
     fn historical_data(&mut self, req_id: i64, bar: &BarData) {}
+    /// Every bar answering this request has been stated, and the window
+    /// they cover.
     fn historical_data_end(&mut self, req_id: i64, start: &str, end: &str) {}
+    /// A bar that continues a `keep_up_to_date` request, after its
+    /// first batch completed. The bar still forming is restated as it changes.
     fn historical_data_update(&mut self, req_id: i64, bar: &BarData) {}
+    /// The earliest moment the venue holds data for a contract.
     fn head_timestamp(&mut self, req_id: i64, head_timestamp: &str) {}
 
     // ── Contract Details ──
 
+    /// One contract matching a description, with everything the venue
+    /// states about it. A description can match more than one.
     fn contract_details(&mut self, req_id: i64, details: &ContractDetails) {}
+    /// Every contract matching this request has been stated.
     fn contract_details_end(&mut self, req_id: i64) {}
+    /// Contracts whose symbol or name matches a pattern, across venues.
     fn symbol_samples(&mut self, req_id: i64, descriptions: &[ContractDescription]) {}
 
     // ── Tick-by-Tick ──
 
+    /// One trade, as it happens. `tick_attrib_last` says whether it was
+    /// past a limit and whether it goes unreported to the tape.
     fn tick_by_tick_all_last(
         &mut self, req_id: i64, tick_type: i32, time: i64, price: f64,
         size: f64, attrib: &TickAttribLast, exchange: &str, special_conditions: &str,
     ) {}
+    /// One change to the top of the book, as it happens.
     fn tick_by_tick_bid_ask(
         &mut self, req_id: i64, time: i64, bid_price: f64, ask_price: f64,
         bid_size: f64, ask_size: f64, attrib: &TickAttribBidAsk,
     ) {}
+    /// One change to the midpoint, as it happens.
     fn tick_by_tick_mid_point(&mut self, req_id: i64, time: i64, mid_point: f64) {}
 
     // ── Scanner ──
 
+    /// One row of a scan, in rank order.
     fn scanner_data(
         &mut self, req_id: i64, rank: i32, details: &ContractDetails,
         distance: &str, benchmark: &str, projection: &str, legs_str: &str,
     ) {}
+    /// Every row of this scan has been stated.
     fn scanner_data_end(&mut self, req_id: i64) {}
+    /// Every scan the venue offers and what each can be filtered by, as
+    /// the XML the venue publishes.
     fn scanner_parameters(&mut self, xml: &str) {}
 
     // ── News ──
 
+    /// A notice the venue broadcasts to everyone — an exchange
+    /// unavailable, a system message.
     fn update_news_bulletin(&mut self, msg_id: i64, msg_type: i32, message: &str, orig_exchange: &str) {}
+    /// A headline about a contract being watched, as it is published.
     fn tick_news(
         &mut self, ticker_id: i64, timestamp: i64, provider_code: &str,
         article_id: &str, headline: &str, extra_data: &str,
     ) {}
+    /// One headline from the archive.
     fn historical_news(
         &mut self, req_id: i64, time: &str, provider_code: &str,
         article_id: &str, headline: &str,
     ) {}
+    /// Every headline answering this request has been stated, and
+    /// whether the archive holds more.
     fn historical_news_end(&mut self, req_id: i64, has_more: bool) {}
+    /// The body of one article. `article_type` is 0 for text and 1 for a
+    /// binary document.
     fn news_article(&mut self, req_id: i64, article_type: i32, article_text: &str) {}
 
     // ── Real-Time Bars ──
 
+    /// One five-second bar of a live stream.
     fn real_time_bar(
         &mut self, req_id: i64, date: i64, open: f64, high: f64,
         low: f64, close: f64, volume: f64, wap: f64, count: i32,
@@ -134,16 +221,22 @@ pub trait Wrapper {
 
     // ── Historical Ticks ──
 
+    /// Historical midpoints, in batches, until `done`.
     fn historical_ticks(&mut self, req_id: i64, ticks: &HistoricalTickData, done: bool) {}
+    /// Historical quotes, in batches, until `done`.
     fn historical_ticks_bid_ask(
         &mut self, req_id: i64, ticks: &HistoricalTickData, done: bool,
     ) { let _ = (req_id, ticks, done); }
+    /// Historical trades, in batches, until `done`.
     fn historical_ticks_last(
         &mut self, req_id: i64, ticks: &HistoricalTickData, done: bool,
     ) { let _ = (req_id, ticks, done); }
 
     // ── Option Computations / Definitions ──
 
+    /// The venue's own model for an option: the volatility its price
+    /// implies, the greeks, and what the model says the option and its
+    /// underlying are worth.
     fn tick_option_computation(
         &mut self, req_id: i64, tick_type: i32, tick_attrib: i32,
         implied_vol: f64, delta: f64, opt_price: f64, pv_dividend: f64,
@@ -186,16 +279,20 @@ pub trait Wrapper {
     fn wsh_event_data(&mut self, req_id: i64, data_json: &str) {
         let _ = (req_id, data_json);
     }
+    /// One venue's option chain for an underlying: the
+    /// expiries and strikes it lists.
     fn security_definition_option_parameter(
         &mut self, req_id: i64, exchange: &str, underlying_con_id: i64,
         trading_class: &str, multiplier: &str, expirations: &[String], strikes: &[f64],
     ) {
         let _ = (req_id, exchange, underlying_con_id, trading_class, multiplier, expirations, strikes);
     }
+    /// Every venue's chain has been stated.
     fn security_definition_option_parameter_end(&mut self, req_id: i64) { let _ = req_id; }
 
     // ── Delta-Neutral ──
 
+    /// The contract the venue paired with a delta-neutral order.
     fn delta_neutral_validation(
         &mut self, req_id: i64, con_id: i64, delta: f64, price: f64,
     ) {
@@ -204,19 +301,27 @@ pub trait Wrapper {
 
     // ── Histogram ──
 
+    /// How much traded at each price over a window.
     fn histogram_data(&mut self, req_id: i64, items: &[(f64, i64)]) {}
 
     // ── Market Rules ──
 
+    /// The price ladder a contract trades on: each step, and what the
+    /// price moves in above it.
     fn market_rule(&mut self, market_rule_id: i64, price_increments: &[PriceIncrement]) {}
 
     // ── Completed Orders ──
 
+    /// An order that is done — filled, cancelled or expired — as the
+    /// venue holds it.
     fn completed_order(&mut self, contract: &Contract, order: &Order, order_state: &OrderState) {}
+    /// Every completed order has been stated.
     fn completed_orders_end(&mut self) {}
 
     // ── Historical Schedule ──
 
+    /// When a contract's venue was open over a window, session by
+    /// session, in the zone the venue keeps.
     fn historical_schedule(
         &mut self, req_id: i64, start_date_time: &str, end_date_time: &str,
         time_zone: &str, sessions: &[(String, String, String)],
@@ -224,42 +329,57 @@ pub trait Wrapper {
 
     // ── Fundamental Data ──
 
+    /// A fundamental report, as the XML the venue publishes.
     fn fundamental_data(&mut self, req_id: i64, data: &str) {}
 
     // ── Market Depth ──
 
+    /// One level of a book that names no venue. `operation` is 0 to
+    /// insert, 1 to update, 2 to delete; `side` is 0 ask, 1 bid.
     fn update_mkt_depth(
         &mut self, req_id: i64, position: i32, operation: i32,
         side: i32, price: f64, size: f64,
     ) {}
+    /// One level of a book that names the venue it stands on. Every
+    /// level from this client names one.
     fn update_mkt_depth_l2(
         &mut self, req_id: i64, position: i32, market_maker: &str,
         operation: i32, side: i32, price: f64, size: f64, is_smart_depth: bool,
     ) {}
+    /// Every exchange the venue names, in the two sections it names
+    /// them in: shares and derivatives.
     fn mkt_depth_exchanges(&mut self, _descriptions: &[crate::types::DepthMktDataDescription]) {}
 
     // ── Tick Req Params ──
 
+    /// What a subscription was given: the increment its prices move in,
+    /// which venues it is served from, and which feed answered.
     fn tick_req_params(&mut self, ticker_id: i64, min_tick: f64, bbo_exchange: &str, snapshot_permissions: i64) {}
 
     // ── Smart Components ──
 
+    /// Which venue each bit of a quote's exchange mask refers to, and
+    /// the letter that venue is named by.
     fn smart_components(&mut self, req_id: i64, components: &[crate::types::SmartComponent]) {}
 
     // ── News Providers ──
 
+    /// Every news provider this account may read.
     fn news_providers(&mut self, providers: &[crate::types::NewsProvider]) {}
 
     // ── Soft Dollar Tiers ──
 
+    /// The soft dollar tiers this account may direct commission to.
     fn soft_dollar_tiers(&mut self, req_id: i64, tiers: &[crate::types::SoftDollarTier]) {}
 
     // ── Family Codes ──
 
+    /// The account families this login belongs to.
     fn family_codes(&mut self, codes: &[crate::types::FamilyCode]) {}
 
     // ── User Info ──
 
+    /// What the login is entitled to, as the venue states it.
     fn user_info(&mut self, req_id: i64, white_branding_id: &str) {}
 }
 

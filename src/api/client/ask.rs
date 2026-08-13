@@ -73,9 +73,13 @@ pub struct OptionChain {
     pub exchange: String,
     /// The contract the options are on.
     pub underlying_con_id: i64,
+    /// Which class of the chain these strikes belong to.
     pub trading_class: String,
+    /// How many units one contract of it is worth.
     pub multiplier: String,
+    /// Every expiry this venue lists.
     pub expirations: Vec<String>,
+    /// Every strike it lists.
     pub strikes: Vec<f64>,
 }
 
@@ -91,28 +95,39 @@ pub struct Headline {
 /// A holding, as the account states it.
 #[derive(Debug, Clone)]
 pub struct PositionRow {
+    /// Which account it is on.
     pub account: String,
+    /// What is held.
     pub contract: Contract,
+    /// How much of it.
     pub position: f64,
+    /// What it cost on average.
     pub avg_cost: f64,
 }
 
 /// One value the account states about itself.
 #[derive(Debug, Clone)]
 pub struct AccountValue {
+    /// Which account it is on.
     pub account: String,
+    /// Which figure this is.
     pub tag: String,
+    /// What the venue states it as.
     pub value: String,
+    /// What currency it is stated in.
     pub currency: String,
 }
 
 /// Where an order stands.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OrderReport {
+    /// The order this is about.
     pub order_id: i64,
     /// The venue's own word for it: `Filled`, `Cancelled`, `Inactive`, and so on.
     pub status: String,
+    /// How much has filled.
     pub filled: f64,
+    /// How much has not.
     pub remaining: f64,
     /// What it has paid on average, zero until something fills.
     pub avg_price: f64,
