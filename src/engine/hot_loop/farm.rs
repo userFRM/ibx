@@ -1267,14 +1267,20 @@ impl FarmState {
         // Said as a refusal instead. Only where the table was read and names
         // the market: a table this client does not have is not evidence that
         // the venue serves nothing.
+        // Under the name the venue routes by, not the one a caller was handed.
+        // The counterpart remaps its smart destination before sending and this
+        // client already does it for quotes and for orders; a book asked for
+        // under the caller's spelling was the one request still going out
+        // under a name the venue does not route by.
+        let destination = match exchange {
+            "" | "SMART" | "IBKRATS" | "BEST" => "BEST",
+            other => other,
+        };
+
         if let Some(conn) = farm_conn.as_ref()
             && !conn.routing.is_empty()
             && !sec_type.is_empty()
         {
-            let destination = match exchange {
-                "" | "SMART" | "IBKRATS" | "BEST" => "BEST",
-                other => other,
-            };
             let serves_a_book = conn.routing.find(destination, sec_type, "Deep").is_some()
                 || conn.routing.find(destination, sec_type, "AggDeep").is_some();
             let named_at_all = conn.routing.find(destination, sec_type, "Top").is_some();
@@ -1321,7 +1327,7 @@ impl FarmState {
         // stands is indistinguishable from one of these. A caller's second
         // book was answered under another subscription's venue because both
         // were numbered 2.
-        let venues: Vec<String> = vec![exchange.to_string()];
+        let venues: Vec<String> = vec![destination.to_string()];
         // What the caller asked for is recorded whether or not the socket is
         // up. Recorded only when it was, a book asked for while the farm was
         // down could not be withdrawn, and the reconnect asked for it again.
