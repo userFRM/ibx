@@ -1254,7 +1254,44 @@ impl FarmState {
         is_smart_depth: bool,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
+        shared: &SharedState,
     ) {
+        // A book the venue does not serve where this is routed.
+        //
+        // The routing answer names, per market and security type, which kinds
+        // of data are served. For the smart destination and a stock it names
+        // one — the top of the book — and never a deep one, in any region. So
+        // a book asked for there is asked of somewhere that has none, and the
+        // answer is nothing at all: no refusal, no book, no way to tell which.
+        //
+        // Said as a refusal instead. Only where the table was read and names
+        // the market: a table this client does not have is not evidence that
+        // the venue serves nothing.
+        if let Some(conn) = farm_conn.as_ref()
+            && !conn.routing.is_empty()
+            && !sec_type.is_empty()
+        {
+            let destination = match exchange {
+                "" | "SMART" | "IBKRATS" | "BEST" => "BEST",
+                other => other,
+            };
+            let serves_a_book = conn.routing.find(destination, sec_type, "Deep").is_some()
+                || conn.routing.find(destination, sec_type, "AggDeep").is_some();
+            let named_at_all = conn.routing.find(destination, sec_type, "Top").is_some();
+            if named_at_all && !serves_a_book {
+                shared.reference.push_historical_error(
+                    req_id,
+                    crate::api::error_codes::Refusal::VALIDATION,
+                    format!(
+                        "the venue serves no book for a {sec_type} on {destination}, \
+                         only the top of one — ask on the exchange the contract \
+                         trades on instead",
+                    ),
+                );
+                return;
+            }
+        }
+
         let fix_sec_type = match sec_type {
             "STK" => "CS", "FUT" => "FUT", "OPT" => "OPT", "IND" => "IND",
             "CASH" => "CASH", other => other,
@@ -1763,6 +1800,7 @@ impl FarmState {
         context: &mut Context,
         hb: &mut HeartbeatState,
         replay: ReplayPacing,
+        shared: &SharedState,
     ) {
         *farm_conn = Some(conn);
         self.disconnected = false;
@@ -1798,7 +1836,7 @@ impl FarmState {
         {
             self.send_depth_subscribe(
                 req_id, con_id, &exchange, &listed_on, &sec_type, num_rows, is_smart_depth,
-                farm_conn, hb,
+                farm_conn, hb, shared,
             );
         }
 
@@ -2805,12 +2843,13 @@ mod depth_identity_tests {
     #[test]
     fn a_callers_id_is_never_what_the_venue_is_asked_under() {
         let mut farm = FarmState::new();
+        let shared = SharedState::new();
         let mut conn = None;
         let mut hb = HeartbeatState::new();
 
         // Two callers, numbered as callers number things.
-        farm.send_depth_subscribe(1, 756733, "IEX", "", "STK", 10, false, &mut conn, &mut hb);
-        farm.send_depth_subscribe(2, 756733, "ARCA", "", "STK", 10, false, &mut conn, &mut hb);
+        farm.send_depth_subscribe(1, 756733, "IEX", "", "STK", 10, false, &mut conn, &mut hb, &shared);
+        farm.send_depth_subscribe(2, 756733, "ARCA", "", "STK", 10, false, &mut conn, &mut hb, &shared);
 
         let asked_under: Vec<u32> = farm.depth_fanout_map.iter().map(|(sub, _)| *sub).collect();
         assert_eq!(asked_under.len(), 2, "one subscription each");
@@ -2853,10 +2892,11 @@ mod depth_identity_tests {
     #[test]
     fn withdrawing_a_book_withdraws_what_was_asked_for() {
         let mut farm = FarmState::new();
+        let shared = SharedState::new();
         let mut conn = None;
         let mut hb = HeartbeatState::new();
 
-        farm.send_depth_subscribe(7, 756733, "SMART", "", "STK", 10, true, &mut conn, &mut hb);
+        farm.send_depth_subscribe(7, 756733, "SMART", "", "STK", 10, true, &mut conn, &mut hb, &shared);
         assert_eq!(farm.depth_subs.len(), 1, "a book on no venue is one subscription");
         assert_eq!(farm.depth_fanout_map[0].1, 7, "and it is the caller's");
         assert_ne!(farm.depth_fanout_map[0].0, 7, "asked under an id of ours");
