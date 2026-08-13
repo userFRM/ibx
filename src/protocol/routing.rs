@@ -195,6 +195,37 @@ mod tests {
         assert_eq!(farms.len(), 6, "one entry per farm, not per market");
     }
 
+    /// The smart destination serves the top of a book for a share and never a
+    /// deep one, in any region. A named exchange serves both.
+    ///
+    /// This is what makes a book asked for on no particular venue answerable
+    /// before it is sent: the venue has no such book, so the request reaches
+    /// nothing and nothing comes back — no refusal, no book, no way to tell
+    /// which. The rows below are the shape the venue sends, several regional
+    /// books on the smart destination and none of them deep.
+    #[test]
+    fn the_smart_destination_has_no_book_for_a_share() {
+        let table = RoutingTable::parse(
+            "BEST,STK,Top,1,*,ndc1.example,4000,usfarm;             BEST,STK,Top,16,*,hdc1.example,4000,jfarm;             BEST,STK,AggDeep,1,PINK,ndc1.example,4000,usfarm;             IEX,STK,Top|Deep,-1,*,ndc1.example,4000,usfarm;             ISLAND,STK,Top|Deep2|Deep,-1,*,ndc1.example,4000,usfarm"
+        );
+
+        // Named at all, so the venue does serve this market — just not a book.
+        assert!(table.find("BEST", "STK", "Top").is_some());
+        assert!(table.find("BEST", "STK", "Deep").is_none(), "no book on the smart route");
+
+        // On the exchange the contract trades on, there is one.
+        assert!(table.find("IEX", "STK", "Deep").is_some());
+        assert!(table.find("ISLAND", "STK", "Deep2").is_some());
+
+        // The aggregated book exists, and only for the sub-market it names.
+        let agg = table.find("BEST", "STK", "AggDeep").expect("served for one market");
+        assert_eq!(agg.qualifier, "PINK", "not for every share on the destination");
+
+        // A market the table does not name at all is not evidence of anything,
+        // and must not be read as a refusal.
+        assert!(table.find("NOSUCH", "STK", "Top").is_none());
+    }
+
     /// The frame's own trailer rides on the last row, and a row that cannot be
     /// read is one row rather than a reason to lose the table.
     #[test]
