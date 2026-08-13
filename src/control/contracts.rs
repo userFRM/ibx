@@ -391,7 +391,8 @@ pub struct ContractDefinition {
     pub puttable: bool,
     /// Whether it converts to equity.
     pub convertible: bool,
-    /// Whether it may be exercised in part.
+    /// Whether that call or put redeems part of the principal rather than
+    /// all of it.
     pub next_option_partial: bool,
     /// Whether it is closed.
     pub fund_closed: bool,
