@@ -88,6 +88,12 @@ pub(super) fn phase_farm_heartbeat_keepalive(conns: Conns) -> Conns {
 pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
     println!("--- Phase 56: Heartbeat Timeout Detection (simulated stale CCP) ---");
 
+    // This phase takes the session away itself: it parks the real connection
+    // behind a dead socket to measure how long the engine takes to notice. A
+    // loss while this is held is the phase's own doing, so it is not counted
+    // against the run the way an unasked-for one is.
+    let _taking_it_away = super::common::TakingTheSessionAway::begin();
+
     // Read the deadline off the engine rather than restating it. A version of
     // this phase spelled out the thresholds it was written against and then
     // failed for a year's worth of runs after they were widened to match the

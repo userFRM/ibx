@@ -1,6 +1,8 @@
 //! Shared types and helpers for compatibility tests.
 
 use std::env;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// An account number, as it may be written down.
 ///
@@ -544,6 +546,66 @@ pub(super) fn historical_silence(shared: &SharedState, what: &str) {
     );
 }
 
+/// Every phase that could not run because the session went away, and no phase
+/// had asked it to.
+///
+/// A phase that skips on a lost connection is telling the truth about itself
+/// and a lie about the run: it reports the same SKIP whether the session was
+/// up and the market quiet, or the session was gone and nothing could have
+/// arrived. Per phase that is the honest reading. Per run it means the suite
+/// finishes green having verified none of them.
+static LOST_THE_SESSION: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// How many phases are currently taking the session away on purpose.
+static ON_PURPOSE: AtomicUsize = AtomicUsize::new(0);
+
+/// A phase is about to take the session away, and losses until the guard drops
+/// are that phase's doing rather than the venue's.
+///
+/// One phase does this deliberately: it parks the trading connection behind a
+/// dead socket to measure how long detection takes. Scoped rather than set for
+/// the rest of the run, so a genuine loss after it is still recorded.
+#[must_use = "the session is only expected to go away while the guard is held"]
+pub(super) struct TakingTheSessionAway;
+
+impl TakingTheSessionAway {
+    pub(super) fn begin() -> Self {
+        ON_PURPOSE.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for TakingTheSessionAway {
+    fn drop(&mut self) {
+        ON_PURPOSE.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Record that a phase skipped because the session was gone.
+pub(super) fn note_lost_session(what: &str) {
+    if ON_PURPOSE.load(Ordering::Acquire) == 0 {
+        LOST_THE_SESSION.lock().unwrap().push(what.to_string());
+    }
+}
+
+/// Fail the run if the session went away and no phase had asked it to.
+///
+/// Called once, at the end. Every phase named here reported SKIP and verified
+/// nothing, so a run reaching this point with a non-empty list has not tested
+/// what its phase count says it tested.
+pub(super) fn no_phase_lost_the_session_unasked() {
+    let lost = LOST_THE_SESSION.lock().unwrap();
+    assert!(
+        lost.is_empty(),
+        "the session went away during the run and no phase asked it to, so \
+         {} phase(s) reported SKIP having verified nothing: {}. The phase \
+         count above counts them as run. Diagnose the disconnect rather than \
+         reading this suite as green.",
+        lost.len(),
+        lost.join("; "),
+    );
+}
+
 /// Something the session had to deliver and did not, on a path the market does
 /// not gate: account values, a position after a fill, the notification that the
 /// connection went away. A session that is logged in delivers these at any hour,
@@ -553,6 +615,7 @@ pub(super) fn session_owed(shared: &SharedState, what: &str) {
     // The session owes this only while it has one. A connection that went away
     // explains the absence, and explains it better than the rule does.
     if shared.take_connection_lost() {
+        note_lost_session(what);
         println!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
         return;
     }
@@ -589,6 +652,7 @@ pub(super) fn no_market(shared: &SharedState, what: &str) {
     // wrong with the client — but "the market is quiet" is the one reading that
     // is certainly false.
     if shared.take_connection_lost() {
+        note_lost_session(what);
         println!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
         return;
     }

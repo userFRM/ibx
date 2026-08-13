@@ -81,6 +81,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
         return conns;
     }
     if uncertain {
+        super::common::note_lost_session("an order's state after the session went away");
         println!("  SKIP: the connection went away with the order on it, so its state is not known\n");
         return conns;
     }
@@ -341,6 +342,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
         return conns;
     }
     if uncertain {
+        super::common::note_lost_session("an order's state after the session went away");
         println!("  SKIP: the connection went away with the order on it, so its state is not known\n");
         return conns;
     }
@@ -350,6 +352,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     // order is still waiting, correctly, and no fill can arrive. That is the
     // connection, not the market.
     if shared.take_connection_lost() {
+        super::common::note_lost_session("an order left waiting when the session went away");
         println!("  SKIP: the trading connection was lost, so the order is still waiting to be sent\n");
         return conns;
     }
