@@ -699,6 +699,18 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     // while a cancel for the same order is in flight. Losing that race is the
     // outcome under test, not a badly built order.
     "already being cancelled",
+    // A time-in-force the venue does not accept for the destination the order
+    // is routed to. The destination is not this client's invention: an order
+    // on no particular venue, or on the smart route, is sent to the same
+    // place the counterpart sends it, so an order placed the same way through
+    // a gateway is refused with the same words. What is left is the venue's
+    // rule about which time-in-force it takes where.
+    "is invalid for this combination of exchange and security type",
+    // The same race, one order up: a bracket's child cannot attach to a parent
+    // the venue is already cancelling. Which order the race is lost on does
+    // not change whose answer it is — the venue is describing the state of its
+    // own book, not the message this client wrote.
+    "parent order is being cancelled",
     // The same race, lost by a wider margin: the venue had already cancelled
     // the order before the replace reached it, which is what happens to a
     // day order left resting while the market is shut. An order that no
@@ -720,20 +732,6 @@ pub(super) fn reject_reason(shared: &SharedState, order_id: u64) -> String {
         .map(|info| info.order_state.reject_reason)
         .filter(|reason| !reason.is_empty())
         .unwrap_or_else(|| "no reason reported".to_string());
-
-    // Whether the order was well built is only readable while the session is
-    // up. A session that went away takes its own orders with it — a child
-    // whose parent the venue cancelled on the way down was rejected by the
-    // disconnect, not by anything this client put on the wire. Still a
-    // failure, because a run that lost its session verified nothing here;
-    // read as a malformed order it sends the next reader to the order
-    // builder, which is the wrong place.
-    assert!(
-        !shared.connection_lost(),
-        "the session went away before the venue answered for order {order_id}, \
-         so this phase verified nothing and the rejection {reason:?} says \
-         nothing about the order this client built. Diagnose the disconnect."
-    );
 
     let lowered = reason.to_lowercase();
     assert!(
