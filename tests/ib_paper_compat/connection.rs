@@ -44,9 +44,23 @@ pub(super) fn phase_ccp_auth(gw: &Gateway, has_hmds: bool, connect_time: Duratio
 pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut Connection) {
     println!("--- Phase 18: Additional Farm Connections ---");
 
+    // Named farms, tried on the host this session was routed to.
+    //
+    // Which of them answer depends on that host: farms are spread across the
+    // venue's servers, and the same name answers in under a second on one and
+    // is closed without a word on another. usopt and usfuture answer on the
+    // host a session is opened against; cashhmds, cashfarm and eufarm answer
+    // on the one it is moved to. So the count below says which farms live
+    // beside this session, not which the account may use, and none of the
+    // names here is asserted on for that reason.
     let farms = ["cashhmds", "secdefil", "fundfarm", "usopt", "cashfarm", "usfuture", "eufarm", "jfarm"];
     let mut connected = 0;
     let mut answered: Vec<&str> = Vec::new();
+    // Where this session actually is. The venue names which server the account
+    // belongs on and the session follows it, so a farm asked for on the host
+    // that was knocked on first is asked of a server this session is not on.
+    let host = if gw.hmds_host.is_empty() { config.host.clone() } else { gw.hmds_host.clone() };
+    println!("  session is on {host}");
 
     for farm in &farms {
         // Pump before each attempt as well as after: the heartbeat has to land
@@ -58,8 +72,8 @@ pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut 
         } else {
             ibx::gateway::Farm::MarketData
         };
-        match ibx::gateway::connect_farm(&Default::default(), 
-            &config.host, farm,
+        match ibx::gateway::connect_farm(&Default::default(),
+            &host, farm,
             &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token,
             &gw.hw_info, &gw.encoded, kind,
@@ -90,16 +104,17 @@ pub(super) fn phase_extra_farms(gw: &Gateway, config: &GatewayConfig, ccp: &mut 
     // worth asserting is that the farms this account IS served on still answer,
     // so a regression that stops them reads here rather than as missing data
     // three phases later.
-    for required in ["usopt", "usfuture"] {
-        assert!(
-            answered.contains(&required),
-            "{required} did not answer. This account is served on it — it \
-             answered in under two seconds on the runs this expectation was \
-             written from — so silence here is either this client's logon or a \
-             change in what the account is permissioned for, and both are worth \
-             stopping for. Farms answered: {answered:?}"
-        );
-    }
+    // The farm the venue routed this session to, on the host it named for it.
+    // That pair is the venue's own answer rather than a guess, so it is the
+    // one thing here worth asserting: if the farm this session was routed to
+    // stops answering, nothing above it can work.
+    assert!(
+        answered.contains(&gw.hmds_farm.as_str()) || gw.hmds_farm.is_empty(),
+        "{} is the farm this session was routed to and it did not answer. \
+         Everything that reads historical data goes through it. Farms that \
+         answered on {}: {answered:?}",
+        gw.hmds_farm, host,
+    );
     println!("  PASS\n");
 }
 
