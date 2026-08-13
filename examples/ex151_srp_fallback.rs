@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut auth = ReconnectAuth {
+        alternate_hosts: Vec::new(),
         settings: Default::default(),
         host: host.clone(),
         username: username.clone(),
