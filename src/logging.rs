@@ -1,3 +1,10 @@
+//! Where this client writes what it did.
+//!
+//! Not the caller-facing surface. What a program written against this client
+//! touches is [`crate::api`], which is documented in full and gated on staying
+//! that way. This module is the engine underneath it, exported because the
+//! binaries, benchmarks and integration tests in this repository reach it.
+
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
