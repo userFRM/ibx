@@ -2342,11 +2342,27 @@ impl Gateway {
         // from "the route happens to match the connect host", and the reconnect
         // would then prefer a stale host over one the caller has since updated
         // through a redirect.
+        //
+        // Where the venue names none, a name is invented — and an invented one
+        // is a US farm on whichever host this session happened to knock at.
+        // That is a guess in both halves, and a farm asked for on a host it is
+        // not on answers with ten seconds of silence and a close, so it fails
+        // as missing data rather than as a wrong name. Said out loud for that
+        // reason: every session in this codebase's logs is named both, so if
+        // this is ever read in one, it is the interesting part of it.
         let parsed_trading = parse_farm_route(&trading_route);
+        let invented = |what: &str, farm: &str| {
+            log::warn!(
+                "the venue named no {what} route, so this session will try {farm} \
+                 on {host} — a guess at both, and wrong for any account this \
+                 venue does not serve from there",
+            );
+            (host.to_string(), farm.to_string())
+        };
         let (trading_host, trading_farm) = parsed_trading.clone()
-            .unwrap_or_else(|| (host.to_string(), DEFAULT_TRADING_FARM.to_string()));
+            .unwrap_or_else(|| invented("trading", DEFAULT_TRADING_FARM));
         let (mktdata_host, mktdata_farm) = parse_farm_route(&mktdata_route)
-            .unwrap_or_else(|| (host.to_string(), "ushmds".to_string()));
+            .unwrap_or_else(|| invented("market data", "ushmds"));
         // Contract definitions and the calendar that rides with them. Stated
         // by the venue at logon like the other two; where it states none, this
         // client simply has no such connection rather than guessing a name.
