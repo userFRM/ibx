@@ -81,11 +81,18 @@ impl DisconnectReason {
     pub fn recovery(self) -> Recovery {
         match self {
             Self::Transport | Self::NoResponse => Recovery::Retry,
-            // Slowly, not never: a session is taken by whoever connected last,
-            // and reconnecting straight into it takes it back off them. Two
-            // clients doing that to each other never stop. Waiting long enough
-            // that a person notices is the useful behaviour.
-            Self::TakenOver => Recovery::RetrySlowly,
+            // Never, not slowly. A session belongs to whoever connected last,
+            // and taking it back is a decision only the person running both
+            // ends can make: reconnecting into it takes it off them, and two
+            // clients doing that to each other never stop. The counterpart
+            // treats this as one of the reasons it does not come back from,
+            // and a program written against it is already built to be told the
+            // session ended rather than to watch it flap.
+            //
+            // Retrying slowly was better than retrying at once and still
+            // wrong: with no attempt limit set, slowly is only a longer way of
+            // fighting over it forever.
+            Self::TakenOver => Recovery::Stop,
             Self::NotReady => Recovery::RetrySlowly,
             Self::AuthorizationFailed | Self::ByDesign => Recovery::Stop,
         }
@@ -136,17 +143,20 @@ mod tests {
         assert!(reason.is_terminal(), "the same credentials fail the same way next time");
     }
 
-    /// Two clients on one session, each reconnecting the instant it is dropped,
-    /// take it off each other forever. Neither ever keeps it.
+    /// Two clients on one session, each reconnecting when it is dropped, take
+    /// it off each other forever. Neither ever keeps it, and slowing the
+    /// reconnect down only lengthens the cycle: with no attempt limit set, a
+    /// slow retry is still a retry every time.
     #[test]
-    fn a_session_taken_by_another_login_is_not_snatched_back() {
+    fn a_session_taken_by_another_login_is_not_taken_back() {
         let e = io::Error::other("competing live session detected");
         let reason = DisconnectReason::from_error(&e);
         assert_eq!(reason, DisconnectReason::TakenOver);
-        assert!(!reason.is_terminal(), "it may come back, so keep trying");
-        assert!(
-            delay_for(reason, Duration::from_secs(2)) >= Duration::from_secs(30),
-            "but not immediately, or the two clients fight over it",
+        assert!(reason.is_terminal(), "whoever connected last has it");
+        assert_eq!(
+            delay_for(reason, Duration::from_secs(2)),
+            Duration::ZERO,
+            "there is no next attempt to wait for",
         );
     }
 
