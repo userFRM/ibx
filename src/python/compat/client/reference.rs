@@ -31,12 +31,12 @@ impl EClient {
         if let Ok(wire) = wire_req_id(req_id) {
             self.core.historical_request_is_new(wire);
         }
-        if !what_to_show.eq_ignore_ascii_case("SCHEDULE") {
-            if let Err(why) = ClientCore::validate_historical_args(
+        if !what_to_show.eq_ignore_ascii_case("SCHEDULE")
+            && let Err(why) = ClientCore::validate_historical_args(
                 bar_size_setting, what_to_show, keep_up_to_date,
-            ) {
-                return self.report_refusal(py, req_id, why.into());
-            }
+            )
+        {
+            return self.report_refusal(py, req_id, why.into());
         }
         if what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {

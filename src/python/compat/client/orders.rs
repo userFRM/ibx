@@ -79,12 +79,12 @@ impl EClient {
         // The same guard the Rust surface applies. Without it here, whether a
         // caller is protected from an order the venue will refuse in silence
         // depends on which language they wrote in.
-        if let Ok(shared) = self.shared_state() {
-            if let Err(why) = ClientCore::refuse_unpermitted_sec_type(
+        if let Ok(shared) = self.shared_state()
+            && let Err(why) = ClientCore::refuse_unpermitted_sec_type(
                 &shared.reference.order_permissions(), &contract.sec_type,
-            ) {
-                return self.report_refusal(py, order_id, why.into());
-            }
+            )
+        {
+            return self.report_refusal(py, order_id, why.into());
         }
 
         // An order names its contract by the venue's own id. A caller who
