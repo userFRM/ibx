@@ -401,7 +401,22 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             start_time: get_str("startTime"),
             end_time: get_str("endTime"),
         }),
-        _ => Err(format!("Unsupported algo strategy: '{strategy}'")),
+        // Anything else goes as the caller wrote it.
+        //
+        // Refused here instead, a caller could use only the algorithms this
+        // match happens to name — five of the thirteen an ordinary session is
+        // offered. Which ones an account may use is the venue's answer, stated
+        // at logon and enforced by it, and the reference client does not
+        // interpret these either.
+        // The caller's own spelling, not the one folded for matching: the
+        // venue is handed this name and does not know a lower-cased one.
+        _ => Ok(AlgoParams::Named {
+            strategy: strategy.to_string(),
+            params: params
+                .iter()
+                .flat_map(|tv| [tv.tag.clone(), tv.value.clone()])
+                .collect(),
+        }),
     }
 }
 

@@ -1738,8 +1738,11 @@ fn push_order_attrs(
     }
 }
 
-fn build_algo_tags(algo: &AlgoParams) -> (&'static str, Vec<String>) {
+fn build_algo_tags(algo: &AlgoParams) -> (&str, Vec<String>) {
     match algo {
+        // Carried through untouched: the venue decides which algorithms this
+        // account may use, and it says so at logon.
+        AlgoParams::Named { strategy, params } => (strategy.as_str(), params.clone()),
         AlgoParams::Vwap { no_take_liq, allow_past_end_time, start_time, end_time, .. } => (
             "Vwap",
             vec![

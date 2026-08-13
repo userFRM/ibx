@@ -477,6 +477,32 @@ fn a_limit_order_still_modifies() {
     }
 }
 
+/// An algorithm this client does not model is carried, not refused.
+///
+/// Which algorithms an account may use is stated at logon — thirteen keys on an
+/// ordinary session — and enforced by the venue. Refusing on the five this
+/// client happens to name is a narrower answer than the venue's, and it stops a
+/// caller using one the venue would have taken. The reference client does not
+/// interpret these either.
+#[test]
+fn an_algorithm_this_client_does_not_model_is_carried_through() {
+    let params = vec![
+        TagValue { tag: "componentSize".into(), value: "100".into() },
+        TagValue { tag: "timeBetweenOrders".into(), value: "60".into() },
+    ];
+    match parse_algo_params("Accumulate/Distribute", &params).expect("named, not refused") {
+        AlgoParams::Named { strategy, params } => {
+            assert_eq!(strategy, "Accumulate/Distribute", "as the caller wrote it");
+            assert_eq!(
+                params,
+                vec!["componentSize", "100", "timeBetweenOrders", "60"],
+                "name then value, in the order given",
+            );
+        }
+        other => panic!("carried through as {other:?}"),
+    }
+}
+
 #[test]
 fn parse_algo_vwap() {
     let params = vec![
@@ -547,9 +573,24 @@ fn parse_algo_pct_vol() {
     }
 }
 
+/// An algorithm this client does not model is not an algorithm the venue does
+/// not offer, and it used to be refused as though it were.
+///
+/// This pinned the older behaviour, where a caller could use only the five
+/// strategies this file names. Which ones an account may use is stated at
+/// logon and enforced by the venue, so the refusal was a narrower answer than
+/// the venue's own — and the reference client forwards these without reading
+/// them.
 #[test]
 fn parse_algo_unsupported() {
-    assert!(parse_algo_params("unknown", &[]).is_err());
+    let carried = parse_algo_params("unknown", &[]).expect("carried, not refused");
+    assert!(matches!(carried, AlgoParams::Named { .. }));
+
+    // A malformed parameter on a strategy this client does model is still
+    // refused: that is this client reading something it understands and
+    // finding it wrong, which is a different thing.
+    let bad = vec![TagValue { tag: "maxPctVol".into(), value: "not a number".into() }];
+    assert!(parse_algo_params("vwap", &bad).is_err());
 }
 
 // ── ibx#263: malformed / non-finite algo params must be rejected, not
