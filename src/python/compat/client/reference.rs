@@ -324,11 +324,16 @@ impl EClient {
         let shared = self.shared.lock().unwrap().clone();
         if let Some(shared) = shared
             && let Some(rule) = shared.reference.market_rule(market_rule_id) {
-                let increments: Vec<(f64, f64)> = rule.price_increments.iter()
-                    .map(|pi| (pi.low_edge, pi.increment)).collect();
-                let list = pyo3::types::PyList::new(py, increments.iter().map(|(low, inc)| {
-                    pyo3::types::PyTuple::new(py, [*low, *inc]).unwrap()
-                }))?;
+                // Objects with names on them, as the reference client hands
+                // them over and as the Rust surface here already did. A pair of
+                // numbers left a program reading `lowEdge` holding a tuple.
+                let steps: Vec<Py<pyo3::PyAny>> = rule.price_increments.iter()
+                    .map(|pi| Py::new(py, super::super::contract::PriceIncrementPy {
+                        low_edge: pi.low_edge,
+                        increment: pi.increment,
+                    }).map(|o| o.into_any()))
+                    .collect::<PyResult<_>>()?;
+                let list = pyo3::types::PyList::new(py, steps)?;
                 self.callback(py, "market_rule", (market_rule_id as i64, list.as_any()))?;
                 return Ok(());
             }
