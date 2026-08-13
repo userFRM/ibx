@@ -87,6 +87,13 @@ pub(crate) struct FarmState {
     pub(crate) instrument_md_reqs: Vec<(InstrumentId, Vec<u32>)>,
     /// Active depth subscriptions: (req_id, is_smart_depth).
     pub(crate) depth_subs: Vec<(u32, bool)>,
+    /// How deep each caller asked its book to be, by the caller's own id.
+    ///
+    /// The venue sends the levels it has and this number is not on the wire —
+    /// the reference client asks for a depth and then shows that many, so a
+    /// caller that asked for five and was handed ten was handed a book it did
+    /// not ask for.
+    depth_rows: Vec<(u32, i32)>,
     /// Which exchange each fanned-out depth subscription is for, so a level
     /// says where it stands. Without it every level of a smart book arrived
     /// unattributed, and a caller was handed one book with no way to tell
@@ -458,6 +465,7 @@ impl FarmState {
             md_req_to_instrument: Vec::new(),
             instrument_md_reqs: Vec::new(),
             depth_subs: Vec::new(),
+            depth_rows: Vec::new(),
             depth_tag_to_req: Vec::new(),
             depth_fanout_map: Vec::new(),
             depth_fanout_exchange: Vec::new(),
@@ -1250,7 +1258,7 @@ impl FarmState {
         exchange: &str,
         primary_exchange: &str,
         sec_type: &str,
-        _num_rows: i32,
+        num_rows: i32,
         is_smart_depth: bool,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
@@ -1310,7 +1318,7 @@ impl FarmState {
         // one per venue, below.
         self.depth_resub_info.push((
             req_id, con_id, exchange.to_string(), primary_exchange.to_string(),
-            sec_type.to_string(), _num_rows, is_smart_depth,
+            sec_type.to_string(), num_rows, is_smart_depth,
         ));
 
         // A book on no particular venue is asked for once, on no particular
@@ -1334,6 +1342,11 @@ impl FarmState {
         // What the caller asked for is recorded whether or not the socket is
         // up. Recorded only when it was, a book asked for while the farm was
         // down could not be withdrawn, and the reconnect asked for it again.
+        self.depth_rows.retain(|(id, _)| *id != req_id);
+        if num_rows > 0 {
+            self.depth_rows.push((req_id, num_rows));
+        }
+
         let mut asked_under = Vec::with_capacity(venues.len());
         for venue in &venues {
             let under = self.next_md_req_id;
@@ -1383,6 +1396,7 @@ impl FarmState {
         self.depth_fanout_map.retain(|(_, user)| *user != req_id);
         self.depth_fanout_exchange.retain(|(sub, _)| !asked_under.contains(sub));
         self.depth_tag_to_req.retain(|(_, rid, ..)| *rid != req_id);
+        self.depth_rows.retain(|(id, _)| *id != req_id);
 
         if let Some(conn) = farm_conn.as_mut() {
             for sub_req in &asked_under {
@@ -1492,6 +1506,7 @@ impl FarmState {
                                   else { let p = bid_position; bid_position += 1; p };
                     let operation = if is_snapshot { 0 } else { 1 };
                     for (req_id, is_smart, venue) in &subscribers {
+                        if !self.within_asked_depth(*req_id, position) { continue; }
                         shared.market.push_depth_update(DepthUpdate {
                             req_id: *req_id, position, market_maker: venue.clone(),
                             operation, side, price, size, is_smart_depth: *is_smart,
@@ -1522,6 +1537,7 @@ impl FarmState {
                                   else { let p = bid_position; bid_position += 1; p };
                     let operation = if is_snapshot { 0 } else { 1 };
                     for (req_id, is_smart, venue) in &subscribers {
+                        if !self.within_asked_depth(*req_id, position) { continue; }
                         shared.market.push_depth_update(DepthUpdate {
                             req_id: *req_id, position, market_maker: venue.clone(),
                             operation, side, price, size, is_smart_depth: *is_smart,
@@ -1533,6 +1549,20 @@ impl FarmState {
             }
 
             if pos < body.len() && body[pos] == 0x58 { pos += 1; }
+        }
+    }
+
+    /// Whether a level is inside the depth its caller asked for.
+    ///
+    /// The venue sends what it has. A caller that asked for five levels and is
+    /// handed every one the venue sends was handed a different book from the
+    /// one it asked for, and the reference client it was written against would
+    /// have shown five.
+    fn within_asked_depth(&self, req_id: u32, position: i32) -> bool {
+        match self.depth_rows.iter().find(|(id, _)| *id == req_id) {
+            Some((_, rows)) => position < *rows,
+            // Nothing asked for in particular, so nothing is too deep.
+            None => true,
         }
     }
 
@@ -1630,6 +1660,7 @@ impl FarmState {
                     self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
                 {
                     for (req_id, is_smart, venue) in &subscribers {
+                        if !self.within_asked_depth(*req_id, book_position) { continue; }
                         // The venue's own name for the maker where it states
                         // one, and otherwise the exchange this section of the
                         // book is from: a level with neither is a level a
@@ -1662,6 +1693,8 @@ impl FarmState {
                         self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
                     {
                         for (req_id, is_smart, venue) in &subscribers {
+                            if !self.within_asked_depth(*req_id, book_position) { continue; }
+                        if !self.within_asked_depth(*req_id, book_position) { continue; }
                             shared.market.push_depth_update(DepthUpdate {
                                 req_id: *req_id, position: book_position,
                                 market_maker: venue.clone(),
@@ -2894,6 +2927,34 @@ mod depth_identity_tests {
         let one = farm.depth_subscribers_of(990000);
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].0, 3);
+    }
+
+    /// A caller that asked for a shallow book is not handed a deep one.
+    ///
+    /// The depth is not on the wire. The venue sends the levels it has, and the
+    /// reference client shows the number the caller asked for — so a caller
+    /// that asked for five and was handed every level got a different book from
+    /// the one it asked for.
+    #[test]
+    fn a_book_is_as_deep_as_the_caller_asked() {
+        let mut farm = FarmState::new();
+        let mut conn = None;
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+
+        farm.send_depth_subscribe(1, 756733, "IEX", "", "STK", 5, false, &mut conn, &mut hb, &shared);
+        assert!(farm.within_asked_depth(1, 0), "the top of the book");
+        assert!(farm.within_asked_depth(1, 4), "the fifth level");
+        assert!(!farm.within_asked_depth(1, 5), "and no deeper");
+
+        // A caller that named no depth is not held to one.
+        farm.send_depth_subscribe(2, 756733, "IEX", "", "STK", 0, false, &mut conn, &mut hb, &shared);
+        assert!(farm.within_asked_depth(2, 99));
+
+        // Withdrawn, and the depth goes with it rather than outliving the
+        // request and applying to whatever reuses the number.
+        farm.send_depth_unsubscribe(1, &mut conn, &mut hb);
+        assert!(farm.within_asked_depth(1, 99));
     }
 
     /// A book is asked for once and withdrawn once, and what is withdrawn is
