@@ -324,6 +324,25 @@ impl EClient {
         Ok(())
     }
 
+    /// Push a level of a book into SharedState.
+    ///
+    /// A book is the one stream whose delivery to a caller was never checked
+    /// without a session, and that is exactly where it was found not to arrive.
+    #[doc(hidden)]
+    #[pyo3(signature = (req_id, position, market_maker, operation, side, price, size, is_smart_depth=false))]
+    #[allow(clippy::too_many_arguments)]
+    fn _test_push_depth(
+        &self, req_id: u32, position: i32, market_maker: &str, operation: i32,
+        side: i32, price: f64, size: f64, is_smart_depth: bool,
+    ) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.market.push_depth_update(crate::types::DepthUpdate {
+            req_id, position, market_maker: market_maker.to_string(),
+            operation, side, price, size, is_smart_depth,
+        });
+        Ok(())
+    }
+
     /// Push historical data into SharedState.
     #[doc(hidden)]
     fn _test_push_historical_data(
