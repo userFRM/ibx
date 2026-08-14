@@ -2458,6 +2458,25 @@ fn req_historical_data_accepts_streamable_keep_up_to_date_size() {
     assert!(matches!(rx.try_recv().unwrap(), ControlCommand::FetchHistorical { keep_up_to_date: true, .. }));
 }
 
+/// An engine that has gone is not a request that was malformed. A caller that
+/// branches on the code has to be able to tell a session it can reopen from a
+/// request it has to fix.
+#[test]
+fn a_request_with_no_engine_behind_it_says_so_under_its_own_code() {
+    // The engine's end of the channel goes with the receiver.
+    let (client, rx, _shared) = test_client();
+    drop(rx);
+
+    let refused = client
+        .req_contract_details(1, &spy())
+        .expect_err("nothing can be sent with no engine to send it");
+    assert_eq!(
+        refused.code,
+        crate::api::error_codes::Refusal::NOT_CONNECTED,
+        "not connected, rather than a request that failed validation: {refused}",
+    );
+}
+
 /// A req_id reaches these requests' wire form as u32. `next_order_id()` hands
 /// out ids near 1.7e12, so a caller running one counter for orders and
 /// requests — the ibapi idiom — had every one of these wrap: the gateway saw

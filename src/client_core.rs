@@ -6,6 +6,7 @@
 //! respective callback formats (Rust `Wrapper` trait calls or PyO3 `call_method`).
 
 use std::collections::{HashMap, HashSet};
+use crate::api::error_codes::Refusal;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
 
@@ -759,9 +760,14 @@ impl ClientCore {
     /// Wait for the hot loop to process a registration command and return the
     /// assigned ID. The engine replies Err when the instrument table is full
     /// (ibx#233) — previously that condition killed the hot loop.
-    fn recv_registration(&self, reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>) -> Result<InstrumentId, String> {
+    fn recv_registration(
+        &self, reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>,
+    ) -> Result<InstrumentId, Refusal> {
         reply_rx.recv_timeout(self.registration_timeout())
-            .map_err(|_| "Registration timed out".to_string())?
+            .map_err(|_| Refusal::no_answer("Registration timed out"))?
+            // A full instrument table is the caller asking for more than this
+            // session can hold, which is theirs to fix.
+            .map_err(Refusal::validation)
     }
 
     /// The instrument this conId is already known to hold. `0` means the
@@ -841,7 +847,7 @@ impl ClientCore {
         exchange: &str,
         sec_type: &str,
         identity: &str,
-    ) -> Result<InstrumentId, String> {
+    ) -> Result<InstrumentId, Refusal> {
         // The cache is skipped when the caller states an identity, because the
         // slot may have been allocated by a market-data subscription that had
         // none — and the engine is where the identity is stored. Short-circuiting
@@ -860,7 +866,7 @@ impl ClientCore {
             sec_type: sec_type.to_string(), exchange: exchange.to_string(),
             identity: identity.to_string(),
             reply_tx: Some(reply_tx),
-        }).map_err(|e| format!("Engine stopped: {e}"))?;
+        }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
 
         let id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, id);
@@ -899,7 +905,7 @@ impl ClientCore {
         snapshot: bool,
         generic_tick_list: &str,
         mode_9887: i32,
-    ) -> Result<InstrumentId, String> {
+    ) -> Result<InstrumentId, Refusal> {
         // News subscription if generic_tick_list contains 292
         let wants_news = generic_tick_list.split(',')
             .any(|t| t.trim() == "292" || t.trim() == "mdoff,292" || t.trim().ends_with("292"));
@@ -940,7 +946,7 @@ impl ClientCore {
             sec_type: sec_type.to_string(), exchange: exchange.to_string(),
             identity: String::new(),
             reply_tx: None,
-        }).map_err(|e| format!("Engine stopped: {e}"))?;
+        }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
         control_tx.send(ControlCommand::Subscribe {
             con_id,
             symbol: symbol.to_string(),
@@ -953,7 +959,7 @@ impl ClientCore {
             multiplier: multiplier.to_string(),
             mode_9887,
             reply_tx: Some(reply_tx),
-        }).map_err(|e| format!("Engine stopped: {e}"))?;
+        }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
 
         // The engine answers this one. A conId-less contract has no client-side
         // identity, so a duplicate can only be settled against the slot the
@@ -1144,7 +1150,7 @@ impl ClientCore {
         sec_type: &str,
         exchange: &str,
         tbt_type: TbtType,
-    ) -> Result<InstrumentId, String> {
+    ) -> Result<InstrumentId, Refusal> {
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::SubscribeTbt {
             req_id,
@@ -1154,7 +1160,7 @@ impl ClientCore {
             exchange: exchange.to_string(),
             tbt_type,
             reply_tx: Some(reply_tx),
-        }).map_err(|e| format!("Engine stopped: {e}"))?;
+        }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
 
         let instrument_id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);

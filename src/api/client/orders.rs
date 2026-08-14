@@ -21,10 +21,12 @@ impl EClient {
     /// here is not permission: when the venue stated no permissions, there is
     /// nothing to enforce and the order goes.
     fn check_sec_type_permitted(&self, sec_type: &str) -> Result<(), Refusal> {
+        // A validator's own words, under the number a request the client will
+        // not send is reported with.
         ClientCore::refuse_unpermitted_sec_type(
             &self.shared.reference.order_permissions(), sec_type,
         )
-        .map_err(Refusal::from)
+        .map_err(Refusal::validation)
     }
 
     /// Security type → the order types the venue permits for it, as stated at
@@ -101,20 +103,12 @@ impl EClient {
             named = match self.core.named_for(&key) {
                 Some(already) => already,
                 None => {
-                    let answer = self.qualify_contract(contract).map_err(|why| {
-                        // Why the lookup failed decides the code. Called a
-                        // missing definition whatever happened, an order
-                        // refused because the session ended reads as an order
-                        // for a contract that does not exist, and a caller
-                        // that branches on the code retries the description
-                        // against a session that is gone.
-                        match self.shared.reference.session_over() {
-                            Some(over) => Refusal::not_connected(
-                                format!("the session is over: {over}"),
-                            ),
-                            None => Refusal::no_definition(why),
-                        }
-                    })?;
+                    // Under the code the lookup failed with. Rewritten to
+                    // "no security definition" whatever happened, an order
+                    // refused because the session ended reads as an order for
+                    // a contract that does not exist, and a caller that
+                    // branches on the code retries the description for ever.
+                    let answer = self.qualify_contract(contract)?;
                     self.core.remember_named(key, answer.clone());
                     answer
                 }

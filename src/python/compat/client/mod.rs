@@ -615,8 +615,10 @@ impl EClient {
             &contract.last_trade_date_or_contract_month, contract.strike,
             &contract.right, &contract.multiplier, &contract.currency,
         );
-        py.detach(|| self.core.find_or_register_instrument(&tx, con_id, &symbol, &exchange, &sec_type, &identity))
-            .map_err(PyRuntimeError::new_err)
+        py.detach(|| self.core.find_or_register_instrument(
+            &tx, con_id, &symbol, &exchange, &sec_type, &identity,
+        ))
+        .map_err(|refusal| PyRuntimeError::new_err(refusal.message))
     }
 }
 

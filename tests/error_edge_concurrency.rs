@@ -124,7 +124,10 @@ fn place_order_zero_con_id_asks_the_venue_to_name_it() {
     };
     let refused = client.place_order(1, &contract, &order)
         .expect_err("with nothing to answer it, the caller is told so");
-    assert_eq!(refused.code, ibx::api::error_codes::Refusal::NO_DEFINITION);
+    // Nothing answered, which is not the same as the venue answering that it
+    // has no definition. The refusal says so under its own number rather than
+    // borrowing one the venue never sent.
+    assert_eq!(refused.code, ibx::api::error_codes::Refusal::NO_ANSWER);
     let asked = rx.try_iter().any(|cmd| matches!(
         cmd, ControlCommand::FetchContractDetails { ref symbol, .. } if symbol == "TEST"
     ));

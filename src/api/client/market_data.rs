@@ -138,7 +138,6 @@ impl EClient {
                 kind,
             )
             .map(|_| ())
-            .map_err(Refusal::from)
     }
 
 
