@@ -850,6 +850,9 @@ pub struct ReferenceState {
     ccp_session_id: Mutex<String>,
     /// Logical-name → host URL map pushed by the gateway during logon.
     misc_urls: Mutex<HashMap<String, String>>,
+    /// Another session already on this account at connect: address, login time,
+    /// and whether this one is held to reading only.
+    competing_session: Mutex<Option<(String, String, bool)>>,
     /// Security type → the order types the venue permits for it, from logon tag 6652.
     order_permissions: Mutex<HashMap<String, Vec<String>>>,
     /// Feature tokens the venue enables for this account, from logon tag 6542
@@ -895,6 +898,7 @@ impl ReferenceState {
             white_branding_id: Mutex::new(String::new()),
             ccp_session_id: Mutex::new(String::new()),
             misc_urls: Mutex::new(HashMap::new()),
+            competing_session: Mutex::new(None),
             order_permissions: Mutex::new(HashMap::new()),
             enabled_features: Mutex::new(Vec::new()),
             island_granted: AtomicBool::new(false),
@@ -1528,6 +1532,21 @@ impl ReferenceState {
 
     #[doc(hidden)] pub fn set_ccp_session_id(&self, id: String) {
         *self.ccp_session_id.lock().unwrap() = id;
+    }
+
+    /// Another session that already held this account when this one connected,
+    /// as the venue named it: where it connected from, when it logged in, and
+    /// whether this session may look but not trade.
+    ///
+    /// `None` when this session is alone. The venue permits one logon at a time
+    /// and takes the account from the older session without saying which it
+    /// dropped, so a caller that wants to know before it starts work asks here.
+    pub fn competing_session(&self) -> Option<(String, String, bool)> {
+        self.competing_session.lock().unwrap().clone()
+    }
+
+    #[doc(hidden)] pub fn set_competing_session(&self, other: Option<(String, String, bool)>) {
+        *self.competing_session.lock().unwrap() = other;
     }
 
     #[doc(hidden)] pub fn set_misc_urls(&self, urls: HashMap<String, String>) {

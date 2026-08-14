@@ -173,6 +173,19 @@ def main():
     client = EClient(watcher)
     client.connect(username=username, password=password, host=asked.host, paper=True)
     threading.Thread(target=client.run, daemon=True).start()
+    # Nobody else on the account. The venue permits one logon at a time and
+    # takes it from the older session without saying which it dropped, so a run
+    # that starts beside another measures the contention rather than the
+    # client — every stream stops and nothing says why.
+    other = client.competing_session()
+    if other:
+        where, since, read_only = other
+        print(f"another session already holds this account, from {where} since {since}"
+              + (", and this one may not trade" if read_only else ""))
+        print("stop it and start again; this run would be racing it.")
+        client.disconnect()
+        return 2
+
     if not watcher.ready.wait(timeout=60):
         print("no session was opened within a minute")
         return 1

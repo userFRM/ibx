@@ -405,6 +405,19 @@ impl EClient {
         self.account()
     }
 
+    /// Another session that already held this account when this one connected.
+    ///
+    /// `None` when this session is alone. Otherwise where the other one
+    /// connected from, when it logged in, and whether this session is held to
+    /// reading only because the other has the account.
+    ///
+    /// Worth asking before starting work: the venue permits one logon at a time
+    /// and takes the account from the older session without saying which it
+    /// dropped, so a second client reads as data that stops arriving.
+    fn competing_session(&self) -> PyResult<Option<(String, String, bool)>> {
+        Ok(self.shared_state()?.reference.competing_session())
+    }
+
     /// Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
     fn ccp_session_id(&self) -> PyResult<String> {
         Ok(self.shared_state()?.reference.ccp_session_id())
