@@ -29,9 +29,14 @@ from ibx import Contract, EClient, EWrapper
 
 #: Liquid enough to be quoting whenever a market is open, and spread across two
 #: asset classes so one venue going quiet does not read as the client stalling.
-#: Where a book is asked for. Any exchange the contract trades on serves one;
-#: the venue's smart destination does not, for a share.
-BOOK_EXCHANGE = "ISLAND"
+#: Where a book is asked for.
+#:
+#: Serving a book and serving it to this account are different questions. The
+#: routing table answers the first; only the venue answers the second, and it
+#: answers by refusing. Asked for the same share on six exchanges, it refused
+#: five and took one — the one this account holds the depth subscription for.
+#: The smart destination has no book for a share at all.
+BOOK_EXCHANGE = "IEX"
 
 SUBJECTS = [
     ("SPY", "STK", "SMART"),
