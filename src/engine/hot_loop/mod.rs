@@ -1265,6 +1265,14 @@ impl HotLoop {
         if let Some(stated) = conn.heartbeat_secs {
             self.hb.set_ccp_interval(stated);
         }
+        // This session's logon is now the newer one. Left at the first, every
+        // later reconnect would find its own previous logon listed as a
+        // competing session and give the account up to itself.
+        if let Some(stamped) = conn.logged_in_at.clone()
+            && let Some(auth) = self.reconnect_auth.as_mut()
+        {
+            auth.logged_in_at = stamped;
+        }
         // Where this attempt landed. A reconnect can be redirected, and a
         // session that does not remember it dials the door again every time
         // and never learns the one host it knows answers for this account.
@@ -1315,6 +1323,10 @@ impl HotLoop {
             self.budget.attempts(),
         );
         self.reconnect_halted = Some(retry::DisconnectReason::ByDesign);
+        // Said once, where every request can read it: a session nothing is
+        // trying to rebuild answers nothing, and a caller that is not told
+        // waits out a timeout per call for an answer that cannot come.
+        self.shared.reference.set_session_over(retry::DisconnectReason::ByDesign.as_str());
         self.shared.set_connection_lost();
         emit(&self.event_tx, Event::Disconnected);
     }
@@ -1428,6 +1440,10 @@ impl HotLoop {
                      The connection has to be rebuilt by the caller.",
                 );
                 self.reconnect_halted = Some(retry::DisconnectReason::AuthorizationFailed);
+                // Said once, where every request can read it: a session nothing is
+                // trying to rebuild answers nothing, and a caller that is not told
+                // waits out a timeout per call for an answer that cannot come.
+                self.shared.reference.set_session_over(retry::DisconnectReason::AuthorizationFailed.as_str());
                 self.shared.set_connection_lost();
                 emit(&self.event_tx, Event::Disconnected);
                 return;
@@ -1467,6 +1483,7 @@ impl HotLoop {
                 self.reconnect_farm(conn);
                 self.farm_reconnect_attempt = 0;
                 self.reconnect_halted = None;
+                self.shared.reference.clear_session_over();
                 self.budget.record_connected(Instant::now());
                 self.announce_reconnected();
                 self.farm_next_attempt_at = None;
@@ -1486,6 +1503,7 @@ impl HotLoop {
                         reason.as_str(),
                     );
                     self.reconnect_halted = Some(reason);
+                    self.shared.reference.set_session_over(reason.as_str());
                     self.pending_farm_reconnect = None;
                     self.shared.set_connection_lost();
                     emit(&self.event_tx, Event::Disconnected);
@@ -1529,6 +1547,10 @@ impl HotLoop {
                      The connection has to be rebuilt by the caller.",
                 );
                 self.reconnect_halted = Some(retry::DisconnectReason::AuthorizationFailed);
+                // Said once, where every request can read it: a session nothing is
+                // trying to rebuild answers nothing, and a caller that is not told
+                // waits out a timeout per call for an answer that cannot come.
+                self.shared.reference.set_session_over(retry::DisconnectReason::AuthorizationFailed.as_str());
                 self.shared.set_connection_lost();
                 emit(&self.event_tx, Event::Disconnected);
                 return;
@@ -1560,6 +1582,7 @@ impl HotLoop {
                 self.reconnect_ccp(conn);
                 self.ccp_reconnect_attempt = 0;
                 self.reconnect_halted = None;
+                self.shared.reference.clear_session_over();
                 self.budget.record_connected(Instant::now());
                 // The request for these goes out on this socket even though
                 // the bars come back on the historical one, so an HMDS that
@@ -1584,6 +1607,7 @@ impl HotLoop {
                         reason.as_str(),
                     );
                     self.reconnect_halted = Some(reason);
+                    self.shared.reference.set_session_over(reason.as_str());
                     self.pending_ccp_reconnect = None;
                     self.shared.set_connection_lost();
                     emit(&self.event_tx, Event::Disconnected);
@@ -2350,6 +2374,7 @@ mod tests {
     fn an_hmds_disconnect_lets_its_reconnect_run() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: "gw.example".into(),
@@ -2495,6 +2520,12 @@ mod tests {
         );
         assert!(shared.take_connection_lost(), "and a caller without an event channel too");
         assert!(hl.reconnect_halted.is_some(), "and nothing keeps retrying what cannot work");
+        // And every request made from here on is answered at once instead of
+        // waiting out a timeout apiece for a session that has ended.
+        assert!(
+            shared.reference.session_over().is_some(),
+            "a caller that asks for data is told the session is over, not left to time out",
+        );
     }
 
     /// A login the server refused is refused the same way next time. Climbing
@@ -2550,6 +2581,7 @@ mod tests {
     fn hmds_keeps_retrying_through_an_outage_longer_than_the_ladder() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: "gw.example".into(),
@@ -3085,6 +3117,7 @@ mod calendar_farm_reconnect_tests {
     fn a_calendar_connection_that_went_is_scheduled_to_come_back() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: "gw.example".into(),
@@ -3120,6 +3153,7 @@ mod calendar_farm_reconnect_tests {
     fn a_session_without_that_farm_does_not_try() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: "gw.example".into(),

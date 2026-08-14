@@ -67,9 +67,10 @@ impl EClient {
     /// contract is one the venue has nothing to match, and answers with
     /// nothing at all.
     ///
-    /// Resolving it costs a request and an answer, so this call does not
-    /// return until the venue has named the contract — up to the answer
-    /// timeout. The reference client never waits here, because a gateway
+    /// Resolving it costs a request and an answer the first time, so this call
+    /// does not return until the venue has named the contract — up to the
+    /// answer timeout. Once per description: the answer is kept, and later
+    /// orders on the same contract are sent without asking again. The reference client never waits here, because a gateway
     /// resolved the contract before the order reached it; this client is the
     /// gateway, so the work happens somewhere, and today it happens on the
     /// caller's thread. A caller placing orders from inside a callback stalls
@@ -95,7 +96,16 @@ impl EClient {
 
         let named;
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
-            named = self.qualify_contract(contract).map_err(Refusal::no_definition)?;
+            let key = ClientCore::description_key(contract);
+            named = match self.core.named_for(&key) {
+                Some(already) => already,
+                None => {
+                    let answer = self.qualify_contract(contract)
+                        .map_err(Refusal::no_definition)?;
+                    self.core.remember_named(key, answer.clone());
+                    answer
+                }
+            };
             &named
         } else {
             contract

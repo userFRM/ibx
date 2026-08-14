@@ -528,6 +528,17 @@ pub struct ReconnectAuth {
     pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
     /// Which host to open the session against.
     pub host: String,
+    /// When the session being rebuilt first logged in, in the venue's spelling.
+    ///
+    /// A reconnect that finds somebody on the account compares the two: later
+    /// than this is another client, which took the account fairly and should
+    /// keep it. Earlier is this session's own previous logon, not yet reaped,
+    /// and taking that back is just finishing the reconnect.
+    ///
+    /// Empty means every session the venue names counts as another client,
+    /// which is the careful reading: the reconnect gives the account up rather
+    /// than taking it from somebody who may hold it fairly.
+    pub logged_in_at: String,
     /// The other auth servers this session reached the venue through.
     ///
     /// Tried in order when the first cannot be reached. Every one was named by
@@ -630,6 +641,24 @@ pub struct CompetingSession {
 /// reading only.
 const COMPETING_READ_ONLY: &str = "(RO)";
 
+/// How a reconnect says it found somebody else on the account.
+///
+/// Read back by the failover, which is why it is one spelling rather than two,
+/// and classified as a takeover by the retry ladder, which is why it says
+/// "competing".
+const TOOK_THE_ACCOUNT: &str = "competing logon:";
+
+/// Whether a session the venue names belongs to another client rather than to
+/// this one.
+///
+/// Both stamps are GMT `YYYYMMDD-HH:MM:SS`, so comparing them as text compares
+/// them as moments. Equal counts as this session's own: a reconnect that lands
+/// in the same second as the logon being reaped is the common case, and giving
+/// the account up over it would strand a caller who has no competitor at all.
+fn is_another_client(other_since: &str, our_logon: &str) -> bool {
+    other_since > our_logon
+}
+
 /// Read a competing session out of the venue's answer to the connect.
 ///
 /// The answer carries one field for this, and it is either `0` for nobody
@@ -725,6 +754,13 @@ pub struct Gateway {
     /// Another session already logged in on this account when this one
     /// connected, as the venue stated it. `None` when this session is alone.
     pub competing: Option<CompetingSession>,
+    /// When this session logged in, in the spelling the venue uses for the
+    /// same fact about somebody else.
+    ///
+    /// The two are comparable, which is what makes a takeover tellable from a
+    /// ghost: a session that logged in after this one is another client, and a
+    /// session that logged in before it is this one's own, still being reaped.
+    pub logged_in_at: String,
     /// The auth servers this session's logon ran through, in the order it
     /// reached them: the one it knocked on, then each one it was sent to.
     ///
@@ -1029,6 +1065,14 @@ pub fn reconnect_ccp(auth: &ReconnectAuth) -> io::Result<Connection> {
     // The host this session was on cannot be reached. The others it reached
     // the venue through still answer for this account — the venue named them
     // on the way in — so they are tried before the session is given up on.
+    // Unless the account is the thing that was lost. Every host answers for
+    // the same account, so walking them re-asks the same question and, if one
+    // of them answers yes, takes the account back from a client that holds it
+    // fairly — the fight this refusal exists to end.
+    if why.to_string().contains(TOOK_THE_ACCOUNT) {
+        return Err(why);
+    }
+
     let mut last = why;
     for host in &auth.alternate_hosts {
         log::warn!("{} did not answer ({last}); trying {host}", auth.host);
@@ -1056,6 +1100,9 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         return Err(io::Error::other("CCP reconnect: too many redirects"));
     }
     log::info!("CCP reconnect to {}:{} (attempt {})", host, AUTH_PORT, depth + 1);
+    // This attempt's logon, stamped before it is made so it can be compared
+    // with what the venue says about anyone else on the account.
+    let logged_in_at = chrono_free_timestamp().to_string();
 
     // TLS + DH key exchange
     let addr = format!("{host}:{AUTH_PORT}")
@@ -1230,15 +1277,28 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
 
         if msg_type == ns::NS_CONNECT_RESPONSE {
             if let Some(other) = parse_competing_session(&inner_text) {
+                // Whose session it is, decided by the one fact that separates
+                // them: when it logged in. A session older than this one's own
+                // last logon is this one's own, still being reaped by the
+                // venue, and reconnecting over it finishes the reconnect. A
+                // session younger than that logged in while this one was away —
+                // it is another client, it took the account fairly, and taking
+                // it back starts a fight that was watched happen: both sides
+                // reconnecting onto each other every twenty-odd seconds, each
+                // seeing only its own data stop.
+                if is_another_client(&other.since, &auth.logged_in_at) {
+                    return Err(io::Error::other(format!(
+                        "{TOOK_THE_ACCOUNT} another client holds this account, \
+                         from {} since {}, after this session logged in at {}",
+                        other.ip, other.since, auth.logged_in_at,
+                    )));
+                }
                 log::warn!(
-                    "reconnected onto an account another session holds, from {} at {}{}",
+                    "reconnected over this session's own earlier logon, from {} at {}{}",
                     other.ip, other.since,
                     if other.read_only { ", and this one may not trade" } else { "" },
                 );
                 // Carried out with the connection so the engine can say so.
-                // Logged only, a reconnect that took the account back from
-                // another program looked to that program like its data
-                // stopping for no reason, and to this one like nothing at all.
                 took_from = Some((other.ip.clone(), other.since.clone(), other.read_only));
             }
             let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
@@ -1315,6 +1375,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     // Where this attempt actually landed. A redirect followed here is followed
     // again on every later attempt unless the session remembers it.
     conn.connected_host = Some(host.to_string());
+    conn.logged_in_at = Some(logged_in_at);
     Ok(conn)
 }
 
@@ -2558,6 +2619,7 @@ impl Gateway {
 
         let gw = Gateway {
             competing,
+            logged_in_at: chrono_free_timestamp().to_string(),
             auth_hosts: vec![host.to_string()],
             account_id,
             accounts,
@@ -2762,6 +2824,7 @@ impl Gateway {
         // was redirected, that is every reconnect.
         let on = self.auth_hosts.first().cloned().unwrap_or_else(|| caller.host.clone());
         ReconnectAuth {
+            logged_in_at: self.logged_in_at.clone(),
             settings: caller.settings,
             alternate_hosts: alternates_to(&self.auth_hosts, &on),
             host: on,
@@ -2969,6 +3032,21 @@ mod tests {
 
         // A host that is not among them is still not retried against itself.
         assert_eq!(super::alternates_to(&one, "elsewhere.example"), ["cdc1.example"]);
+    }
+
+    /// Which session a logon the venue names belongs to, decided by when it
+    /// was made.
+    #[test]
+    fn a_session_younger_than_this_one_belongs_to_somebody_else() {
+        // What was watched happen: this session logged in, lost the account,
+        // and found a logon from a minute later sitting on it.
+        assert!(super::is_another_client("20260814-09:59:33", "20260814-09:58:33"));
+        // The same session's own logon, still listed while the venue reaps it.
+        assert!(!super::is_another_client("20260814-09:58:33", "20260814-09:58:33"));
+        assert!(!super::is_another_client("20260814-09:58:32", "20260814-09:58:33"));
+        // Across a day and a year boundary, which the text order has to hold.
+        assert!(super::is_another_client("20260815-00:00:01", "20260814-23:59:59"));
+        assert!(!super::is_another_client("20251231-23:59:59", "20260101-00:00:01"));
     }
 
     /// The venue names the session that was already logged in, and this reads
@@ -3446,6 +3524,7 @@ mod tests {
 
     fn auth_with(host: &str, trading_host: &str, trading_farm: &str) -> ReconnectAuth {
         ReconnectAuth {
+            logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
             host: host.to_string(),

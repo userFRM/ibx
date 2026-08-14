@@ -157,6 +157,7 @@ fn ccp_reconnect_with_cached_credentials() {
     let full_auth_ms = t0.elapsed().as_millis();
 
     let auth = ReconnectAuth {
+        logged_in_at: String::new(),
         alternate_hosts: Vec::new(),
         settings: Default::default(),
         host: cfg.host.clone(),

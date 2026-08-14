@@ -44,6 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut auth = ReconnectAuth {
+        // Empty: this example has no earlier logon of its own to compare a
+        // competing session against, and empty is the careful answer — every
+        // session the venue names reads as another client, and the reconnect
+        // gives the account up rather than taking it back.
+        logged_in_at: String::new(),
         alternate_hosts: Vec::new(),
         settings: Default::default(),
         host: host.clone(),

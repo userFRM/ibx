@@ -175,6 +175,35 @@ impl Contract {
             delta_neutral_contract: None,
         }
     }
+
+    /// The same contract in the shape the rest of the client uses.
+    ///
+    /// Combo legs and the delta-neutral contract are dropped, exactly as
+    /// `from_api` drops them: they need a `Python` token to read.
+    pub(crate) fn to_api(&self) -> crate::api::types::Contract {
+        crate::api::types::Contract {
+            con_id: self.con_id,
+            symbol: self.symbol.clone(),
+            sec_type: self.sec_type.clone(),
+            exchange: self.exchange.clone(),
+            currency: self.currency.clone(),
+            last_trade_date_or_contract_month: self.last_trade_date_or_contract_month.clone(),
+            last_trade_date: self.last_trade_date.clone(),
+            strike: self.strike,
+            right: self.right.clone(),
+            multiplier: self.multiplier.clone(),
+            local_symbol: self.local_symbol.clone(),
+            primary_exchange: self.primary_exchange.clone(),
+            trading_class: self.trading_class.clone(),
+            include_expired: self.include_expired,
+            sec_id_type: self.sec_id_type.clone(),
+            sec_id: self.sec_id.clone(),
+            description: self.description.clone(),
+            issuer_id: self.issuer_id.clone(),
+            combo_legs_descrip: self.combo_legs_descrip.clone(),
+            ..Default::default()
+        }
+    }
 }
 
 
