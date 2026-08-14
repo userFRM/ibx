@@ -260,6 +260,12 @@ impl Client {
             if let Some(v) = take(&self.inner.shared) {
                 return Ok(v);
             }
+            if let Some((code, message)) = self.inner.shared.reference.take_error_for(req_id as u32) {
+                // Under the number the venue gave it. Written into the text
+                // instead, a caller could only match on prose for something
+                // the reference client hands it to branch on.
+                return Err(Refusal::stated(code, message));
+            }
             // Nothing is going to answer. The reference client says so at once
             // rather than at the end of a timeout, and a program that asks in a
             // loop otherwise spends a minute per call discovering the same
@@ -268,12 +274,6 @@ impl Client {
                 return Err(Refusal::not_connected(format!(
                     "the session is over: {why}",
                 )));
-            }
-            if let Some((code, message)) = self.inner.shared.reference.take_error_for(req_id as u32) {
-                // Under the number the venue gave it. Written into the text
-                // instead, a caller could only match on prose for something
-                // the reference client hands it to branch on.
-                return Err(Refusal::stated(code, message));
             }
             if Instant::now() >= deadline {
                 return Err(Refusal::no_answer(format!(

@@ -77,6 +77,14 @@ where
             if let Some((code, msg)) = shared.reference.take_error_for(req_id as u32) {
                 return Err(format!("{msg} ({code})"));
             }
+            // Nothing is coming, so the caller hears it now rather than at the
+            // end of a wait it pays once per call.
+            if let Some(why) = shared.reference.session_over() {
+                return Err(format!(
+                    "the session is over: {why} ({})",
+                    crate::api::error_codes::Refusal::NOT_CONNECTED,
+                ));
+            }
             if Instant::now() >= deadline {
                 return Err(format!(
                     "no answer within {}s to {what}",

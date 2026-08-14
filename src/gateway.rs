@@ -641,6 +641,18 @@ pub struct CompetingSession {
 /// reading only.
 const COMPETING_READ_ONLY: &str = "(RO)";
 
+/// A host the venue named, and the port it named it on.
+///
+/// The venue states `host:port` in a redirect. Falls back to the port this
+/// session is already on when it states only a host, which is the common case
+/// and the only one this client used to handle.
+fn host_and_port(target: &str, fallback: u16) -> (&str, u16) {
+    match target.split_once(':') {
+        Some((host, port)) => (host, port.parse().unwrap_or(fallback)),
+        None => (target, fallback),
+    }
+}
+
 /// How a reconnect says it found somebody else on the account.
 ///
 /// Read back by the failover, which is why it is one spelling rather than two,
@@ -1791,7 +1803,7 @@ impl Gateway {
     /// Connect to IB: auth + logon + data farm connections.
     /// Returns Gateway + farm Connection + auth Connection + optional historical data Connection.
     pub fn connect(config: &GatewayConfig) -> io::Result<Session> {
-        let first = Self::connect_to_host(config, &config.host, 0);
+        let first = Self::connect_to_host(config, &config.host, AUTH_PORT, 0);
         let Err(why) = first else { return first };
 
         // A door that does not open is not an answer. The venue runs one per
@@ -1822,7 +1834,7 @@ impl Gateway {
             &config.host,
         ) {
             log::warn!("{} did not answer ({last}); trying {host}", config.host);
-            match Self::connect_to_host(config, &host, 0) {
+            match Self::connect_to_host(config, &host, AUTH_PORT, 0) {
                 Ok(session) => {
                     log::info!("connected through {host}");
                     return Ok(session);
@@ -1837,6 +1849,7 @@ impl Gateway {
     fn connect_to_host(
         config: &GatewayConfig,
         host: &str,
+        port: u16,
         redirect_depth: u32,
     ) -> io::Result<Session> {
         if redirect_depth > 3 {
@@ -1946,14 +1959,19 @@ impl Gateway {
             Ok(data) => data,
             Err(e) if e.to_string().starts_with("REDIRECT:") => {
                 let target = e.to_string().strip_prefix("REDIRECT:").unwrap().to_string();
-                // Extract host (strip port if present — auth always uses AUTH_PORT)
-                let redirect_host = target.split(':').next().unwrap_or(&target);
-                log::info!("Redirected to {redirect_host}, reconnecting...");
+                // Where the venue sent this session, on the port it named. The
+                // port used to be dropped for the one this client connects on
+                // by default, which is right until the day it is not, and then
+                // it is a connection to a port nothing is listening on.
+                let (redirect_host, redirect_port) = host_and_port(&target, port);
+                log::info!("Redirected to {redirect_host}:{redirect_port}, reconnecting...");
                 drop(tls);
                 // The host that sent us on still answers for this account, so
                 // it is worth trying if the one it named stops.
                 let knocked = host.to_string();
-                let mut session = Self::connect_to_host(config, redirect_host, redirect_depth + 1)?;
+                let mut session = Self::connect_to_host(
+                    config, redirect_host, redirect_port, redirect_depth + 1,
+                )?;
                 if !session.gateway.auth_hosts.contains(&knocked) {
                     session.gateway.auth_hosts.push(knocked);
                 }
@@ -2077,10 +2095,12 @@ impl Gateway {
                 ));
             } else if raw_type == ns::NS_REDIRECT {
                 let target = parts.get(2).unwrap_or(&"");
-                let redirect_host = target.split(':').next().unwrap_or(target);
-                log::info!("Post-auth redirect to {redirect_host}, reconnecting...");
+                let (redirect_host, redirect_port) = host_and_port(target, port);
+                log::info!("Post-auth redirect to {redirect_host}:{redirect_port}, reconnecting...");
                 drop(tls);
-                return Self::connect_to_host(config, redirect_host, redirect_depth + 1);
+                return Self::connect_to_host(
+                    config, redirect_host, redirect_port, redirect_depth + 1,
+                );
             } else {
                 payload
             };
@@ -3078,8 +3098,16 @@ mod tests {
         assert_eq!(super::alternates_to(&one, "elsewhere.example"), ["cdc1.example"]);
     }
 
-    /// Which session a logon the venue names belongs to, decided by when it
-    /// was made.
+    /// A redirect states where to go, and may state the port to go on.
+    #[test]
+    fn a_redirect_is_followed_to_the_port_it_names() {
+        assert_eq!(super::host_and_port("zdc1.example:4002", 4001), ("zdc1.example", 4002));
+        // The common case: only a host, so the session stays on its port.
+        assert_eq!(super::host_and_port("zdc1.example", 4001), ("zdc1.example", 4001));
+        // Nonsense where a port should be is not a reason to connect nowhere.
+        assert_eq!(super::host_and_port("zdc1.example:four", 4001), ("zdc1.example", 4001));
+    }
+
     /// The doors are tried in order, and the one that just failed is not
     /// tried again as if it were a second chance.
     #[test]
@@ -3092,6 +3120,8 @@ mod tests {
         assert_eq!(rest[0], crate::config::CCP_HOSTS[1], "and in the order they are listed");
     }
 
+    /// Which session a logon the venue names belongs to, decided by when it
+    /// was made.
     #[test]
     fn a_session_younger_than_this_one_belongs_to_somebody_else() {
         // What was watched happen: this session logged in, lost the account,
