@@ -1475,6 +1475,7 @@ impl FarmState {
     /// Field tag encoding: bit 5(0x20)=size, bit 3(0x08)=ask, bit 2(0x04)=snapshot, bit 0(0x01)=2-byte.
     fn handle_depth_35p(&self, body: &[u8], shared: &SharedState) {
         self.note_depth_wire("depth-35p", body, shared);
+        log::debug!("book frame, {} bytes", body.len());
         use crate::types::DepthUpdate;
         let mut pos = 0;
         let mut bid_position: i32 = 0;
@@ -1648,6 +1649,10 @@ impl FarmState {
             size_tick = st;
             pos = 6;
         }
+        log::debug!(
+            "book frame, other shape, tag {hdr_stag}, {} subscriber(s)",
+            subscribers.len(),
+        );
         // If the header named no subscription, scanning starts at 2 and the
         // first sentinel names the ones its levels belong to.
 
@@ -1720,7 +1725,6 @@ impl FarmState {
                     {
                         for (req_id, is_smart, venue) in &subscribers {
                             if !self.within_asked_depth(*req_id, book_position) { continue; }
-                        if !self.within_asked_depth(*req_id, book_position) { continue; }
                             shared.market.push_depth_update(DepthUpdate {
                                 req_id: *req_id, position: book_position,
                                 market_maker: venue.clone(),
