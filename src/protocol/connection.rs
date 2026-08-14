@@ -130,6 +130,13 @@ pub struct Connection {
     pub read_key: Vec<u8>,
     /// IV for verifying inbound messages (chains across messages).
     pub read_iv: Vec<u8>,
+    /// The server this connection was finally made on.
+    ///
+    /// A logon can be redirected, and the address dialled is then not the
+    /// address answering. A session that does not remember where it ended up
+    /// starts every later attempt at a door that only redirects, and never
+    /// learns the one host it is certain answers for this account.
+    pub connected_host: Option<String>,
     /// Another session that already held this account when this connection was
     /// made, as the venue named it: address, login time, and whether this
     /// session is held to reading only.
@@ -191,6 +198,7 @@ impl Connection {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            connected_host: None,
             competing: None,
             heartbeat_secs: None,
             routing: Default::default(),
@@ -428,6 +436,7 @@ impl Connection {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            connected_host: None,
             competing: None,
             heartbeat_secs: None,
             routing: Default::default(),
@@ -689,6 +698,7 @@ mod tests {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            connected_host: None,
             competing: None,
             heartbeat_secs: None,
             routing: Default::default(),
