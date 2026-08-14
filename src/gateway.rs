@@ -1911,6 +1911,17 @@ impl Gateway {
         };
 
         // --- Phase 1: TLS + auth ---
+        //
+        // On the auth port, not the port the redirect named. The venue does
+        // state one — a redirect to this host carries 4000 — and it is not
+        // where the logon is answered: connecting there is accepted at the
+        // socket and then reset, and the session only completes on 4001.
+        // Measured on a live account, both ports, every redirect in the chain.
+        // So the port travels with the redirect for the record, and the auth
+        // port is what is dialled.
+        if port != AUTH_PORT {
+            log::debug!("redirect named port {port}; auth is answered on {AUTH_PORT}");
+        }
         log::info!("Connecting to auth server {host}:{AUTH_PORT}");
         let addr = format!("{host}:{AUTH_PORT}")
             .to_socket_addrs()?
@@ -3150,9 +3161,11 @@ mod tests {
         assert_eq!(super::alternates_to(&one, "elsewhere.example"), ["cdc1.example"]);
     }
 
-    /// A redirect states where to go, and may state the port to go on.
+    /// A redirect states where to go, and states a port with it. The port is
+    /// read and carried, and it is not where the logon is answered: measured
+    /// live, a redirect to this venue names 4000 and only 4001 completes.
     #[test]
-    fn a_redirect_is_followed_to_the_port_it_names() {
+    fn a_redirect_states_a_port_alongside_its_host() {
         assert_eq!(super::host_and_port("zdc1.example:4002", 4001), ("zdc1.example", 4002));
         // The common case: only a host, so the session stays on its port.
         assert_eq!(super::host_and_port("zdc1.example", 4001), ("zdc1.example", 4001));

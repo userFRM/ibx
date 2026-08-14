@@ -2818,6 +2818,43 @@ impl CommissionAndFeesReport {
     #[new]
     #[pyo3(signature = ())]
     fn new() -> Self { Self::default() }
+
+    // Under the reference client's own names. A program reads a commission
+    // report by the names its library declares, and this one is handed
+    // straight to that library's callback: a name it does not answer to is an
+    // exception on every fill, which is every time money moves.
+    #[getter(execId)]
+    fn get_exec_id_alias(&self) -> String { self.exec_id.clone() }
+    #[setter(execId)]
+    fn set_exec_id_alias(&mut self, v: String) { self.exec_id = v; }
+
+    /// What the venue charged. The reference client calls the whole of it the
+    /// commission; this client names it for what it now includes.
+    #[getter(commission)]
+    fn get_commission_alias(&self) -> f64 { self.commission_and_fees }
+    #[setter(commission)]
+    fn set_commission_alias(&mut self, v: f64) { self.commission_and_fees = v; }
+
+    #[getter(commissionAndFees)]
+    fn get_commission_and_fees_alias(&self) -> f64 { self.commission_and_fees }
+    #[setter(commissionAndFees)]
+    fn set_commission_and_fees_alias(&mut self, v: f64) { self.commission_and_fees = v; }
+
+    #[getter(realizedPNL)]
+    fn get_realized_pnl_alias(&self) -> f64 { self.realized_pnl }
+    #[setter(realizedPNL)]
+    fn set_realized_pnl_alias(&mut self, v: f64) { self.realized_pnl = v; }
+
+    /// Their spelling keeps the underscore: `yield` is a keyword in Python.
+    #[getter(yield_)]
+    fn get_yield_alias(&self) -> f64 { self.yield_amount }
+    #[setter(yield_)]
+    fn set_yield_alias(&mut self, v: f64) { self.yield_amount = v; }
+
+    #[getter(yieldRedemptionDate)]
+    fn get_yield_redemption_date_alias(&self) -> String { self.yield_redemption_date.clone() }
+    #[setter(yieldRedemptionDate)]
+    fn set_yield_redemption_date_alias(&mut self, v: String) { self.yield_redemption_date = v; }
 }
 
 // ── ContractDescription ──

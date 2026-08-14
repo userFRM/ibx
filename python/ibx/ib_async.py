@@ -26,6 +26,7 @@ or left to `IB_USERNAME` and `IB_PASSWORD`.
 
 import asyncio
 import os
+import pathlib
 import threading
 import time
 
@@ -45,7 +46,8 @@ class IbxClient:
     MinClientVersion = 157
     MaxClientVersion = 178
 
-    def __init__(self, wrapper, username="", password="", paper=True):
+    def __init__(self, wrapper, username="", password="", paper=True,
+                 session_file=None):
         self.wrapper = wrapper
         self._username = username or os.environ.get("IB_USERNAME", "")
         self._password = password or os.environ.get("IB_PASSWORD", "")
@@ -75,6 +77,14 @@ class IbxClient:
         self._callbacks = _LoopBound(wrapper)
         self._client = _ibx.EClient(self._callbacks)
 
+        # Where this session is kept between runs. The venue answers a request
+        # that names a session it still holds with a challenge rather than a
+        # whole handshake, so a program that starts often is not a new login
+        # every time — and does not ask a person to approve each one. Owner
+        # only, sealed with the password, and refused if it names another
+        # account. Pass session_file=False to attach() to keep nothing.
+        self._session_file = session_file
+
     # ── connection ──
 
     async def connectAsync(self, host, port, clientId, timeout=2.0):
@@ -94,6 +104,7 @@ class IbxClient:
                 password=self._password,
                 paper=self._paper,
                 client_id=self.clientId,
+                session_file=self._session_file,
             ),
         )
         self.connState = IbxClient.CONNECTED
@@ -539,12 +550,25 @@ def _contract(contract):
     return made
 
 
-def attach(ib, username="", password="", paper=True):
+def attach(ib, username="", password="", paper=True, session_file=None):
     """Point an `ib_async.IB` at this engine, and hand it back.
 
     The credentials are this session's; left out, `IB_USERNAME` and
     `IB_PASSWORD` are used.
+
+    The session is kept between runs, under this account's own file in
+    ``~/.ibx``. A venue answers a request that names a session it still holds
+    with a challenge rather than a whole handshake, so a program that starts
+    often is one login rather than one per start, and needs a person to approve
+    far fewer of them. Name another path to move it, or pass ``False`` to keep
+    nothing and log in fully every time.
     """
-    ib.client = IbxClient(ib.wrapper, username, password, paper)
+    if session_file is None:
+        who = username or os.environ.get("IB_USERNAME", "")
+        kind = "paper" if paper else "live"
+        session_file = str(pathlib.Path.home() / ".ibx" / f"session-{who}-{kind}")
+    elif session_file is False:
+        session_file = None
+    ib.client = IbxClient(ib.wrapper, username, password, paper, session_file)
     ib.wrapper.client = ib.client
     return ib
