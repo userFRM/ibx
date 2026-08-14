@@ -528,7 +528,16 @@ def parse_pymethods(path: Path) -> list[dict]:
                     break
         impl_body = block[start + 1:end]
         for fm in re.finditer(
-            r'((?:\s*(?:///|//)[^\n]*\n|\s*#\[pyo3[^\]]*\]\s*\n)*)\s*fn (\w+)\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)',
+            # Any attribute, not only pyo3's. A lint allowance between the
+            # signature and the function used to end the match, so a method
+            # carrying one was published under whatever the page already said
+            # rather than under what it takes.
+            # An attribute runs to the end of its line. Matched up to the
+            # first `]` instead, a signature naming an indexed constant —
+            # `CCP_HOSTS[0]` — ended the attribute early, the signature was
+            # never captured, and the method was published under the names of
+            # its Rust arguments instead of the ones a caller passes.
+            r'((?:\s*(?:///|//)[^\n]*\n|\s*#\[[^\n]*\n)*)\s*fn (\w+)\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)',
             impl_body,
         ):
             preamble, name, args_str = fm.group(1), fm.group(2), fm.group(3)
@@ -555,11 +564,57 @@ def parse_pymethods(path: Path) -> list[dict]:
     return results
 
 
+#: Rust spellings of a default, and what a caller writing Python passes.
+_DEFAULTS_IN_PYTHON = {
+    "true": "True",
+    "false": "False",
+    "None": "None",
+    "Vec::new()": "[]",
+    '"".to_string()': '""',
+}
+
+
+def _default_in_python(value: str) -> str | None:
+    """The default as a caller would write it, or nothing where it is not a
+    value a caller can write.
+
+    A default built by calling something — a constant looked up, a string
+    allocated — has no Python spelling, and printing the Rust for it in a
+    Python signature tells a reader to type something that is not Python.
+    Those are shown as taking a default without saying what it is.
+    """
+    value = value.strip()
+    if value in _DEFAULTS_IN_PYTHON:
+        return _DEFAULTS_IN_PYTHON[value]
+    if value.endswith('.to_string()') and value.startswith('"'):
+        return value[: -len(".to_string()")]
+    if re.fullmatch(r'-?\d+(\.\d+)?', value) or re.fullmatch(r'"[^"]*"', value):
+        return value
+    return None
+
+
 def _build_py_sig(name: str, rust_args: str, pyo3_sig: str) -> str:
     if pyo3_sig:
         m = re.search(r'signature\s*=\s*\((.+)\)', pyo3_sig)
         if m:
-            return f"{name}({m.group(1)})"
+            # The capture is greedy to the last paren on the line, which is the
+            # attribute's own. Trimmed until the parens balance, so the final
+            # parameter keeps its default instead of carrying a bracket into it.
+            raw = m.group(1)
+            while raw.count("(") < raw.count(")") and ")" in raw:
+                raw = raw[: raw.rfind(")")]
+            shown = []
+            for arg in _split_top_level(raw):
+                if "=" not in arg:
+                    shown.append(arg.strip())
+                    continue
+                param, default = arg.split("=", 1)
+                as_python = _default_in_python(default)
+                shown.append(
+                    f"{param.strip()}={as_python}" if as_python is not None
+                    else param.strip()
+                )
+            return f"{name}({', '.join(shown)})"
     args = [a.strip() for a in rust_args.split(',')]
     py_args = []
     for arg in args:
@@ -571,6 +626,24 @@ def _build_py_sig(name: str, rust_args: str, pyo3_sig: str) -> str:
         if am:
             py_args.append(am.group(1))
     return f"{name}({', '.join(py_args)})"
+
+
+def _split_top_level(args: str) -> list[str]:
+    """Split on the commas between parameters, not the ones inside a default."""
+    out, depth, current = [], 0, ""
+    for ch in args:
+        if ch in "([<":
+            depth += 1
+        elif ch in ")]>":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(current)
+            current = ""
+            continue
+        current += ch
+    if current.strip():
+        out.append(current)
+    return out
 
 
 def parse_py_wrapper(path: Path) -> list[dict]:

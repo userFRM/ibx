@@ -19,7 +19,7 @@
 Create a new EClient (or EWrapper) instance.
 
 ```python
-def new(wrapper))
+def new(wrapper)
 ```
 
 | Parameter | Type | Description |
@@ -30,8 +30,10 @@ def new(wrapper))
 
 #### `connect`
 
+Connect to IB and start the engine.  Live logins (``paper=False``) enter a second-factor approval window and **block** until the factor is approved (mobile push) or the deadline fires (``ib_key_timeout_secs``, default ~18 min). This is a human approval gate, not a hang. To bound or avoid it: use ``paper=True``, pass a smaller ``ib_key_timeout_secs``, or run ``connect()`` on a worker thread with your own timeout. Paper logins skip the gate entirely. Set ``RUST_LOG=info`` to see a log line when the wait begins.  ``code_provider`` answers that factor with a typed code instead: ``code_provider(factor, display_id, avth_url) -> str``, where ``factor`` is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or ``"authenticator"`` (return the account's current code; ``display_id`` and ``avth_url`` are empty). An authenticator account has no push to fall back to and cannot log in without this. It is called once, on a thread of its own, and holds the GIL while it runs — return the code, don't block on input. One wrong code ends the login; there is no retry.  Multiple ``EClient`` instances can run concurrently in one process; each owns its own state, sockets, and engine thread, and ``connect()`` does not serialize across instances. If you pin engines via ``core_id``, give each a distinct value. See ibx#203 / ibx#207.
+
 ```python
-def connect(host, port, client_id, username, password, paper, core_id, ib_key_timeout_secs, ib_key_token_sub_type, code_provider, readonly)
+def connect(host, port=0, client_id=0, username="", password="", paper=True, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=False, settings=None, session_file=None, order_id_file=None)
 ```
 
 | Parameter | Type | Description |
@@ -141,7 +143,7 @@ def misc_url(key)
 Request P&L updates for the account.
 
 ```python
-def req_pnl(req_id, account, model_code=""))
+def req_pnl(req_id, account, model_code="")
 ```
 
 | Parameter | Type | Description |
@@ -171,7 +173,7 @@ def cancel_pnl(req_id)
 Request P&L for a single position.
 
 ```python
-def req_pnl_single(req_id, account, model_code, con_id))
+def req_pnl_single(req_id, account, model_code, con_id)
 ```
 
 | Parameter | Type | Description |
@@ -202,7 +204,7 @@ def cancel_pnl_single(req_id)
 Request account summary.
 
 ```python
-def req_account_summary(req_id, group_name, tags))
+def req_account_summary(req_id, group_name, tags)
 ```
 
 | Parameter | Type | Description |
@@ -252,7 +254,7 @@ def cancel_positions()
 Request account updates.
 
 ```python
-def req_account_updates(subscribe, _acct_code=""))
+def req_account_updates(subscribe, _acct_code="")
 ```
 
 | Parameter | Type | Description |
@@ -277,7 +279,7 @@ def req_managed_accts()
 Request account updates for multiple accounts/models.
 
 ```python
-def req_account_updates_multi(req_id, account, model_code, ledger_and_nlv=false))
+def req_account_updates_multi(req_id, account, model_code, ledger_and_nlv=False)
 ```
 
 | Parameter | Type | Description |
@@ -308,7 +310,7 @@ def cancel_account_updates_multi(req_id)
 Request positions across multiple accounts/models.
 
 ```python
-def req_positions_multi(req_id, account, model_code))
+def req_positions_multi(req_id, account, model_code)
 ```
 
 | Parameter | Type | Description |
@@ -366,7 +368,7 @@ def place_order(order_id, contract, order)
 Exercise or lapse a long option position.  `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `_override` is taken for signature compatibility and is not sent: it is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.
 
 ```python
-def exercise_options(req_id, contract, exercise_action, exercise_quantity, account, _override))
+def exercise_options(req_id, contract, exercise_action, exercise_quantity, account, _override)
 ```
 
 | Parameter | Type | Description |
@@ -385,7 +387,7 @@ def exercise_options(req_id, contract, exercise_action, exercise_quantity, accou
 Cancel an order.
 
 ```python
-def cancel_order(order_id, manual_order_cancel_time=""))
+def cancel_order(order_id, manual_order_cancel_time="")
 ```
 
 | Parameter | Type | Description |
@@ -424,7 +426,7 @@ def req_global_cancel()
 Request next valid order ID.
 
 ```python
-def req_ids(num_ids=1))
+def req_ids(num_ids=1)
 ```
 
 | Parameter | Type | Description |
@@ -468,7 +470,7 @@ def req_all_open_orders()
 Binding an order placed elsewhere to this session.  The reference client asks a local process to hand over orders a person entered by hand in front of it. There is no such process here and no such person, so there is nothing to hand over, and this reports that rather than returning as though the binding were in place.  Returning quietly was worse than either alternative: a caller that asked to be given those orders and was told nothing waits for orders that are never coming, with nothing to say why.
 
 ```python
-def req_auto_open_orders(b_auto_bind))
+def req_auto_open_orders(b_auto_bind)
 ```
 
 | Parameter | Type | Description |
@@ -482,7 +484,7 @@ def req_auto_open_orders(b_auto_bind))
 Request execution reports.
 
 ```python
-def req_executions(req_id, exec_filter=None))
+def req_executions(req_id, exec_filter=None)
 ```
 
 | Parameter | Type | Description |
@@ -497,7 +499,7 @@ def req_executions(req_id, exec_filter=None))
 Request completed orders.
 
 ```python
-def req_completed_orders(api_only=false))
+def req_completed_orders(api_only=False)
 ```
 
 | Parameter | Type | Description |
@@ -513,7 +515,7 @@ def req_completed_orders(api_only=false))
 Set news provider codes for per-contract news ticks (e.g. "BRFG*BRFUPDN").
 
 ```python
-def set_news_providers(providers))
+def set_news_providers(providers)
 ```
 
 | Parameter | Type | Description |
@@ -527,7 +529,7 @@ def set_news_providers(providers))
 Request market data for a contract.
 
 ```python
-def req_mkt_data(req_id, contract, generic_tick_list="", snapshot=false, regulatory_snapshot=false, mkt_data_options=Vec::new()))
+def req_mkt_data(req_id, contract, generic_tick_list="", snapshot=False, regulatory_snapshot=False, mkt_data_options=[])
 ```
 
 | Parameter | Type | Description |
@@ -546,7 +548,7 @@ def req_mkt_data(req_id, contract, generic_tick_list="", snapshot=false, regulat
 Like `req_mkt_data`, but encodes the market-data mode per request (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several subscriptions on the same contract can run in parallel and the caller picks whichever feed has data. The frozen one keeps thinly-traded names streaming after hours when the realtime feed is silent.
 
 ```python
-def req_mkt_data_ex(req_id, contract, generic_tick_list="", snapshot=false, regulatory_snapshot=false, mode_9887=0))
+def req_mkt_data_ex(req_id, contract, generic_tick_list="", snapshot=False, regulatory_snapshot=False, mode_9887=0)
 ```
 
 | Parameter | Type | Description |
@@ -579,7 +581,7 @@ def cancel_mkt_data(req_id)
 Request tick-by-tick data.
 
 ```python
-def req_tick_by_tick_data(req_id, contract, tick_type, number_of_ticks=0, ignore_size=false))
+def req_tick_by_tick_data(req_id, contract, tick_type, number_of_ticks=0, ignore_size=False)
 ```
 
 | Parameter | Type | Description |
@@ -645,7 +647,7 @@ def req_market_data_type(market_data_type)
 Request market depth (L2 order book).
 
 ```python
-def req_mkt_depth(req_id, contract, num_rows=5, is_smart_depth=false, mkt_depth_options=Vec::new()))
+def req_mkt_depth(req_id, contract, num_rows=5, is_smart_depth=False, mkt_depth_options=[])
 ```
 
 | Parameter | Type | Description |
@@ -663,7 +665,7 @@ def req_mkt_depth(req_id, contract, num_rows=5, is_smart_depth=false, mkt_depth_
 Cancel market depth.
 
 ```python
-def cancel_mkt_depth(req_id, is_smart_depth=false))
+def cancel_mkt_depth(req_id, is_smart_depth=False)
 ```
 
 | Parameter | Type | Description |
@@ -678,7 +680,7 @@ def cancel_mkt_depth(req_id, is_smart_depth=false))
 Request real-time 5-second bars.
 
 ```python
-def req_real_time_bars(req_id, contract, bar_size=5, what_to_show="TRADES", use_rth=0, real_time_bars_options=Vec::new()))
+def req_real_time_bars(req_id, contract, bar_size=5, what_to_show="TRADES", use_rth=0, real_time_bars_options=[])
 ```
 
 | Parameter | Type | Description |
@@ -860,7 +862,7 @@ def req_sec_def_opt_params(req_id, underlying_symbol, fut_fop_exchange, underlyi
 Request scanner subscription.
 
 ```python
-def req_scanner_subscription(req_id, subscription, scanner_subscription_options=Vec::new(), scanner_subscription_filter_options=Vec::new()))
+def req_scanner_subscription(req_id, subscription, scanner_subscription_options=[], scanner_subscription_filter_options=[])
 ```
 
 | Parameter | Type | Description |
@@ -901,7 +903,7 @@ def req_scanner_parameters()
 Request a news article.
 
 ```python
-def req_news_article(req_id, provider_code, article_id, news_article_options=Vec::new()))
+def req_news_article(req_id, provider_code, article_id, news_article_options=[])
 ```
 
 | Parameter | Type | Description |
@@ -965,7 +967,7 @@ def cancel_fundamental_data(req_id)
 Request historical tick data.
 
 ```python
-def req_historical_ticks(req_id, contract, start_date_time="", end_date_time="", number_of_ticks=1000, what_to_show="TRADES", use_rth=1, ignore_size=false, misc_options=Vec::new()))
+def req_historical_ticks(req_id, contract, start_date_time="", end_date_time="", number_of_ticks=1000, what_to_show="TRADES", use_rth=1, ignore_size=False, misc_options=[])
 ```
 
 | Parameter | Type | Description |
@@ -1106,7 +1108,7 @@ def algorithms_for(sec_type)
 What volatility a price implies for an option, under the model the venue publishes for that contract. Answered on `tick_option_computation`.
 
 ```python
-def calculate_implied_volatility(req_id, contract, option_price, under_price, implied_vol_options=Vec::new()))
+def calculate_implied_volatility(req_id, contract, option_price, under_price, implied_vol_options=[])
 ```
 
 | Parameter | Type | Description |
@@ -1124,7 +1126,7 @@ def calculate_implied_volatility(req_id, contract, option_price, under_price, im
 What an option is worth at a stated volatility, under the same model. Answered on `tick_option_computation`.
 
 ```python
-def calculate_option_price(req_id, contract, volatility, under_price, opt_prc_options=Vec::new()))
+def calculate_option_price(req_id, contract, volatility, under_price, opt_prc_options=[])
 ```
 
 | Parameter | Type | Description |
@@ -1170,7 +1172,7 @@ def cancel_calculate_option_price(req_id)
 Ask for the notices the venue broadcasts to everyone. Answered on `update_news_bulletin`.
 
 ```python
-def req_news_bulletins(all_msgs=true))
+def req_news_bulletins(all_msgs=True)
 ```
 
 | Parameter | Type | Description |
@@ -1218,7 +1220,7 @@ def request_fa(fa_data_type)
 Replace a partition of the advisor's configuration with the one given.
 
 ```python
-def replace_fa(req_id, fa_data_type, cxml))
+def replace_fa(req_id, fa_data_type, cxml)
 ```
 
 | Parameter | Type | Description |
@@ -1341,7 +1343,7 @@ def req_family_codes()
 How much the venue should log about this session, 1 to 5.
 
 ```python
-def set_server_log_level(log_level=2))
+def set_server_log_level(log_level=2)
 ```
 
 | Parameter | Type | Description |
@@ -1411,7 +1413,7 @@ def cancel_wsh_event_data(req_id)
 The calendar's events. Answered on `wshEventData`.  `wsh_event_data` is the object the public API takes: a contract id, or a filter the caller writes, plus the window and what to fill from.
 
 ```python
-def req_wsh_event_data(req_id, wsh_event_data=None))
+def req_wsh_event_data(req_id, wsh_event_data=None)
 ```
 
 | Parameter | Type | Description |
