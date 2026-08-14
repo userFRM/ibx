@@ -100,6 +100,16 @@ def get_account_id()
 
 ---
 
+#### `competing_session`
+
+Another session that already held this account when this one connected.  `None` when this session is alone. Otherwise where the other one connected from, when it logged in, and whether this session is held to reading only because the other has the account.  Worth asking before starting work: the venue permits one logon at a time and takes the account from the older session without saying which it dropped, so a second client reads as data that stops arriving.
+
+```python
+def competing_session()
+```
+
+---
+
 #### `ccp_session_id`
 
 Session ID surfaced to webapp REST clients as `x-ccp-session-id`.

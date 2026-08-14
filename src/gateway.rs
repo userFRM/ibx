@@ -2689,6 +2689,9 @@ impl Gateway {
         // Webapp-REST-facing fields from the FIX logon roundtrip.
         shared.reference.set_ccp_session_id(self.server_session_id.clone());
         shared.reference.set_misc_urls(self.misc_urls.clone());
+        shared.reference.set_competing_session(self.competing.as_ref().map(|other| {
+            (other.ip.clone(), other.since.clone(), other.read_only)
+        }));
     }
 
     /// Create the control channel and build a HotLoop with connected sockets.

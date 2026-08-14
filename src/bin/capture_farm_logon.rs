@@ -63,6 +63,26 @@ fn main() {
     };
     let gw = session.gateway;
 
+    // Nobody else on the account.
+    //
+    // The venue permits one logon at a time and takes the account from the
+    // older session without saying which it dropped. A probe that opens a
+    // second one is measuring a session it is in the middle of ending, and its
+    // answers are about the contention rather than about the client. It names
+    // the other session in its answer to the connect, so this is answerable
+    // before anything is asked.
+    if let Some(other) = &gw.competing {
+        eprintln!(
+            "another session already holds this account, from {} since {}{}.\n\
+             Stop it and try again: this account takes one logon at a time and \
+             the venue does not say which one it drops.",
+            other.ip,
+            other.since,
+            if other.read_only { ", and this one may not trade" } else { "" },
+        );
+        std::process::exit(1);
+    }
+
     // The host the session moved to, not the one it was opened against. The
     // venue names which server this account belongs on and the session follows
     // it; a farm asked for on the host that was knocked on first is asked of a
