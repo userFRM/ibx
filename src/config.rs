@@ -28,10 +28,16 @@ pub fn ib_version() -> String {
     std::env::var("IBX_VERSION").unwrap_or_else(|_| IB_VERSION.to_string())
 }
 
-/// Auth server endpoints.
+/// The doors this client knocks on, in the order it tries them.
+///
+/// One per region the venue serves. Whichever answers routes the session to
+/// where its account actually lives, so the order is a matter of which is
+/// nearest rather than which is correct — every one of them is.
 pub const CCP_HOSTS: &[&str] = &[
     "cdc1.ibllc.com",
     "ndc1.ibllc.com",
+    "zdc1.ibllc.com",
+    "hdc1.ibllc.com",
 ];
 
 /// The locale a session announces itself with, where it states none.

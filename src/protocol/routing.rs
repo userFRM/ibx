@@ -19,7 +19,13 @@
 //! Exchange, security type, the endpoints served there, a depth identifier,
 //! a qualifier, then where to ask.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+/// What the venue calls a book, richest first.
+///
+/// A market listing more than one is offering the better of them, and this is
+/// the order the counterpart asks in.
+const BOOK_ENDPOINTS: [&str; 4] = ["AggDeep", "Deep2", "DeepX", "Deep"];
 
 /// One market, and where to ask about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,7 +170,7 @@ impl RoutingTable {
     /// contract, and it asks in that order for the same reason — a market
     /// listing both `Deep2` and `Deep` is offering the better of the two.
     pub fn book_endpoint(&self, exchange: &str, sec_type: &str) -> Option<&str> {
-        const RICHEST_FIRST: [&str; 4] = ["AggDeep", "Deep2", "DeepX", "Deep"];
+        const RICHEST_FIRST: [&str; 4] = BOOK_ENDPOINTS;
         let served = |name: &str| {
             self.rows.iter().any(|r| {
                 r.exchange == exchange
@@ -174,6 +180,19 @@ impl RoutingTable {
             })
         };
         RICHEST_FIRST.into_iter().find(|name| served(name))
+    }
+
+    /// The farms that serve a book, by name.
+    ///
+    /// A book is asked for on the connection this session holds, and the table
+    /// states which farm serves each one. A book whose farm is not the farm
+    /// this session is on is asked of a server that does not serve it.
+    pub fn book_farms(&self) -> BTreeSet<&str> {
+        self.rows
+            .iter()
+            .filter(|r| BOOK_ENDPOINTS.iter().any(|name| r.serves(name)))
+            .map(|r| r.farm.as_str())
+            .collect()
     }
 
     /// Which server a farm is on, by name.
@@ -325,5 +344,19 @@ mod tests {
         assert_eq!(table.rows()[0].exchange, "GOOD");
 
         assert!(RoutingTable::parse("").is_empty());
+    }
+
+    /// A book is served by a named farm, and this session is on one farm.
+    #[test]
+    fn the_farms_that_serve_a_book_are_named() {
+        let table = RoutingTable::parse(
+            "IEX,CS,Top|Deep,-1,*,ndc1.example,4002,ushmds;\
+             BEST,CS,Top,-1,*,ndc1.example,4002,ushmds;\
+             XETRA,CS,AggDeep,-1,*,zdc1.example,4002,euhmds",
+        );
+        let farms = table.book_farms();
+        assert!(farms.contains("ushmds"), "IEX serves a book from ushmds");
+        assert!(farms.contains("euhmds"), "and XETRA from another farm");
+        assert_eq!(farms.len(), 2, "a row serving only the top of a book is not one");
     }
 }
