@@ -1122,8 +1122,14 @@ pub(super) fn phase_close_px_order(conns: Conns) -> Conns {
 pub(super) fn phase_dark_ice_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 66: Dark Ice Algo Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::DarkIce { allow_past_end_time: true, display_size: 1, start_time: "20260311-13:30:00".into(), end_time: "20260311-20:00:00".into() } },
+        // Two hundred showing one hundred. The venue refuses a display size
+        // that is not a multiple of the lot size — "Display size should be a
+        // multiple of lot size" — and it states no lot size anywhere a client
+        // can read, so this asks in the round lot the iceberg phase beside it
+        // is already accepted with. Asking for one share showing one was
+        // refused every run, which tested the venue's rule and never the algo.
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 200,
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::DarkIce { allow_past_end_time: true, display_size: 100, start_time: "20260311-13:30:00".into(), end_time: "20260311-20:00:00".into() } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }

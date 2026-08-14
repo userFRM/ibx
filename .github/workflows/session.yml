@@ -40,6 +40,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A session that goes away mid-run is the one failure this suite cannot
+  # diagnose from its own output: the reason lives in the client's log, and at
+  # error level the log says a connection closed and never why, nor what the
+  # reconnect made of it.
+  RUST_LOG: ibx=info
 
 permissions:
   contents: read
