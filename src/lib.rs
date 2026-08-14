@@ -65,6 +65,8 @@ pub mod config;
 pub mod control;
 pub mod gateway;
 pub mod logging;
+/// The last order id handed out, kept between runs.
+pub mod order_ids;
 pub mod protocol;
 pub mod types;
 

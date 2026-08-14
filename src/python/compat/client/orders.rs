@@ -118,7 +118,7 @@ impl EClient {
         let oid = if order_id > 0 {
             order_id as u64
         } else {
-            self.next_order_id.fetch_add(1, Ordering::Relaxed)
+            self.take_order_id()
         };
 
         let instrument = self.find_or_register_instrument(py, contract)?;
@@ -201,7 +201,7 @@ impl EClient {
         let oid = if req_id > 0 {
             req_id as u64
         } else {
-            self.next_order_id.fetch_add(1, Ordering::Relaxed)
+            self.take_order_id()
         };
         let instrument = self.find_or_register_instrument(py, contract)?;
         Self::send_control(py, &tx, ControlCommand::Order(
@@ -265,7 +265,7 @@ impl EClient {
 
     /// Get the next order ID (local counter, auto-increments).
     fn next_order_id(&self) -> i64 {
-        self.next_order_id.fetch_add(1, Ordering::Relaxed) as i64
+        self.take_order_id() as i64
     }
 
     /// Request all open orders for this client.
