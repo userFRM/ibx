@@ -1252,6 +1252,20 @@ impl HotLoop {
         );
     }
 
+    /// Forget a halt, unless it was one nothing can undo.
+    ///
+    /// One transport coming back says nothing about the other. A session the
+    /// venue took away stays taken away while the market-data side reconnects
+    /// happily, and clearing the halt on that success let the auth side be
+    /// retried — straight back into taking the account from whoever holds it.
+    fn clear_halt_if_it_was_not_settled(&mut self) {
+        if matches!(&self.reconnect_halted, Some(reason) if reason.is_terminal()) {
+            return;
+        }
+        self.reconnect_halted = None;
+        self.shared.reference.clear_session_over();
+    }
+
     /// Replace the auth connection (after reconnection) and reconcile order state.
     pub fn reconnect_ccp(&mut self, conn: Connection) {
         // Whoever held the account when this reconnect arrived, and the
@@ -1482,8 +1496,7 @@ impl HotLoop {
                 log::info!("Farm auto-reconnect succeeded (attempt {})", self.farm_reconnect_attempt);
                 self.reconnect_farm(conn);
                 self.farm_reconnect_attempt = 0;
-                self.reconnect_halted = None;
-                self.shared.reference.clear_session_over();
+                self.clear_halt_if_it_was_not_settled();
                 self.budget.record_connected(Instant::now());
                 self.announce_reconnected();
                 self.farm_next_attempt_at = None;
@@ -1581,8 +1594,7 @@ impl HotLoop {
                 log::info!("CCP auto-reconnect succeeded (attempt {})", self.ccp_reconnect_attempt);
                 self.reconnect_ccp(conn);
                 self.ccp_reconnect_attempt = 0;
-                self.reconnect_halted = None;
-                self.shared.reference.clear_session_over();
+                self.clear_halt_if_it_was_not_settled();
                 self.budget.record_connected(Instant::now());
                 // The request for these goes out on this socket even though
                 // the bars come back on the historical one, so an HMDS that
