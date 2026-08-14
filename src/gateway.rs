@@ -1029,17 +1029,26 @@ pub fn reconnect_ccp(auth: &ReconnectAuth) -> io::Result<Connection> {
     // The host this session was on cannot be reached. The others it reached
     // the venue through still answer for this account — the venue named them
     // on the way in — so they are tried before the session is given up on.
+    let mut last = why;
     for host in &auth.alternate_hosts {
-        log::warn!("{} did not answer ({why}); trying {host}", auth.host);
+        log::warn!("{} did not answer ({last}); trying {host}", auth.host);
         match reconnect_ccp_attempt(auth, &token_hash, host, 0) {
             Ok(conn) => {
                 log::info!("reconnected on {host}");
                 return Ok(conn);
             }
-            Err(next) => log::warn!("{host} did not answer either ({next})"),
+            // The reason a later host gives, not the first one's. A host that
+            // cannot be reached says nothing about the session; one that
+            // answers and refuses the credentials says everything, and
+            // returning the first meant the caller was told a transport
+            // failure when the venue had stated something it could act on.
+            Err(next) => {
+                log::warn!("{host} did not answer either ({next})");
+                last = next;
+            }
         }
     }
-    Err(why)
+    Err(last)
 }
 
 fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, depth: u32) -> io::Result<Connection> {
@@ -1182,6 +1191,10 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     let fix_deadline = std::time::Instant::now()
         + std::time::Duration::from_secs_f64(TIMEOUT_FIX_LOGON * 2.0);
     let mut fix_ready = false;
+    // Whoever held the account when this reconnect arrived, if the venue said,
+    // and the interval it holds this connection to.
+    let mut took_from: Option<(String, String, bool)> = None;
+    let mut stated_heartbeat: Option<u64> = None;
     while std::time::Instant::now() < fix_deadline {
         let (payload, _) = match ns::ns_recv(&mut tls) {
             Ok(r) => r,
@@ -1222,6 +1235,11 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
                     other.ip, other.since,
                     if other.read_only { ", and this one may not trade" } else { "" },
                 );
+                // Carried out with the connection so the engine can say so.
+                // Logged only, a reconnect that took the account back from
+                // another program looked to that program like its data
+                // stopping for no reason, and to this one like nothing at all.
+                took_from = Some((other.ip.clone(), other.since.clone(), other.read_only));
             }
             let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
             session::send_secure(&mut tls, &mut channel, newcomm.as_bytes())?;
@@ -1262,7 +1280,20 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
                     format!("CCP reconnect logon rejected: {reason}"),
                 ));
             }
-            "A" | "U" => break,
+            "A" | "U" => {
+                // The interval the venue holds this connection to. Read from
+                // the answer for the same reason the first logon reads it: the
+                // number this client proposes is not what it is held to, and a
+                // reconnect that kept the old connection's number would answer
+                // a new agreement at the old rate.
+                if let Some(stated) = fields.get(&108).and_then(|v| v.parse::<u64>().ok())
+                    && stated > 0
+                {
+                    log::info!("the venue holds this reconnect to a {stated}s heartbeat");
+                    stated_heartbeat = Some(stated);
+                }
+                break;
+            }
             _ => {}
         }
     }
@@ -1279,6 +1310,8 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     let mut conn = Connection::new(tls)?;
     conn.seq = ccp_seq;
     log::info!("CCP reconnect complete (seq={})", conn.seq);
+    conn.competing = took_from;
+    conn.heartbeat_secs = stated_heartbeat;
     Ok(conn)
 }
 
@@ -2719,10 +2752,16 @@ impl Gateway {
     /// transport the same way a real client does, instead of failing the phase
     /// that happened to be running.
     pub fn reconnect_auth(&self, caller: CallerAuth) -> ReconnectAuth {
+        // Where this session actually ended up, not where it first knocked.
+        // The venue names the server an account belongs on and the session
+        // follows it, so reconnecting to the address the caller configured
+        // starts again at a door that only redirects — and on a session that
+        // was redirected, that is every reconnect.
+        let on = self.auth_hosts.first().cloned().unwrap_or_else(|| caller.host.clone());
         ReconnectAuth {
             settings: caller.settings,
-            alternate_hosts: alternates_to(&self.auth_hosts, &caller.host),
-            host: caller.host,
+            alternate_hosts: alternates_to(&self.auth_hosts, &on),
+            host: on,
             username: caller.username,
             password: caller.password,
             paper: caller.paper,
@@ -2877,6 +2916,27 @@ mod tests {
         // Short or absent field 4 yields no type rather than a wrong one.
         assert_eq!(parse_auth_start_token("a;b;c"), ("".into(), None));
         assert_eq!(parse_auth_start_token(&frame("")), ("".into(), None));
+    }
+
+    /// A reconnect starts where the session actually is.
+    ///
+    /// The venue names which server an account belongs on and the session
+    /// follows it, so the address a caller configured is a door that only
+    /// redirects. Reconnecting to it starts the redirect again on every
+    /// attempt, and on a session that was redirected once that is every
+    /// reconnect it will ever make.
+    #[test]
+    fn a_reconnect_starts_where_the_session_ended_up() {
+        // The order a session records them in: where it ended up, then each
+        // door it knocked on to get there.
+        let seen = ["zdc1.example".to_string(), "cdc1.example".to_string()];
+
+        // The caller configured the door. What matters is the room.
+        assert_eq!(super::alternates_to(&seen, "zdc1.example"), ["cdc1.example"]);
+
+        // And the door is still worth keeping: it answered for this account
+        // once, which is more than can be said for an address nobody named.
+        assert!(seen.contains(&"cdc1.example".to_string()));
     }
 
     /// A reconnect is given the hosts the venue sent this session to, and

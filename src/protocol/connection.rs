@@ -130,6 +130,14 @@ pub struct Connection {
     pub read_key: Vec<u8>,
     /// IV for verifying inbound messages (chains across messages).
     pub read_iv: Vec<u8>,
+    /// Another session that already held this account when this connection was
+    /// made, as the venue named it: address, login time, and whether this
+    /// session is held to reading only.
+    ///
+    /// A reconnect that finds one has taken the account back from whoever had
+    /// it. That is worth telling a caller — silently, it reads to them as the
+    /// other program's data stopping for no reason.
+    pub competing: Option<(String, String, bool)>,
     /// How often this connection's far side expects to hear from the session,
     /// where it said so in its answer to the logon.
     ///
@@ -183,6 +191,7 @@ impl Connection {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            competing: None,
             heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
@@ -419,6 +428,7 @@ impl Connection {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            competing: None,
             heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
@@ -679,6 +689,7 @@ mod tests {
             sign_iv: Vec::new(),
             read_key: Vec::new(),
             read_iv: Vec::new(),
+            competing: None,
             heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
