@@ -163,6 +163,17 @@ pub struct EClientConfig {
     /// which today, on the servers reached from here, is nothing. That is a
     /// cost with no measured return, so it is a decision rather than a default.
     pub session_file: Option<std::path::PathBuf>,
+    /// Where the last order id handed out is kept, so the next run does not
+    /// hand out the same ones.
+    ///
+    /// An order id belongs to the account rather than to the process: the
+    /// venue answers an order under an id it already holds with "Duplicate ID"
+    /// and places nothing. The counterpart remembers its last id in its own
+    /// settings and hands out that value plus one; this is the same, in a file
+    /// keyed by account, kind of session and client id. Left unset the counter
+    /// lives as long as the process, which is enough for one run and not for
+    /// two.
+    pub order_id_file: Option<std::path::PathBuf>,
 }
 
 /// ibapi-compatible EClient. Matches C++ `EClientSocket` method signatures.
@@ -195,6 +206,8 @@ pub struct EClient {
     /// once per session.
     pub(crate) close_notified: AtomicBool,
     pub(crate) next_order_id: AtomicU64,
+    /// Where the last id handed out is kept, and under which key.
+    pub(crate) order_id_store: Option<(std::path::PathBuf, String)>,
     pub(crate) core: ClientCore,
     pub(crate) session_token_bytes: Vec<u8>,
     pub(crate) session: crate::auth::resume::ResumableSession,
@@ -352,10 +365,20 @@ impl EClient {
             .name("ib-engine-hotloop".into())
             .spawn(move || { hot_loop.run_with_panic_recovery(); })?;
 
-        let start_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() * 1000;
+        // One past the last id this account handed out, where a file remembers
+        // it. Otherwise the clock — seconds, not milliseconds: an id a
+        // thousand times larger does not fit the width a request is carried
+        // under, so every request built from one is refused before it leaves.
+        let order_id_store = config.order_id_file.as_ref().map(|path| {
+            (path.clone(), crate::order_ids::key(&config.username, config.paper, 0))
+        });
+        let start_id = match &order_id_store {
+            Some((path, key)) => crate::order_ids::next_after_last(path, key),
+            None => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
 
         let core = ClientCore::new();
         // Stated before the client is handed back, so a caller cannot place
@@ -372,6 +395,7 @@ impl EClient {
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
             next_order_id: AtomicU64::new(start_id),
+            order_id_store,
             core,
             session_token_bytes,
             session,
@@ -400,6 +424,8 @@ impl EClient {
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
             next_order_id: AtomicU64::new(start_id),
+            // Built from parts, so nothing is remembered anywhere.
+            order_id_store: None,
             core: ClientCore::new(),
             session_token_bytes: Vec::new(),
             session: Default::default(),

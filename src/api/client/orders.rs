@@ -248,7 +248,15 @@ impl EClient {
 
     /// Get the next order ID (local counter).
     pub fn next_order_id(&self) -> i64 {
-        self.next_order_id.fetch_add(1, Ordering::Relaxed) as i64
+        let id = self.next_order_id.fetch_add(1, Ordering::Relaxed);
+        // Remembered as it is handed out rather than in a batch: a run that
+        // ends between the two is exactly the run whose ids would be reused.
+        if let Some((path, key)) = self.order_id_store.as_ref()
+            && let Err(e) = crate::order_ids::remember(path, key, id)
+        {
+            log::warn!("order id {id} not remembered in {}: {e}", path.display());
+        }
+        id as i64
     }
 
     // ── Open Orders ──
