@@ -74,19 +74,37 @@ fn place_order_unsupported_order_type_returns_error() {
     assert!(result.unwrap_err().message.contains("Unsupported order type"));
 }
 
+/// An algorithm this client does not model is carried to the venue, not
+/// refused here.
+///
+/// This asserted the opposite, and the opposite was wrong: a caller could use
+/// only the handful of strategies this client parses, while the venue states
+/// which ones the account may use and refuses the rest itself. The reference
+/// client forwards these without reading them.
 #[test]
-fn place_order_unsupported_algo_returns_error() {
+fn place_order_with_an_unmodelled_algo_is_sent() {
     let (client, _rx, shared) = test_client();
     shared.market.set_instrument_count(1);
     let order = Order {
         action: "BUY".into(), total_quantity: 100.0,
         order_type: "LMT".into(), lmt_price: 150.0,
-        algo_strategy: "unknown_algo".into(),
+        algo_strategy: "Accumulate/Distribute".into(),
         ..Default::default()
     };
-    let result = client.place_order(1, &spy(), &order);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("Unsupported algo"));
+    assert!(client.place_order(1, &spy(), &order).is_ok(), "carried, not refused");
+
+    // An order this client does find wrong is still refused: the algorithm is
+    // one it models and the parameter is not a number.
+    let bad = Order {
+        action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: 150.0,
+        algo_strategy: "vwap".into(),
+        algo_params: vec![ibx::api::types::TagValue {
+            tag: "maxPctVol".into(), value: "not a number".into(),
+        }],
+        ..Default::default()
+    };
+    assert!(client.place_order(2, &spy(), &bad).is_err(), "read, and found wrong");
 }
 
 #[test]
