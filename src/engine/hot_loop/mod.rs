@@ -1246,6 +1246,17 @@ impl HotLoop {
 
     /// Replace the auth connection (after reconnection) and reconcile order state.
     pub fn reconnect_ccp(&mut self, conn: Connection) {
+        // Whoever held the account when this reconnect arrived, and the
+        // interval the venue stated on it. Both are answers to this
+        // connection's logon and belong to this connection: kept from the one
+        // that went, a session would be held to an interval nobody agreed and
+        // a takeover would be reported once and never again.
+        if conn.competing.is_some() {
+            self.shared.reference.set_competing_session(conn.competing.clone());
+        }
+        if let Some(stated) = conn.heartbeat_secs {
+            self.hb.set_ccp_interval(stated);
+        }
         self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.context.market);
     }
 
