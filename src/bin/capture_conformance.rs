@@ -78,7 +78,7 @@ fn main() {
             println!("preview_status={}", state.status);
             println!("preview_commission={}", state.commission_and_fees);
         }
-        Err(e) => println!("preview_error={}", e.lines().next().unwrap_or("")),
+        Err(e) => println!("preview_error={} ({})", e.message.lines().next().unwrap_or(""), e.code),
     }
 
     client.disconnect();

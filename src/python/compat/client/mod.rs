@@ -109,7 +109,8 @@ impl Drop for EClient {
 /// requests is past `u32::MAX` on the first call, and a truncated id answers
 /// under one the caller never used (ibx#285).
 pub(crate) fn wire_req_id(req_id: i64) -> PyResult<u32> {
-    crate::api::client::wire_req_id(req_id).map_err(PyRuntimeError::new_err)
+    crate::api::client::wire_req_id(req_id)
+        .map_err(|refusal| PyRuntimeError::new_err(refusal.message))
 }
 
 /// Adapt a Python callable to the second-factor [`CodeProvider`] the login gate

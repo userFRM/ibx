@@ -3,6 +3,7 @@
 //! Methods that are not yet supported log a warning.
 
 use crate::api::wrapper::Wrapper;
+use crate::api::error_codes::Refusal;
 
 use super::EClient;
 
@@ -47,7 +48,7 @@ impl EClient {
     /// groups, its allocation profiles — and the venue names it by a word, so
     /// the number is turned into the word it stands for. A number that stands
     /// for nothing is refused rather than sent as an empty partition.
-    pub fn request_fa(&self, fa_data_type: i32) -> Result<(), String> {
+    pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal> {
         let partition = advisor_partition(fa_data_type)
             .ok_or_else(|| format!("no advisor configuration is named by {fa_data_type}"))?;
         self.send(crate::types::ControlCommand::AdvisorConfig {
@@ -59,7 +60,7 @@ impl EClient {
     }
 
     /// Replace a partition of the advisor's configuration with the one given.
-    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), String> {
+    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal> {
         let partition = advisor_partition(fa_data_type)
             .ok_or_else(|| format!("no advisor configuration is named by {fa_data_type}"))?;
         self.send(crate::types::ControlCommand::AdvisorConfig {
@@ -139,7 +140,7 @@ impl EClient {
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,
         ) -> Option<f64>,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, Refusal> {
         let instrument = self
             .instrument_of(contract.con_id)
             .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
@@ -174,12 +175,12 @@ impl EClient {
             present_value_of_dividends: stated_or_none(stated.pv_dividend).unwrap_or(0.0),
         };
         solve(terms, model).ok_or_else(|| {
+            Refusal::validation(
             "no volatility fits this price under the venue's own model for this contract. An \
              option far enough into the money is worth its intrinsic value and little else, and \
              its price then hardly moves with volatility at all — so there is no one volatility \
              the price implies, and naming one would be picking a number rather than solving \
-             for it"
-                .to_string()
+             for it")
         })
     }
 
@@ -216,8 +217,9 @@ impl EClient {
     /// Put a contract in the group this request follows, stated as
     /// `conId@exchange`, or `none` to empty it. Every follower of that group is
     /// told, including this one.
-    pub fn update_display_group(&self, req_id: i64, contract_info: &str) -> Result<(), String> {
+    pub fn update_display_group(&self, req_id: i64, contract_info: &str) -> Result<(), Refusal> {
         self.core.update_display_group(req_id, contract_info)
+            .map_err(Refusal::from)
     }
 
     // ── Soft Dollar Tiers ──
@@ -266,8 +268,10 @@ impl EClient {
     /// waiting on a callback that will never come cannot tell that apart from
     /// a slow gateway, so it is told on the channel a venue uses to say it
     /// will not act on a request.
-    fn report_reason(&self, req_id: i64, reason: &str) {
-        self.shared.reference.push_historical_error(req_id.max(0) as u32, 321, reason.to_string());
+    fn report_reason(&self, req_id: i64, reason: &Refusal) {
+        self.shared.reference.push_historical_error(
+            req_id.max(0) as u32, reason.code, reason.message.clone(),
+        );
     }
 }
 

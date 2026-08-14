@@ -206,8 +206,8 @@ fn an_unusable_quantity_is_refused() {
             tif: "DAY".into(), ..Default::default()
         };
         let err = client.place_order(9102, &spy(), &order)
-            .expect_err("must be refused").to_string();
-        assert!(err.contains(expect), "quantity {qty}: expected {expect:?}, got: {err}");
+            .expect_err("must be refused");
+        assert!(err.message.contains(expect), "quantity {qty}: expected {expect:?}, got: {err}");
     }
 }
 
@@ -600,28 +600,28 @@ fn parse_algo_unsupported() {
 fn parse_algo_vwap_rejects_malformed_max_pct_vol() {
     let params = vec![TagValue { tag: "maxPctVol".into(), value: "abc".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("maxPctVol"), "got: {err}");
+    assert!(err.message.contains("maxPctVol"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_vwap_rejects_nan_max_pct_vol() {
     let params = vec![TagValue { tag: "maxPctVol".into(), value: "NaN".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("maxPctVol"), "got: {err}");
+    assert!(err.message.contains("maxPctVol"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_vwap_rejects_infinite_max_pct_vol() {
     let params = vec![TagValue { tag: "maxPctVol".into(), value: "inf".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("maxPctVol"), "got: {err}");
+    assert!(err.message.contains("maxPctVol"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_vwap_rejects_malformed_bool() {
     let params = vec![TagValue { tag: "noTakeLiq".into(), value: "yes".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("noTakeLiq"), "got: {err}");
+    assert!(err.message.contains("noTakeLiq"), "got: {err}");
 }
 
 #[test]
@@ -631,14 +631,14 @@ fn parse_algo_vwap_rejects_empty_max_pct_vol() {
     // not silently coerced into the "absent" default of 0.0.
     let params = vec![TagValue { tag: "maxPctVol".into(), value: "".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("maxPctVol"), "got: {err}");
+    assert!(err.message.contains("maxPctVol"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_vwap_rejects_empty_bool() {
     let params = vec![TagValue { tag: "noTakeLiq".into(), value: "".into() }];
     let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.contains("noTakeLiq"), "got: {err}");
+    assert!(err.message.contains("noTakeLiq"), "got: {err}");
 }
 
 #[test]
@@ -646,7 +646,7 @@ fn parse_algo_arrival_price_rejects_unknown_risk_aversion() {
     // The issue's own repro: a typo must be refused, not silently sent as Neutral.
     let params = vec![TagValue { tag: "riskAversion".into(), value: "Aggresive".into() }];
     let err = parse_algo_params("arrivalpx", &params).unwrap_err();
-    assert!(err.contains("riskAversion"), "got: {err}");
+    assert!(err.message.contains("riskAversion"), "got: {err}");
 }
 
 #[test]
@@ -664,21 +664,21 @@ fn parse_algo_arrival_price_rejects_empty_risk_aversion() {
     // never set may default to Neutral.
     let params = vec![TagValue { tag: "riskAversion".into(), value: "".into() }];
     let err = parse_algo_params("arrivalpx", &params).unwrap_err();
-    assert!(err.contains("riskAversion"), "got: {err}");
+    assert!(err.message.contains("riskAversion"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_dark_ice_rejects_malformed_display_size() {
     let params = vec![TagValue { tag: "displaySize".into(), value: "abc".into() }];
     let err = parse_algo_params("darkice", &params).unwrap_err();
-    assert!(err.contains("displaySize"), "got: {err}");
+    assert!(err.message.contains("displaySize"), "got: {err}");
 }
 
 #[test]
 fn parse_algo_dark_ice_rejects_negative_display_size() {
     let params = vec![TagValue { tag: "displaySize".into(), value: "-5".into() }];
     let err = parse_algo_params("darkice", &params).unwrap_err();
-    assert!(err.contains("displaySize"), "got: {err}");
+    assert!(err.message.contains("displaySize"), "got: {err}");
 }
 
 #[test]
@@ -694,7 +694,7 @@ fn parse_algo_dark_ice_defaults_display_size_when_absent() {
 fn parse_algo_dark_ice_rejects_empty_display_size() {
     let params = vec![TagValue { tag: "displaySize".into(), value: "".into() }];
     let err = parse_algo_params("darkice", &params).unwrap_err();
-    assert!(err.contains("displaySize"), "got: {err}");
+    assert!(err.message.contains("displaySize"), "got: {err}");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -848,7 +848,7 @@ fn a_second_symbol_is_not_a_duplicate_of_the_first_con_id_less_contract() {
         ..Default::default()
     };
     let err = client.req_mkt_data(2, &qqq, "", false, false).unwrap_err();
-    assert!(!err.contains("req_id 1"), "QQQ is not the live contract: {err}");
+    assert!(!err.message.contains("req_id 1"), "QQQ is not the live contract: {err}");
     match rx.try_recv().expect("the registration reaches the engine") {
         ControlCommand::RegisterInstrument { con_id, symbol, .. } => {
             assert_eq!((con_id, symbol.as_str()), (0, "QQQ"));
@@ -927,9 +927,9 @@ fn req_tick_by_tick_data_is_sent_rather_than_refused() {
     let err = client
         .req_tick_by_tick_data(10, &spy(), "Sideways", 0, false)
         .expect_err("a kind that is not a kind is refused");
-    assert!(err.contains("no such kind"), "{err}");
+    assert!(err.message.contains("no such kind"), "{err}");
     assert!(
-        !err.contains("not served to this session"),
+        !err.message.contains("not served to this session"),
         "the old reasoning is gone: {err}"
     );
 }
@@ -2429,7 +2429,7 @@ fn req_historical_data_rejects_unknown_bar_size() {
     // The issue's exact repro: "1 Min" (wrong case) used to return 5-minute
     // candles with no error.
     let err = client.req_historical_data(5, &spy(), "", "2 D", "1 Min", "TRADES", true, 1, false).unwrap_err();
-    assert!(err.contains("bar_size"), "got: {err}");
+    assert!(err.message.contains("bar_size"), "got: {err}");
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
 }
 
@@ -2437,7 +2437,7 @@ fn req_historical_data_rejects_unknown_bar_size() {
 fn req_historical_data_rejects_unknown_what_to_show() {
     let (client, rx, _shared) = test_client();
     let err = client.req_historical_data(5, &spy(), "", "2 D", "1 min", "TRADE", true, 1, false).unwrap_err();
-    assert!(err.contains("what_to_show"), "got: {err}");
+    assert!(err.message.contains("what_to_show"), "got: {err}");
     assert!(rx.try_recv().is_err());
 }
 
@@ -2447,7 +2447,7 @@ fn req_historical_data_rejects_unsupported_keep_up_to_date_size() {
     // "1 min" is valid on the batch path but not supported for streaming —
     // it used to silently downgrade to 5-minute bars on this path only.
     let err = client.req_historical_data(5, &spy(), "", "1 D", "1 min", "TRADES", true, 1, true).unwrap_err();
-    assert!(err.contains("keep_up_to_date"), "got: {err}");
+    assert!(err.message.contains("keep_up_to_date"), "got: {err}");
     assert!(rx.try_recv().is_err());
 }
 
@@ -2465,7 +2465,7 @@ fn req_historical_data_accepts_streamable_keep_up_to_date_size() {
 /// of the one the caller asked under.
 #[test]
 fn an_unwireable_req_id_is_refused() {
-    type Call = fn(&EClient, i64) -> Result<(), String>;
+    type Call = fn(&EClient, i64) -> Result<(), Refusal>;
     let calls: &[(&str, Call)] = &[
         ("req_historical_data", |c, id| c.req_historical_data(id, &spy(), "", "1 D", "1 min", "TRADES", true, 1, false)),
         ("cancel_historical_data", |c, id| c.cancel_historical_data(id)),
@@ -2496,7 +2496,7 @@ fn an_unwireable_req_id_is_refused() {
                 Err(e) => e,
                 Ok(()) => panic!("{name}({bad}) must be refused"),
             };
-            assert!(err.contains("req_id"), "{name}: the error names the field: {err}");
+            assert!(err.message.contains("req_id"), "{name}: the error names the field: {err}");
             assert!(rx.try_recv().is_err(), "{name}: and nothing reaches the wire");
         }
         // The largest id the wire can carry is still a request, not an error.
@@ -4242,7 +4242,7 @@ fn a_display_group_keeps_its_followers_in_step() {
 
     // A caller that follows nothing has no group to put a contract in.
     let refusal = client.update_display_group(99, "1@SMART").unwrap_err();
-    assert!(refusal.contains("follows no display group"), "{refusal}");
+    assert!(refusal.message.contains("follows no display group"), "{refusal}");
 
     // Once it stops following, it is no longer told.
     client.unsubscribe_from_group_events(11);

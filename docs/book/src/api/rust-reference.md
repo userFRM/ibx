@@ -580,7 +580,7 @@ pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> 
 Exercise or lapse a long option position. `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `override_` is taken for signature compatibility and is not sent: it is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.
 
 ```rust
-pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_action: i32, exercise_quantity: i32, account: &str, override_: bool, ) -> Result<(), String>
+pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_action: i32, exercise_quantity: i32, account: &str, override_: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -592,7 +592,7 @@ pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_actio
 | `account` | `&str` | Account ID. |
 | `override_` | `bool` |  |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -601,7 +601,7 @@ pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_actio
 Cancel an order.
 
 ```rust
-pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), String>
+pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -609,7 +609,7 @@ pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Re
 | `order_id` | `i64` | Order identifier. Must be unique per session. |
 | `manual_order_cancel_time` | `&str` | Manual cancel time (empty for immediate). |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -618,14 +618,14 @@ pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Re
 Cancel an order identified by `permId` — stable across sessions. `permId` is the broker-assigned identifier returned in `order_status` callbacks and surfaced in account tools. Useful for cancelling an order placed in a prior session, where the local `order_id` is not retained. Per ib-agent#154 the CCP cancel frame is orderId-only, so ibx looks up the local `order_id` from `permId` in the open-order cache (populated by `place_order` callbacks or by the CCP session-recovery push hydrated in `handle_exec_report`). Fails if `perm_id` is not currently tracked.
 
 ```rust
-pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), String>
+pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `perm_id` | `i64` | Permanent order ID assigned by the server. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -634,10 +634,10 @@ pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), String>
 Cancel all orders.
 
 ```rust
-pub fn req_global_cancel(&self) -> Result<(), String>
+pub fn req_global_cancel(&self) -> Result<(), Refusal>
 ```
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -744,7 +744,7 @@ pub fn req_executions(&self, req_id: i64, filter: &ExecutionFilter, wrapper: &mu
 Parse algo strategy and TagValue params into internal AlgoParams. A key the caller never set defaults the way IB's own algos do (0.0, false, or the documented default enum value). A key the caller *did* set — even to an empty string — is refused if it doesn't parse, instead of silently taking that same default: a typo like `riskAversion="Aggresive"` used to submit a Neutral algo with no error, and `maxPctVol=""` used to submit 0.0. See ibx#263.
 
 ```rust
-pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, String>
+pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -752,7 +752,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 | `strategy` | `&str` | Algo strategy name (e.g. `"Vwap"`, `"Twap"`). |
 | `params` | `&[TagValue]` | Algo parameter list. |
 
-**Returns:** `Result<AlgoParams, String>`
+**Returns:** `Result<AlgoParams, Refusal>`
 
 ---
 
@@ -763,7 +763,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) have no emission path, and `tick_generic` never fires (ibx#234) — the venue asks for those under numbers of its own rather than the ones this list uses, and this client does not know the mapping. Delayed and frozen data are requested, contrary to what this said: name the type on [`req_market_data_type`](EClient::req_market_data_type) and every subscription after it carries the mode, or state it per request with [`req_mkt_data_ex`](EClient::req_mkt_data_ex). The table there gives the wire shape of each.
 
 ```rust
-pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, ) -> Result<(), String>
+pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -774,7 +774,7 @@ pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list:
 | `snapshot` | `bool` | If `true`, delivers one quote then auto-cancels. |
 | `regulatory_snapshot` | `bool` | If `true`, request a regulatory snapshot (additional fees may apply). |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -783,7 +783,7 @@ pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list:
 Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time (ibx#233), so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`.
 
 ```rust
-pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool, mode_9887: i32, ) -> Result<(), String>
+pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool, mode_9887: i32, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -795,7 +795,7 @@ pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_li
 | `regulatory_snapshot` | `bool` | If `true`, request a regulatory snapshot (additional fees may apply). |
 | `mode_9887` | `i32` |  |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -804,14 +804,14 @@ pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_li
 Cancel market data.
 
 ```rust
-pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -820,7 +820,7 @@ pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), String>
 Subscribe to every trade or every quote change on a contract. This used to refuse outright, on the reasoning that the feed rode a service of its own which this client could not reach. That reasoning was wrong. The feed rides the historical farm this client already reaches — the counterpart registers it there under the name "TickByTick" beside the five-second bars that already stream — and no list of services is involved. The account is entitled; a missing entitlement arrives as the venue's own refusal, not as silence. What was actually wrong was reading what came back. The subscription was always right, which is why the venue acknowledged it and assigned a ticker id, and then nothing could be made of the frames that followed.
 
 ```rust
-pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type: &str, number_of_ticks: i32, ignore_size: bool, ) -> Result<(), String>
+pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type: &str, number_of_ticks: i32, ignore_size: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -831,7 +831,7 @@ pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type
 | `number_of_ticks` | `i32` | Maximum number of ticks to return. |
 | `ignore_size` | `bool` | If `true`, ignore size in tick-by-tick data. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -840,14 +840,14 @@ pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type
 Cancel tick-by-tick data.
 
 ```rust
-pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -856,7 +856,7 @@ pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), String>
 Subscribe to market depth (L2 order book).
 
 ```rust
-pub fn req_mkt_depth( &self, req_id: i64, contract: &Contract, num_rows: i32, is_smart_depth: bool, ) -> Result<(), String>
+pub fn req_mkt_depth( &self, req_id: i64, contract: &Contract, num_rows: i32, is_smart_depth: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -866,7 +866,7 @@ pub fn req_mkt_depth( &self, req_id: i64, contract: &Contract, num_rows: i32, is
 | `num_rows` | `i32` | Number of order book rows to subscribe to. |
 | `is_smart_depth` | `bool` | If `true`, aggregate depth from multiple exchanges via SMART. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -875,14 +875,14 @@ pub fn req_mkt_depth( &self, req_id: i64, contract: &Contract, num_rows: i32, is
 Cancel market depth.
 
 ```rust
-pub fn cancel_mkt_depth(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_mkt_depth(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -891,7 +891,7 @@ pub fn cancel_mkt_depth(&self, req_id: i64) -> Result<(), String>
 Subscribe to real-time 5-second bars.
 
 ```rust
-pub fn req_real_time_bars( &self, req_id: i64, contract: &Contract, _bar_size: i32, what_to_show: &str, use_rth: bool, ) -> Result<(), String>
+pub fn req_real_time_bars( &self, req_id: i64, contract: &Contract, _bar_size: i32, what_to_show: &str, use_rth: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -902,7 +902,7 @@ pub fn req_real_time_bars( &self, req_id: i64, contract: &Contract, _bar_size: i
 | `what_to_show` | `&str` | Data type: `"TRADES"`, `"MIDPOINT"`, `"BID"`, `"ASK"`, `"BID_ASK"`, etc. |
 | `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -911,14 +911,14 @@ pub fn req_real_time_bars( &self, req_id: i64, contract: &Contract, _bar_size: i
 Cancel real-time bars.
 
 ```rust
-pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -927,10 +927,10 @@ pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), String>
 Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen). Request an auth-connection round-trip time sample (ibx#158): sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. The result lands asynchronously — poll `last_rtt()` after a moment. No-op while a probe is already in flight or the connection is down.
 
 ```rust
-pub fn req_ping(&self) -> Result<(), String>
+pub fn req_ping(&self) -> Result<(), Refusal>
 ```
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1013,7 +1013,7 @@ pub fn quote_by_instrument(&self, instrument: InstrumentId) -> Option<Quote>
 Request historical data.
 
 ```rust
-pub fn req_historical_data( &self, req_id: i64, contract: &Contract, end_date_time: &str, duration: &str, bar_size: &str, what_to_show: &str, use_rth: bool, _format_date: i32, keep_up_to_date: bool, ) -> Result<(), String>
+pub fn req_historical_data( &self, req_id: i64, contract: &Contract, end_date_time: &str, duration: &str, bar_size: &str, what_to_show: &str, use_rth: bool, _format_date: i32, keep_up_to_date: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1028,7 +1028,7 @@ pub fn req_historical_data( &self, req_id: i64, contract: &Contract, end_date_ti
 | `format_date` | `i32` | Date format: 1=`"YYYYMMDD HH:MM:SS"`, 2=Unix seconds. |
 | `keep_up_to_date` | `bool` | If `true`, continue receiving updates after initial history. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1037,14 +1037,14 @@ pub fn req_historical_data( &self, req_id: i64, contract: &Contract, end_date_ti
 Cancel historical data.
 
 ```rust
-pub fn cancel_historical_data(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_historical_data(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1053,7 +1053,7 @@ pub fn cancel_historical_data(&self, req_id: i64) -> Result<(), String>
 Request head timestamp.
 
 ```rust
-pub fn req_head_time_stamp( &self, req_id: i64, contract: &Contract, what_to_show: &str, use_rth: bool, _format_date: i32, ) -> Result<(), String>
+pub fn req_head_time_stamp( &self, req_id: i64, contract: &Contract, what_to_show: &str, use_rth: bool, _format_date: i32, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1064,7 +1064,7 @@ pub fn req_head_time_stamp( &self, req_id: i64, contract: &Contract, what_to_sho
 | `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
 | `format_date` | `i32` | Date format: 1=`"YYYYMMDD HH:MM:SS"`, 2=Unix seconds. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1073,7 +1073,7 @@ pub fn req_head_time_stamp( &self, req_id: i64, contract: &Contract, what_to_sho
 Request contract details.
 
 ```rust
-pub fn req_contract_details(&self, req_id: i64, contract: &Contract) -> Result<(), String>
+pub fn req_contract_details(&self, req_id: i64, contract: &Contract) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1081,7 +1081,7 @@ pub fn req_contract_details(&self, req_id: i64, contract: &Contract) -> Result<(
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1090,10 +1090,10 @@ pub fn req_contract_details(&self, req_id: i64, contract: &Contract) -> Result<(
 Request available exchanges for market depth.
 
 ```rust
-pub fn req_mkt_depth_exchanges(&self) -> Result<(), String>
+pub fn req_mkt_depth_exchanges(&self) -> Result<(), Refusal>
 ```
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1102,7 +1102,7 @@ pub fn req_mkt_depth_exchanges(&self) -> Result<(), String>
 Request matching symbols.
 
 ```rust
-pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), String>
+pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1110,7 +1110,7 @@ pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Str
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `pattern` | `&str` | Symbol search pattern. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1119,14 +1119,14 @@ pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Str
 Ask what event types the corporate-events calendar carries. Has to be asked before events can be: the counterpart holds the answer and will not build an event request without it.
 
 ```rust
-pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), String>
+pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1135,14 +1135,14 @@ pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), String>
 Stop waiting on the event types. The query is one message and one answer, so there is nothing at the venue to withdraw: what is withdrawn is the answer, which would otherwise reach a caller who has said they are done with it. A cancel naming no waiting request says so rather than returning as though it acted.
 
 ```rust
-pub fn cancel_wsh_meta_data(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_wsh_meta_data(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1151,14 +1151,14 @@ pub fn cancel_wsh_meta_data(&self, req_id: i64) -> Result<(), String>
 Stop waiting on the calendar's events. As above.
 
 ```rust
-pub fn cancel_wsh_event_data(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_wsh_event_data(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1167,7 +1167,7 @@ pub fn cancel_wsh_event_data(&self, req_id: i64) -> Result<(), String>
 Ask the corporate-events calendar for events. A caller either names a contract or writes its own filter. The filter goes to the venue as written: the venue validates it, and rewriting it here would change what was asked.
 
 ```rust
-pub fn req_wsh_event_data( &self, req_id: i64, query: crate::control::calendar::CalendarQuery, ) -> Result<(), String>
+pub fn req_wsh_event_data( &self, req_id: i64, query: crate::control::calendar::CalendarQuery, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1175,7 +1175,7 @@ pub fn req_wsh_event_data( &self, req_id: i64, query: crate::control::calendar::
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `query` | `crate::control::calendar::CalendarQuery` |  |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1184,7 +1184,7 @@ pub fn req_wsh_event_data( &self, req_id: i64, query: crate::control::calendar::
 Request option chain parameters. `fut_fop_exchange` names the venue for a futures option chain and is empty for an equity or index one.
 
 ```rust
-pub fn req_sec_def_opt_params( &self, req_id: i64, underlying_symbol: &str, fut_fop_exchange: &str, underlying_sec_type: &str, underlying_con_id: i64, ) -> Result<(), String>
+pub fn req_sec_def_opt_params( &self, req_id: i64, underlying_symbol: &str, fut_fop_exchange: &str, underlying_sec_type: &str, underlying_con_id: i64, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1195,7 +1195,7 @@ pub fn req_sec_def_opt_params( &self, req_id: i64, underlying_symbol: &str, fut_
 | `underlying_sec_type` | `&str` | Underlying security type (e.g. `"STK"`). |
 | `underlying_con_id` | `i64` | Underlying contract ID. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1204,14 +1204,14 @@ pub fn req_sec_def_opt_params( &self, req_id: i64, underlying_symbol: &str, fut_
 Cancel head timestamp request.
 
 ```rust
-pub fn cancel_head_time_stamp(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_head_time_stamp(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1259,10 +1259,10 @@ pub fn cancel_news_bulletins(&self)
 Request scanner parameters XML.
 
 ```rust
-pub fn req_scanner_parameters(&self) -> Result<(), String>
+pub fn req_scanner_parameters(&self) -> Result<(), Refusal>
 ```
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1271,7 +1271,7 @@ pub fn req_scanner_parameters(&self) -> Result<(), String>
 Subscribe to a market scanner. `filters` are the scanner filter tags named by `req_scanner_parameters`, e.g. `priceAbove` = `"10"` or `stkTypes` = `"inc:ETF"`.
 
 ```rust
-pub fn req_scanner_subscription( &self, req_id: i64, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, filters: &[TagValue], ) -> Result<(), String>
+pub fn req_scanner_subscription( &self, req_id: i64, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, filters: &[TagValue], ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1283,7 +1283,7 @@ pub fn req_scanner_subscription( &self, req_id: i64, instrument: &str, location_
 | `max_items` | `u32` | Maximum number of scanner results. |
 | `filters` | `&[TagValue]` | Scanner filter tags from `req_scanner_parameters`, e.g. `priceAbove` = `"10"`. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1292,14 +1292,14 @@ pub fn req_scanner_subscription( &self, req_id: i64, instrument: &str, location_
 Cancel a scanner subscription.
 
 ```rust
-pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1308,7 +1308,7 @@ pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), String>
 Request historical news headlines.
 
 ```rust
-pub fn req_historical_news( &self, req_id: i64, con_id: i64, provider_codes: &str, start_time: &str, end_time: &str, max_results: u32, ) -> Result<(), String>
+pub fn req_historical_news( &self, req_id: i64, con_id: i64, provider_codes: &str, start_time: &str, end_time: &str, max_results: u32, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1320,7 +1320,7 @@ pub fn req_historical_news( &self, req_id: i64, con_id: i64, provider_codes: &st
 | `end_time` | `&str` | End date/time for news query. |
 | `max_results` | `u32` | Maximum number of results. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1329,7 +1329,7 @@ pub fn req_historical_news( &self, req_id: i64, con_id: i64, provider_codes: &st
 Request a news article by provider and article ID.
 
 ```rust
-pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &str) -> Result<(), String>
+pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1338,7 +1338,7 @@ pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &st
 | `provider_code` | `&str` | News provider code (e.g. `"BRFG"`). |
 | `article_id` | `&str` | News article identifier. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1347,7 +1347,7 @@ pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &st
 Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary).
 
 ```rust
-pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), String>
+pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1356,7 +1356,7 @@ pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type
 | `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
 | `report_type` | `&str` | Report type: `"ReportSnapshot"`, `"ReportsFinSummary"`, `"RESC"`, etc. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1365,14 +1365,14 @@ pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type
 Cancel fundamental data.
 
 ```rust
-pub fn cancel_fundamental_data(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_fundamental_data(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1381,7 +1381,7 @@ pub fn cancel_fundamental_data(&self, req_id: i64) -> Result<(), String>
 Request price histogram data.
 
 ```rust
-pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool, period: &str) -> Result<(), String>
+pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool, period: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1391,7 +1391,7 @@ pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool
 | `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
 | `period` | `&str` | Histogram period, e.g. `"1week"`, `"1month"`. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1400,14 +1400,14 @@ pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool
 Cancel histogram data.
 
 ```rust
-pub fn cancel_histogram_data(&self, req_id: i64) -> Result<(), String>
+pub fn cancel_histogram_data(&self, req_id: i64) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1416,7 +1416,7 @@ pub fn cancel_histogram_data(&self, req_id: i64) -> Result<(), String>
 Request historical tick data.
 
 ```rust
-pub fn req_historical_ticks( &self, req_id: i64, contract: &Contract, start_date_time: &str, end_date_time: &str, number_of_ticks: i32, what_to_show: &str, use_rth: bool, ) -> Result<(), String>
+pub fn req_historical_ticks( &self, req_id: i64, contract: &Contract, start_date_time: &str, end_date_time: &str, number_of_ticks: i32, what_to_show: &str, use_rth: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1429,7 +1429,7 @@ pub fn req_historical_ticks( &self, req_id: i64, contract: &Contract, start_date
 | `what_to_show` | `&str` | Data type: `"TRADES"`, `"MIDPOINT"`, `"BID"`, `"ASK"`, `"BID_ASK"`, etc. |
 | `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1438,7 +1438,7 @@ pub fn req_historical_ticks( &self, req_id: i64, contract: &Contract, start_date
 Request historical trading schedule.
 
 ```rust
-pub fn req_historical_schedule( &self, req_id: i64, contract: &Contract, end_date_time: &str, duration: &str, use_rth: bool, ) -> Result<(), String>
+pub fn req_historical_schedule( &self, req_id: i64, contract: &Contract, end_date_time: &str, duration: &str, use_rth: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1449,7 +1449,7 @@ pub fn req_historical_schedule( &self, req_id: i64, contract: &Contract, end_dat
 | `duration` | `&str` | Duration string, e.g. `"1 D"`, `"1 W"`, `"1 M"`, `"1 Y"`. |
 | `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1504,14 +1504,14 @@ pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
 Request FA data. Not yet implemented. Ask the venue for a partition of the advisor's own configuration. The reference client names the partition by a number — its aliases, its groups, its allocation profiles — and the venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition.
 
 ```rust
-pub fn request_fa(&self, fa_data_type: i32) -> Result<(), String>
+pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `fa_data_type` | `i32` | FA data type (1=Groups, 2=Profiles, 3=Aliases). |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1520,7 +1520,7 @@ pub fn request_fa(&self, fa_data_type: i32) -> Result<(), String>
 Replace a partition of the advisor's configuration with the one given.
 
 ```rust
-pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), String>
+pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1528,7 +1528,7 @@ pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), String>
 | `fa_data_type` | `i32` | FA data type (1=Groups, 2=Profiles, 3=Aliases). |
 | `cxml` | `&str` | FA XML configuration data. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 
@@ -1642,7 +1642,7 @@ pub fn unsubscribe_from_group_events(&self, req_id: i64)
 Put a contract in the group this request follows, stated as `conId@exchange`, or `none` to empty it. Every follower of that group is told, including this one.
 
 ```rust
-pub fn update_display_group(&self, req_id: i64, contract_info: &str) -> Result<(), String>
+pub fn update_display_group(&self, req_id: i64, contract_info: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1650,7 +1650,7 @@ pub fn update_display_group(&self, req_id: i64, contract_info: &str) -> Result<(
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `contract_info` | `&str` | Display group contract info string. |
 
-**Returns:** `Result<(), String>`
+**Returns:** `Result<(), Refusal>`
 
 ---
 

@@ -81,6 +81,12 @@ impl From<String> for Refusal {
     }
 }
 
+impl From<&str> for Refusal {
+    fn from(message: &str) -> Self {
+        Self::validation(message)
+    }
+}
+
 impl From<Refusal> for String {
     fn from(refusal: Refusal) -> String {
         refusal.message

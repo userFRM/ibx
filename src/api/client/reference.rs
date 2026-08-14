@@ -1,6 +1,7 @@
 //! Reference data: contract details, historical data, scanners, news, fundamentals.
 
 use crate::types::*;
+use crate::api::error_codes::Refusal;
 
 use super::{wire_req_id, Contract, EClient, TagValue};
 use crate::client_core::ClientCore;
@@ -16,7 +17,7 @@ impl EClient {
         &self, req_id: i64, contract: &Contract,
         end_date_time: &str, duration: &str, bar_size: &str,
         what_to_show: &str, use_rth: bool, _format_date: i32, keep_up_to_date: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         ClientCore::validate_historical_args(bar_size, what_to_show, keep_up_to_date)?;
         self.send(ControlCommand::FetchHistorical {
             req_id: wire_req_id(req_id)?,
@@ -36,14 +37,14 @@ impl EClient {
     }
 
     /// Cancel historical data. Matches `cancelHistoricalData` in C++.
-    pub fn cancel_historical_data(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_historical_data(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::CancelHistorical { req_id: wire_req_id(req_id)? })
     }
 
     /// Request head timestamp. Matches `reqHeadTimeStamp` in C++.
     pub fn req_head_time_stamp(
         &self, req_id: i64, contract: &Contract, what_to_show: &str, use_rth: bool, _format_date: i32,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchHeadTimestamp {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
@@ -60,7 +61,7 @@ impl EClient {
     // ── Contract Details ──
 
     /// Request contract details. Matches `reqContractDetails` in C++.
-    pub fn req_contract_details(&self, req_id: i64, contract: &Contract) -> Result<(), String> {
+    pub fn req_contract_details(&self, req_id: i64, contract: &Contract) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchContractDetails {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
@@ -73,12 +74,12 @@ impl EClient {
     }
 
     /// Request available exchanges for market depth.
-    pub fn req_mkt_depth_exchanges(&self) -> Result<(), String> {
+    pub fn req_mkt_depth_exchanges(&self) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchMktDepthExchanges)
     }
 
     /// Request matching symbols. Matches `reqMatchingSymbols` in C++.
-    pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), String> {
+    pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchMatchingSymbols {
             req_id: wire_req_id(req_id)?,
             pattern: pattern.into(),
@@ -89,7 +90,7 @@ impl EClient {
     ///
     /// Has to be asked before events can be: the counterpart holds the answer
     /// and will not build an event request without it.
-    pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), String> {
+    pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchCalendarMetaData { req_id: wire_req_id(req_id)? })
     }
 
@@ -100,12 +101,12 @@ impl EClient {
     /// otherwise reach a caller who has said they are done with it. A cancel
     /// naming no waiting request says so rather than returning as though it
     /// acted.
-    pub fn cancel_wsh_meta_data(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_wsh_meta_data(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::CancelCalendar { req_id: wire_req_id(req_id)? })
     }
 
     /// Stop waiting on the calendar's events. As above.
-    pub fn cancel_wsh_event_data(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_wsh_event_data(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::CancelCalendar { req_id: wire_req_id(req_id)? })
     }
 
@@ -118,7 +119,7 @@ impl EClient {
         &self,
         req_id: i64,
         query: crate::control::calendar::CalendarQuery,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchCalendarEvents {
             req_id: wire_req_id(req_id)?,
             query: Box::new(query),
@@ -132,7 +133,7 @@ impl EClient {
     pub fn req_sec_def_opt_params(
         &self, req_id: i64, underlying_symbol: &str, fut_fop_exchange: &str,
         underlying_sec_type: &str, underlying_con_id: i64,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchOptionParams {
             req_id: wire_req_id(req_id)?,
             symbol: underlying_symbol.into(),
@@ -143,7 +144,7 @@ impl EClient {
     }
 
     /// Cancel head timestamp request. Matches `cancelHeadTimestamp` in C++.
-    pub fn cancel_head_time_stamp(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_head_time_stamp(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::CancelHeadTimestamp { req_id: wire_req_id(req_id)? })
     }
 
@@ -186,7 +187,7 @@ impl EClient {
     // ── Scanner ──
 
     /// Request scanner parameters XML. Matches `reqScannerParameters` in C++.
-    pub fn req_scanner_parameters(&self) -> Result<(), String> {
+    pub fn req_scanner_parameters(&self) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchScannerParams)
     }
 
@@ -197,7 +198,7 @@ impl EClient {
     pub fn req_scanner_subscription(
         &self, req_id: i64, instrument: &str, location_code: &str,
         scan_code: &str, max_items: u32, filters: &[TagValue],
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.send(ControlCommand::SubscribeScanner {
             req_id: wire_req_id(req_id)?,
             instrument: instrument.into(),
@@ -209,7 +210,7 @@ impl EClient {
     }
 
     /// Cancel a scanner subscription. Matches `cancelScannerSubscription` in C++.
-    pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::CancelScanner { req_id: wire_req_id(req_id)? })
     }
 
@@ -219,7 +220,7 @@ impl EClient {
     pub fn req_historical_news(
         &self, req_id: i64, con_id: i64, provider_codes: &str,
         start_time: &str, end_time: &str, max_results: u32,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchHistoricalNews {
             req_id: wire_req_id(req_id)?,
             con_id: con_id as u32,
@@ -231,7 +232,7 @@ impl EClient {
     }
 
     /// Request a news article by provider and article ID. Matches `reqNewsArticle` in C++.
-    pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &str) -> Result<(), String> {
+    pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchNewsArticle {
             req_id: wire_req_id(req_id)?,
             provider_code: provider_code.into(),
@@ -242,7 +243,7 @@ impl EClient {
     // ── Fundamental Data ──
 
     /// Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary). Matches `reqFundamentalData` in C++.
-    pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), String> {
+    pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchFundamentalData {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id as u32,
@@ -251,14 +252,14 @@ impl EClient {
     }
 
     /// Cancel fundamental data. Matches `cancelFundamentalData` in C++.
-    pub fn cancel_fundamental_data(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_fundamental_data(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::CancelFundamentalData { req_id: wire_req_id(req_id)? })
     }
 
     // ── Histogram ──
 
     /// Request price histogram data. Matches `reqHistogramData` in C++.
-    pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool, period: &str) -> Result<(), String> {
+    pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool, period: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchHistogramData {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id as u32,
@@ -268,7 +269,7 @@ impl EClient {
     }
 
     /// Cancel histogram data. Matches `cancelHistogramData` in C++.
-    pub fn cancel_histogram_data(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_histogram_data(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::CancelHistogramData { req_id: wire_req_id(req_id)? })
     }
 
@@ -279,7 +280,7 @@ impl EClient {
         &self, req_id: i64, contract: &Contract,
         start_date_time: &str, end_date_time: &str,
         number_of_ticks: i32, what_to_show: &str, use_rth: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         // Refused here rather than turned into trades on the way out.
         crate::control::historical::tick_data_type(what_to_show)?;
         self.send(ControlCommand::FetchHistoricalTicks {
@@ -304,7 +305,7 @@ impl EClient {
     pub fn req_historical_schedule(
         &self, req_id: i64, contract: &Contract,
         end_date_time: &str, duration: &str, use_rth: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchHistoricalSchedule {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,

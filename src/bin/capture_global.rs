@@ -111,7 +111,7 @@ fn main() {
         let resolved = match client.qualify_contract(&contract) {
             Ok(c) => c,
             Err(e) => {
-                println!("{what:<22} no: {}", first_line(&e));
+                println!("{what:<22} no: {} ({})", first_line(&e.message), e.code);
                 continue;
             }
         };
