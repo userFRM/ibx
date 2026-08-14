@@ -1257,6 +1257,20 @@ impl HotLoop {
         if let Some(stated) = conn.heartbeat_secs {
             self.hb.set_ccp_interval(stated);
         }
+        // Where this attempt landed. A reconnect can be redirected, and a
+        // session that does not remember it dials the door again every time
+        // and never learns the one host it knows answers for this account.
+        if let Some(landed) = conn.connected_host.clone()
+            && let Some(auth) = self.reconnect_auth.as_mut()
+            && auth.host != landed
+        {
+            log::info!("this session is now on {landed}");
+            auth.alternate_hosts.retain(|host| *host != landed);
+            if !auth.alternate_hosts.contains(&auth.host) {
+                auth.alternate_hosts.push(auth.host.clone());
+            }
+            auth.host = landed;
+        }
         self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.context.market);
     }
 

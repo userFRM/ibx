@@ -1312,6 +1312,9 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     log::info!("CCP reconnect complete (seq={})", conn.seq);
     conn.competing = took_from;
     conn.heartbeat_secs = stated_heartbeat;
+    // Where this attempt actually landed. A redirect followed here is followed
+    // again on every later attempt unless the session remembers it.
+    conn.connected_host = Some(host.to_string());
     Ok(conn)
 }
 
