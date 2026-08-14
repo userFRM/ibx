@@ -175,7 +175,7 @@ impl EClient {
     /// owns its own state, sockets, and engine thread, and ``connect()`` does
     /// not serialize across instances. If you pin engines via ``core_id``, give
     /// each a distinct value. See ibx#203 / ibx#207.
-    #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None))]
+    #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None))]
     #[allow(clippy::too_many_arguments)]
     fn connect(
         &self,
@@ -195,7 +195,17 @@ impl EClient {
         // Stated here it belongs to this session; stated there it is the
         // process's, and is what a session that states nothing falls back to.
         settings: Option<std::collections::HashMap<String, String>>,
+        // Where to keep this session so the next start does not need a new
+        // logon. The venue answers a request that names a session it still
+        // holds with a challenge rather than a whole handshake, which is how a
+        // program restarts without a person to approve it — and how a program
+        // that starts often stops counting against an account as a new login
+        // every time. Owner-only, sealed with the password, and bound to this
+        // account and this kind of session.
+        session_file: Option<String>,
     ) -> PyResult<()> {
+        let username_for_resume = username.clone();
+        let password_for_resume = password.clone();
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
@@ -221,15 +231,41 @@ impl EClient {
             ib_key_token_sub_type: ib_key_token_sub_type
                 .unwrap_or_else(|| crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into()),
             code_provider,
-            // The bindings do not hand a session back yet. Adding a way to
-            // would be adding a way to ask for something the servers reached
-            // from here decline; when one takes it, this is where it goes.
-            resume: None,
+            // Whatever was left in the file the caller named. A file that
+            // cannot be read is a slower start, not a failed one: the password
+            // is still here, and a file whose whole point is to avoid needing
+            // a person defeats itself by raising at one.
+            resume: session_file.as_ref().and_then(|path| {
+                crate::auth::resume::load(
+                    std::path::Path::new(path), &username_for_resume, &password_for_resume, paper,
+                )
+            }),
         };
 
         let result = py.detach(|| Gateway::connect(&config));
         let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = result
             .map_err(|e| PyRuntimeError::new_err(format!("Connection failed: {e}")))?;
+
+        // Kept for the next start, where the caller asked for it. Best effort:
+        // a session that cannot be written is a slower start next time, never
+        // a failed connect now.
+        if let Some(path) = session_file.as_ref() {
+            let session = crate::auth::resume::ResumableSession {
+                token: crate::auth::crypto::strip_leading_zeros(
+                    &gw.session_token.to_bytes_be(),
+                ).to_vec(),
+                server_session_id: gw.server_session_id.clone(),
+                hw_info: gw.hw_info.clone(),
+                encoded: gw.encoded.clone(),
+                username: username_for_resume,
+                paper,
+            };
+            if let Err(e) = crate::auth::resume::save(
+                std::path::Path::new(path), &password_for_resume, &session,
+            ) {
+                log::warn!("session not saved to {path}: {e}");
+            }
+        }
 
         *self.account_id.lock().unwrap() = Some(gw.account_id.clone());
         *self.accounts.lock().unwrap() = gw.accounts.clone();
@@ -257,10 +293,16 @@ impl EClient {
             },
         );
 
+        // An order id the account has not used before, that still fits the
+        // width the wire carries a request under. Seconds since the epoch is
+        // both: it is past every id an account has counted up to, it rises on
+        // its own, and it is a third of the way through u32 rather than a
+        // thousand times past it — milliseconds were not wireable, so every
+        // request built from one was refused before it left (ibx#285).
         let start_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() * 1000;
+            .as_secs();
 
         let handle = thread::Builder::new()
             .name("ib-engine-hotloop".into())
