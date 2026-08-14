@@ -97,7 +97,12 @@ def main() -> int:
     ib = ibx.ib_async.attach(IB(), username=username, password=password)
     ib.connect()
 
-    other = ib.client.competing_session() if hasattr(ib.client, "competing_session") else None
+    # Asked for, not probed for: a name this client does not carry is answered
+    # with a closure that raises when called, so hasattr says yes to everything.
+    try:
+        other = ib.client.competing_session()
+    except NotImplementedError:
+        other = None
     if other:
         print(f"another session already holds this account: {other}")
         ib.disconnect()
