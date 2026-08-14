@@ -1016,9 +1016,14 @@ pub fn connect_farm(
                 });
                 let table = crate::protocol::routing::RoutingTable::parse(body);
                 if !table.is_empty() {
+                    // Which farms serve a book, next to the farm this session
+                    // is on: a book served from another farm is asked for on a
+                    // connection that does not serve it.
+                    let book_farms = table.book_farms();
                     log::info!(
-                        "{farm_id} routing table: {} markets across {} farms",
-                        table.rows().len(), table.farms().len(),
+                        "{farm_id} routing table: {} markets across {} farms; \
+                         books served from {:?}",
+                        table.rows().len(), table.farms().len(), book_farms,
                     );
                     conn.routing = table;
                 }
@@ -1786,7 +1791,46 @@ impl Gateway {
     /// Connect to IB: auth + logon + data farm connections.
     /// Returns Gateway + farm Connection + auth Connection + optional historical data Connection.
     pub fn connect(config: &GatewayConfig) -> io::Result<Session> {
-        Self::connect_to_host(config, &config.host, 0)
+        let first = Self::connect_to_host(config, &config.host, 0);
+        let Err(why) = first else { return first };
+
+        // A door that does not open is not an answer. The venue runs one per
+        // region and any of them will route a session to where its account
+        // lives, so a session whose default door is unreachable knocks on the
+        // next rather than giving up on a venue that is up.
+        //
+        // Only for the doors this client ships: a caller that named a host
+        // meant that host, and being sent somewhere else is not failover, it
+        // is the session going somewhere the caller did not ask for.
+        if !crate::config::CCP_HOSTS.contains(&config.host.as_str()) {
+            return Err(why);
+        }
+        // And only when nothing answered. A refusal is the same refusal at
+        // every door, and asking again with the same credentials is how an
+        // account gets locked rather than connected.
+        if !matches!(
+            crate::engine::hot_loop::retry::DisconnectReason::from_error(&why),
+            crate::engine::hot_loop::retry::DisconnectReason::Transport
+                | crate::engine::hot_loop::retry::DisconnectReason::NoResponse
+        ) {
+            return Err(why);
+        }
+
+        let mut last = why;
+        for host in alternates_to(
+            &crate::config::CCP_HOSTS.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+            &config.host,
+        ) {
+            log::warn!("{} did not answer ({last}); trying {host}", config.host);
+            match Self::connect_to_host(config, &host, 0) {
+                Ok(session) => {
+                    log::info!("connected through {host}");
+                    return Ok(session);
+                }
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
     }
 
     /// Internal: connect to a specific host, with redirect depth tracking.
@@ -3036,6 +3080,18 @@ mod tests {
 
     /// Which session a logon the venue names belongs to, decided by when it
     /// was made.
+    /// The doors are tried in order, and the one that just failed is not
+    /// tried again as if it were a second chance.
+    #[test]
+    fn the_doors_after_the_one_that_failed_are_the_rest_of_them() {
+        let doors: Vec<String> =
+            crate::config::CCP_HOSTS.iter().map(|h| h.to_string()).collect();
+        let rest = super::alternates_to(&doors, crate::config::CCP_HOSTS[0]);
+        assert_eq!(rest.len(), doors.len() - 1);
+        assert!(!rest.contains(&crate::config::CCP_HOSTS[0].to_string()));
+        assert_eq!(rest[0], crate::config::CCP_HOSTS[1], "and in the order they are listed");
+    }
+
     #[test]
     fn a_session_younger_than_this_one_belongs_to_somebody_else() {
         // What was watched happen: this session logged in, lost the account,
