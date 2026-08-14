@@ -588,14 +588,6 @@ impl EClient {
             .ok_or_else(|| PyRuntimeError::new_err("Not connected"))
     }
 
-    /// Send a control command to the engine. `control_tx` is a sync_channel(64)
-    /// channel: a full queue is normal backpressure (the hot loop is behind,
-    /// not gone) and `send` is meant to wait for it to drain, so the send
-    /// itself stays blocking. What must not happen is waiting with the GIL
-    /// held, stalling every Python thread instead of just this call
-    /// (ibx#271), so the wait runs detached, and only the actual send
-    /// crosses that boundary; `cmd` must already be a plain owned value by
-    /// the time it's built (never touching Python state once detached).
     /// Hand out the next order id, and remember it as used.
     ///
     /// Written where it was read from, for the reason it is read at all: an id
@@ -612,6 +604,14 @@ impl EClient {
         id
     }
 
+    /// Send a control command to the engine. `control_tx` is a sync_channel(64)
+    /// channel: a full queue is normal backpressure (the hot loop is behind,
+    /// not gone) and `send` is meant to wait for it to drain, so the send
+    /// itself stays blocking. What must not happen is waiting with the GIL
+    /// held, stalling every Python thread instead of just this call
+    /// (ibx#271), so the wait runs detached, and only the actual send
+    /// crosses that boundary; `cmd` must already be a plain owned value by
+    /// the time it's built (never touching Python state once detached).
     pub(crate) fn send_control(py: Python<'_>, tx: &SyncSender<ControlCommand>, cmd: ControlCommand) -> PyResult<()> {
         // The error carries the command back, which is the whole command by
         // value. Nothing here wants it returned, so it is described and dropped
