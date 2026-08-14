@@ -1309,7 +1309,8 @@ impl FarmState {
                 && let Some(route) = conn.routing.find(destination, sec_type, endpoint)
             {
                 log::info!(
-                    "book for {sec_type} on {destination} is {endpoint}, served by {} on {}",
+                    "book for {sec_type} {con_id} on {destination} is {endpoint}, \
+                     served by {} on {} ({num_rows} rows asked)",
                     route.farm, route.host,
                 );
             }
