@@ -213,9 +213,17 @@ fn trailing_size_increment(parts: &[&str]) -> Option<f64> {
 /// What the option model goes by where an exchange would be named.
 const GREEKS_VENUE: &str = "IBVOL";
 
-/// One venue refusing to show its book. Not the end of the request: this
-/// client asks several venues for one book and the others may answer.
-const DEPTH_VENUE_REFUSED: i32 = 321;
+/// The venue refusing to serve data this account is not subscribed to.
+///
+/// The number the counterpart reports that under. It was this client's own
+/// number for a malformed request, which said the caller had asked wrongly
+/// when the venue had simply declined to serve it — a caller branching on it
+/// the way it would against the reference client read a refusal it could fix
+/// as one it could not.
+///
+/// The refusal itself carries no number: the venue names the request and says
+/// why in words, and the number is the one a caller is owed for those words.
+const DEPTH_VENUE_REFUSED: i32 = 354;
 
 /// The option model's own tick, in place of a request type.
 const GREEKS_REQUEST_TYPE: u32 = 732;
