@@ -231,9 +231,30 @@ pub(super) fn ensure_ccp_alive(
             Err(_) => break,
         }
     }
-    println!("  [reconnect] CCP connection dead, re-establishing gateway session...");
+    println!("  [reconnect] CCP connection dead, rebuilding it on this session...");
 
-    // Full reconnection — CCP requires TLS+SRP auth, so we must reconnect everything
+    // The client's own reconnect, which is the thing a program depends on and
+    // so the thing worth testing. It rebuilds the auth connection on the
+    // session already open.
+    //
+    // Opening a whole new session instead was a second logon on an account
+    // that takes one: the venue drops whatever was still held, and every later
+    // loss in the run becomes unattributable — the suite could no longer tell
+    // the venue dropping this session from the suite having replaced it.
+    if let Some(auth) = RECOVERY_AUTH.get() {
+        match gateway::reconnect_ccp(auth) {
+            Ok(ccp) => {
+                conns.ccp = ccp;
+                println!("  [reconnect] CCP rebuilt on the same session");
+                return conns;
+            }
+            Err(e) => println!("  [reconnect] the session could not be rebuilt: {e}"),
+        }
+    }
+
+    // Only where that failed, and said so. A fresh session is a new logon and
+    // the run is no longer measuring one.
+    println!("  [reconnect] opening a NEW SESSION — this is a second logon");
     match gateway::Gateway::connect(config) {
         Ok(gateway::Session { gateway: new_gw, market_data: farm, trading: ccp, historical: hmds, .. }) => {
             conns.farm = farm;
