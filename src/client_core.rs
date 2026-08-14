@@ -763,8 +763,17 @@ impl ClientCore {
     fn recv_registration(
         &self, reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>,
     ) -> Result<InstrumentId, Refusal> {
+        use std::sync::mpsc::RecvTimeoutError;
         reply_rx.recv_timeout(self.registration_timeout())
-            .map_err(|_| Refusal::no_answer("Registration timed out"))?
+            .map_err(|why| match why {
+                // The engine took the command and then went. That is a session
+                // to reopen, not a venue that stayed silent, and a caller
+                // branching on the code has to be able to tell them apart.
+                RecvTimeoutError::Disconnected => {
+                    Refusal::not_connected("Engine stopped before it answered")
+                }
+                RecvTimeoutError::Timeout => Refusal::no_answer("Registration timed out"),
+            })?
             // A full instrument table is the caller asking for more than this
             // session can hold, which is theirs to fix.
             .map_err(Refusal::validation)
@@ -1084,7 +1093,7 @@ impl ClientCore {
                 &c.multiplier, &c.currency,
             ),
             &c.primary_exchange, &c.local_symbol, &c.trading_class,
-            &c.sec_id_type, &c.sec_id,
+            &c.sec_id_type, &c.sec_id, &c.currency,
         )
     }
 
@@ -1098,11 +1107,18 @@ impl ClientCore {
     pub fn description_key_of(
         symbol: &str, sec_type: &str, exchange: &str, identity: &str,
         primary_exchange: &str, local_symbol: &str, trading_class: &str,
-        sec_id_type: &str, sec_id: &str,
+        sec_id_type: &str, sec_id: &str, currency: &str,
     ) -> String {
+        // The currency verbatim, beside the identity that has already folded
+        // it. A contract's identity treats saying nothing and saying USD as
+        // the same thing, which is right for the slot an order is placed
+        // through and wrong here: the lookup sends the currency as a filter,
+        // so a description that stated none can be answered with a listing in
+        // another one — and under a shared key, the next order that does say
+        // USD would be placed on it.
         format!(
             "{symbol}|{sec_type}|{exchange}|{identity}|{primary_exchange}|\
-             {local_symbol}|{trading_class}|{sec_id_type}|{sec_id}"
+             {local_symbol}|{trading_class}|{sec_id_type}|{sec_id}|{currency}"
         )
     }
 
@@ -3809,5 +3825,16 @@ mod exchange_mask_provenance_tests {
         let mut abroad = spy("SMART");
         abroad.currency = "EUR".into();
         assert!(core.named_for(&ClientCore::description_key(&abroad)).is_none());
+
+        // And a description that stated no currency at all is its own. The
+        // identity folds "" and USD together, which is right for the slot an
+        // order goes through: here it would let a lookup answered with a
+        // listing in another currency satisfy an order that asked for USD.
+        let mut unstated = spy("SMART");
+        unstated.currency = String::new();
+        assert!(
+            core.named_for(&ClientCore::description_key(&unstated)).is_none(),
+            "saying nothing about the currency is not the same as saying USD",
+        );
     }
 }
