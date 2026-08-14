@@ -1301,7 +1301,19 @@ impl FarmState {
             // about one of them, two markets that serve a book under another
             // read as serving none, and a request the venue would have
             // answered is refused instead.
-            let serves_a_book = conn.routing.book_endpoint(destination, sec_type).is_some();
+            let book = conn.routing.book_endpoint(destination, sec_type);
+            // Which server the table says serves it. A book asked for on a
+            // connection to another farm is acknowledged and then silent,
+            // which is indistinguishable from a market with nothing to send.
+            if let Some(endpoint) = book
+                && let Some(route) = conn.routing.find(destination, sec_type, endpoint)
+            {
+                log::info!(
+                    "book for {sec_type} on {destination} is {endpoint}, served by {} on {}",
+                    route.farm, route.host,
+                );
+            }
+            let serves_a_book = book.is_some();
             let named_at_all = conn.routing.find(destination, sec_type, "Top").is_some();
             if named_at_all && !serves_a_book {
                 shared.reference.push_historical_error(
