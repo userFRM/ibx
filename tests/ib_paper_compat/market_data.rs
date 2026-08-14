@@ -270,12 +270,18 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
     // silent aggregated subscription is retried directly before concluding
     // anything about the client.
     if depth_updates.is_empty() {
+        // The exchange the contract trades on, rather than the smart
+        // destination again. The venue serves no book there for a share — it
+        // lists the top of one and nothing deeper, in every region — so asking
+        // twice in the same place asks twice for something that does not
+        // exist. Asked for on six exchanges, the venue refused five and took
+        // this one, which is the one this account holds depth for.
         let direct_id = req_id + 1;
         control_tx
             .send(ControlCommand::SubscribeDepth {
                 req_id: direct_id,
                 con_id: 756733,
-                exchange: "SMART".into(),
+                exchange: "IEX".into(),
                 sec_type: "STK".into(),
                 num_rows: 5,
                 is_smart_depth: false,
@@ -300,7 +306,17 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     if depth_updates.is_empty() {
-        no_market(&shared, "no depth updates on either subscription");
+        // A book this account is not entitled to is refused by the venue, in
+        // words and under the number the reference client reports it with. A
+        // phase that read that as a quiet market said nothing about either.
+        let refused = shared.reference.take_error_for(req_id + 1)
+            .or_else(|| shared.reference.take_error_for(req_id));
+        match refused {
+            Some((code, why)) => {
+                println!("  SKIP: the venue will not serve this book: {why} ({code})\n");
+            }
+            None => no_market(&shared, "no depth updates and no refusal either"),
+        }
     } else {
         println!("  PASS ({} depth updates)\n", depth_updates.len());
     }
