@@ -736,6 +736,10 @@ impl ClientCore {
         *self.news_providers.lock().unwrap() = "BRFG*BRFUPDN".into();
         self.news_instruments.lock().unwrap().clear();
         self.contract_cache.lock().unwrap().clear();
+        // What the venue named for a description belongs to the session that
+        // asked. Kept across a reconnect — or a login as somebody else — the
+        // next order goes out under an id this session was never given.
+        self.named_by_description.lock().unwrap().clear();
     }
 
     // ── Registration helpers ──
@@ -1073,15 +1077,27 @@ impl ClientCore {
                 &c.last_trade_date_or_contract_month, c.strike, &c.right,
                 &c.multiplier, &c.currency,
             ),
+            &c.primary_exchange, &c.local_symbol, &c.trading_class,
+            &c.sec_id_type, &c.sec_id,
         )
     }
 
     /// The same key from the parts, for surfaces that carry their own contract
     /// type rather than this one.
+    ///
+    /// Everything the lookup narrows on is in here. Two descriptions that
+    /// differ only in a field the key leaves out are one key, and the second
+    /// order goes out under the first one's contract.
+    #[allow(clippy::too_many_arguments)]
     pub fn description_key_of(
         symbol: &str, sec_type: &str, exchange: &str, identity: &str,
+        primary_exchange: &str, local_symbol: &str, trading_class: &str,
+        sec_id_type: &str, sec_id: &str,
     ) -> String {
-        format!("{symbol}|{sec_type}|{exchange}|{identity}")
+        format!(
+            "{symbol}|{sec_type}|{exchange}|{identity}|{primary_exchange}|\
+             {local_symbol}|{trading_class}|{sec_id_type}|{sec_id}"
+        )
     }
 
     /// The contract the venue named for a description, if it has named one.

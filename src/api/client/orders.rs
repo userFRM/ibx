@@ -100,8 +100,20 @@ impl EClient {
             named = match self.core.named_for(&key) {
                 Some(already) => already,
                 None => {
-                    let answer = self.qualify_contract(contract)
-                        .map_err(Refusal::no_definition)?;
+                    let answer = self.qualify_contract(contract).map_err(|why| {
+                        // Why the lookup failed decides the code. Called a
+                        // missing definition whatever happened, an order
+                        // refused because the session ended reads as an order
+                        // for a contract that does not exist, and a caller
+                        // that branches on the code retries the description
+                        // against a session that is gone.
+                        match self.shared.reference.session_over() {
+                            Some(over) => Refusal::not_connected(
+                                format!("the session is over: {over}"),
+                            ),
+                            None => Refusal::no_definition(why),
+                        }
+                    })?;
                     self.core.remember_named(key, answer.clone());
                     answer
                 }

@@ -103,13 +103,7 @@ impl EClient {
         // placing a hundred orders on one contract asks about it once.
         let named;
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
-            let key = crate::client_core::ClientCore::description_key_of(
-                &contract.symbol, &contract.sec_type, &contract.exchange,
-                &crate::client_core::ClientCore::contract_identity(
-                    &contract.last_trade_date_or_contract_month, contract.strike,
-                    &contract.right, &contract.multiplier, &contract.currency,
-                ),
-            );
+            let key = crate::client_core::ClientCore::description_key(&contract.to_api());
             match self.qualify_once(py, contract, &key) {
                 Ok(found) => { named = found; &named }
                 // Under the code that caused it: an order refused because the

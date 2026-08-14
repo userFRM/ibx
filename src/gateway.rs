@@ -641,6 +641,20 @@ pub struct CompetingSession {
 /// reading only.
 const COMPETING_READ_ONLY: &str = "(RO)";
 
+/// Whether a failed connect means nothing was reached, rather than something
+/// answering and saying no.
+///
+/// The difference decides whether another door is worth knocking on: a door
+/// that cannot be reached says nothing about the account, and one that refuses
+/// says everything, at every door.
+fn nobody_answered(e: &io::Error) -> bool {
+    use crate::engine::hot_loop::retry::DisconnectReason;
+    matches!(
+        DisconnectReason::from_error(e),
+        DisconnectReason::Transport | DisconnectReason::NoResponse,
+    )
+}
+
 /// A host the venue named, and the port it named it on.
 ///
 /// The venue states `host:port` in a redirect. Falls back to the port this
@@ -1117,9 +1131,11 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         return Err(io::Error::other("CCP reconnect: too many redirects"));
     }
     log::info!("CCP reconnect to {}:{} (attempt {})", host, AUTH_PORT, depth + 1);
-    // This attempt's logon, stamped before it is made so it can be compared
-    // with what the venue says about anyone else on the account.
-    let logged_in_at = chrono_free_timestamp().to_string();
+    // When the venue says this logon happened, filled in from its answer
+    // below. Empty until then, and empty is the careful reading: every session
+    // the venue names counts as another client, so the reconnect gives the
+    // account up rather than taking it from somebody who may hold it fairly.
+    let mut logged_in_at = String::new();
 
     // TLS + DH key exchange
     let addr = format!("{host}:{AUTH_PORT}")
@@ -1369,6 +1385,19 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
                     log::info!("the venue holds this reconnect to a {stated}s heartbeat");
                     stated_heartbeat = Some(stated);
                 }
+                // When the venue says this logon happened, by its own clock.
+                // The competing session it names is stamped by that clock too,
+                // and one clock's readings are comparable where two machines'
+                // are not.
+                //
+                // This clock only where the venue states none. Its readings are
+                // the venue's to within the drift between the two, and drift is
+                // a worse risk than the alternative: with no stamp at all every
+                // session the venue names reads as another client, and a
+                // reconnect that meets its own logon still being reaped would
+                // hand the account back rather than finish.
+                logged_in_at = fields.get(&52).cloned()
+                    .unwrap_or_else(|| chrono_free_timestamp().to_string());
                 break;
             }
             _ => {}
@@ -1820,11 +1849,7 @@ impl Gateway {
         // And only when nothing answered. A refusal is the same refusal at
         // every door, and asking again with the same credentials is how an
         // account gets locked rather than connected.
-        if !matches!(
-            crate::engine::hot_loop::retry::DisconnectReason::from_error(&why),
-            crate::engine::hot_loop::retry::DisconnectReason::Transport
-                | crate::engine::hot_loop::retry::DisconnectReason::NoResponse
-        ) {
+        if !nobody_answered(&why) {
             return Err(why);
         }
 
@@ -1839,6 +1864,11 @@ impl Gateway {
                     log::info!("connected through {host}");
                     return Ok(session);
                 }
+                // A door that answered and refused has answered for the
+                // account, not for itself. Knocking on the rest asks the same
+                // question with the same credentials, which is how an account
+                // gets locked rather than connected.
+                Err(e) if !nobody_answered(&e) => return Err(e),
                 Err(e) => last = e,
             }
         }
@@ -2157,6 +2187,10 @@ impl Gateway {
         tls.get_ref().set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
         let ack_deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
         let mut account_id = String::new();
+        // Empty until the venue's answer states it, and empty is the careful
+        // reading: every session the venue names then counts as another
+        // client, so this one gives the account up rather than taking it.
+        let mut logged_in_at = String::new();
         let mut accounts: Vec<String> = Vec::new();
         let mut heartbeat_interval = CCP_HEARTBEAT;
         let mut server_session_id = String::new();
@@ -2216,6 +2250,16 @@ impl Gateway {
                     ));
                 }
                 _ => {}
+            }
+
+            // When the venue says this logon happened, by its own clock. The
+            // competing session it names carries a stamp from the same clock,
+            // and one clock's readings are comparable where two are not.
+            if let Some(v) = fields.get(&52)
+                && logged_in_at.is_empty()
+            {
+                logged_in_at = v.clone();
+                log::info!("the venue stamps this logon {logged_in_at}");
             }
 
             if let Some(v) = fields.get(&1) {
@@ -2681,9 +2725,17 @@ impl Gateway {
         }
         log::info!("Login holds {} account(s)", accounts.len());
 
+        // This clock only where the venue stated none, for the reason the
+        // reconnect states: no stamp at all reads every session the venue
+        // names as another client.
+        if logged_in_at.is_empty() {
+            logged_in_at = chrono_free_timestamp().to_string();
+            log::info!("the venue stamped no time on this logon; using this clock");
+        }
+
         let gw = Gateway {
             competing,
-            logged_in_at: chrono_free_timestamp().to_string(),
+            logged_in_at,
             auth_hosts: vec![host.to_string()],
             account_id,
             accounts,
@@ -3133,6 +3185,9 @@ mod tests {
         // Across a day and a year boundary, which the text order has to hold.
         assert!(super::is_another_client("20260815-00:00:01", "20260814-23:59:59"));
         assert!(!super::is_another_client("20251231-23:59:59", "20260101-00:00:01"));
+        // No stamp of this session's own: every session the venue names is
+        // somebody else, which gives the account up rather than taking it.
+        assert!(super::is_another_client("20260814-09:58:33", ""));
     }
 
     /// The venue names the session that was already logged in, and this reads
