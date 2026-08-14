@@ -116,6 +116,27 @@ official gateway behaves the same way.
 - **Historical execution reports require a window within 7 days.** A request
   without one is rejected in full.
 
+## Sessions
+
+An account takes one logon at a time. The venue states this at connect, names
+the session already holding the account, and states when that session logged
+in.
+
+| Behaviour | Status | Verification |
+| --- | :---: | --- |
+| The session holding the account is reported to the caller | ✅ Supported | `competing_session()` returns the address, the logon time, and whether this session may trade. A read-only flag from the venue is carried as stated |
+| A logon later than this one is another client, and keeps the account | ✅ Supported | A reconnect that finds one reports it and stops; retrying cannot change it. Both times are read from the venue's own clock, so two machines' clocks cannot decide it |
+| A logon at or before this one is this session's own, still being reaped | ✅ Supported | The reconnect completes over it, which is what an ordinary recovery is |
+| The heartbeat is the interval the venue answered with | ✅ Supported | The interval a logon proposes is not what it is held to; the answer is read from the logon response and applied on every reconnect |
+| A reconnect follows the venue | ✅ Supported | It uses the hosts this session reached the venue through, on the port the venue named in its redirect, and stops walking hosts when one answers and refuses |
+| The first connect knocks on the next door when one does not answer | ✅ Supported | One host per region. A door that answers and refuses ends the walk, so a refused logon is not repeated at every door |
+| A session that has ended answers at once | ✅ Supported | Requests made after a terminal loss are refused with 504 immediately, rather than waiting out a timeout each. Every request already answered keeps the venue's own answer |
+
+One session, held open for 175 minutes across a market open: 106,053 quotes,
+180,433 trades, 95,985 book rows and 4,148 bars, with no unrequested
+disconnect and no error other than the venue's own answer for a series it does
+not hold. `scripts/endurance.py --minutes 175`.
+
 ## Architectural differences from a gateway process
 
 | Gateway | This client |
