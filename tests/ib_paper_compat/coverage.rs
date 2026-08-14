@@ -50,6 +50,7 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
     // shutdown phase at the end of a run.
     "Logout",
     "Shutdown",
+    "ForceDisconnect",
 ];
 
 const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[

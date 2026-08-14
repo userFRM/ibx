@@ -1064,6 +1064,14 @@ impl HotLoop {
                     // must not have the session logged out from under it.
                     self.ccp.send_logout(&mut self.ccp_conn, &mut self.hb);
                 }
+                ControlCommand::ForceDisconnect => {
+                    // What a maintenance window does, on demand. The recovery
+                    // that follows is the engine's own: nothing here helps it
+                    // along, which is the point.
+                    log::warn!("both transports taken away on request");
+                    self.force_farm_disconnect();
+                    self.force_ccp_disconnect();
+                }
                 ControlCommand::Shutdown => {
                     // Unsubscribe all active market data before stopping
                     let instruments: Vec<InstrumentId> = self.farm.instrument_md_reqs

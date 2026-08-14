@@ -2392,6 +2392,18 @@ pub enum ControlCommand {
     Logout,
     /// Graceful shutdown.
     Shutdown,
+    /// Take both transports away, as a maintenance window does.
+    ///
+    /// For proving recovery, which cannot be proved by waiting for the venue
+    /// to do it. Recovering once is not the same as recovering repeatedly:
+    /// state kept from the connection that went, a subscription re-asked under
+    /// an id the venue already holds, a host learned and then forgotten — none
+    /// of those show up until the second time.
+    ///
+    /// Both, because a maintenance window takes both: the auth transport
+    /// carries the orders and the data one carries the quotes, and a client
+    /// that recovers one is still not trading.
+    ForceDisconnect,
 }
 
 /// Account-level state.
