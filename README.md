@@ -301,6 +301,21 @@ through a seqlock from any thread; everything else arrives on the callbacks.
 The Python bindings run the same engine and do not hold the GIL while reading
 the wire.
 
+### One process, one session
+
+The logon lives in your process. An account takes one logon at a time, so two
+programs on one account are two logons, and the venue hands the account to
+whichever connected last: the first is told it has lost the session and stops.
+
+Several strategies inside one process share the session and cost nothing
+extra: one subscription per contract on the wire, whoever asks for it. Several
+*programs* need something holding the session in front of them, which is what a
+gateway's local socket does and what this client, having no socket, does not.
+See [#2](https://github.com/userFRM/ibx/issues/2).
+
+Run one after another and nothing is needed: the last order id handed out is
+remembered, so a later run does not reuse ids the account already holds.
+
 ## Requirements
 
 - Rust 2024 edition (1.85+)
