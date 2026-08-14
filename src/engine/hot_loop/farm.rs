@@ -1488,10 +1488,15 @@ impl FarmState {
             pos += 3;
 
             let Some((_, _, min_tick, size_tick, _)) = self.lookup_depth_stag(stag) else {
+                // A book frame for a stream this session does not hold. Silent
+                // otherwise, and silence here is indistinguishable from a
+                // market with nothing to send.
+                log::debug!("book frame for an unknown stream, tag {stag}");
                 continue;
             };
             // One venue's stream can belong to several requests.
             let subscribers = self.depth_subscribers_of(stag);
+            log::debug!("book frame on tag {stag}: {} subscriber(s)", subscribers.len());
 
             // What the venue counts this contract's sizes in, the same way
             // min_tick is what it counts its prices in. Stating none means

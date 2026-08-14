@@ -397,6 +397,9 @@ impl EClient {
 
         // Drain depth updates -> updateMktDepth / updateMktDepthL2
         let depth_updates = shared.market.drain_depth_updates();
+        if !depth_updates.is_empty() {
+            log::debug!("delivering {} book level(s)", depth_updates.len());
+        }
         for du in depth_updates {
             if du.market_maker.is_empty() {
                 call_wrapper!(self.wrapper, py, "update_mkt_depth", (du.req_id as i64, du.position, du.operation, du.side, du.price, du.size));
