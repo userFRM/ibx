@@ -45,6 +45,7 @@ mod stubs;
 mod tests;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use crate::api::error_codes::Refusal;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -217,9 +218,11 @@ impl Drop for EClient {
 /// would answer under an id the caller never used — and `next_order_id()`
 /// hands out ids well past `u32::MAX`, so the ibapi idiom of one counter for
 /// orders and requests hit it on the first call. Refuse instead (ibx#285).
-pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, String> {
+pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
     u32::try_from(req_id).map_err(|_| {
-        format!("req_id {req_id} is outside the range this request can carry (0..={})", u32::MAX)
+        Refusal::validation(format!(
+            "req_id {req_id} is outside the range this request can carry (0..={})", u32::MAX,
+        ))
     })
 }
 
@@ -431,8 +434,10 @@ impl EClient {
     }
 
     /// Send a control command to the engine. Returns `Err` if the engine has shut down.
-    pub(crate) fn send(&self, cmd: ControlCommand) -> Result<(), String> {
-        self.control_tx.send(cmd).map_err(|e| format!("Engine stopped: {e}"))
+    pub(crate) fn send(&self, cmd: ControlCommand) -> Result<(), Refusal> {
+        self.control_tx
+            .send(cmd)
+            .map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))
     }
 
     // ── Connection ──

@@ -144,30 +144,34 @@ impl Client {
     /// A lookup answers here rather than streaming, so by the time this can be
     /// called there is nothing left running. It reports that rather than
     /// pretending to stop something.
-    pub fn cancel_contract_details(&self, _req_id: i64) -> Result<(), String> {
-        Err(NO_COUNTERPART
-            .iter()
-            .find(|(name, _)| *name == "cancel_contract_details")
-            .map(|(_, why)| (*why).to_string())
-            .unwrap_or_default())
+    pub fn cancel_contract_details(&self, _req_id: i64) -> Result<(), Refusal> {
+        Err(Refusal::validation(
+            NO_COUNTERPART
+                .iter()
+                .find(|(name, _)| *name == "cancel_contract_details")
+                .map(|(_, why)| (*why).to_string())
+                .unwrap_or_default(),
+        ))
     }
 
     /// Begin the handshake a third-party program makes with a local process.
-    pub fn verify_request(&self, _api_name: &str, _api_version: &str) -> Result<(), String> {
+    pub fn verify_request(&self, _api_name: &str, _api_version: &str) -> Result<(), Refusal> {
         Err(Self::no_local_process("verify_request"))
     }
 
     /// Continue that handshake.
-    pub fn verify_message(&self, _api_data: &str) -> Result<(), String> {
+    pub fn verify_message(&self, _api_data: &str) -> Result<(), Refusal> {
         Err(Self::no_local_process("verify_message"))
     }
 
-    fn no_local_process(call: &str) -> String {
-        NO_COUNTERPART
-            .iter()
-            .find(|(name, _)| *name == call)
-            .map(|(_, why)| (*why).to_string())
-            .unwrap_or_default()
+    fn no_local_process(call: &str) -> Refusal {
+        Refusal::validation(
+            NO_COUNTERPART
+                .iter()
+                .find(|(name, _)| *name == call)
+                .map(|(_, why)| (*why).to_string())
+                .unwrap_or_default(),
+        )
     }
 
     /// The session underneath, for anything this shape does not carry.
@@ -197,17 +201,17 @@ impl Client {
     // -- calls that answer -------------------------------------------------
 
     /// Everything the venue knows about the contracts matching a description.
-    pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, String> {
+    pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
         self.inner.contract_details(contract)
     }
 
     /// Fill in what the venue knows about a contract, above all its id.
-    pub fn qualify_contract(&self, contract: &Contract) -> Result<Contract, String> {
+    pub fn qualify_contract(&self, contract: &Contract) -> Result<Contract, Refusal> {
         self.inner.qualify_contract(contract)
     }
 
     /// Fill in a whole list, keeping their order.
-    pub fn qualify_contracts(&self, contracts: &[Contract]) -> Result<Vec<Contract>, String> {
+    pub fn qualify_contracts(&self, contracts: &[Contract]) -> Result<Vec<Contract>, Refusal> {
         self.inner.qualify_contracts(contracts)
     }
 
@@ -220,7 +224,7 @@ impl Client {
         bar_size: &str,
         what_to_show: &str,
         use_rth: bool,
-    ) -> Result<Vec<BarData>, String> {
+    ) -> Result<Vec<BarData>, Refusal> {
         self.inner.historical_data(
             contract, end_date_time, duration, bar_size, what_to_show,
             use_rth,
@@ -228,17 +232,17 @@ impl Client {
     }
 
     /// What the account holds.
-    pub fn positions(&self) -> Result<Vec<PositionRow>, String> {
+    pub fn positions(&self) -> Result<Vec<PositionRow>, Refusal> {
         self.inner.positions()
     }
 
     /// The account's figures for the tags asked for.
-    pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, String> {
+    pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, Refusal> {
         self.inner.account_summary(tags)
     }
 
     /// Every expiration and strike a venue lists for an underlying.
-    pub fn option_chain(&self, underlying: &Contract) -> Result<Vec<OptionChain>, String> {
+    pub fn option_chain(&self, underlying: &Contract) -> Result<Vec<OptionChain>, Refusal> {
         self.inner.option_chain(underlying)
     }
 
@@ -360,7 +364,7 @@ impl Client {
         contract: &Contract,
         what_to_show: &str,
         use_rth: bool,
-    ) -> Result<Subscription<RealTimeBar>, String> {
+    ) -> Result<Subscription<RealTimeBar>, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_real_time_bars(req_id, contract, 5, what_to_show, use_rth)?;
         // Withdraw through a clone of the session's control channel rather
@@ -384,7 +388,7 @@ impl Client {
         contract: &Contract,
         num_rows: i32,
         smart_depth: bool,
-    ) -> Result<Subscription<DepthUpdate>, String> {
+    ) -> Result<Subscription<DepthUpdate>, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_mkt_depth(req_id, contract, num_rows, smart_depth)?;
         let tx = self.inner.control_tx.clone();
@@ -409,13 +413,13 @@ impl Client {
     ///
     /// The order's own id is what the venue answers under, so it is returned:
     /// a caller with nothing to correlate on cannot tell which answer is theirs.
-    pub fn place_order(&self, order_id: i64, contract: &Contract, order: &crate::api::types::Order) -> Result<i64, String> {
+    pub fn place_order(&self, order_id: i64, contract: &Contract, order: &crate::api::types::Order) -> Result<i64, Refusal> {
         self.inner.place_order(order_id, contract, order)?;
         Ok(order_id)
     }
 
     /// Withdraw one order.
-    pub fn cancel_order(&self, order_id: i64) -> Result<(), String> {
+    pub fn cancel_order(&self, order_id: i64) -> Result<(), Refusal> {
         self.inner.cancel_order(order_id, "")
     }
 
@@ -427,7 +431,7 @@ impl Client {
         quantity: i32,
         account: &str,
         override_precaution: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.inner.exercise_options(
             self.stream_id(), contract, action, quantity, account,
             override_precaution,
@@ -480,12 +484,12 @@ impl Client {
     }
 
     /// Every scan the venue offers, and what each can be filtered by.
-    pub fn scanner_parameters(&self) -> Result<(), String> {
+    pub fn scanner_parameters(&self) -> Result<(), Refusal> {
         self.inner.req_scanner_parameters()
     }
 
     /// Every exchange the venue names, in the two sections it names them in.
-    pub fn market_depth_exchanges(&self) -> Result<(), String> {
+    pub fn market_depth_exchanges(&self) -> Result<(), Refusal> {
         self.inner.req_mkt_depth_exchanges()
     }
 
@@ -541,7 +545,7 @@ impl Client {
         number_of_ticks: i32,
         what_to_show: &str,
         use_rth: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.inner.req_historical_ticks(
             self.stream_id(), contract, start_date_time, end_date_time,
             number_of_ticks, what_to_show, use_rth,
@@ -556,14 +560,14 @@ impl Client {
         start_time: &str,
         end_time: &str,
         max_results: u32,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.inner.req_historical_news(
             self.stream_id(), con_id, provider_codes, start_time, end_time, max_results,
         )
     }
 
     /// One news article by its id.
-    pub fn news_article(&self, provider_code: &str, article_id: &str) -> Result<(), String> {
+    pub fn news_article(&self, provider_code: &str, article_id: &str) -> Result<(), Refusal> {
         self.inner.req_news_article(self.stream_id(), provider_code, article_id)
     }
 
@@ -575,7 +579,7 @@ impl Client {
         scan_code: &str,
         max_items: u32,
         filters: &[crate::api::types::TagValue],
-    ) -> Result<i64, String> {
+    ) -> Result<i64, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_scanner_subscription(
             req_id, instrument, location_code, scan_code, max_items, filters,
@@ -584,7 +588,7 @@ impl Client {
     }
 
     /// Stop a scan.
-    pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), Refusal> {
         self.inner.cancel_scanner_subscription(req_id)
     }
 
@@ -663,22 +667,22 @@ impl Client {
     }
 
     /// Ask the venue for a partition of the advisor's own configuration.
-    pub fn request_fa(&self, fa_data_type: i32) -> Result<(), String> {
+    pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal> {
         self.inner.request_fa(fa_data_type)
     }
 
     /// Replace a partition of that configuration with the one given.
-    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), String> {
+    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal> {
         self.inner.replace_fa(fa_data_type, cxml)
     }
 
     /// What event types the corporate-events calendar carries.
-    pub fn wsh_metadata(&self) -> Result<(), String> {
+    pub fn wsh_metadata(&self) -> Result<(), Refusal> {
         self.inner.req_wsh_meta_data(self.stream_id())
     }
 
     /// The calendar's events for one contract.
-    pub fn wsh_event_data_by_contract(&self, con_id: i64) -> Result<(), String> {
+    pub fn wsh_event_data_by_contract(&self, con_id: i64) -> Result<(), Refusal> {
         self.inner.req_wsh_event_data(
             self.stream_id(),
             crate::control::calendar::CalendarQuery { con_id: Some(con_id), ..Default::default() },
@@ -689,7 +693,7 @@ impl Client {
     pub fn wsh_event_data(
         &self,
         query: crate::control::calendar::CalendarQuery,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.inner.req_wsh_event_data(self.stream_id(), query)
     }
 
@@ -721,7 +725,7 @@ impl Client {
     }
 
     /// Send an order, under an id this shape chooses.
-    pub fn submit_order(&self, contract: &Contract, order: &crate::api::types::Order) -> Result<i64, String> {
+    pub fn submit_order(&self, contract: &Contract, order: &crate::api::types::Order) -> Result<i64, Refusal> {
         let order_id = self.inner.next_order_id();
         self.place_order(order_id, contract, order)
     }
@@ -736,7 +740,7 @@ impl Client {
         orders: &mut [crate::api::types::Order],
         oca_group: &str,
         oca_type: i32,
-    ) -> Result<Vec<i64>, String> {
+    ) -> Result<Vec<i64>, Refusal> {
         for order in orders.iter_mut() {
             order.oca_group = oca_group.to_string();
             order.oca_type = oca_type;
@@ -781,8 +785,8 @@ impl Client {
     }
 
     /// Withdraw every order this session has working.
-    pub fn global_cancel(&self) -> Result<(), String> {
-        self.inner.req_global_cancel().map_err(|e| e.to_string())
+    pub fn global_cancel(&self) -> Result<(), Refusal> {
+        self.inner.req_global_cancel()
     }
 }
 

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::api::error_codes::Refusal;
 use crate::api::types::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
 
@@ -33,7 +34,7 @@ fn ask_id() -> i64 {
 #[derive(Default)]
 struct Answer {
     details: Vec<ContractDetails>,
-    error: Option<String>,
+    error: Option<Refusal>,
     done: bool,
 }
 
@@ -60,7 +61,7 @@ impl Wrapper for Collector {
         }
         if req_id == self.req_id {
             let mut a = self.answer.lock().unwrap();
-            a.error = Some(format!("{code}: {message}"));
+            a.error = Some(Refusal::stated(code as i32, message));
             a.done = true;
         }
     }
@@ -150,7 +151,10 @@ impl OrderReport {
 /// One question's answer as it accumulates.
 struct Pending<T> {
     rows: Vec<T>,
-    error: Option<String>,
+    /// Under the number the venue gave it. Flattened into a sentence, a caller
+    /// could only match on prose for something the reference client hands it
+    /// to branch on.
+    error: Option<Refusal>,
     done: bool,
 }
 
@@ -169,7 +173,7 @@ impl EClient {
     /// Pump until the collector says the answer is complete, or time runs out.
     fn wait_for<T, W: Wrapper>(
         &self, collector: &mut W, state: &Arc<Mutex<Pending<T>>>, what: &str,
-    ) -> Result<Vec<T>, String> {
+    ) -> Result<Vec<T>, Refusal> {
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         while Instant::now() < deadline {
             self.process_msgs(collector);
@@ -183,7 +187,9 @@ impl EClient {
             return Err(e);
         }
         if !s.done {
-            return Err(format!("no answer within {}s to {what}", ANSWER_TIMEOUT.as_secs()));
+            return Err(Refusal::no_answer(
+                format!("no answer within {}s to {what}", ANSWER_TIMEOUT.as_secs()),
+            ));
         }
         Ok(std::mem::take(&mut s.rows))
     }
@@ -192,7 +198,7 @@ impl EClient {
     pub fn historical_data(
         &self, contract: &Contract, end_date_time: &str, duration: &str,
         bar_size: &str, what_to_show: &str, use_rth: bool,
-    ) -> Result<Vec<BarData>, String> {
+    ) -> Result<Vec<BarData>, Refusal> {
         struct Bars { req_id: i64, state: Arc<Mutex<Pending<BarData>>> }
         impl Wrapper for Bars {
             fn historical_data(&mut self, req_id: i64, bar: &BarData) {
@@ -208,7 +214,7 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
@@ -228,7 +234,7 @@ impl EClient {
     /// stock, not the option — which `qualify_contract` supplies.
     pub fn option_chain(
         &self, underlying: &Contract,
-    ) -> Result<Vec<OptionChain>, String> {
+    ) -> Result<Vec<OptionChain>, Refusal> {
         struct Chain { req_id: i64, state: Arc<Mutex<Pending<OptionChain>>> }
         impl Wrapper for Chain {
             fn security_definition_option_parameter(
@@ -254,17 +260,17 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
         }
         if underlying.con_id == 0 {
-            return Err(format!(
+            return Err(Refusal::validation(format!(
                 "the chain is asked for by the id of the contract the options are on, and {} \
                  carries none: qualify it first",
                 underlying.symbol,
-            ));
+            )));
         }
         let req_id = ask_id();
         let state = Arc::new(Mutex::new(Pending::default()));
@@ -280,7 +286,7 @@ impl EClient {
     /// The same question `req_head_time_stamp` asks.
     pub fn head_timestamp(
         &self, contract: &Contract, what_to_show: &str, use_rth: bool,
-    ) -> Result<String, String> {
+    ) -> Result<String, Refusal> {
         struct Head { req_id: i64, state: Arc<Mutex<Pending<String>>> }
         impl Wrapper for Head {
             fn head_timestamp(&mut self, req_id: i64, head_timestamp: &str) {
@@ -293,7 +299,7 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
@@ -309,7 +315,7 @@ impl EClient {
     /// Contracts whose name or symbol matches a pattern.
     pub fn matching_symbols(
         &self, pattern: &str,
-    ) -> Result<Vec<crate::api::types::ContractDescription>, String> {
+    ) -> Result<Vec<crate::api::types::ContractDescription>, Refusal> {
         struct Matches {
             req_id: i64,
             state: Arc<Mutex<Pending<crate::api::types::ContractDescription>>>,
@@ -327,7 +333,7 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
@@ -346,7 +352,7 @@ impl EClient {
     pub fn news_headlines(
         &self, con_id: i64, provider_codes: &str,
         start_date_time: &str, end_date_time: &str, total_results: i32,
-    ) -> Result<Vec<Headline>, String> {
+    ) -> Result<Vec<Headline>, Refusal> {
         struct Headlines { req_id: i64, state: Arc<Mutex<Pending<Headline>>> }
         impl Wrapper for Headlines {
             fn historical_news(
@@ -370,7 +376,7 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
@@ -388,7 +394,7 @@ impl EClient {
     /// How a contract's trades were spread across prices.
     pub fn histogram_data(
         &self, contract: &Contract, use_rth: bool, period: &str,
-    ) -> Result<Vec<(f64, i64)>, String> {
+    ) -> Result<Vec<(f64, i64)>, Refusal> {
         struct Histogram { req_id: i64, state: Arc<Mutex<Pending<(f64, i64)>>> }
         impl Wrapper for Histogram {
             fn histogram_data(&mut self, req_id: i64, items: &[(f64, i64)]) {
@@ -401,7 +407,7 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
@@ -417,7 +423,7 @@ impl EClient {
     /// A fundamental document about a contract, as the venue writes it.
     pub fn fundamental_data(
         &self, contract: &Contract, report_type: &str,
-    ) -> Result<String, String> {
+    ) -> Result<String, Refusal> {
         struct Document { req_id: i64, state: Arc<Mutex<Pending<String>>> }
         impl Wrapper for Document {
             fn fundamental_data(&mut self, req_id: i64, data: &str) {
@@ -430,7 +436,7 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
@@ -449,7 +455,7 @@ impl EClient {
     /// nothing reaches the market.
     pub fn what_if_order(
         &self, contract: &Contract, order: &crate::api::types::Order,
-    ) -> Result<crate::api::types::OrderState, String> {
+    ) -> Result<crate::api::types::OrderState, Refusal> {
         struct Preview {
             order_id: i64,
             state: Arc<Mutex<Pending<crate::api::types::OrderState>>>,
@@ -468,7 +474,7 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.order_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
@@ -483,7 +489,7 @@ impl EClient {
     }
 
     /// Every holding in the account.
-    pub fn positions(&self) -> Result<Vec<PositionRow>, String> {
+    pub fn positions(&self) -> Result<Vec<PositionRow>, Refusal> {
         struct Held { state: Arc<Mutex<Pending<PositionRow>>> }
         impl Wrapper for Held {
             fn position(&mut self, account: &str, contract: &Contract, position: f64, avg_cost: f64) {
@@ -506,7 +512,7 @@ impl EClient {
 
     /// The account values named by `tags`, as `req_account_summary` asks for
     /// them. `tags` is a comma-separated list, or `All`.
-    pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, String> {
+    pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, Refusal> {
         struct Values { req_id: i64, state: Arc<Mutex<Pending<AccountValue>>> }
         impl Wrapper for Values {
             fn account_summary(&mut self, req_id: i64, account: &str, tag: &str, value: &str, currency: &str) {
@@ -527,7 +533,7 @@ impl EClient {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
                     let mut s = self.state.lock().unwrap();
-                    s.error = Some(format!("{code}: {message}"));
+                    s.error = Some(Refusal::stated(code as i32, message));
                     s.done = true;
                 }
             }
@@ -553,7 +559,7 @@ impl EClient {
     /// the venue had not finished, and the order is still working.
     pub fn await_order(
         &self, order_id: i64, timeout: Duration,
-    ) -> Result<OrderReport, String> {
+    ) -> Result<OrderReport, Refusal> {
         struct Watch { order_id: i64, report: Arc<Mutex<Option<OrderReport>>>, done: Arc<Mutex<bool>> }
         impl Wrapper for Watch {
             fn order_status(
@@ -617,7 +623,8 @@ impl EClient {
             std::thread::sleep(Duration::from_millis(10));
         }
         report.lock().unwrap().clone().ok_or_else(|| {
-            format!("order {order_id} said nothing within {}s", timeout.as_secs())
+            Refusal::no_answer(
+                format!("order {order_id} said nothing within {}s", timeout.as_secs()))
         })
     }
 
@@ -625,7 +632,7 @@ impl EClient {
     ///
     /// The same question `req_contract_details` asks, answered here instead of
     /// on a callback.
-    pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, String> {
+    pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
         let req_id = ask_id();
         let answer = Arc::new(Mutex::new(Answer::default()));
         let mut collector = Collector { req_id, answer: Arc::clone(&answer) };
@@ -645,10 +652,10 @@ impl EClient {
             return Err(e);
         }
         if !a.done {
-            return Err(format!(
+            return Err(Refusal::no_answer(format!(
                 "no answer within {}s to a contract lookup for {} {}",
                 ANSWER_TIMEOUT.as_secs(), contract.sec_type, contract.symbol,
-            ));
+            )));
         }
         Ok(std::mem::take(&mut a.details))
     }
@@ -664,13 +671,13 @@ impl EClient {
     /// resolved to whichever came back first — the same symbol on the same
     /// venue exists in more than one currency, and picking one silently is how
     /// an order ends up on the wrong one.
-    pub fn qualify_contract(&self, contract: &Contract) -> Result<Contract, String> {
+    pub fn qualify_contract(&self, contract: &Contract) -> Result<Contract, Refusal> {
         let mut found = self.contract_details(contract)?;
         match found.len() {
-            0 => Err(format!(
+            0 => Err(Refusal::no_definition(format!(
                 "no contract matches {} {} on {}",
                 contract.sec_type, contract.symbol, contract.exchange,
-            )),
+            ))),
             1 => Ok(found.remove(0).contract),
             n => {
                 let mut how: Vec<String> = found.iter()
@@ -684,10 +691,10 @@ impl EClient {
                 if n > how.len() {
                     how.push(format!("and {} more", n - how.len()));
                 }
-                Err(format!(
+                Err(Refusal::no_definition(format!(
                     "{} {} matches {n} contracts, so it names none: {}",
                     contract.sec_type, contract.symbol, how.join("; "),
-                ))
+                )))
             }
         }
     }
@@ -696,7 +703,7 @@ impl EClient {
     ///
     /// Stops at the first that cannot be named, because a caller building a
     /// basket wants to know which one is wrong, not to trade the rest.
-    pub fn qualify_contracts(&self, contracts: &[Contract]) -> Result<Vec<Contract>, String> {
+    pub fn qualify_contracts(&self, contracts: &[Contract]) -> Result<Vec<Contract>, Refusal> {
         contracts.iter().map(|c| self.qualify_contract(c)).collect()
     }
 }

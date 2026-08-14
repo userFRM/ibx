@@ -1,6 +1,7 @@
 //! Market data request/cancel methods and quote accessors.
 
 use crate::types::*;
+use crate::api::error_codes::Refusal;
 
 use super::{wire_req_id, Contract, EClient};
 
@@ -26,7 +27,7 @@ impl EClient {
     pub fn req_mkt_data(
         &self, req_id: i64, contract: &Contract,
         generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         // The mode the caller asked for on `req_market_data_type`, which names
         // the type once for every subscription that follows. `req_mkt_data_ex`
         // states it per request instead.
@@ -57,7 +58,7 @@ impl EClient {
         &self, req_id: i64, contract: &Contract,
         generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool,
         mode_9887: i32,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         // A contract's news is asked for by the venue's id for the contract,
         // and the caller may have stated a description instead. Resolved only
         // when news is what was asked for: a quote on a description is asked
@@ -82,7 +83,7 @@ impl EClient {
     }
 
     /// Cancel market data. Matches `cancelMktData` in C++.
-    pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), Refusal> {
         let (instrument, needs_news_unsub) = self.core.unregister_mkt_data(req_id);
         if let Some(instrument) = instrument {
             self.send(ControlCommand::Unsubscribe { instrument })?;
@@ -109,7 +110,7 @@ impl EClient {
     pub fn req_tick_by_tick_data(
         &self, req_id: i64, contract: &Contract, tick_type: &str,
         number_of_ticks: i32, ignore_size: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         let _ = (number_of_ticks, ignore_size);
         let kind = TbtType::named(tick_type)?;
 
@@ -137,11 +138,12 @@ impl EClient {
                 kind,
             )
             .map(|_| ())
+            .map_err(Refusal::from)
     }
 
 
     /// Cancel tick-by-tick data. Matches `cancelTickByTickData` in C++.
-    pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), Refusal> {
         // Only what this request took out. Removing the contract's quote
         // mapping here took the quotes away from whoever was watching them.
         if let Some(instrument) = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id) {
@@ -156,7 +158,7 @@ impl EClient {
     pub fn req_mkt_depth(
         &self, req_id: i64, contract: &Contract,
         num_rows: i32, is_smart_depth: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         let exchange = if contract.exchange.is_empty() { "SMART".to_string() } else { contract.exchange.clone() };
         let sec_type = if contract.sec_type.is_empty() { "STK".to_string() } else { contract.sec_type.clone() };
         self.send(ControlCommand::SubscribeDepth {
@@ -173,7 +175,7 @@ impl EClient {
     }
 
     /// Cancel market depth. Matches `cancelMktDepth` in C++.
-    pub fn cancel_mkt_depth(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_mkt_depth(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::UnsubscribeDepth { req_id: wire_req_id(req_id)? })
     }
 
@@ -183,7 +185,7 @@ impl EClient {
     pub fn req_real_time_bars(
         &self, req_id: i64, contract: &Contract,
         _bar_size: i32, what_to_show: &str, use_rth: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         self.send(ControlCommand::SubscribeRealTimeBar {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
@@ -198,7 +200,7 @@ impl EClient {
     }
 
     /// Cancel real-time bars. Matches `cancelRealTimeBars` in C++.
-    pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), String> {
+    pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::CancelRealTimeBar { req_id: wire_req_id(req_id)? })
     }
 
@@ -208,7 +210,7 @@ impl EClient {
     /// contract caches, or pacing budgets. The result lands asynchronously —
     /// poll `last_rtt()` after a moment. No-op while a probe is already in
     /// flight or the connection is down.
-    pub fn req_ping(&self) -> Result<(), String> {
+    pub fn req_ping(&self) -> Result<(), Refusal> {
         self.send(ControlCommand::Ping)
     }
 

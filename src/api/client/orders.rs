@@ -20,10 +20,11 @@ impl EClient {
     /// text at all — so without this check the caller is told nothing. Silence
     /// here is not permission: when the venue stated no permissions, there is
     /// nothing to enforce and the order goes.
-    fn check_sec_type_permitted(&self, sec_type: &str) -> Result<(), String> {
+    fn check_sec_type_permitted(&self, sec_type: &str) -> Result<(), Refusal> {
         ClientCore::refuse_unpermitted_sec_type(
             &self.shared.reference.order_permissions(), sec_type,
         )
+        .map_err(Refusal::from)
     }
 
     /// Security type → the order types the venue permits for it, as stated at
@@ -180,7 +181,7 @@ impl EClient {
     pub fn exercise_options(
         &self, req_id: i64, contract: &Contract, exercise_action: i32,
         exercise_quantity: i32, account: &str, override_: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         let _ = override_;
         let (action, qty) = ClientCore::validate_exercise(
             exercise_action, exercise_quantity, account, &self.account_id,
@@ -207,7 +208,7 @@ impl EClient {
     }
 
     /// Cancel an order. Matches `cancelOrder` in C++.
-    pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), String> {
+    pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::Order(OrderRequest::Cancel {
             order_id: order_id as u64,
         }))
@@ -223,7 +224,7 @@ impl EClient {
     /// the local `order_id` from `permId` in the open-order cache (populated by
     /// `place_order` callbacks or by the CCP session-recovery push hydrated in
     /// `handle_exec_report`). Fails if `perm_id` is not currently tracked.
-    pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), String> {
+    pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), Refusal> {
         if perm_id == 0 {
             return Err("cancel_order_by_perm_id: perm_id must be non-zero".into());
         }
@@ -236,7 +237,7 @@ impl EClient {
     }
 
     /// Cancel all orders. Matches `reqGlobalCancel` in C++.
-    pub fn req_global_cancel(&self) -> Result<(), String> {
+    pub fn req_global_cancel(&self) -> Result<(), Refusal> {
         // Use global instrument count (not just locally-tracked ones)
         let count = self.shared.market.instrument_count();
         for instrument in 0..count {
@@ -350,23 +351,26 @@ impl EClient {
 /// of silently taking that same default: a typo like `riskAversion="Aggresive"`
 /// used to submit a Neutral algo with no error, and `maxPctVol=""` used to
 /// submit 0.0. See ibx#263.
-pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, String> {
+pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
     let get = |key: &str| -> Option<String> {
         params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
     };
     let get_str = |key: &str| -> String { get(key).unwrap_or_default() };
-    let get_f64 = |key: &str| -> Result<f64, String> {
+    let get_f64 = |key: &str| -> Result<f64, Refusal> {
         let raw = match get(key) {
             None => return Ok(0.0),
             Some(raw) => raw,
         };
-        let v: f64 = raw.parse().map_err(|_| format!("Invalid {key} '{raw}': expected a number"))?;
+        let v: f64 = raw.parse()
+            .map_err(|_| Refusal::validation(format!("Invalid {key} '{raw}': expected a number")))?;
         if !v.is_finite() {
-            return Err(format!("Invalid {key} '{raw}': must be a finite number"));
+            return Err(Refusal::validation(
+                format!("Invalid {key} '{raw}': must be a finite number"),
+            ));
         }
         Ok(v)
     };
-    let get_bool = |key: &str| -> Result<bool, String> {
+    let get_bool = |key: &str| -> Result<bool, Refusal> {
         let raw = match get(key) {
             None => return Ok(false),
             Some(raw) => raw,
@@ -374,7 +378,9 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         match raw.to_lowercase().as_str() {
             "0" | "false" => Ok(false),
             "1" | "true" => Ok(true),
-            _ => Err(format!("Invalid {key} '{raw}': expected true/false or 1/0")),
+            _ => Err(Refusal::validation(
+                format!("Invalid {key} '{raw}': expected true/false or 1/0"),
+            )),
         }
     };
 
@@ -446,7 +452,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 /// missing tag defaults to Neutral, matching IB's own algo default; a
 /// present value — including an empty string — that isn't a recognized
 /// member is refused rather than silently defaulting to Neutral. See ibx#263.
-fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, String> {
+fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, Refusal> {
     let raw = match raw {
         None => return Ok(RiskAversion::Neutral),
         Some(raw) => raw,
@@ -456,8 +462,9 @@ fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, String> {
         "get_done" | "getdone" => Ok(RiskAversion::GetDone),
         "aggressive" => Ok(RiskAversion::Aggressive),
         "passive" => Ok(RiskAversion::Passive),
-        _ => Err(format!(
+        _ => Err(Refusal::validation(
             "Unknown riskAversion '{raw}': expected Get_Done, Aggressive, Neutral or Passive"
+                .replace("{raw}", raw),
         )),
     }
 }
