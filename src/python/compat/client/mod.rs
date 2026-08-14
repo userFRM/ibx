@@ -55,6 +55,10 @@ pub struct EClient {
     /// Set by connect(), cleared by disconnect().
     pub(crate) control_tx: Mutex<Option<SyncSender<ControlCommand>>>,
     pub(crate) next_order_id: AtomicU64,
+    /// Where the last id handed out is kept, and under which key. Empty when
+    /// the caller asked for no file, which makes the counter this session's
+    /// alone and lets it collide with what an earlier one used.
+    pub(crate) order_id_store: Mutex<Option<(std::path::PathBuf, String)>>,
     pub(crate) _thread: Mutex<Option<thread::JoinHandle<()>>>,
     /// Set by connect(), cleared by disconnect().
     pub(crate) account_id: Mutex<Option<String>>,
@@ -141,6 +145,7 @@ impl EClient {
             shared: Mutex::new(None),
             control_tx: Mutex::new(None),
             next_order_id: AtomicU64::new(0),
+            order_id_store: Mutex::new(None),
             _thread: Mutex::new(None),
             account_id: Mutex::new(None),
             accounts: Mutex::new(Vec::new()),
@@ -175,7 +180,7 @@ impl EClient {
     /// owns its own state, sockets, and engine thread, and ``connect()`` does
     /// not serialize across instances. If you pin engines via ``core_id``, give
     /// each a distinct value. See ibx#203 / ibx#207.
-    #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None))]
+    #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None, order_id_file=None))]
     #[allow(clippy::too_many_arguments)]
     fn connect(
         &self,
@@ -203,8 +208,12 @@ impl EClient {
         // every time. Owner-only, sealed with the password, and bound to this
         // account and this kind of session.
         session_file: Option<String>,
+        // Where the last order id handed out is kept. Beside the session file
+        // by default, or under the caller's home where there is none.
+        order_id_file: Option<String>,
     ) -> PyResult<()> {
         let username_for_resume = username.clone();
+        let username_for_session = username.clone();
         let password_for_resume = password.clone();
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
@@ -257,7 +266,7 @@ impl EClient {
                 server_session_id: gw.server_session_id.clone(),
                 hw_info: gw.hw_info.clone(),
                 encoded: gw.encoded.clone(),
-                username: username_for_resume,
+                username: username_for_session,
                 paper,
             };
             if let Err(e) = crate::auth::resume::save(
@@ -293,16 +302,20 @@ impl EClient {
             },
         );
 
-        // An order id the account has not used before, that still fits the
-        // width the wire carries a request under. Seconds since the epoch is
-        // both: it is past every id an account has counted up to, it rises on
-        // its own, and it is a third of the way through u32 rather than a
-        // thousand times past it — milliseconds were not wireable, so every
-        // request built from one was refused before it left (ibx#285).
-        let start_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        // One past the last id this account handed out, read from the file
+        // that remembers it. An id belongs to the account rather than to the
+        // process: counting from one on every start collides with everything
+        // placed yesterday, and the venue answers that with "Duplicate ID" and
+        // places nothing.
+        let id_store = order_id_file
+            .map(std::path::PathBuf::from)
+            .or_else(|| session_file.as_ref().and_then(|s| {
+                std::path::Path::new(s).parent().map(|d| d.join("order-ids"))
+            }))
+            .unwrap_or_else(crate::order_ids::default_path);
+        let id_key = crate::order_ids::key(&username_for_resume, paper, client_id);
+        let start_id = crate::order_ids::next_after_last(&id_store, &id_key);
+        *self.order_id_store.lock().unwrap() = Some((id_store, id_key));
 
         let handle = thread::Builder::new()
             .name("ib-engine-hotloop".into())
@@ -583,6 +596,22 @@ impl EClient {
     /// (ibx#271), so the wait runs detached, and only the actual send
     /// crosses that boundary; `cmd` must already be a plain owned value by
     /// the time it's built (never touching Python state once detached).
+    /// Hand out the next order id, and remember it as used.
+    ///
+    /// Written where it was read from, for the reason it is read at all: an id
+    /// this run used must not be handed out by the next one. Written as it is
+    /// handed out rather than in a batch, because a run that ends between the
+    /// two is exactly the run whose ids would be reused.
+    pub(crate) fn take_order_id(&self) -> u64 {
+        let id = self.next_order_id.fetch_add(1, Ordering::Relaxed);
+        if let Some((path, key)) = self.order_id_store.lock().unwrap().as_ref()
+            && let Err(e) = crate::order_ids::remember(path, key, id)
+        {
+            log::warn!("order id {id} not remembered in {}: {e}", path.display());
+        }
+        id
+    }
+
     pub(crate) fn send_control(py: Python<'_>, tx: &SyncSender<ControlCommand>, cmd: ControlCommand) -> PyResult<()> {
         // The error carries the command back, which is the whole command by
         // value. Nothing here wants it returned, so it is described and dropped
