@@ -328,6 +328,16 @@ def _our_name_for(their_name, carrier):
     return split
 
 
+#: Where the two name the same record differently. Their commission report was
+#: named before the venue started charging fees through it, and this client
+#: names it for what it carries now — so the record that says what a trade cost
+#: reached their wrapper as a type nothing there could read, and every fill
+#: raised.
+_THEIR_TYPE_NAME = {
+    "CommissionAndFeesReport": "CommissionReport",
+}
+
+
 def _their_type(name):
     """The type of theirs that goes by this name, if there is one."""
     import dataclasses
@@ -336,6 +346,7 @@ def _their_type(name):
     import ib_async.objects as objects
     import ib_async.order as order_types
 
+    name = _THEIR_TYPE_NAME.get(name, name)
     for module in (contract_types, objects, order_types):
         found = getattr(module, name, None)
         if found is not None and dataclasses.is_dataclass(found):
