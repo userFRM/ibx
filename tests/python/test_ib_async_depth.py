@@ -9,9 +9,13 @@ surface and not the other is invisible to a test that only asks one.
 Needs no session: the level is pushed into the same place the engine pushes it.
 """
 
-from ib_async import IB, Stock
+import pytest
 
-import ibx.ib_async
+ib_async = pytest.importorskip("ib_async")
+
+from ib_async import IB, Stock  # noqa: E402
+
+import ibx.ib_async  # noqa: E402
 
 
 def _attached():
