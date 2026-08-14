@@ -152,6 +152,16 @@ mod tests {
         let e = io::Error::other("competing live session detected");
         let reason = DisconnectReason::from_error(&e);
         assert_eq!(reason, DisconnectReason::TakenOver);
+        // The wording the reconnect gives up with when it finds a logon
+        // younger than its own on the account. Classified anywhere else, the
+        // client takes the account back and the two fight over it.
+        assert_eq!(
+            DisconnectReason::from_error(&io::Error::other(
+                "competing logon: another client holds this account, from 1.2.3.4 \
+                 since 20260814-09:59:33, after this session logged in at 20260814-09:58:33",
+            )),
+            DisconnectReason::TakenOver,
+        );
         assert!(reason.is_terminal(), "whoever connected last has it");
         assert_eq!(
             delay_for(reason, Duration::from_secs(2)),

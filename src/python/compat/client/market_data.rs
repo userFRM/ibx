@@ -2,7 +2,6 @@
 
 use pyo3::prelude::*;
 
-use crate::api::error_codes::Refusal;
 use crate::types::*;
 use super::{wire_req_id, EClient};
 use super::super::contract::Contract;
@@ -56,11 +55,13 @@ impl EClient {
         let wants_news = generic_tick_list.split(',').any(|t| t.trim().ends_with("292"));
         let named;
         let contract = if wants_news && contract.con_id == 0 && !contract.symbol.is_empty() {
-            match self.qualify_contract(py, contract) {
+            match self.qualify_contract_stated(py, contract) {
                 Ok(found) => { named = found; &named }
-                Err(why) => return self.report_refusal(
-                    py, req_id, Refusal::no_definition(why.value(py).to_string()),
-                ),
+                // Under the code that caused it. Called a missing definition
+                // whatever went wrong, a session that ended mid-lookup reads
+                // as a contract that does not exist, and a caller that
+                // branches on the code retries the description for ever.
+                Err(why) => return self.report_refusal(py, req_id, why),
             }
         } else {
             contract
@@ -145,11 +146,13 @@ impl EClient {
         // that was refused before it began.
         let named;
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
-            match self.qualify_contract(py, contract) {
+            match self.qualify_contract_stated(py, contract) {
                 Ok(found) => { named = found; &named }
-                Err(why) => return self.report_refusal(
-                    py, req_id, Refusal::no_definition(why.value(py).to_string()),
-                ),
+                // Under the code that caused it. Called a missing definition
+                // whatever went wrong, a session that ended mid-lookup reads
+                // as a contract that does not exist, and a caller that
+                // branches on the code retries the description for ever.
+                Err(why) => return self.report_refusal(py, req_id, why),
             }
         } else {
             contract

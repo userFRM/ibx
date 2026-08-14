@@ -2475,9 +2475,13 @@ impl CcpState {
             return;
         }
         let now = Instant::now();
+        // A session that has ended answers nothing, so every request waiting on
+        // it is already finished — waiting out its deadline only delays the
+        // caller learning that, once per request.
+        let over = shared.reference.session_over();
         let mut expired: Vec<u32> = Vec::new();
         self.pending_secdef.retain(|(req_id, _, deadline)| {
-            if now >= *deadline {
+            if now >= *deadline || over.is_some() {
                 if *req_id < 0xF000_0000 {
                     expired.push(*req_id);
                 } else {
@@ -2489,7 +2493,7 @@ impl CcpState {
             }
         });
         self.pending_fanout.retain(|p| {
-            if now >= p.deadline {
+            if now >= p.deadline || over.is_some() {
                 log::warn!(
                     "Contract-details fan-out timeout: api_req_id={} received {} of {}",
                     p.api_req_id, p.received, p.fanout_req_ids.len(),
@@ -2501,11 +2505,18 @@ impl CcpState {
             }
         });
         for req_id in expired {
-            log::warn!("Contract-details timeout: req_id={req_id} — no gateway reply within {SECDEF_TIMEOUT:?}");
-            shared.reference.push_historical_error(
-                req_id, 200,
-                "contract details request timed out — no reply from the gateway".to_string(),
-            );
+            let (code, why) = match over {
+                Some(reason) => (
+                    crate::api::error_codes::Refusal::NOT_CONNECTED,
+                    format!("the session is over: {reason}"),
+                ),
+                None => (
+                    200,
+                    "contract details request timed out — no reply from the gateway".to_string(),
+                ),
+            };
+            log::warn!("Contract-details unanswered: req_id={req_id} ({why})");
+            shared.reference.push_historical_error(req_id, code, why);
             shared.reference.push_contract_details_end(req_id);
             emit(event_tx, Event::ContractDetailsEnd(req_id));
         }

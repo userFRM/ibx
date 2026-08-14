@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use crate::api::error_codes::Refusal;
 use pyo3::prelude::*;
 
 use std::sync::Arc;
@@ -115,36 +116,10 @@ impl EClient {
         py: Python<'_>,
         contract: &Contract,
     ) -> PyResult<Vec<ContractDetails>> {
-        let req_id = ask_id();
-        self.req_contract_details(py, req_id, contract)?;
-
-        let shared = self.connected_shared()?;
-
-        let deadline = Instant::now() + ANSWER_TIMEOUT;
-        let collected = py.detach(|| {
-            let mut found = Vec::new();
-            loop {
-                found.extend(shared.reference.take_contract_details_for(req_id as u32));
-                if let Some((code, msg)) = shared.reference.take_error_for(req_id as u32) {
-                    return Err(format!("{msg} ({code})"));
-                }
-                if shared.reference.take_contract_details_end_for(req_id as u32) {
-                    return Ok(found);
-                }
-                if Instant::now() >= deadline {
-                    return Err(format!(
-                        "no answer within {}s to a lookup for {} {}",
-                        ANSWER_TIMEOUT.as_secs(),
-                        contract.sec_type,
-                        contract.symbol,
-                    ));
-                }
-                std::thread::sleep(POLL);
-            }
-        })
-        .map_err(PyRuntimeError::new_err)?;
-
-        Ok(collected.iter().map(|d| ContractDetails::from_definition(py, d)).collect())
+        self.contract_details_stated(py, contract)
+            .map_err(|refusal| PyRuntimeError::new_err(
+                format!("{} ({})", refusal.message, refusal.code),
+            ))
     }
 
 
@@ -418,5 +393,92 @@ impl EClient {
             out.push(self.qualify_contract(py, &bound)?);
         }
         Ok(out)
+    }
+}
+
+/// The same lookups, handing back the venue's own code rather than prose.
+///
+/// Outside `#[pymethods]` on purpose: every function in that block becomes a
+/// method on the Python object, and these are for this crate. A caller with
+/// somewhere to put a code — anything that reports to `error` rather than
+/// raising — uses these, because picking a code for itself is how a session
+/// that ended mid-lookup comes out as a contract that does not exist.
+impl EClient {
+    pub(crate) fn contract_details_stated(
+        &self,
+        py: Python<'_>,
+        contract: &Contract,
+    ) -> Result<Vec<ContractDetails>, Refusal> {
+        let req_id = ask_id();
+        self.req_contract_details(py, req_id, contract)
+            .map_err(|e| Refusal::not_connected(e.to_string()))?;
+
+        let shared = self.connected_shared()
+            .map_err(|e| Refusal::not_connected(e.to_string()))?;
+
+        let deadline = Instant::now() + ANSWER_TIMEOUT;
+        let collected = py.detach(|| {
+            let mut found = Vec::new();
+            loop {
+                found.extend(shared.reference.take_contract_details_for(req_id as u32));
+                if let Some((code, msg)) = shared.reference.take_error_for(req_id as u32) {
+                    return Err(Refusal::stated(code, msg));
+                }
+                if shared.reference.take_contract_details_end_for(req_id as u32) {
+                    return Ok(found);
+                }
+                // Nothing is coming. Waiting the deadline out only delays the
+                // caller learning that, once per request.
+                if let Some(why) = shared.reference.session_over() {
+                    return Err(Refusal::not_connected(
+                        format!("the session is over: {why}"),
+                    ));
+                }
+                if Instant::now() >= deadline {
+                    return Err(Refusal::no_answer(format!(
+                        "no answer within {}s to a lookup for {} {}",
+                        ANSWER_TIMEOUT.as_secs(),
+                        contract.sec_type,
+                        contract.symbol,
+                    )));
+                }
+                std::thread::sleep(POLL);
+            }
+        })?;
+
+        Ok(collected.iter().map(|d| ContractDetails::from_definition(py, d)).collect())
+    }
+
+    /// Name a description once, and remember what it was named.
+    ///
+    /// The venue's answer does not change while a session lasts, and asking
+    /// again per order turns a program that trades one contract into one that
+    /// sends a lookup per order for a name it already has.
+    pub(crate) fn qualify_once(
+        &self, py: Python<'_>, contract: &Contract, key: &str,
+    ) -> Result<Contract, Refusal> {
+        if let Some(already) = self.core.named_for(key) {
+            return Ok(Contract::from_api(&already));
+        }
+        let answer = self.qualify_contract_stated(py, contract)?;
+        self.core.remember_named(key.to_string(), answer.to_api());
+        Ok(answer)
+    }
+
+    pub(crate) fn qualify_contract_stated(
+        &self, py: Python<'_>, contract: &Contract,
+    ) -> Result<Contract, Refusal> {
+        let mut found = self.contract_details_stated(py, contract)?;
+        match found.len() {
+            0 => Err(Refusal::no_definition(format!(
+                "no contract matches {} {} on {}",
+                contract.sec_type, contract.symbol, contract.exchange,
+            ))),
+            1 => Ok(found.remove(0).contract.bind(py).borrow().clone()),
+            n => Err(Refusal::no_definition(format!(
+                "{} {} on {} matches {n} contracts; state the currency or the exchange",
+                contract.sec_type, contract.symbol, contract.exchange,
+            ))),
+        }
     }
 }

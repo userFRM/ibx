@@ -621,6 +621,14 @@ pub struct ClientCore {
     /// What the venue has said about each contract, kept so a second
     /// request need not ask again.
     pub contract_cache: Mutex<HashMap<i64, ApiContract>>,
+    /// Contracts the venue has named, under the description that was asked
+    /// about rather than the one it answered with.
+    ///
+    /// An order may name its contract by description, and the venue only takes
+    /// orders that name it by id, so the description has to be looked up. Asked
+    /// again for every order, a program that places a hundred on one contract
+    /// sends a hundred lookups for a name that has not changed since the first.
+    named_by_description: Mutex<HashMap<String, ApiContract>>,
 }
 
 impl Default for ClientCore {
@@ -672,6 +680,7 @@ impl ClientCore {
             news_providers: Mutex::new("BRFG*BRFUPDN".into()),
             news_instruments: Mutex::new(HashSet::new()),
             contract_cache: Mutex::new(HashMap::new()),
+            named_by_description: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1050,6 +1059,40 @@ impl ClientCore {
     }
 
     // ── Contract cache ──
+
+    /// How a contract was asked about, as one string.
+    ///
+    /// Built from what the caller wrote, not from what the venue answered: a
+    /// caller who says `SMART` gets `SMART` back on the next order, and looking
+    /// the answer up under the exchange the venue routed it to would never
+    /// match.
+    pub fn description_key(c: &ApiContract) -> String {
+        Self::description_key_of(
+            &c.symbol, &c.sec_type, &c.exchange,
+            &Self::contract_identity(
+                &c.last_trade_date_or_contract_month, c.strike, &c.right,
+                &c.multiplier, &c.currency,
+            ),
+        )
+    }
+
+    /// The same key from the parts, for surfaces that carry their own contract
+    /// type rather than this one.
+    pub fn description_key_of(
+        symbol: &str, sec_type: &str, exchange: &str, identity: &str,
+    ) -> String {
+        format!("{symbol}|{sec_type}|{exchange}|{identity}")
+    }
+
+    /// The contract the venue named for a description, if it has named one.
+    pub fn named_for(&self, key: &str) -> Option<ApiContract> {
+        self.named_by_description.lock().unwrap().get(key).cloned()
+    }
+
+    /// Remember what the venue named a description, for the next order on it.
+    pub fn remember_named(&self, key: String, contract: ApiContract) {
+        self.named_by_description.lock().unwrap().insert(key, contract);
+    }
 
     /// Cache a contract for later enrichment.
     pub fn cache_contract(&self, con_id: i64, contract: ApiContract) {
@@ -3715,5 +3758,34 @@ mod exchange_mask_provenance_tests {
 
         shared.reference.note_smart_components_provisional(true);
         assert!(shared.reference.smart_components_are_provisional());
+    }
+
+    /// Two contracts a caller would call different have to look different
+    /// here, or an order on one is sent under the other's id.
+    #[test]
+    fn a_description_names_one_contract_and_no_other() {
+        use crate::api::types::Contract as ApiContract;
+        use super::ClientCore;
+        let spy = |exchange: &str| ApiContract {
+            symbol: "SPY".into(), sec_type: "STK".into(), exchange: exchange.into(),
+            currency: "USD".into(), ..Default::default()
+        };
+        let core = ClientCore::new();
+        let key = ClientCore::description_key(&spy("SMART"));
+        assert!(core.named_for(&key).is_none(), "nothing is known before the venue answers");
+
+        let mut answered = spy("SMART");
+        answered.con_id = 756733;
+        core.remember_named(key.clone(), answered);
+        assert_eq!(core.named_for(&key).map(|c| c.con_id), Some(756733));
+
+        // The same symbol somewhere else is a different contract, and asking
+        // under it must not find the first one.
+        assert!(core.named_for(&ClientCore::description_key(&spy("ARCA"))).is_none());
+
+        // So is the same symbol in another currency, which the identity carries.
+        let mut abroad = spy("SMART");
+        abroad.currency = "EUR".into();
+        assert!(core.named_for(&ClientCore::description_key(&abroad)).is_none());
     }
 }

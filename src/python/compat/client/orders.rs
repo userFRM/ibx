@@ -6,7 +6,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::api::types::{
-    Contract as ApiContract, ExecutionFilter,
+    ExecutionFilter,
 };
 use crate::api::error_codes::Refusal;
 use crate::client_core::ClientCore;
@@ -93,19 +93,29 @@ impl EClient {
         // itself is known to be one the venue would take: an order carrying no
         // id names nothing the venue can match, and is answered by silence.
         //
-        // That resolution is a request and an answer, so this call does not
-        // return until the venue has named the contract. The GIL is released
-        // for the wait, so nothing else in the interpreter is held up — but a
-        // caller placing an order from inside a wrapper callback stalls its own
-        // dispatch loop, because that is the thread it is on. A contract
-        // carrying conId resolves nothing and waits for nothing.
+        // That resolution is a request and an answer the first time, so this
+        // call does not return until the venue has named the contract. The GIL
+        // is released for the wait, so nothing else in the interpreter is held
+        // up — but a caller placing an order from inside a wrapper callback
+        // stalls its own dispatch loop, because that is the thread it is on. A
+        // contract carrying conId resolves nothing and waits for nothing, and
+        // so does one whose description the venue has already named: a program
+        // placing a hundred orders on one contract asks about it once.
         let named;
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
-            match self.qualify_contract(py, contract) {
-                Ok(found) => { named = found; &named }
-                Err(why) => return self.report_refusal(
-                    py, order_id, Refusal::no_definition(why.value(py).to_string()),
+            let key = crate::client_core::ClientCore::description_key_of(
+                &contract.symbol, &contract.sec_type, &contract.exchange,
+                &crate::client_core::ClientCore::contract_identity(
+                    &contract.last_trade_date_or_contract_month, contract.strike,
+                    &contract.right, &contract.multiplier, &contract.currency,
                 ),
+            );
+            match self.qualify_once(py, contract, &key) {
+                Ok(found) => { named = found; &named }
+                // Under the code that caused it: an order refused because the
+                // session ended is not an order for a contract that does not
+                // exist, and a caller that retries on 200 retries for ever.
+                Err(why) => return self.report_refusal(py, order_id, why),
             }
         } else {
             contract
@@ -150,14 +160,7 @@ impl EClient {
         Self::send_control(py, &tx, cmd)?;
 
         // Track order in shared core
-        let api_contract = ApiContract {
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
-            ..Default::default()
-        };
+        let api_contract = contract.to_api();
         let mut tracked_order = api_order.clone();
         tracked_order.order_id = oid as i64;
         self.core.cache_contract(contract.con_id, api_contract.clone());

@@ -137,6 +137,9 @@ pub struct Connection {
     /// starts every later attempt at a door that only redirects, and never
     /// learns the one host it is certain answers for this account.
     pub connected_host: Option<String>,
+    /// When the logon that built this connection was answered, in the spelling
+    /// the venue uses when it names somebody else's session.
+    pub logged_in_at: Option<String>,
     /// Another session that already held this account when this connection was
     /// made, as the venue named it: address, login time, and whether this
     /// session is held to reading only.
@@ -199,6 +202,7 @@ impl Connection {
             read_key: Vec::new(),
             read_iv: Vec::new(),
             connected_host: None,
+            logged_in_at: None,
             competing: None,
             heartbeat_secs: None,
             routing: Default::default(),
@@ -437,6 +441,7 @@ impl Connection {
             read_key: Vec::new(),
             read_iv: Vec::new(),
             connected_host: None,
+            logged_in_at: None,
             competing: None,
             heartbeat_secs: None,
             routing: Default::default(),
@@ -699,6 +704,7 @@ mod tests {
             read_key: Vec::new(),
             read_iv: Vec::new(),
             connected_host: None,
+            logged_in_at: None,
             competing: None,
             heartbeat_secs: None,
             routing: Default::default(),

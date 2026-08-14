@@ -853,6 +853,8 @@ pub struct ReferenceState {
     /// Another session already on this account at connect: address, login time,
     /// and whether this one is held to reading only.
     competing_session: Mutex<Option<(String, String, bool)>>,
+    /// Why this session ended, once it has ended for good.
+    session_over: Mutex<Option<&'static str>>,
     /// Security type → the order types the venue permits for it, from logon tag 6652.
     order_permissions: Mutex<HashMap<String, Vec<String>>>,
     /// Feature tokens the venue enables for this account, from logon tag 6542
@@ -899,6 +901,7 @@ impl ReferenceState {
             ccp_session_id: Mutex::new(String::new()),
             misc_urls: Mutex::new(HashMap::new()),
             competing_session: Mutex::new(None),
+            session_over: Mutex::new(None),
             order_permissions: Mutex::new(HashMap::new()),
             enabled_features: Mutex::new(Vec::new()),
             island_granted: AtomicBool::new(false),
@@ -1543,6 +1546,22 @@ impl ReferenceState {
     /// dropped, so a caller that wants to know before it starts work asks here.
     pub fn competing_session(&self) -> Option<(String, String, bool)> {
         self.competing_session.lock().unwrap().clone()
+    }
+
+    /// Why this session ended, if it has. `Some` means no request can be
+    /// answered any more: the transports are down and nothing is trying to
+    /// bring them back, so a caller that keeps asking is waiting out a timeout
+    /// per call for an answer that cannot arrive.
+    pub fn session_over(&self) -> Option<&'static str> {
+        *self.session_over.lock().unwrap()
+    }
+
+    #[doc(hidden)] pub fn set_session_over(&self, why: &'static str) {
+        *self.session_over.lock().unwrap() = Some(why);
+    }
+
+    #[doc(hidden)] pub fn clear_session_over(&self) {
+        *self.session_over.lock().unwrap() = None;
     }
 
     #[doc(hidden)] pub fn set_competing_session(&self, other: Option<(String, String, bool)>) {
