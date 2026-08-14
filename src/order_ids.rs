@@ -97,8 +97,28 @@ pub fn remember(path: &Path, key: &str, id: u64) -> io::Result<()> {
     // Replaced by rename, so a reader never sees half a file, and a run that
     // dies mid-write still finds the previous counter rather than nothing.
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, body)?;
+    write_private(&tmp, body.as_bytes())?;
     fs::rename(&tmp, path)
+}
+
+/// Owner-only from the moment it exists. The counter is not a secret, but it
+/// carries the account it belongs to, and it sits beside a file that is one.
+#[cfg(unix)]
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    fs::write(path, bytes)
 }
 
 #[cfg(test)]
