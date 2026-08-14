@@ -1,6 +1,7 @@
 //! Market data request/cancel methods.
 
 use pyo3::prelude::*;
+use crate::api::error_codes::Refusal;
 
 use crate::types::*;
 use super::{wire_req_id, EClient};
@@ -89,7 +90,7 @@ impl EClient {
             &last_trade_date, strike, &right, &multiplier,
             snapshot, &generic_tick_list, mode_9887,
         )) {
-            return self.report_refusal(py, req_id, why.into());
+            return self.report_refusal(py, req_id, why);
         }
         self.core.cache_contract(contract.con_id, crate::api::types::Contract {
             con_id: contract.con_id,
@@ -137,7 +138,9 @@ impl EClient {
 
         let tbt_type = match TbtType::named(tick_type) {
             Ok(named) => named,
-            Err(why) => return self.report_refusal(py, req_id, why.into()),
+            // A tick type this client does not carry is a request it will not
+            // send, which is what validation means.
+            Err(why) => return self.report_refusal(py, req_id, Refusal::validation(why)),
         };
 
         // A stream is asked for by the venue's own id for the contract. Sent
@@ -175,7 +178,7 @@ impl EClient {
         if let Err(why) = py.detach(|| self.core.register_tbt(
             &shared, &tx, req_id, con_id, &symbol, &sec_type, &exchange, tbt_type,
         )) {
-            return self.report_refusal(py, req_id, why.into());
+            return self.report_refusal(py, req_id, why);
         }
 
         let _ = (number_of_ticks, ignore_size);
