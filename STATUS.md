@@ -10,9 +10,7 @@ or a recorded server response — not from code inspection.
 | 🔬 Implemented | Implemented and unit-tested; the request reaches the server, but the response has not been observed end to end |
 | ⛔ Unavailable | Not carried by the protocol; the call returns an error stating the reason |
 
-Verification runs against a paper account on IBKR production servers. Where a
-market or data set is not entitled to that account, the entitlement response is
-recorded as the result.
+Verification runs against a paper account on IBKR production servers, and the order path has additionally been run once end to end on a funded account during regular hours. Where a market or data set is not entitled to that account, the entitlement response is recorded as the result.
 
 ---
 
@@ -54,6 +52,7 @@ recorded as the result.
 | Conditions | ✅ Supported | All 6 types (price, volume, percent change, margin, execution, time) accepted and held by the server; `tests/ib_paper_compat` Phase 60 |
 | Order acceptance | ✅ Supported | Every change to an order answers with the order as this client sent it and the status it is now in, which is the pair the reference client answers with. 45 orders placed, modified and withdrawn over a 15-cycle session, every one reaching Cancelled, with no error |
 | Executions and fills | ✅ Supported | Fill reported and position reconciled; execution report retains server fields including unnamed tags; `tests/ib_paper_compat` Phase 97 |
+| A round trip on a funded account | ✅ Supported | One same-day option bought and sold on a live account during regular hours: limit in, filled, limit out, position and account values reconciled, and nothing left open. The order id an account has already used is refused by name, so ids are counted from what the account last used rather than from one |
 | Option exercise and lapse | ✅ Supported | Both submitted for a resolved option contract; server response 399 *"You have not got the number of options requested to be exercised"* delivered to the caller |
 
 ## Account
@@ -131,6 +130,8 @@ in.
 | The heartbeat is the interval the venue answered with | ✅ Supported | The interval a logon proposes is not what it is held to; the answer is read from the logon response and applied on every reconnect |
 | A reconnect follows the venue | ✅ Supported | It uses the hosts this session reached the venue through, on the port the venue named in its redirect, and stops walking hosts when one answers and refuses |
 | The first connect knocks on the next door when one does not answer | ✅ Supported | One host per region. A door that answers and refuses ends the walk, so a refused logon is not repeated at every door |
+| The last order id is kept between runs | ✅ Supported | An order id belongs to the account, not the process: an id it has already used is refused by name. The last one handed out is remembered per account, kind of session and client id, and the next run counts on from it |
+| A session can be offered back to the venue | 🔬 Implemented | Kept between runs, sealed with the account password and owner-only, and offered at connect. This venue declines it and the password does the work, which is the venue's answer rather than an assumption |
 | A session that has ended answers at once | ✅ Supported | Requests made after a terminal loss are refused with 504 immediately, rather than waiting out a timeout each. Every request already answered keeps the venue's own answer |
 
 One session, held open for 175 minutes across a market open: 106,053 quotes,
