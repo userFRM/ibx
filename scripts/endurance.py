@@ -58,6 +58,7 @@ class Counters(EWrapper):
         self.lock = threading.Lock()
         self.seen = collections.Counter()
         self.errors = collections.Counter()
+        self.examples = {}
         self.last_error = None
 
     def next_valid_id(self, order_id):
@@ -92,6 +93,11 @@ class Counters(EWrapper):
             return
         with self.lock:
             self.errors[code] += 1
+            # One example per code, kept from the first of them. Only the most
+            # recent was kept before, so a code that fired every cycle was
+            # counted and never quoted — and a count on its own is not enough
+            # to tell whose refusal it is.
+            self.examples.setdefault(code, message[:120])
             self.last_error = (req_id, code, message[:100])
 
     def _note(self, kind):
@@ -111,7 +117,15 @@ REQUIRED_EVERY_CYCLE = ("quotes", "bars")
 #: stream are the venue's to grant and are quiet on a contract nobody is
 #: trading, so a cycle without one is not a failure — a whole run without one
 #: is, and a run that only printed its counters would not have said so.
+#:
+#: Unless the venue says otherwise. An account without the entitlement is
+#: refused depth outright, and holding a run to a book the venue has said it
+#: will not send is a check that can never pass — which is as useless as one
+#: that can never fail. The refusal is the evidence, and nothing else counts.
 REQUIRED_AT_LEAST_ONCE = ("book", "trades")
+
+#: What the venue says when it will not send a book at all.
+DEPTH_REFUSED = "refused depth"
 
 
 def what_stopped(before, now, cycle):
@@ -200,9 +214,18 @@ def main():
         before = seen
 
     seen, errors, _ = watcher.snapshot()
-    unexpected = {code: n for code, n in errors.items()
-                  if code != NO_TRADES_FOR_A_CURRENCY_PAIR}
-    never_arrived = [kind for kind in REQUIRED_AT_LEAST_ONCE if not seen.get(kind)]
+    unexpected = {
+        code: n for code, n in errors.items()
+        if code != NO_TRADES_FOR_A_CURRENCY_PAIR
+        and DEPTH_REFUSED not in watcher.examples.get(code, "")
+    }
+    refused_depth = any(DEPTH_REFUSED in text for text in watcher.examples.values())
+    never_arrived = [
+        kind for kind in REQUIRED_AT_LEAST_ONCE
+        if not seen.get(kind) and not (kind == "book" and refused_depth)
+    ]
+    if refused_depth:
+        print("the venue refuses a book on this account, so none was required")
     client.disconnect()
 
     for kind in never_arrived:
@@ -212,6 +235,8 @@ def main():
         print(f"STALLED: {what}")
     if unexpected:
         print(f"ERRORS: {unexpected}")
+        for code in sorted(unexpected):
+            print(f"  {code}: {watcher.examples.get(code, '(no message)')}")
     if stalled or unexpected or never_arrived:
         return 1
     print(f"held open for {asked.minutes} minutes with nothing stopping")
