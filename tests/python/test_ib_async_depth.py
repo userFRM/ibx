@@ -62,3 +62,34 @@ def test_the_other_side_and_a_deeper_level():
 
     assert [row.price for row in ticker.domAsks] == [100.30, 100.31]
     assert not ticker.domBids
+
+
+def test_a_commission_report_reaches_them_as_their_own_type():
+    """What a trade cost has to arrive as something their library can read.
+
+    Their record was named before the venue charged fees through it, and this
+    client names it for what it carries now. Handed over under this name it is
+    not a type they can read at all, and their own code raises on every fill —
+    which is every time money moves.
+    """
+    import dataclasses
+
+    from ib_async.objects import CommissionReport
+
+    import ibx
+
+    ours = ibx.CommissionAndFeesReport()
+    ours.execId = "0000e1a7.68a1b2c3.01.01"
+    ours.commission = 1.25
+    ours.currency = "USD"
+    ours.realizedPNL = -2.0
+    ours.yield_ = 0.5
+
+    theirs = ibx.ib_async._as_theirs(ours)
+
+    assert isinstance(theirs, CommissionReport), "handed over as their own record"
+    assert dataclasses.is_dataclass(theirs), "which their code requires it to be"
+    assert theirs.execId == ours.execId
+    assert theirs.commission == 1.25
+    assert theirs.realizedPNL == -2.0
+    assert theirs.yield_ == 0.5

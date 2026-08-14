@@ -6188,6 +6188,30 @@ mod tests {
         (CcpState::new(), Context::new(), SharedState::new())
     }
 
+    /// A lookup the venue never answers has to end anyway. A caller that
+    /// asked through a library holding a future is waiting on the end of this
+    /// request, and a request that simply stops existing leaves it waiting for
+    /// as long as the program runs.
+    #[test]
+    fn a_lookup_the_venue_never_answers_is_ended_rather_than_left() {
+        let (mut ccp, _context, shared) = u186_test_state();
+        // Asked for by the venue's own id for the contract, which is the shape
+        // a caller uses when it names nothing else.
+        ccp.pending_secdef.push((4242, true, Instant::now() - Duration::from_secs(1)));
+
+        ccp.sweep_contract_details(&shared, &None);
+
+        let refused = shared.reference.drain_historical_errors();
+        assert_eq!(refused.len(), 1, "the caller is told, once");
+        assert_eq!(refused[0].0, 4242, "under the id it asked with");
+        assert_eq!(
+            shared.reference.drain_contract_details_end(),
+            vec![4242],
+            "and the request ends, which is what a waiting future is waiting for",
+        );
+        assert!(ccp.pending_secdef.is_empty(), "and nothing is left pending");
+    }
+
     #[test]
     fn matching_symbols_matched_by_echoed_req_id_not_fifo() {
         let (mut ccp, mut context, shared) = u186_test_state();
