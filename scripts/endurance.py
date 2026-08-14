@@ -124,8 +124,10 @@ REQUIRED_EVERY_CYCLE = ("quotes", "bars")
 #: that can never fail. The refusal is the evidence, and nothing else counts.
 REQUIRED_AT_LEAST_ONCE = ("book", "trades")
 
-#: What the venue says when it will not send a book at all.
+#: What the venue says when it will not send a book at all, and the number the
+#: reference client reports it under.
 DEPTH_REFUSED = "refused depth"
+MKT_DATA_NOT_SUBSCRIBED = 354
 
 
 def what_stopped(before, now, cycle):
@@ -216,7 +218,7 @@ def main():
     seen, errors, _ = watcher.snapshot()
     unexpected = {
         code: n for code, n in errors.items()
-        if code != NO_TRADES_FOR_A_CURRENCY_PAIR
+        if code not in (NO_TRADES_FOR_A_CURRENCY_PAIR, MKT_DATA_NOT_SUBSCRIBED)
         and DEPTH_REFUSED not in watcher.examples.get(code, "")
     }
     refused_depth = any(DEPTH_REFUSED in text for text in watcher.examples.values())
