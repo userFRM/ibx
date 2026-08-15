@@ -183,7 +183,7 @@ impl EClient {
                 shares: fill.qty as f64,
                 price,
                 perm_id,
-                client_id: 0,
+                client_id: self.client_id.load(Ordering::Acquire) as i64,
                 order_id: fill.order_id as i64,
                 liquidation: 0,
                 cum_qty,
@@ -237,6 +237,11 @@ impl EClient {
             if let Some(tracked) = tracked {
                 let contract_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
                 let order_py = Py::new(py, Order {
+                    // The number this session connected under. The reference
+                    // client keys a trade by it with the order id, so an order
+                    // reported under a client that did not place it is a second
+                    // trade the caller never sees updated.
+                    client_id: self.client_id.load(Ordering::Acquire),
                     order_id: tracked.order.order_id,
                     action: tracked.order.action.clone(),
                     total_quantity: tracked.order.total_quantity,
@@ -261,7 +266,8 @@ impl EClient {
             }
 
             call_wrapper!(self.wrapper, py, "order_status", (update.order_id as i64, status, update.filled_qty,
-                 update.remaining_qty, avg, update.perm_id, parent_id, 0.0f64, 0i64, "", 0.0f64));
+                 update.remaining_qty, avg, update.perm_id, parent_id, 0.0f64,
+                 self.client_id.load(Ordering::Acquire) as i64, "", 0.0f64));
 
             // Track open orders
             self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty, update.remaining_qty);
@@ -467,6 +473,9 @@ impl EClient {
                     // order, so a status naming its parent is a status for an
                     // order that was never placed.
                     parent_id: self.core.tracked_parent_id(wi.order_id).unwrap_or(0),
+                    // As on the update path: the reference client keys a trade
+                    // by the client that placed it.
+                    client_id: self.client_id.load(Ordering::Acquire),
                     ..Default::default()
                 };
                 (Py::new(py, c)?.into_any(), Py::new(py, o)?.into_any())

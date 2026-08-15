@@ -196,3 +196,38 @@ def test_a_request_before_connect_can_answer_from_its_own_error_handler():
     c.req_pnl(1, "")
     t.cancel()
     assert len(w.codes) == 2, "both the call and its handler were told"
+
+
+def test_an_order_is_reported_under_the_client_that_placed_it():
+    """The reference client keys a trade by the client and the order id.
+
+    Reported under client zero when the session connected under another, its
+    open-order and status callbacks land on a key nobody is holding: the
+    caller's own trade never updates, and a second one appears beside it.
+    """
+    from ibx import EClient, EWrapper
+
+    class W(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.opened = []
+            self.status = []
+
+        def open_order(self, order_id, contract, order, state):
+            self.opened.append(order.clientId)
+
+        def order_status(self, order_id, status, filled, remaining, avg_price,
+                         perm_id, parent_id, last_fill_price, client_id,
+                         why_held, mkt_cap_price):
+            self.status.append(client_id)
+
+    w = W()
+    c = EClient(w)
+    c._test_connect("T")
+    c._test_set_client_id(7)
+    c._test_track_order(21, 0, "SPY", "BUY", 100.0, 1.0, 0)
+    c._test_push_order_update(21, 0, "Submitted", 0.0, 100.0)
+    c._test_dispatch_once()
+
+    assert w.opened == [7], "the order names the client that placed it"
+    assert w.status == [7], "and so does its status"
