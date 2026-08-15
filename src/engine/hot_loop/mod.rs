@@ -444,6 +444,16 @@ impl HotLoop {
         if self.ccp.news_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
             return;
         }
+        // A subscription waiting on the lookup that will name its contract is
+        // as much a reference as a live one. The pending record carries the
+        // slot, so a slot reclaimed while its lookup is out is handed to
+        // another contract and then subscribed with the first one's id: the
+        // quotes arrive, under the wrong contract, priced on its tick.
+        if self.ccp.pending_md_subscribe.iter().any(|(_, p, _)| p.instrument == instrument)
+            || self.ccp.resolved_md_subscribe.iter().any(|(_, p)| p.instrument == instrument)
+        {
+            return;
+        }
         // A holding is a reference to the contract as much as a subscription
         // is. Dropping the last subscription on something the account still
         // owns handed the slot to the next contract, which then reported the
@@ -884,6 +894,14 @@ impl HotLoop {
                 ControlCommand::CancelHistorical { req_id } => {
                     self.hmds.keep_up_to_date_reqs.remove(&req_id);
                     self.hmds.kut_resub.retain(|k| k.req_id != req_id);
+                    self.hmds.rtbar_subs.retain(|(_, rid, _, _)| *rid != req_id);
+                    self.hmds.forming_bars.retain(|f| f.req_id != req_id);
+                    // A keep-up-to-date request rides the five-second stream,
+                    // and its routing and half-built bar are held apart from
+                    // the request itself. Left behind, a later request under
+                    // the same id folds its first bars into the cancelled
+                    // one's partial.
+
                     if let Some(pos) = self.hmds.pending_historical.iter().position(|(_, rid, _)| *rid == req_id) {
                         let (query_id, _, _) = self.hmds.pending_historical.remove(pos);
                         self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
@@ -2558,6 +2576,87 @@ mod tests {
             hl.hmds_next_attempt_at.is_some(),
             "an HMDS reconnect is scheduled rather than skipped forever",
         );
+    }
+
+    /// A cancelled keep-up-to-date request leaves nothing behind under its id.
+    ///
+    /// The stream's routing and its half-built bar are held apart from the
+    /// request, so cancelling the request alone leaves them. A later request
+    /// numbered the same then folds its first bars into the cancelled one's
+    /// partial and reports a bar built from two contracts.
+    #[test]
+    fn cancelling_a_kept_up_to_date_request_takes_its_stream_with_it() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let req_id = 7u32;
+
+        hl.hmds.keep_up_to_date_reqs.insert(req_id);
+        hl.hmds.rtbar_subs.push(("hist_1".to_string(), req_id, Some(99), 0.01));
+        hl.hmds.forming_bars.push(crate::engine::hot_loop::hmds::FormingBar {
+            req_id,
+            seconds: 60,
+            opened_at: 0,
+            bar: Default::default(),
+            weighted: 0.0,
+        });
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(crate::types::ControlCommand::CancelHistorical { req_id }).unwrap();
+        hl.poll_control_commands();
+
+
+        assert!(!hl.hmds.keep_up_to_date_reqs.contains(&req_id));
+        assert!(
+            !hl.hmds.rtbar_subs.iter().any(|(_, rid, _, _)| *rid == req_id),
+            "the stream's routing goes with the request",
+        );
+        assert!(
+            !hl.hmds.forming_bars.iter().any(|f| f.req_id == req_id),
+            "and so does the bar it was part way through",
+        );
+    }
+
+    /// A subscription still waiting to be told which contract it is for.
+    ///
+    /// The pending record carries the slot, not the contract — the contract is
+    /// what the lookup is for. Reclaim it and the slot goes to the next
+    /// registration; the lookup then comes back, adopts the first contract's
+    /// id onto the second contract's slot, and subscribes it there. The quotes
+    /// arrive under the wrong contract, priced on its tick increment.
+    #[test]
+    fn a_slot_waiting_on_its_lookup_is_not_reclaimed() {
+        for stage in ["asked", "answered"] {
+            let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+            let instrument = hl.context.market.register(0);
+            let pending = crate::engine::hot_loop::ccp::PendingSubscribe {
+                instrument,
+                symbol: "SPY".into(),
+                exchange: "SMART".into(),
+                sec_type: "STK".into(),
+                currency: "USD".into(),
+                last_trade_date: String::new(),
+                strike: 0.0,
+                right: String::new(),
+                multiplier: String::new(),
+                mode_9887: 0,
+            };
+            match stage {
+                // Out on the wire, no answer yet.
+                "asked" => hl.ccp.pending_md_subscribe.push((1, pending, Instant::now())),
+                // Answered, not yet sent.
+                _ => hl.ccp.resolved_md_subscribe.push((756733, pending)),
+            }
+
+            hl.try_reclaim_instrument(instrument);
+
+            // The slot is reclaimed by being handed to the next contract that
+            // asks, which is exactly what must not happen here.
+            let next = hl.context.market.register(265598);
+            assert_ne!(
+                next, instrument,
+                "the slot was handed on while its lookup was {stage}",
+            );
+        }
     }
 
     /// The slot guard lists what still refers to a contract, and a holding was
