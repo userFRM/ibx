@@ -872,8 +872,13 @@ impl CcpState {
                     }
                     else if let Some(ticker_id_str) = crate::control::historical::parse_ticker_id(xml_tag) {
                         let ticker_id: u32 = ticker_id_str.parse().unwrap_or(0);
-                        let min_tick =
-                            crate::control::historical::min_tick_of(xml_tag, &ticker_id_str);
+                        // No unit, no bars: a price counted in a unit nobody
+                        // stated is wrong and looks right.
+                        let Some(min_tick) =
+                            crate::control::historical::min_tick_of(xml_tag, &ticker_id_str)
+                        else {
+                            return;
+                        };
                         // Match ticker to a pending keepUpToDate query
                         for (qid, req_id) in &self.pending_kut_historical {
                             if xml_tag.contains(qid) {
@@ -899,7 +904,16 @@ impl CcpState {
                     let payload_len = body[10] as usize;
                     if body.len() >= 11 + payload_len
                         && let Some(&req_id) = self.kut_ticker_map.get(&ticker_id) {
-                            let min_tick = self.kut_min_tick.get(&ticker_id).copied().unwrap_or(0.01);
+                            // Only the unit the venue stated for this ticker.
+                            // Absent, the bar is left rather than decoded as
+                            // though it moved in pennies.
+                            let Some(&min_tick) = self.kut_min_tick.get(&ticker_id) else {
+                                log::warn!(
+                                    "bar for ticker {ticker_id} arrived before the venue \
+                                     stated what its prices are counted in; not decoded",
+                                );
+                                return;
+                            };
                             let payload = &body[11..11 + payload_len];
                             if let Some(mut bar) = crate::control::historical::decode_bar_payload(payload, min_tick) {
                                 bar.timestamp = timestamp;
@@ -3765,7 +3779,17 @@ fn handle_position_elsewhere(
     else {
         return;
     };
-    let position = parsed.get(&6064).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    // An absent quantity means this frame carries no quantity, not that the
+    // holding is gone. Defaulting to zero publishes a real holding as flat, and
+    // `"NaN".parse()` succeeds, so a non-finite value does the same by another
+    // route. Both are how the two sibling paths went wrong (ibx#261, ibx#296);
+    // this one kept the defect after they were fixed.
+    let Some(position) = parsed.get(&6064)
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+    else {
+        return;
+    };
     let avg_cost = parsed.get(&6101)
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|v| v.is_finite())

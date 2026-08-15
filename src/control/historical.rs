@@ -416,25 +416,28 @@ pub fn build_cancel_request(ticker_id: &str, seq: u32) -> Vec<u8> {
     )
 }
 
-/// The smallest price move the venue states for a contract, or a penny.
+/// The smallest price move the venue states for a contract, where it states one.
 ///
 /// Every price on the contract is decoded against this, so the wrong one does
 /// not fail — it scales every price by a constant and reports the result as
 /// the venue's own. A penny is the right answer for a US share and wrong for a
-/// currency pair, a future, and anything quoted in yen.
+/// currency pair, a future, and anything quoted in yen — so where the venue
+/// states none, this states none, and the bars are left unread.
 ///
 /// The venue states it on the definition, so a definition that does not is the
 /// interesting case and says so rather than passing quietly as a share.
-pub fn min_tick_of(xml_tag: &str, ticker_id: &str) -> f64 {
+pub fn min_tick_of(xml_tag: &str, ticker_id: &str) -> Option<f64> {
     match extract_xml_tag(xml_tag, "minTick").and_then(|s| s.parse::<f64>().ok()) {
-        Some(tick) => tick,
+        Some(tick) => Some(tick),
         None => {
-            log::warn!(
-                "no minTick stated for ticker {ticker_id}; decoding its prices \
-                 as though they move in pennies, which is wrong for anything \
-                 that does not",
-            );
-            0.01
+            // Nothing is decoded without it. Prices in a bar are counted in
+            // this unit, so choosing one decides every price in the answer:
+            // a penny is right for a US share and wrong for everything that
+            // moves in anything else, and the caller cannot tell which they
+            // were handed. A bar that cannot be read is told; a bar read at a
+            // unit nobody stated is a wrong price presented as a right one.
+            log::warn!("no minTick stated for ticker {ticker_id}; its bars cannot be read");
+            None
         }
     }
 }
@@ -1624,4 +1627,19 @@ mod tick_data_type_tests {
         assert!((bar.wap - expected_wap).abs() < 1e-9);
     }
 
+
+    /// The unit prices are counted in is the venue's to state. Chosen here, a
+    /// bar in anything that does not move in pennies is decoded wrong and
+    /// handed over as though it were right.
+    #[test]
+    fn a_ticker_with_no_stated_unit_reads_no_bars() {
+        let stated = "<ticker id=\"7\"><minTick>0.005</minTick></ticker>";
+        assert_eq!(super::min_tick_of(stated, "7"), Some(0.005));
+
+        let silent = "<ticker id=\"7\"></ticker>";
+        assert_eq!(
+            super::min_tick_of(silent, "7"), None,
+            "no unit stated is no unit, not a penny",
+        );
+    }
 }
