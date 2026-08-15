@@ -10,6 +10,10 @@ use crate::client_core::ClientCore;
 #[pymethods]
 impl EClient {
     /// Request historical bar data.
+    ///
+    /// `chart_options` is taken and not applied. This protocol's request
+    /// carries no free-form option list, so what a caller puts in one cannot be
+    /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth, format_date=1, keep_up_to_date=false, chart_options=Vec::new()))]
     pub(crate) fn req_historical_data(
         &self,
@@ -173,6 +177,11 @@ impl EClient {
     }
 
     /// Request scanner subscription.
+    ///
+    /// `scanner_subscription_options` is taken and not applied. This protocol's
+    /// request carries no free-form option list, so what a caller puts in one
+    /// cannot be sent. The reference client's own list is empty on every
+    /// ordinary call.
     #[pyo3(signature = (req_id, subscription, scanner_subscription_options=Vec::new(), scanner_subscription_filter_options=Vec::new()))]
     fn req_scanner_subscription(
         &self,
@@ -214,6 +223,10 @@ impl EClient {
     }
 
     /// Request a news article.
+    ///
+    /// `news_article_options` is taken and not applied. This protocol's request
+    /// carries no free-form option list, so what a caller puts in one cannot be
+    /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, provider_code, article_id, news_article_options=Vec::new()))]
     fn req_news_article(
         &self,
@@ -234,6 +247,11 @@ impl EClient {
     }
 
     /// Request historical news.
+    ///
+    /// `historical_news_options` is taken and not applied. This protocol's
+    /// request carries no free-form option list, so what a caller puts in one
+    /// cannot be sent. The reference client's own list is empty on every
+    /// ordinary call.
     #[pyo3(signature = (req_id, con_id, provider_codes, start_date_time, end_date_time, total_results, historical_news_options=Vec::new()))]
     pub(crate) fn req_historical_news(
         &self,
@@ -260,6 +278,11 @@ impl EClient {
     }
 
     /// Request fundamental data.
+    ///
+    /// `fundamental_data_options` is taken and not applied. This protocol's
+    /// request carries no free-form option list, so what a caller puts in one
+    /// cannot be sent. The reference client's own list is empty on every
+    /// ordinary call.
     #[pyo3(signature = (req_id, contract, report_type, fundamental_data_options=Vec::new()))]
     pub(crate) fn req_fundamental_data(
         &self,
@@ -287,6 +310,10 @@ impl EClient {
     }
 
     /// Request historical tick data.
+    ///
+    /// `ignore_size` and `misc_options` are taken and not applied. The request
+    /// has no field for suppressing size-only changes, and none for a free-form
+    /// option list.
     #[pyo3(signature = (req_id, contract, start_date_time="", end_date_time="", number_of_ticks=1000, what_to_show="TRADES", use_rth=1, ignore_size=false, misc_options=Vec::new()))]
     fn req_historical_ticks(
         &self,

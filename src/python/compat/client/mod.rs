@@ -192,6 +192,9 @@ impl EClient {
     /// owns its own state, sockets, and engine thread, and ``connect()`` does
     /// not serialize across instances. If you pin engines via ``core_id``, give
     /// each a distinct value.
+    ///
+    /// `port` is taken and not applied. There is no local socket to name a port
+    /// on: this client is the one the gateway would have been listening for.
     #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None, order_id_file=None))]
     #[allow(clippy::too_many_arguments)]
     fn connect(

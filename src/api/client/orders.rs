@@ -201,6 +201,10 @@ impl EClient {
     }
 
     /// Cancel an order. Matches `cancelOrder` in C++.
+    ///
+    /// `manual_order_cancel_time` is taken and not applied. A cancel names five
+    /// fields on this wire and no time among them, as the counterpart's own
+    /// cancel does.
     pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::Order(OrderRequest::Cancel {
             order_id: order_id as u64,
@@ -341,6 +345,10 @@ impl EClient {
     /// session is told about every order on the account, whether it placed
     /// them or not — and this surface names no client, so there is nothing to
     /// refuse and nothing left to do.
+    ///
+    /// `b_auto_bind` is taken and not applied. Whether it asks to bind or to
+    /// stop binding, the answer is the same: this session hears about every
+    /// order on the account either way.
     pub fn req_auto_open_orders(&self, _b_auto_bind: bool) {}
 
     /// Request execution reports. Matches `reqExecutions` in C++.

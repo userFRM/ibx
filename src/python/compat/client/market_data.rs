@@ -16,6 +16,10 @@ impl EClient {
     }
 
     /// Request market data for a contract.
+    ///
+    /// `mkt_data_options` is taken and not applied. This protocol's request
+    /// carries no free-form option list, so what a caller puts in one cannot be
+    /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, contract, generic_tick_list="", snapshot=false, regulatory_snapshot=false, mkt_data_options=Vec::new()))]
     fn req_mkt_data(
         &self,
@@ -36,6 +40,11 @@ impl EClient {
     /// subscriptions on the same contract can run in parallel and the caller
     /// picks whichever feed has data. The frozen one keeps thinly-traded names
     /// streaming after hours when the realtime feed is silent.
+    ///
+    /// `regulatory_snapshot` is taken and not applied. A regulatory snapshot is
+    /// a separate, chargeable request this protocol does not carry, so asking
+    /// for one here would be answered with an ordinary subscription and a
+    /// charge nobody agreed to.
     #[pyo3(signature = (req_id, contract, generic_tick_list="", snapshot=false, regulatory_snapshot=false, mode_9887=0))]
     fn req_mkt_data_ex(
         &self,
@@ -124,6 +133,13 @@ impl EClient {
     }
 
     /// Request tick-by-tick data.
+    ///
+    /// `number_of_ticks` and `ignore_size` are taken and not applied. The
+    /// subscription states the contract and the kind of stream and nothing
+    /// else: there is no field for a prelude of past ticks, and none for
+    /// suppressing size-only changes. The Rust surface refuses them rather than
+    /// dropping them; here they are answered with the stream the venue gives,
+    /// which is what their defaults describe.
     #[pyo3(signature = (req_id, contract, tick_type, number_of_ticks=0, ignore_size=false))]
     fn req_tick_by_tick_data(
         &self,
@@ -234,6 +250,10 @@ impl EClient {
     }
 
     /// Request market depth (L2 order book).
+    ///
+    /// `mkt_depth_options` is taken and not applied. This protocol's request
+    /// carries no free-form option list, so what a caller puts in one cannot be
+    /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, contract, num_rows=5, is_smart_depth=false, mkt_depth_options=Vec::new()))]
     fn req_mkt_depth(
         &self,
@@ -263,6 +283,10 @@ impl EClient {
     }
 
     /// Cancel market depth.
+    ///
+    /// `is_smart_depth` is taken and not applied. A book is withdrawn by the
+    /// request that asked for it, and this client remembers which kind that
+    /// was, so the caller restating it changes nothing.
     #[pyo3(signature = (req_id, is_smart_depth=false))]
     fn cancel_mkt_depth(&self, py: Python<'_>, req_id: i64, is_smart_depth: bool) -> PyResult<()> {
         let _ = is_smart_depth;
@@ -272,6 +296,10 @@ impl EClient {
     }
 
     /// Request real-time 5-second bars.
+    ///
+    /// `bar_size` and `real_time_bars_options` are taken and not applied. The
+    /// venue's real-time bar is five seconds and there is no field asking for
+    /// another, and this protocol's request carries no free-form option list.
     #[pyo3(signature = (req_id, contract, bar_size=5, what_to_show="TRADES", use_rth=0, real_time_bars_options=Vec::new()))]
     fn req_real_time_bars(
         &self,

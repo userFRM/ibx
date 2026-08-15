@@ -53,6 +53,10 @@ impl EClient {
     /// What volatility a price implies for an option, under the model
     /// the venue publishes for that contract. Answered on
     /// `tick_option_computation`.
+    ///
+    /// `implied_vol_options` is taken and not applied. This protocol's request
+    /// carries no free-form option list, so what a caller puts in one cannot be
+    /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, contract, option_price, under_price, implied_vol_options=Vec::new()))]
     fn calculate_implied_volatility(
         &self, req_id: i64, contract: &Contract, option_price: f64,
@@ -77,6 +81,10 @@ impl EClient {
 
     /// What an option is worth at a stated volatility, under the same
     /// model. Answered on `tick_option_computation`.
+    ///
+    /// `opt_prc_options` is taken and not applied. This protocol's request
+    /// carries no free-form option list, so what a caller puts in one cannot be
+    /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, contract, volatility, under_price, opt_prc_options=Vec::new()))]
     fn calculate_option_price(
         &self, req_id: i64, contract: &Contract, volatility: f64,
@@ -119,6 +127,10 @@ impl EClient {
 
     /// Ask for the notices the venue broadcasts to everyone. Answered on
     /// `update_news_bulletin`.
+    ///
+    /// `all_msgs` is taken and not applied. The subscription carries no field
+    /// asking for the bulletins that came before it, so what arrives is what is
+    /// published from here on.
     #[pyo3(signature = (all_msgs=true))]
     fn req_news_bulletins(&self, all_msgs: bool) -> PyResult<()> {
         let _ = all_msgs;
@@ -250,6 +262,10 @@ impl EClient {
     /// Ask which venue each bit of a quote's exchange mask refers to.
     /// The venue states the map beside the quote, so a quote has to have been
     /// asked for first. Answered on `smart_components`.
+    ///
+    /// `bbo_exchange` is taken and not applied. The venue states one table of
+    /// routing components at logon, for this session rather than per exchange,
+    /// and that whole table is what comes back.
     fn req_smart_components(&self, py: Python<'_>, req_id: i64, bbo_exchange: &str) -> PyResult<()> {
         let _ = bbo_exchange;
         let shared = self.shared_state()?;

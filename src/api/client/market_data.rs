@@ -54,6 +54,11 @@ impl EClient {
     /// compare modes on one contract, cancel between them. To set the mode for
     /// every subscription instead of naming it per request, call
     /// `req_market_data_type`.
+    ///
+    /// `regulatory_snapshot` is taken and not applied. A regulatory snapshot is
+    /// a separate, chargeable request this protocol does not carry, so asking
+    /// for one here would be answered with an ordinary subscription and a
+    /// charge nobody agreed to.
     pub fn req_mkt_data_ex(
         &self, req_id: i64, contract: &Contract,
         generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool,
@@ -196,6 +201,10 @@ impl EClient {
     // ── Real-Time Bars ──
 
     /// Subscribe to real-time 5-second bars. Matches `reqRealTimeBars` in C++.
+    ///
+    /// `bar_size` is taken and not applied. The venue's real-time bar is five
+    /// seconds and there is no field asking for another; the reference client
+    /// takes the number and sends none either.
     pub fn req_real_time_bars(
         &self, req_id: i64, contract: &Contract,
         _bar_size: i32, what_to_show: &str, use_rth: bool,

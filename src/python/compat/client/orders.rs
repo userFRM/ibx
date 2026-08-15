@@ -168,6 +168,10 @@ impl EClient {
     /// refused. `_override` is taken for signature compatibility and is not
     /// sent: it is a validation bypass the venue's own front end applies before
     /// it builds the order, so there is no tag for it on the wire.
+    ///
+    /// `override_` is taken and not applied. It is a validation bypass the
+    /// venue's own front end applies before it builds the order, so there is no
+    /// tag for it on the wire.
     #[pyo3(signature = (req_id, contract, exercise_action, exercise_quantity, account, _override))]
     fn exercise_options(
         &self, py: Python<'_>, req_id: i64, contract: &Contract, exercise_action: i32,
@@ -209,6 +213,10 @@ impl EClient {
     }
 
     /// Cancel an order.
+    ///
+    /// `manual_order_cancel_time` is taken and not applied. A cancel names five
+    /// fields on this wire and no time among them, as the counterpart's own
+    /// cancel does.
     #[pyo3(signature = (order_id, manual_order_cancel_time=""))]
     fn cancel_order(&self, py: Python<'_>, order_id: i64, manual_order_cancel_time: &str) -> PyResult<()> {
         self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
@@ -254,6 +262,9 @@ impl EClient {
     }
 
     /// Request next valid order ID.
+    ///
+    /// `num_ids` is taken and not applied. Ids are handed out one at a time
+    /// here, as the reference client does whatever number is asked for.
     #[pyo3(signature = (num_ids=1))]
     fn req_ids(&self, py: Python<'_>, num_ids: i32) -> PyResult<()> {
         let next_id = self.next_order_id.load(Ordering::Relaxed) as i64;
@@ -326,6 +337,10 @@ impl EClient {
     /// Returning quietly was worse than either alternative: a caller that asked
     /// to be given those orders and was told nothing waits for orders that are
     /// never coming, with nothing to say why.
+    ///
+    /// `b_auto_bind` is taken and not applied. Whether it asks to bind or to
+    /// stop binding, the answer is the same: this session hears about every
+    /// order on the account either way.
     #[pyo3(signature = (b_auto_bind))]
     fn req_auto_open_orders(&self, b_auto_bind: bool) -> PyResult<()> {
         // Nothing goes to the venue: the counterpart answers this itself,

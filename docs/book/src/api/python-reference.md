@@ -30,7 +30,7 @@ def new(wrapper)
 
 #### `connect`
 
-Connect to IB and start the engine.  Live logins (``paper=False``) enter a second-factor approval window and **block** until the factor is approved (mobile push) or the deadline fires (``ib_key_timeout_secs``, default ~18 min). This is a human approval gate, not a hang. To bound or avoid it: use ``paper=True``, pass a smaller ``ib_key_timeout_secs``, or run ``connect()`` on a worker thread with your own timeout. Paper logins skip the gate entirely. Set ``RUST_LOG=info`` to see a log line when the wait begins.  ``code_provider`` answers that factor with a typed code instead: ``code_provider(factor, display_id, avth_url) -> str``, where ``factor`` is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or ``"authenticator"`` (return the account's current code; ``display_id`` and ``avth_url`` are empty). An authenticator account has no push to fall back to and cannot log in without this. It is called once, on a thread of its own, and holds the GIL while it runs — return the code, don't block on input. One wrong code ends the login; there is no retry.  Multiple ``EClient`` instances can run concurrently in one process; each owns its own state, sockets, and engine thread, and ``connect()`` does not serialize across instances. If you pin engines via ``core_id``, give each a distinct value.
+Connect to IB and start the engine.  Live logins (``paper=False``) enter a second-factor approval window and **block** until the factor is approved (mobile push) or the deadline fires (``ib_key_timeout_secs``, default ~18 min). This is a human approval gate, not a hang. To bound or avoid it: use ``paper=True``, pass a smaller ``ib_key_timeout_secs``, or run ``connect()`` on a worker thread with your own timeout. Paper logins skip the gate entirely. Set ``RUST_LOG=info`` to see a log line when the wait begins.  ``code_provider`` answers that factor with a typed code instead: ``code_provider(factor, display_id, avth_url) -> str``, where ``factor`` is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or ``"authenticator"`` (return the account's current code; ``display_id`` and ``avth_url`` are empty). An authenticator account has no push to fall back to and cannot log in without this. It is called once, on a thread of its own, and holds the GIL while it runs — return the code, don't block on input. One wrong code ends the login; there is no retry.  Multiple ``EClient`` instances can run concurrently in one process; each owns its own state, sockets, and engine thread, and ``connect()`` does not serialize across instances. If you pin engines via ``core_id``, give each a distinct value.  `port` is taken and not applied. There is no local socket to name a port on: this client is the one the gateway would have been listening for.
 
 ```python
 def connect(host, port=0, client_id=0, username="", password="", paper=True, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=False, settings=None, session_file=None, order_id_file=None)
@@ -140,7 +140,7 @@ def misc_url(key)
 
 #### `req_pnl`
 
-Request P&L updates for the account.
+Request P&L updates for the account.  `model_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
 
 ```python
 def req_pnl(req_id, account, model_code="")
@@ -170,7 +170,7 @@ def cancel_pnl(req_id)
 
 #### `req_pnl_single`
 
-Request P&L for a single position.
+Request P&L for a single position.  `account` and `model_code` are taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
 
 ```python
 def req_pnl_single(req_id, account, model_code, con_id)
@@ -201,7 +201,7 @@ def cancel_pnl_single(req_id)
 
 #### `req_account_summary`
 
-Request account summary.
+Request account summary.  `group_name` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
 
 ```python
 def req_account_summary(req_id, group_name, tags)
@@ -251,7 +251,7 @@ def cancel_positions()
 
 #### `req_account_updates`
 
-Request account updates.
+Request account updates.  `acct_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
 
 ```python
 def req_account_updates(subscribe, _acct_code="")
@@ -276,7 +276,7 @@ def req_managed_accts()
 
 #### `req_account_updates_multi`
 
-Request account updates for multiple accounts/models.
+Request account updates for multiple accounts/models.  `ledger_and_nlv` is taken and not applied. The account figures arrive as the venue states them, and it states the ledger and the net liquidation among them without being asked.
 
 ```python
 def req_account_updates_multi(req_id, account, model_code, ledger_and_nlv=False)
@@ -365,7 +365,7 @@ def place_order(order_id, contract, order)
 
 #### `exercise_options`
 
-Exercise or lapse a long option position.  `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `_override` is taken for signature compatibility and is not sent: it is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.
+Exercise or lapse a long option position.  `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `_override` is taken for signature compatibility and is not sent: it is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.  `override_` is taken and not applied. It is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.
 
 ```python
 def exercise_options(req_id, contract, exercise_action, exercise_quantity, account, _override)
@@ -384,7 +384,7 @@ def exercise_options(req_id, contract, exercise_action, exercise_quantity, accou
 
 #### `cancel_order`
 
-Cancel an order.
+Cancel an order.  `manual_order_cancel_time` is taken and not applied. A cancel names five fields on this wire and no time among them, as the counterpart's own cancel does.
 
 ```python
 def cancel_order(order_id, manual_order_cancel_time="")
@@ -423,7 +423,7 @@ def req_global_cancel()
 
 #### `req_ids`
 
-Request next valid order ID.
+Request next valid order ID.  `num_ids` is taken and not applied. Ids are handed out one at a time here, as the reference client does whatever number is asked for.
 
 ```python
 def req_ids(num_ids=1)
@@ -467,7 +467,7 @@ def req_all_open_orders()
 
 #### `req_auto_open_orders`
 
-Binding an order placed elsewhere to this session.  The reference client asks a local process to hand over orders a person entered by hand in front of it. There is no such process here and no such person, so there is nothing to hand over, and this reports that rather than returning as though the binding were in place.  Returning quietly was worse than either alternative: a caller that asked to be given those orders and was told nothing waits for orders that are never coming, with nothing to say why.
+Binding an order placed elsewhere to this session.  The reference client asks a local process to hand over orders a person entered by hand in front of it. There is no such process here and no such person, so there is nothing to hand over, and this reports that rather than returning as though the binding were in place.  Returning quietly was worse than either alternative: a caller that asked to be given those orders and was told nothing waits for orders that are never coming, with nothing to say why.  `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
 
 ```python
 def req_auto_open_orders(b_auto_bind)
@@ -526,7 +526,7 @@ def set_news_providers(providers)
 
 #### `req_mkt_data`
 
-Request market data for a contract.
+Request market data for a contract.  `mkt_data_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.
 
 ```python
 def req_mkt_data(req_id, contract, generic_tick_list="", snapshot=False, regulatory_snapshot=False, mkt_data_options=[])
@@ -545,7 +545,7 @@ def req_mkt_data(req_id, contract, generic_tick_list="", snapshot=False, regulat
 
 #### `req_mkt_data_ex`
 
-Like `req_mkt_data`, but encodes the market-data mode per request (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several subscriptions on the same contract can run in parallel and the caller picks whichever feed has data. The frozen one keeps thinly-traded names streaming after hours when the realtime feed is silent.
+Like `req_mkt_data`, but encodes the market-data mode per request (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several subscriptions on the same contract can run in parallel and the caller picks whichever feed has data. The frozen one keeps thinly-traded names streaming after hours when the realtime feed is silent.  `regulatory_snapshot` is taken and not applied. A regulatory snapshot is a separate, chargeable request this protocol does not carry, so asking for one here would be answered with an ordinary subscription and a charge nobody agreed to.
 
 ```python
 def req_mkt_data_ex(req_id, contract, generic_tick_list="", snapshot=False, regulatory_snapshot=False, mode_9887=0)
@@ -578,7 +578,7 @@ def cancel_mkt_data(req_id)
 
 #### `req_tick_by_tick_data`
 
-Request tick-by-tick data.
+Request tick-by-tick data.  `number_of_ticks` and `ignore_size` are taken and not applied. The subscription states the contract and the kind of stream and nothing else: there is no field for a prelude of past ticks, and none for suppressing size-only changes. The Rust surface refuses them rather than dropping them; here they are answered with the stream the venue gives, which is what their defaults describe.
 
 ```python
 def req_tick_by_tick_data(req_id, contract, tick_type, number_of_ticks=0, ignore_size=False)
@@ -644,7 +644,7 @@ def req_market_data_type(market_data_type)
 
 #### `req_mkt_depth`
 
-Request market depth (L2 order book).
+Request market depth (L2 order book).  `mkt_depth_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.
 
 ```python
 def req_mkt_depth(req_id, contract, num_rows=5, is_smart_depth=False, mkt_depth_options=[])
@@ -662,7 +662,7 @@ def req_mkt_depth(req_id, contract, num_rows=5, is_smart_depth=False, mkt_depth_
 
 #### `cancel_mkt_depth`
 
-Cancel market depth.
+Cancel market depth.  `is_smart_depth` is taken and not applied. A book is withdrawn by the request that asked for it, and this client remembers which kind that was, so the caller restating it changes nothing.
 
 ```python
 def cancel_mkt_depth(req_id, is_smart_depth=False)
@@ -677,7 +677,7 @@ def cancel_mkt_depth(req_id, is_smart_depth=False)
 
 #### `req_real_time_bars`
 
-Request real-time 5-second bars.
+Request real-time 5-second bars.  `bar_size` and `real_time_bars_options` are taken and not applied. The venue's real-time bar is five seconds and there is no field asking for another, and this protocol's request carries no free-form option list.
 
 ```python
 def req_real_time_bars(req_id, contract, bar_size=5, what_to_show="TRADES", use_rth=0, real_time_bars_options=[])
@@ -859,7 +859,7 @@ def req_sec_def_opt_params(req_id, underlying_symbol, fut_fop_exchange, underlyi
 
 #### `req_scanner_subscription`
 
-Request scanner subscription.
+Request scanner subscription.  `scanner_subscription_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.
 
 ```python
 def req_scanner_subscription(req_id, subscription, scanner_subscription_options=[], scanner_subscription_filter_options=[])
@@ -900,7 +900,7 @@ def req_scanner_parameters()
 
 #### `req_news_article`
 
-Request a news article.
+Request a news article.  `news_article_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.
 
 ```python
 def req_news_article(req_id, provider_code, article_id, news_article_options=[])
@@ -964,7 +964,7 @@ def cancel_fundamental_data(req_id)
 
 #### `req_historical_ticks`
 
-Request historical tick data.
+Request historical tick data.  `ignore_size` and `misc_options` are taken and not applied. The request has no field for suppressing size-only changes, and none for a free-form option list.
 
 ```python
 def req_historical_ticks(req_id, contract, start_date_time="", end_date_time="", number_of_ticks=1000, what_to_show="TRADES", use_rth=1, ignore_size=False, misc_options=[])
@@ -1105,7 +1105,7 @@ def algorithms_for(sec_type)
 
 #### `calculate_implied_volatility`
 
-What volatility a price implies for an option, under the model the venue publishes for that contract. Answered on `tick_option_computation`.
+What volatility a price implies for an option, under the model the venue publishes for that contract. Answered on `tick_option_computation`.  `implied_vol_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.
 
 ```python
 def calculate_implied_volatility(req_id, contract, option_price, under_price, implied_vol_options=[])
@@ -1123,7 +1123,7 @@ def calculate_implied_volatility(req_id, contract, option_price, under_price, im
 
 #### `calculate_option_price`
 
-What an option is worth at a stated volatility, under the same model. Answered on `tick_option_computation`.
+What an option is worth at a stated volatility, under the same model. Answered on `tick_option_computation`.  `opt_prc_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.
 
 ```python
 def calculate_option_price(req_id, contract, volatility, under_price, opt_prc_options=[])
@@ -1169,7 +1169,7 @@ def cancel_calculate_option_price(req_id)
 
 #### `req_news_bulletins`
 
-Ask for the notices the venue broadcasts to everyone. Answered on `update_news_bulletin`.
+Ask for the notices the venue broadcasts to everyone. Answered on `update_news_bulletin`.  `all_msgs` is taken and not applied. The subscription carries no field asking for the bulletins that came before it, so what arrives is what is published from here on.
 
 ```python
 def req_news_bulletins(all_msgs=True)
@@ -1291,7 +1291,7 @@ def update_display_group(req_id, contract_info)
 
 #### `req_smart_components`
 
-Ask which venue each bit of a quote's exchange mask refers to. The venue states the map beside the quote, so a quote has to have been asked for first. Answered on `smart_components`.
+Ask which venue each bit of a quote's exchange mask refers to. The venue states the map beside the quote, so a quote has to have been asked for first. Answered on `smart_components`.  `bbo_exchange` is taken and not applied. The venue states one table of routing components at logon, for this session rather than per exchange, and that whole table is what comes back.
 
 ```python
 def req_smart_components(req_id, bbo_exchange)

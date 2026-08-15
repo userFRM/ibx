@@ -13,6 +13,10 @@ impl EClient {
 
     /// Request smart routing components for a BBO exchange. Matches `reqSmartComponents` in C++.
     /// Gateway-local — returns component exchanges from init data.
+    ///
+    /// `bbo_exchange` is taken and not applied. The venue states one table of
+    /// routing components at logon, for this session rather than per exchange,
+    /// and that whole table is what comes back.
     pub fn req_smart_components(&self, req_id: i64, _bbo_exchange: &str, wrapper: &mut impl Wrapper) {
         let components = self.shared.reference.smart_components();
         wrapper.smart_components(req_id, &components);
