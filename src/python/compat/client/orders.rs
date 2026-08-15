@@ -328,14 +328,20 @@ impl EClient {
     /// never coming, with nothing to say why.
     #[pyo3(signature = (b_auto_bind))]
     fn req_auto_open_orders(&self, b_auto_bind: bool) -> PyResult<()> {
-        if b_auto_bind {
-            crate::python::compat::client::report_unserviceable(
+        // Nothing goes to the venue: the counterpart answers this itself,
+        // refusing it for any client but zero and otherwise setting a property
+        // of its own. What that property gates does not arise here — this
+        // session is told about every order on the account whether it placed
+        // them or not — so the only observable part is the refusal.
+        if self.client_id.load(std::sync::atomic::Ordering::Acquire) != 0 {
+            crate::python::compat::client::stubs::report_unserviceable_with(
                 self,
                 -1,
-                "binding orders entered outside this session: there is no other \
-                 process holding them",
+                crate::api::error_codes::Refusal::AUTO_BIND_NOT_THIS_CLIENT,
+                "orders entered elsewhere are bound to the client numbered zero",
             );
         }
+        let _ = b_auto_bind;
         Ok(())
     }
 

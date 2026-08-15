@@ -26,6 +26,12 @@ fn a_recent_second() -> u64 {
 
 #[pymethods]
 impl EClient {
+    /// Name the client this session connected under, as `connect` does.
+    #[doc(hidden)]
+    fn _test_set_client_id(&self, client_id: i32) {
+        self.client_id.store(client_id, Ordering::Release);
+    }
+
     /// Create a fake "connected" EClient backed by a SharedState + channel.
     #[doc(hidden)]
     #[pyo3(signature = (account_id="TEST123".to_string(), readonly=false))]

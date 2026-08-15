@@ -422,8 +422,14 @@ const MODELLED_IN_PROCESS: &str = "solving an option for its volatility or its p
 
 /// Answer a request this client cannot serve the way the reference client
 /// does: on the error callback, returning normally.
-pub(crate) fn report_unserviceable(client: &EClient, req_id: i64, reason: &str) {
-    report_reason(client, req_id, reason);
+/// Answer a request the counterpart refuses, under the number it refuses it
+/// with rather than the general one.
+pub(crate) fn report_unserviceable_with(
+    client: &EClient, req_id: i64, code: i32, reason: &str,
+) {
+    if let Ok(shared) = client.shared_state() {
+        shared.reference.push_historical_error(req_id.max(0) as u32, code, reason.to_string());
+    }
 }
 
 /// Answer a request this client cannot serve the way the reference client
