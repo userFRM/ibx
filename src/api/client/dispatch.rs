@@ -375,7 +375,7 @@ impl EClient {
             let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
             for bar in &response.bars {
                 let bd = BarData {
-                    date: bar.time.clone(),
+                    date: self.core.bar_time_for(req_id as i64, &bar.time),
                     open: bar.open,
                     high: bar.high,
                     low: bar.low,

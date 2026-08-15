@@ -496,7 +496,8 @@ impl EClient {
             let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
             for bar in &response.bars {
                 let bar_obj = BarData::new(
-                    bar.time.clone(), bar.open, bar.high, bar.low, bar.close,
+                    self.core.bar_time_for(req_id as i64, &bar.time),
+                    bar.open, bar.high, bar.low, bar.close,
                     bar.volume, bar.wap, bar.count as i32,
                     response.timezone.clone(),
                 );
