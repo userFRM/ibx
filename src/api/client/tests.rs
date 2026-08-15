@@ -4599,3 +4599,73 @@ fn one_contract_has_one_owner_however_many_ask_at_once() {
         "everybody else follows it rather than being dropped",
     );
 }
+
+/// Solving an option is answered here, against the model the venue published
+/// for that contract — which is what the counterpart does with it. The wire
+/// carries no such request, so the alternative is refusing a question the
+/// counterpart answers.
+#[test]
+fn solving_an_option_answers_against_the_venues_own_model() {
+    #[derive(Default)]
+    struct Heard {
+        computed: Vec<(i64, f64)>,
+        errors: Vec<String>,
+    }
+    impl Wrapper for Heard {
+        fn tick_option_computation(&mut self, req_id: i64, _t: i32, _a: i32, _iv: f64,
+                                   _d: f64, opt_price: f64, _pv: f64, _g: f64,
+                                   _v: f64, _th: f64, _up: f64) {
+            self.computed.push((req_id, opt_price));
+        }
+        fn error(&mut self, _req_id: i64, _code: i64, msg: &str, _adv: &str) {
+            self.errors.push(msg.to_string());
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let mut heard = Heard::default();
+
+    let mut option = spy();
+    option.con_id = 756733;
+    option.sec_type = "OPT".into();
+    option.strike = 500.0;
+    option.right = "C".into();
+    option.last_trade_date_or_contract_month = "20270115".into();
+
+    // Without the venue's own model there is nothing to solve against, and
+    // the call says so rather than inventing one.
+    client.calculate_option_price(5, &option, 0.25, 505.0);
+    client.process_msgs(&mut heard);
+    assert!(heard.computed.is_empty(), "no model, no answer");
+    assert!(!heard.errors.is_empty(), "and the caller is told why");
+
+    // With it, the answer is solved and delivered under the caller's request.
+    shared.market.push_option_computation(crate::types::OptionComputation {
+        answers: None,
+        instrument: 0,
+        implied_vol: 0.20,
+        opt_price: 30.0,
+        und_price: 505.0,
+        ..Default::default()
+    });
+    let _ = shared.market.drain_option_computations();
+    heard.errors.clear();
+
+    client.calculate_option_price(6, &option, 0.25, 505.0);
+    client.process_msgs(&mut heard);
+
+    assert!(heard.errors.is_empty(), "{:?}", heard.errors);
+    assert_eq!(heard.computed.len(), 1, "the price was answered");
+    assert_eq!(heard.computed[0].0, 6, "under the request that asked for it");
+    assert!(heard.computed[0].1 > 0.0, "and it is a price");
+
+    // The question the other way round — what volatility a price implies —
+    // is solved against the same model and answered the same way.
+    heard.computed.clear();
+    client.calculate_implied_volatility(7, &option, 32.0, 505.0);
+    client.process_msgs(&mut heard);
+
+    assert!(heard.errors.is_empty(), "{:?}", heard.errors);
+    assert_eq!(heard.computed.len(), 1, "the volatility was answered");
+    assert_eq!(heard.computed[0].0, 7);
+}

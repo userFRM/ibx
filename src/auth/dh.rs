@@ -40,7 +40,7 @@ impl SecureChannel {
         let mut client_random = [0u8; 32];
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as u32;
         client_random[0..4].copy_from_slice(&timestamp.to_be_bytes());
         rand::rng().fill_bytes(&mut client_random[4..]);

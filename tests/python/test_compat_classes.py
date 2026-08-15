@@ -419,3 +419,54 @@ def test_auto_binding_is_refused_only_for_a_client_that_is_not_zero():
     c.req_auto_open_orders(True)
     c._test_dispatch_once()
     assert [e for e in w.errors if e[0] == 327], w.errors
+
+
+def test_solving_an_option_answers_rather_than_refusing():
+    """The counterpart computes these in its own process and answers on
+    `tick_option_computation`; the wire carries no such request.
+
+    This surface refused them while the Rust one answered, so the same call
+    against the same session gave a number in one language and an error in
+    the other.
+    """
+    from ibx import EClient, EWrapper, Contract
+
+    class W(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.computed = []
+            self.errors = []
+
+        def tick_option_computation(self, req_id, tick_type, attrib, implied_vol,
+                                    delta, opt_price, pv_dividend, gamma, vega,
+                                    theta, und_price):
+            self.computed.append((req_id, implied_vol, opt_price))
+
+        def error(self, req_id, code, msg, advanced=""):
+            self.errors.append((code, msg))
+
+    w = W()
+    c = EClient(w)
+    c._test_connect("T")
+
+    option = Contract()
+    option.conId = 999001
+    option.secType = "OPT"
+    option.symbol = "SPY"
+    option.strike = 500.0
+    option.right = "C"
+    option.lastTradeDateOrContractMonth = "20270115"
+    c._test_map_con_id(999001, 0)
+
+    # What the venue published for this contract, which the answer is solved
+    # against — without it there is no model and the call says so.
+    c._test_push_option_model(0, 0.20, 30.0, 505.0)
+    c._test_dispatch_once()
+    w.computed.clear()
+
+    c.calculate_option_price(77, option, 0.25, 505.0)
+    c._test_dispatch_once()
+
+    assert not w.errors, w.errors
+    assert w.computed, "the price was answered, not refused"
+    assert w.computed[0][0] == 77, "under the request that asked for it"
