@@ -123,7 +123,7 @@ pub(super) fn phase_extra_farms(
             farm_host, farm,
             &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token,
-            &gw.hw_info, &gw.encoded, kind,
+            &gw.hw_info, &gw.encoded, kind, None,
         ) {
             Ok(_conn) => {
                 connected += 1;

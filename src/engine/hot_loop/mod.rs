@@ -217,6 +217,23 @@ impl HeartbeatState {
         LIVENESS_DEAD_SECS.max(self.ccp_interval_secs.saturating_mul(3))
     }
 
+    /// The same two windows for a farm, from the interval that farm stated.
+    ///
+    /// A farm speaks on its own cadence, and the fixed windows are sized for
+    /// the auth connection's. One that heartbeats every sixty seconds is not
+    /// silent at thirty-five, so a fixed window declares a working connection
+    /// dead between two of its own heartbeats.
+    pub fn farm_test_after(stated: Option<u64>) -> u64 {
+        let interval = stated.unwrap_or(FARM_HEARTBEAT_SECS);
+        LIVENESS_TEST_SECS.max(interval.saturating_mul(3) / 2)
+    }
+
+    /// How long of silence before a farm is treated as gone.
+    pub fn farm_dead_after(stated: Option<u64>) -> u64 {
+        let interval = stated.unwrap_or(FARM_HEARTBEAT_SECS);
+        LIVENESS_DEAD_SECS.max(interval.saturating_mul(3))
+    }
+
     /// Hold this session to the interval the venue stated.
     pub fn set_ccp_interval(&mut self, secs: u64) {
         if secs > 0 {
@@ -1168,9 +1185,10 @@ impl HotLoop {
                 self.hb.last_farm_sent = now;
             }
 
+            let stated = conn.heartbeat_secs;
             let warmed_up = now.duration_since(self.hb.farm_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
-            if warmed_up && since_recv > LIVENESS_TEST_SECS {
-                if since_recv > LIVENESS_DEAD_SECS {
+            if warmed_up && since_recv > HeartbeatState::farm_test_after(stated) {
+                if since_recv > HeartbeatState::farm_dead_after(stated) {
                     log::error!("Farm liveness timeout ({since_recv}s silent) — connection lost");
                     self.farm.handle_disconnect(&mut self.context, &self.event_tx);
                 } else if self.hb.pending_farm_test.is_none() {
@@ -1192,7 +1210,10 @@ impl HotLoop {
             let since_sent = now.duration_since(self.hb.last_hmds_sent).as_secs();
             let since_recv = now.duration_since(self.hb.last_hmds_recv).as_secs();
 
-            if since_sent >= FARM_HEARTBEAT_SECS {
+            // Half of what this farm said it expects, as on the farm channel
+            // above. Sending on a fixed thirty is late for a farm that asked
+            // for ten, and the venue closes a session it stopped hearing from.
+            if since_sent >= half_of(conn.heartbeat_secs.unwrap_or(FARM_HEARTBEAT_SECS)) {
                 let _ = conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT),
                     (fix::TAG_SENDING_TIME, &ts),
@@ -1200,9 +1221,10 @@ impl HotLoop {
                 self.hb.last_hmds_sent = now;
             }
 
+            let stated = conn.heartbeat_secs;
             let warmed_up = now.duration_since(self.hb.hmds_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
-            if warmed_up && since_recv > LIVENESS_TEST_SECS {
-                if since_recv > LIVENESS_DEAD_SECS {
+            if warmed_up && since_recv > HeartbeatState::farm_test_after(stated) {
+                if since_recv > HeartbeatState::farm_dead_after(stated) {
                     log::error!("HMDS liveness timeout ({since_recv}s silent) — connection lost");
                     self.hmds.disconnect(&mut self.hmds_conn);
                 } else if self.hb.pending_hmds_test.is_none() {
@@ -1275,9 +1297,12 @@ impl HotLoop {
         if conn.competing.is_some() {
             self.shared.reference.set_competing_session(conn.competing.clone());
         }
-        if let Some(stated) = conn.heartbeat_secs {
-            self.hb.set_ccp_interval(stated);
-        }
+        // What this connection stated, or what its own logon proposed where it
+        // stated nothing — an ack that echoes no interval has accepted the one
+        // it was offered. Either way it is this connection's, and leaving the
+        // previous one in place holds the session to an interval neither end
+        // of it agreed.
+        self.hb.set_ccp_interval(conn.heartbeat_secs.unwrap_or(crate::config::CCP_HEARTBEAT));
         // This session's logon is now the newer one. Left at the first, every
         // later reconnect would find its own previous logon listed as a
         // competing session and give the account up to itself.
@@ -1476,7 +1501,7 @@ impl HotLoop {
                     &auth.settings, &farm_host, &farm_name,
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
-                    &auth.hw_info, &auth.encoded, Farm::MarketData,
+                    &auth.hw_info, &auth.encoded, Farm::MarketData, auth.trading_port,
                 );
                 let _ = tx.send(result);
             })
@@ -1678,7 +1703,7 @@ impl HotLoop {
                     &auth.settings, &auth.hmds_host, &auth.hmds_farm,
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
-                    &auth.hw_info, &auth.encoded, Farm::Historical,
+                    &auth.hw_info, &auth.encoded, Farm::Historical, auth.hmds_port,
                 );
                 let _ = tx.send(result);
             })
@@ -1717,7 +1742,7 @@ impl HotLoop {
                     &auth.settings, &auth.secdef_host, &auth.secdef_farm,
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
-                    &auth.hw_info, &auth.encoded, Farm::SecurityDefinition,
+                    &auth.hw_info, &auth.encoded, Farm::SecurityDefinition, auth.secdef_port,
                 );
                 let _ = tx.send(result);
             })
@@ -2317,6 +2342,56 @@ mod tests {
         assert_eq!(super::half_of(0), 1);
     }
 
+    /// A farm states its own cadence, and it is not the auth connection's.
+    ///
+    /// The fixed windows are sized against ten seconds. A farm asking for
+    /// sixty is declared dead at thirty-five — between two of its own
+    /// heartbeats — and a farm asking for ten is answered on a thirty-second
+    /// schedule, which is the venue closing a session it stopped hearing from.
+    #[test]
+    fn a_farm_is_measured_against_the_cadence_it_stated() {
+        // Nothing stated: the farm default, and the fixed windows with it.
+        assert_eq!(HeartbeatState::farm_test_after(None), LIVENESS_TEST_SECS.max(45));
+        assert_eq!(HeartbeatState::farm_dead_after(None), LIVENESS_DEAD_SECS.max(90));
+
+        // A slower farm is not a silent one.
+        assert_eq!(HeartbeatState::farm_test_after(Some(60)), 90);
+        assert_eq!(HeartbeatState::farm_dead_after(Some(60)), 180);
+        assert!(
+            HeartbeatState::farm_dead_after(Some(60)) > LIVENESS_DEAD_SECS,
+            "a farm on a sixty-second cadence outlives the fixed window",
+        );
+
+        // A faster one keeps the fixed windows, which are already generous.
+        assert_eq!(HeartbeatState::farm_test_after(Some(10)), LIVENESS_TEST_SECS);
+        assert_eq!(HeartbeatState::farm_dead_after(Some(10)), LIVENESS_DEAD_SECS);
+
+        for stated in [None, Some(10), Some(30), Some(60)] {
+            assert!(
+                HeartbeatState::farm_test_after(stated) < HeartbeatState::farm_dead_after(stated),
+                "probe before declaring, at {stated:?}",
+            );
+        }
+    }
+
+    /// An ack that echoes no interval has accepted the one it was offered.
+    ///
+    /// Keeping the previous connection's holds the new session to a cadence
+    /// neither end of it agreed to.
+    #[test]
+    fn a_reconnect_that_states_no_interval_takes_the_one_it_proposed() {
+        let mut hb = HeartbeatState::new();
+        hb.set_ccp_interval(30);
+        assert_eq!(hb.ccp_send_every(), 15);
+
+        // What `reconnect_ccp` does with an ack carrying no tag 108.
+        hb.set_ccp_interval(None::<u64>.unwrap_or(crate::config::CCP_HEARTBEAT));
+        assert_eq!(
+            hb.ccp_send_every(), crate::config::CCP_HEARTBEAT / 2,
+            "the new connection's proposal, not the dead one's interval",
+        );
+    }
+
     /// A venue that speaks less often is not a venue that has gone away.
     ///
     /// The silence windows are fixed numbers chosen against a ten-second
@@ -2385,6 +2460,9 @@ mod tests {
     fn an_hmds_disconnect_lets_its_reconnect_run() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            trading_port: None,
+            hmds_port: None,
+            secdef_port: None,
             logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
@@ -2592,6 +2670,9 @@ mod tests {
     fn hmds_keeps_retrying_through_an_outage_longer_than_the_ladder() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            trading_port: None,
+            hmds_port: None,
+            secdef_port: None,
             logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
@@ -3127,6 +3208,9 @@ mod calendar_farm_reconnect_tests {
     fn a_calendar_connection_that_went_is_scheduled_to_come_back() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            trading_port: None,
+            hmds_port: None,
+            secdef_port: None,
             logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
@@ -3163,6 +3247,9 @@ mod calendar_farm_reconnect_tests {
     fn a_session_without_that_farm_does_not_try() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            trading_port: None,
+            hmds_port: None,
+            secdef_port: None,
             logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),
