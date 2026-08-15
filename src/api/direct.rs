@@ -71,7 +71,8 @@ const _: () = assert!(
 );
 
 /// How long a question waits for its answer.
-const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
+const ANSWER_TIMEOUT: Duration =
+    Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
 
 /// How long to sleep between looks at the queue.
 const POLL: Duration = Duration::from_millis(5);

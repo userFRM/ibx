@@ -2440,9 +2440,17 @@ impl CcpState {
     /// (>= 0xF000_0000: cache auto-fetch, scanner enrichment) are dropped
     /// silently — no user is waiting on them.
     /// How long a subscription waits for the lookup that would name its
-    /// contract. Longer than the lookup's own deadline, so its answer — a
-    /// definition, or a refusal — is preferred to this.
-    const NAMING_TIMEOUT: Duration = Duration::from_secs(20);
+    /// contract.
+    ///
+    /// Between two deadlines, and it has to stay between them. Longer than the
+    /// lookup's own, so a definition or a refusal from the venue is preferred
+    /// to this. Shorter than the caller's, because for a held request this is
+    /// the only report there is: the lookup behind it is asked under an
+    /// internal id, and an internal id is dropped silently. Sitting past the
+    /// caller's wait, as it did, meant the caller was told nothing arrived
+    /// while the reason was still being held, and heard it never.
+    const NAMING_TIMEOUT: Duration =
+        Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
 
     /// A subscription whose contract the venue never named. Reported rather
     /// than left waiting: silence is what this whole path exists to remove.
@@ -6210,6 +6218,23 @@ mod tests {
 
     fn u186_test_state() -> (CcpState, Context, SharedState) {
         (CcpState::new(), Context::new(), SharedState::new())
+    }
+
+    /// Every deadline the engine keeps for a caller's request has to expire
+    /// before the caller stops waiting, or the caller is told nothing arrived
+    /// while the reason is still held here and reported to nobody.
+    #[test]
+    fn the_engine_answers_before_a_caller_gives_up() {
+        let caller = Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
+        assert!(
+            SECDEF_TIMEOUT < CcpState::NAMING_TIMEOUT,
+            "a lookup's own answer is preferred to the fallback that covers it",
+        );
+        assert!(
+            CcpState::NAMING_TIMEOUT < caller,
+            "a held request is reported before the caller stops listening",
+        );
+        assert!(SECDEF_TIMEOUT < caller);
     }
 
     /// A lookup the venue never answers has to end anyway. A caller that
