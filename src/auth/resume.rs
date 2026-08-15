@@ -22,7 +22,24 @@ use crate::auth::crypto::{aes_cbc_decrypt, aes_cbc_encrypt};
 const SALT_LEN: usize = 32;
 
 /// Format marker. A file that does not open with this is not one of these.
-const MAGIC: &[u8; 8] = b"IBXSESS\x01";
+///
+/// The version moves when the sealing changes, so a file written under the
+/// previous one is refused rather than failing to open for a reason that
+/// looks like a wrong password.
+const MAGIC: &[u8; 8] = b"IBXSESS\x02";
+
+/// How many times the password is folded to reach the key.
+///
+/// The file holds a token that stands in for a password and a second factor,
+/// and it opens with a marker anybody can recognise, so guessing against it
+/// can be done offline at whatever rate the derivation allows. One pass of a
+/// hash allows billions a second. This is the cost of one guess.
+///
+/// The tests fold a token thousands of times over; what they check is that a
+/// session survives the round trip and that a wrong password does not open
+/// it, neither of which the count changes. They pay a smaller one so the
+/// suite is not mostly this.
+const SEAL_ROUNDS: u32 = if cfg!(test) { 1_000 } else { 600_000 };
 
 /// What a resumed connect needs. All four are established at login and none can
 /// be recomputed without one.
@@ -99,14 +116,35 @@ pub fn default_path() -> PathBuf {
 /// anyone who does not already hold the credential it protects — copying it to
 /// another machine, or reading it as another user, gains nothing.
 fn seal_key(password: &str, salt: &[u8]) -> [u8; 16] {
-    use sha1::{Digest, Sha1};
-    let mut hasher = Sha1::new();
-    hasher.update(b"ibx-session-v1");
-    hasher.update(salt);
-    hasher.update(password.as_bytes());
-    let digest = hasher.finalize();
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+
+    let mac = |key: &[u8], data: &[u8]| -> [u8; 32] {
+        let mut m = <HmacSha256 as Mac>::new_from_slice(key)
+            .expect("HMAC takes a key of any length");
+        m.update(data);
+        m.finalize().into_bytes().into()
+    };
+
+    // PBKDF2's first block: the salt and the round counter, then each result
+    // folded back into the next and every one of them combined.
+    let mut block = Vec::with_capacity(salt.len() + 12);
+    block.extend_from_slice(b"ibx-session");
+    block.extend_from_slice(salt);
+    block.extend_from_slice(&1u32.to_be_bytes());
+
+    let mut current = mac(password.as_bytes(), &block);
+    let mut folded = current;
+    for _ in 1..SEAL_ROUNDS {
+        current = mac(password.as_bytes(), &current);
+        for (acc, byte) in folded.iter_mut().zip(current.iter()) {
+            *acc ^= byte;
+        }
+    }
+
     let mut key = [0u8; 16];
-    key.copy_from_slice(&digest[..16]);
+    key.copy_from_slice(&folded[..16]);
     key
 }
 

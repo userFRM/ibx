@@ -1755,12 +1755,19 @@ fn run_second_factor(
             token_sub_type,
             if sf.token_sub_type.is_some() { "from AUTH_START" } else { "configured default" },
         );
-        match session::do_ib_key_2fa(
+        // Polled, as the security-code gate beside this one is. The wait is a
+        // person reaching for a phone, so the socket is quiet for most of it —
+        // and a wait with no timeout on the socket cannot reach its own
+        // deadline if the server stops talking rather than closing.
+        tls.get_ref().set_read_timeout(Some(Duration::from_millis(500)))?;
+        let gate = session::do_ib_key_2fa(
             tls,
             token_sub_type,
             deadline,
             sf.code_provider,
-        )? {
+        );
+        tls.get_ref().set_read_timeout(None)?;
+        match gate? {
             session::IbKeyOutcome::Skipped => {
                 log::info!("2FA gate: skipped (no second factor)");
             }

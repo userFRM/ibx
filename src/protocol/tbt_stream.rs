@@ -335,8 +335,13 @@ fn read_record(
 
     match kind {
         TbtKind::Last | TbtKind::AllLast => {
-            running.last_ticks = running.last_ticks.checked_add(first_move)?;
-            let price = running.last_ticks as f64 * min_tick;
+            // Where the price would stand. A move is a step from the last one,
+            // so it is committed only once the whole record has been read: a
+            // record that runs out part way through leaves the baseline where
+            // it was, rather than shifting every price after it by a step
+            // belonging to a record nobody could read.
+            let last_ticks = running.last_ticks.checked_add(first_move)?;
+            let price = last_ticks as f64 * min_tick;
             let plain_size = bits.unsigned()?;
             let flags = bits.unsigned()?;
             // Bit five says the size is stated again, at greater width; bit
@@ -346,14 +351,16 @@ fn read_record(
             } else {
                 plain_size
             };
-            Some(TbtRecord::Trade(TbtTradeRecord {
+            let record = TbtRecord::Trade(TbtTradeRecord {
                 price,
                 size,
                 past_limit: flags & 1 != 0,
                 unreported: flags & (1 << 1) != 0,
                 exchange: bits.text()?,
                 conditions: bits.text()?,
-            }))
+            });
+            running.last_ticks = last_ticks;
+            Some(record)
         }
         TbtKind::BidAsk => {
             // Both moves, then the flags, then a size a side. Settled against a
@@ -362,26 +369,31 @@ fn read_record(
             // quoted; read this way the same bytes give the quote that was on
             // the screen and consume the payload exactly.
             let ask_move = bits.signed()?;
-            running.bid_ticks = running.bid_ticks.checked_add(first_move)?;
-            running.ask_ticks = running.ask_ticks.checked_add(ask_move)?;
+            // Committed after the record reads, as above.
+            let bid_ticks = running.bid_ticks.checked_add(first_move)?;
+            let ask_ticks = running.ask_ticks.checked_add(ask_move)?;
             let flags = bits.unsigned()?;
             let bid_size = size(bits, flags & (1 << 2) != 0)?;
             let ask_size = size(bits, flags & (1 << 3) != 0)?;
-            Some(TbtRecord::Quote(TbtQuoteRecord {
-                bid: running.bid_ticks as f64 * min_tick,
-                ask: running.ask_ticks as f64 * min_tick,
+            let record = TbtRecord::Quote(TbtQuoteRecord {
+                bid: bid_ticks as f64 * min_tick,
+                ask: ask_ticks as f64 * min_tick,
                 bid_size,
                 ask_size,
                 bid_past_low: flags & 1 != 0,
                 ask_past_high: flags & (1 << 1) != 0,
-            }))
+            });
+            running.bid_ticks = bid_ticks;
+            running.ask_ticks = ask_ticks;
+            Some(record)
         }
         TbtKind::MidPoint => {
-            running.mid_ticks = running.mid_ticks.checked_add(first_move)?;
+            let mid_ticks = running.mid_ticks.checked_add(first_move)?;
             // Two fields: the move, and a flag word. No size, no venue, no text.
             let _flags = bits.unsigned()?;
+            running.mid_ticks = mid_ticks;
             Some(TbtRecord::MidPoint {
-                price: running.mid_ticks as f64 * min_tick,
+                price: mid_ticks as f64 * min_tick,
             })
         }
     }
@@ -572,6 +584,45 @@ mod tests {
         assert!((bids[0] - 1.15510).abs() < 1e-9, "{bids:?}");
         assert!((bids[1] - 1.15510).abs() < 1e-9, "a record that does not move it leaves it");
         assert!((bids[2] - 1.15500).abs() < 1e-9, "and a move down moves it down");
+    }
+
+    /// A record that runs out part way through moves nothing.
+    ///
+    /// Prices arrive as steps from the last one, so a step taken from a record
+    /// that could not be read is not a price that was wrong once — it is an
+    /// offset carried into every price on that stream afterwards, including
+    /// across frames.
+    #[test]
+    fn a_record_that_cannot_be_read_leaves_the_price_where_it_was() {
+        let mut running = RunningPrice::default();
+
+        // A whole frame first, so there is a baseline to corrupt.
+        decode_frame(&frame(&[quote(23_102, 23_103, 1, 1)]), TbtKind::BidAsk, 0.00005, &mut running)
+            .expect("a frame");
+        let baseline = (running.bid_ticks, running.ask_ticks);
+
+        // A record that states its header and both moves and then stops: the
+        // moves read, and nothing after them does.
+        let cut = {
+            let mut w = Writer::default();
+            w.unsigned(1).unsigned(1_786_340_548);
+            w.signed(500).signed(500);
+            frame(&[w.out])
+        };
+        let _ = decode_frame(&cut, TbtKind::BidAsk, 0.00005, &mut running);
+
+        assert_eq!(
+            (running.bid_ticks, running.ask_ticks), baseline,
+            "a record nobody could read does not move the price",
+        );
+
+        // And the next good frame is measured from where the price really was.
+        let f = decode_frame(&frame(&[quote(1, 1, 1, 1)]), TbtKind::BidAsk, 0.00005, &mut running)
+            .expect("a frame");
+        match &f.records[0] {
+            TbtRecord::Quote(q) => assert!((q.bid - 1.15515).abs() < 1e-9, "{}", q.bid),
+            other => panic!("expected a quote, got {other:?}"),
+        }
     }
 
     /// The running price carries across frames, not only across records.

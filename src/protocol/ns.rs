@@ -118,8 +118,19 @@ pub fn ns_recv<R: Read>(reader: &mut R) -> io::Result<(Vec<u8>, usize)> {
         ));
     }
     let payload_len = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
-    let mut payload = vec![0u8; payload_len];
-    reader.read_exact(&mut payload)?;
+    // Read in bounded chunks rather than allocating what the header claims.
+    // The counterpart reads into a buffer it caps and takes the smaller of
+    // that and what remains, so a length nobody backs with bytes costs it
+    // nothing. Reserving it up front makes a four-byte field an instruction to
+    // allocate four gigabytes.
+    const CHUNK: usize = 64 * 1024;
+    let mut payload = Vec::with_capacity(payload_len.min(CHUNK));
+    let mut buf = [0u8; CHUNK];
+    while payload.len() < payload_len {
+        let want = (payload_len - payload.len()).min(CHUNK);
+        reader.read_exact(&mut buf[..want])?;
+        payload.extend_from_slice(&buf[..want]);
+    }
     Ok((payload, payload_len + 8))
 }
 
@@ -429,4 +440,27 @@ mod tests {
             Some((1, 2, vec!["caf\u{e9}".to_string()])),
         );
     }
+
+    /// A length nobody backs with bytes costs nothing.
+    ///
+    /// The header states a size in four bytes. Reserving that up front turns
+    /// `0xffffffff` into an instruction to allocate four gigabytes before a
+    /// single byte of payload has arrived. The counterpart reads into a buffer
+    /// it caps and takes the smaller of that and what remains.
+    #[test]
+    fn a_stated_length_is_not_an_allocation() {
+        let mut framed = NS_MAGIC.to_vec();
+        framed.extend_from_slice(&u32::MAX.to_be_bytes());
+        framed.extend_from_slice(b"only these bytes actually follow");
+
+        let started = std::time::Instant::now();
+        let result = ns_recv(&mut framed.as_slice());
+
+        assert!(result.is_err(), "the payload the header promised never arrived");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "and finding that out did not mean reserving four gigabytes first",
+        );
+    }
+
 }

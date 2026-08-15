@@ -310,11 +310,22 @@ impl Connection {
                         .iter()
                         .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
                         .collect();
-                    log::warn!(
-                        "extract_frames: dropping {}B (no header). first {}B ascii={:?} full_hex={}",
-                        self.buf.len(), head_n, head_ascii, full_hex,
-                    );
-                    self.buf.clear();
+                    // The tail could be a header the socket has not finished
+                    // delivering. The longest marker is `8=FIX.`, so anything
+                    // shorter than that at the end is kept: clearing it
+                    // discards a genuine frame — an ack, a fill — that had
+                    // only been split across two reads, and leaves the read
+                    // after it starting mid-header.
+                    const LONGEST_MARKER: usize = b"8=FIX.".len();
+                    let keep = self.buf.len().min(LONGEST_MARKER - 1);
+                    let dropped = self.buf.len() - keep;
+                    if dropped > 0 {
+                        log::warn!(
+                            "extract_frames: dropping {dropped}B (no header). first {}B ascii={:?} full_hex={}",
+                            head_n, head_ascii, full_hex,
+                        );
+                    }
+                    self.buf.drain(..dropped);
                     break;
                 }
             };
@@ -705,6 +716,29 @@ mod tests {
             heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
+        }
+    }
+
+    /// A header split across two reads is a frame, not garbage.
+    ///
+    /// TCP delivers bytes, not messages. A read that ends part way through
+    /// `8=FIX.` leaves a buffer with no header in it, and clearing that buffer
+    /// throws away the frame — an ack, a fill — that the next read completes.
+    #[test]
+    fn a_header_split_across_two_reads_still_arrives() {
+        let inner = fix_build(&[(35, "0")], 1);
+
+        // The socket hands over the first three bytes of the header.
+        let mut conn = test_connection_with_buf(inner[..3].to_vec());
+        assert!(conn.extract_frames().is_empty(), "nothing whole has arrived yet");
+
+        // The rest follows, and the frame reads as one.
+        conn.buf.extend_from_slice(&inner[3..]);
+        let frames = conn.extract_frames();
+        assert_eq!(frames.len(), 1, "the frame survived being split");
+        match &frames[0] {
+            Frame::Fix(data) => assert_eq!(data, &inner),
+            other => panic!("expected Frame::Fix, got {other:?}"),
         }
     }
 
