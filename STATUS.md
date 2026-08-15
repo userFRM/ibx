@@ -177,10 +177,14 @@ not hold. `scripts/endurance.py --minutes 175`.
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,367 | No |
-| Python | 374 | No |
-| Python, live | 489 | Yes |
-| Paper compatibility suite (137 phases) | 17 tests | Yes |
+| Rust unit and integration | 1,573 | No |
+| Python | 379 | No |
+| Python, live | 131 | Yes |
+| Paper compatibility suite (136 phases) | 26 tests | Yes |
+
+Counted rather than stated: `scripts/check_status_counts.py` names every test
+in each suite and fails the gate when this table disagrees with it, so a
+figure here cannot go quietly out of date as the suites grow.
 
 Run order and environment are documented in
 [docs/engineering-notes.md](docs/engineering-notes.md).
@@ -191,8 +195,9 @@ A request this client will not send is reported through `error(reqId, code,
 message)` and the call returns, as the reference client does. The number is the
 one that client reports for the same class: 321 for a request that fails
 validation, 200 for a contract description that matches nothing, 504 for a call
-with no session. Construction and configuration raise, as does a synchronous
-call with a return value.
+with no session, and 327 for binding orders entered elsewhere, which that
+client refuses for any client but the one they bind to. Construction and
+configuration raise, as does a synchronous call with a return value.
 
 ## Planned work
 
