@@ -47,7 +47,7 @@ fn main() {
 
     // Submit initial order at $1.00
     let base_order_id = 1u64;
-    let mut current_order_id = base_order_id;
+    let current_order_id = base_order_id;
 
     println!(
         "[{:.3}s] Submitting initial GTC limit BUY 1 @ $1.00...",
@@ -111,7 +111,6 @@ fn main() {
 
         // Wait for the ack, which comes back under the order's own id.
         let deadline = Instant::now() + Duration::from_secs(30);
-        let mut acked = false;
         loop {
             if Instant::now() > deadline {
                 println!("  Iteration {} modify timed out", i + 1);
@@ -129,7 +128,6 @@ fn main() {
                             iterations,
                             format_ns(ns),
                         );
-                        acked = true;
                         break;
                     }
                 }
@@ -143,9 +141,8 @@ fn main() {
             }
         }
 
-        if acked {
-            current_order_id = current_order_id;
-        }
+        // The replace restates the order under its own id, so the next
+        // iteration names the same one.
 
         // Brief pause
         std::thread::sleep(Duration::from_millis(100));

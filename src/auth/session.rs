@@ -132,34 +132,6 @@ pub fn get_session_id() -> String {
 ///
 /// Override with the `IBX_HWID_PATH` env var to point elsewhere (containers,
 /// CI, sharing one cookie across multiple machines, etc.).
-/// The group a peer states, where it states one this arithmetic can use.
-///
-/// A modulus of zero makes `modpow` panic and a modulus of one makes every
-/// power zero; a generator outside `2..n` is not a generator. The defaults are
-/// what this client would have used anyway, so an unusable pair falls back to
-/// them rather than taking the login down or continuing on a group that proves
-/// nothing.
-fn stated_group(
-    stated: &[String],
-    default_n: BigUint,
-    default_g: BigUint,
-) -> (BigUint, BigUint) {
-    let parsed = stated.first().zip(stated.get(1)).and_then(|(n, g)| {
-        Some((
-            BigUint::parse_bytes(n.as_bytes(), 16)?,
-            BigUint::parse_bytes(g.as_bytes(), 16)?,
-        ))
-    });
-    match parsed {
-        Some((n, g)) if n > BigUint::from(1u32) && g > BigUint::from(1u32) && g < n => (n, g),
-        Some(_) => {
-            log::warn!("the venue stated an SRP group this client cannot use; keeping its own");
-            (default_n, default_g)
-        }
-        None => (default_n, default_g),
-    }
-}
-
 fn hwid_path() -> std::path::PathBuf {
     if let Some(p) = std::env::var_os("IBX_HWID_PATH") {
         return std::path::PathBuf::from(p);
@@ -397,6 +369,34 @@ fn extract_srp_data(fields: &[String], username: &str) -> Vec<String> {
         .filter(|f| !f.is_empty() && f.as_str() != username)
         .cloned()
         .collect()
+}
+
+/// The group a peer states, where it states one this arithmetic can use.
+///
+/// A modulus of zero makes `modpow` panic and a modulus of one makes every
+/// power zero; a generator outside `2..n` is not a generator. The defaults are
+/// what this client would have used anyway, so an unusable pair falls back to
+/// them rather than taking the login down or continuing on a group that proves
+/// nothing.
+fn stated_group(
+    stated: &[String],
+    default_n: BigUint,
+    default_g: BigUint,
+) -> (BigUint, BigUint) {
+    let parsed = stated.first().zip(stated.get(1)).and_then(|(n, g)| {
+        Some((
+            BigUint::parse_bytes(n.as_bytes(), 16)?,
+            BigUint::parse_bytes(g.as_bytes(), 16)?,
+        ))
+    });
+    match parsed {
+        Some((n, g)) if n > BigUint::from(1u32) && g > BigUint::from(1u32) && g < n => (n, g),
+        Some(_) => {
+            log::warn!("the venue stated an SRP group this client cannot use; keeping its own");
+            (default_n, default_g)
+        }
+        None => (default_n, default_g),
+    }
 }
 
 /// Execute authentication protocol.
