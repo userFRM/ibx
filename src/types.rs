@@ -1535,7 +1535,14 @@ impl OrderBuffer {
         }
     }
 
-    /// Add a request, dropping the oldest if the buffer is full.
+    /// Add a request.
+    ///
+    /// Nothing is dropped. The capacity is what a healthy backlog fits in, not
+    /// a limit on what a caller may send: an order thrown away here would be
+    /// one a caller was told nothing about, which is the one outcome an order
+    /// path cannot have. Past that size the buffer grows, and the assertion
+    /// says so in a debug build, because a backlog that deep means the
+    /// transport is not draining rather than that a caller is busy.
     pub fn push(&mut self, req: OrderRequest) {
         debug_assert!(self.buf.len() < MAX_PENDING_ORDERS, "order buffer overflow");
         self.buf.push(req);
