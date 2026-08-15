@@ -113,7 +113,7 @@ pub(crate) fn drain_and_send_orders(
                 let (sec_type_str, destination) = context.market.order_routing(instrument);
                 // What the contract is denominated in, not what most of them
                 // happen to be.
-                let currency = context.market.order_currency(instrument);
+                let currency = currency_for(context, shared, instrument);
                 // Versioned ClOrdIDs like every other submit path: a cancel or
                 // replace that has seen no echo yet computes `{id}.{ver}` for
                 // OrigClOrdID, and a bare id would not match. The ids are freshly
@@ -235,7 +235,7 @@ pub(crate) fn drain_and_send_orders(
                 let (sec_type_str, destination) = context.market.order_routing(instrument);
                 // What the contract is denominated in, not what most of them
                 // happen to be.
-                let currency = context.market.order_currency(instrument);
+                let currency = currency_for(context, shared, instrument);
                 let now = chrono_free_timestamp();
                 conn.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
@@ -714,6 +714,33 @@ fn oca_type_str(oca_type: u8) -> &'static str {
 fn is_trigger_only(ord_type: u8) -> bool {
     matches!(ord_type, b'3' | b'J') || ord_type == crate::types::ORD_STP_PRT
 }
+
+/// What an order says a contract is denominated in.
+///
+/// What the caller registered, where they registered one. Otherwise what the
+/// venue's own definition of that contract says, which is the answer a caller
+/// who named their contract by id alone never gave and the venue always has.
+/// Dollars only where neither states anything, which is what an unstated
+/// currency has always meant here.
+///
+/// Saying dollars from the start put an order for a contract priced in
+/// something else into the wrong currency, on a path a caller reaches by
+/// passing back a contract read out of their own positions.
+fn currency_for(
+    context: &Context,
+    shared: &Arc<SharedState>,
+    instrument: crate::types::InstrumentId,
+) -> String {
+    context.market.order_currency_stated(instrument)
+        .or_else(|| {
+            context.market.con_id(instrument)
+                .and_then(|con_id| shared.reference.get_contract(con_id))
+                .map(|known| known.currency)
+                .filter(|c| !c.is_empty())
+        })
+        .unwrap_or_else(|| "USD".to_string())
+}
+
 
 /// One shared encoder for every extended order submission (ibx#224): the
 /// order-type-specific tags come from `kind`; the TIF and the full

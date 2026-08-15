@@ -378,6 +378,17 @@ impl MarketState {
             .unwrap_or_else(|| "USD".to_string())
     }
 
+    /// The currency this contract was registered with, where one was stated.
+    ///
+    /// Apart from `order_currency`, which answers dollars when nothing was
+    /// said. A caller that registered a contract by its id alone stated no
+    /// currency, and the venue's own definition of that contract knows one —
+    /// so the two are worth telling apart before either is put on an order.
+    pub fn order_currency_stated(&self, id: InstrumentId) -> Option<String> {
+        let key = self.option_keys.get(id as usize)?.as_deref()?;
+        key.split('|').nth(6).filter(|c| !c.is_empty()).map(str::to_string)
+    }
+
     pub fn order_identity(&self, id: InstrumentId) -> Option<OrderIdentity> {
         let key = self.option_keys.get(id as usize)?.as_deref()?;
         let mut it = key.split('|');
@@ -695,6 +706,7 @@ mod tests {
             .try_register_contract(102, "SAP", "STK", "IBIS", "||||||EUR")
             .expect("registers");
         assert_eq!(ms.order_currency(eu), "EUR");
+        assert_eq!(ms.order_currency_stated(eu), Some("EUR".to_string()));
 
         let jp = ms
             .try_register_contract(103, "7203", "STK", "TSEJ", "||||||JPY")
@@ -708,6 +720,11 @@ mod tests {
             .try_register_contract(104, "AAPL", "STK", "SMART", "|||||")
             .expect("registers");
         assert_eq!(ms.order_currency(unstated), "USD");
+        assert_eq!(
+            ms.order_currency_stated(unstated), None,
+            "a contract registered without a currency stated none, which is not the \
+             same as stating dollars: the venue's own definition is asked next",
+        );
     }
 
     #[test]
