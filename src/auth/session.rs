@@ -132,6 +132,34 @@ pub fn get_session_id() -> String {
 ///
 /// Override with the `IBX_HWID_PATH` env var to point elsewhere (containers,
 /// CI, sharing one cookie across multiple machines, etc.).
+/// The group a peer states, where it states one this arithmetic can use.
+///
+/// A modulus of zero makes `modpow` panic and a modulus of one makes every
+/// power zero; a generator outside `2..n` is not a generator. The defaults are
+/// what this client would have used anyway, so an unusable pair falls back to
+/// them rather than taking the login down or continuing on a group that proves
+/// nothing.
+fn stated_group(
+    stated: &[String],
+    default_n: BigUint,
+    default_g: BigUint,
+) -> (BigUint, BigUint) {
+    let parsed = stated.first().zip(stated.get(1)).and_then(|(n, g)| {
+        Some((
+            BigUint::parse_bytes(n.as_bytes(), 16)?,
+            BigUint::parse_bytes(g.as_bytes(), 16)?,
+        ))
+    });
+    match parsed {
+        Some((n, g)) if n > BigUint::from(1u32) && g > BigUint::from(1u32) && g < n => (n, g),
+        Some(_) => {
+            log::warn!("the venue stated an SRP group this client cannot use; keeping its own");
+            (default_n, default_g)
+        }
+        None => (default_n, default_g),
+    }
+}
+
 fn hwid_path() -> std::path::PathBuf {
     if let Some(p) = std::env::var_os("IBX_HWID_PATH") {
         return std::path::PathBuf::from(p);
@@ -291,8 +319,15 @@ pub fn recv_secure<R: Read>(
         ));
     }
 
+    // Read rather than indexed: the guard above establishes two fields, and a
+    // secure message states three. A frame with the type and nothing after it
+    // is malformed, which is a thing to report — indexing it takes the login
+    // thread down instead.
+    let body = parts.get(2).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "secure message carries no body")
+    })?;
     let ct = B64
-        .decode(parts[2])
+        .decode(body)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     channel
         .decrypt(&ct)
@@ -396,19 +431,8 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     };
 
     let data_fields = extract_srp_data(&fields2, username);
-    // The server may state N and g; otherwise the defaults apply
-    let (n, g) = if data_fields.len() >= 2 {
-        if let (Some(server_n), Some(server_g)) = (
-            BigUint::parse_bytes(data_fields[0].as_bytes(), 16),
-            BigUint::parse_bytes(data_fields[1].as_bytes(), 16),
-        ) {
-            (server_n, server_g)
-        } else {
-            (n, g)
-        }
-    } else {
-        (n, g)
-    };
+    // The venue may state its own group; otherwise this client's applies.
+    let (n, g) = stated_group(&data_fields, n, g);
 
     // Generate client keys: a (private), A = g^a mod N
     let mut a_bytes = [0u8; 32];
@@ -1132,6 +1156,16 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 };
                 return Err(ib_key_err(io::ErrorKind::ConnectionAborted, msg));
             }
+            // Nothing has arrived yet. The approval is a person reaching for a
+            // phone, so silence is the ordinary case and the loop goes back to
+            // the deadline check at the top — which is the only thing that can
+            // end this wait. Treating it as a failure both ends the login while
+            // the operator is still deciding, and, without a timeout on the
+            // socket at all, leaves the deadline unreachable while a server
+            // that has stopped talking holds the wait open for ever.
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock
+                || e.kind() == io::ErrorKind::TimedOut
+                || e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
 
@@ -1426,18 +1460,8 @@ pub fn do_srp_farm(
     }
 
     let data_fields = extract_srp_data(&fields2, username);
-    let (n, g) = if data_fields.len() >= 2 {
-        if let (Some(server_n), Some(server_g)) = (
-            BigUint::parse_bytes(data_fields[0].as_bytes(), 16),
-            BigUint::parse_bytes(data_fields[1].as_bytes(), 16),
-        ) {
-            (server_n, server_g)
-        } else {
-            (n, g)
-        }
-    } else {
-        (n, g)
-    };
+    // The venue may state its own group; otherwise this client's applies.
+    let (n, g) = stated_group(&data_fields, n, g);
 
     // Generate client keys with 32-byte private key
     let mut a_bytes = [0u8; 32];
@@ -2765,6 +2789,53 @@ mod tests {
             "tokenSubType must be the last field; got {fields:?}");
     }
 
+        /// A quiet socket is what waiting for a phone tap looks like.
+    ///
+    /// The gate polls, so most reads come back with nothing. Treating that as
+    /// a failure ends the login while the operator is still deciding; treating
+    /// it as a reason to block for ever leaves the client's own deadline
+    /// unreachable when a server stops talking without closing. Neither: the
+    /// wait goes round again, and the deadline is what ends it.
+    #[test]
+    fn a_quiet_socket_is_waited_through_and_the_deadline_ends_it() {
+        /// Answers every read with a timeout, as a polled socket does while
+        /// nobody has tapped anything.
+        struct AlwaysQuiet {
+            reads: std::cell::Cell<u32>,
+            written: Vec<u8>,
+        }
+        impl io::Read for AlwaysQuiet {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                self.reads.set(self.reads.get() + 1);
+                Err(io::Error::new(io::ErrorKind::WouldBlock, "nothing yet"))
+            }
+        }
+        impl io::Write for AlwaysQuiet {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.written.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        }
+
+        let mut stream = AlwaysQuiet { reads: std::cell::Cell::new(0), written: Vec::new() };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+
+        let started = std::time::Instant::now();
+        let outcome = do_ib_key_2fa(&mut stream, "2a", deadline, None);
+
+        let why = outcome.expect_err("a wait nobody answered ends as a timeout");
+        assert_eq!(why.kind(), io::ErrorKind::TimedOut, "{why}");
+        assert!(
+            stream.reads.get() > 1,
+            "the wait went round rather than giving up on the first quiet read",
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "and it ended on its own deadline",
+        );
+    }
+
     #[test]
     fn ib_key_2fa_approved_after_state_2_and_passed() {
         // Server sends SWCR_TOKEN(state=2) carrying the approval URL, then
@@ -3140,4 +3211,37 @@ mod tests {
         assert!(!err.to_string().contains(SERVER_TEXT),
             "AUTH_FINISH rejection must not echo the server's field; got {err}");
     }
+
+    /// A group the venue states has to be one this arithmetic can use.
+    ///
+    /// `modpow` panics on a zero modulus, so a peer stating `N=0` takes the
+    /// login thread down rather than failing the login. One and a generator
+    /// outside `2..N` prove nothing about the peer either.
+    #[test]
+    fn an_unusable_srp_group_falls_back_to_this_clients_own() {
+        let default_n = BigUint::from(0xFFFF_FFFB_u32);
+        let default_g = BigUint::from(2u32);
+        let mine = || (default_n.clone(), default_g.clone());
+
+        // What the venue normally states: a modulus and a generator inside it.
+        let (n, g) = stated_group(
+            &["1FFFF".to_string(), "5".to_string()],
+            default_n.clone(), default_g.clone(),
+        );
+        assert_eq!((n, g), (BigUint::from(0x1FFFFu32), BigUint::from(5u32)));
+
+        for (why, stated) in [
+            ("a zero modulus", vec!["0".to_string(), "2".to_string()]),
+            ("a modulus of one", vec!["1".to_string(), "2".to_string()]),
+            ("a generator of one", vec!["1FFFF".to_string(), "1".to_string()]),
+            ("a generator past the modulus", vec!["5".to_string(), "1FFFF".to_string()]),
+            ("nothing parseable", vec!["zz".to_string(), "2".to_string()]),
+            ("only one field", vec!["1FFFF".to_string()]),
+            ("no fields at all", vec![]),
+        ] {
+            let (n, g) = stated_group(&stated, default_n.clone(), default_g.clone());
+            assert_eq!((n, g), mine(), "{why} is not a group to use");
+        }
+    }
+
 }
