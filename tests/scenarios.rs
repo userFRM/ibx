@@ -970,14 +970,14 @@ fn req_completed_orders_drains_and_dispatches() {
     });
 
     let mut w = RecordingWrapper::default();
-    client.req_completed_orders(&mut w);
+    client.req_completed_orders(false, &mut w);
 
     assert_eq!(w.events.iter().filter(|e| *e == "completed_order").count(), 2);
     assert!(w.events.iter().any(|e| e == "completed_orders_end"));
 
     // Second call should return empty (already drained)
     w.events.clear();
-    client.req_completed_orders(&mut w);
+    client.req_completed_orders(false, &mut w);
     assert_eq!(w.events.iter().filter(|e| *e == "completed_order").count(), 0);
     assert!(w.events.iter().any(|e| e == "completed_orders_end"));
 }
@@ -986,7 +986,7 @@ fn req_completed_orders_drains_and_dispatches() {
 fn req_completed_orders_empty_still_fires_end() {
     let (client, _rx, _shared) = test_client();
     let mut w = RecordingWrapper::default();
-    client.req_completed_orders(&mut w);
+    client.req_completed_orders(false, &mut w);
     assert_eq!(w.events, vec!["completed_orders_end"]);
 }
 

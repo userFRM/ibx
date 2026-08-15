@@ -291,8 +291,17 @@ impl EClient {
     // ── Completed Orders ──
 
     /// Request completed orders. Matches `reqCompletedOrders` in C++.
-    /// Immediately delivers all archived completed orders, then calls `completed_orders_end`.
-    pub fn req_completed_orders(&self, wrapper: &mut impl Wrapper) {
+    ///
+    /// Immediately delivers every completed order this session archived, then
+    /// calls `completed_orders_end`.
+    ///
+    /// `api_only` is taken and not applied. It asks for orders entered through
+    /// an API rather than by hand, and nothing this client holds says which an
+    /// order was: the completed orders are the ones this session saw, and the
+    /// venue states no origin on them. Passing `true` is answered with all of
+    /// them rather than with a guess at which were typed.
+    pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper) {
+        let _ = api_only;
         for order in self.shared.orders.drain_completed_orders() {
             let status_str = crate::client_core::order_status_str(order.status);
             if let Some(info) = self.shared.orders.get_order_info(order.order_id) {

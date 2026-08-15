@@ -453,9 +453,8 @@ impl Client {
 
     /// Orders that are done — filled, cancelled or expired.
     pub fn completed_orders(&self, api_only: bool) {
-        let _ = api_only;
         let mut r = self.recorded.lock().unwrap();
-        self.inner.req_completed_orders(&mut *r);
+        self.inner.req_completed_orders(api_only, &mut *r);
     }
 
     /// The account families this login belongs to.

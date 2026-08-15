@@ -496,7 +496,7 @@ def req_executions(req_id, exec_filter=None)
 
 #### `req_completed_orders`
 
-Request completed orders.
+Request completed orders.  `api_only` is taken and not applied. It asks for orders entered through an API rather than by hand, and nothing this client holds says which an order was: the completed orders are the ones this session saw, and the venue states no origin on them. Passing `true` is answered with all of them rather than with a guess at which were typed.
 
 ```python
 def req_completed_orders(api_only=False)
