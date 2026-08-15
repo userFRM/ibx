@@ -600,6 +600,14 @@ pub struct ClientCore {
     /// names its own mode is not described by the type set for everything
     /// else, and that request's callback has to say what it asked for.
     mdt_by_req: Mutex<HashMap<i64, i32>>,
+    /// Which requests asked for their bar times as seconds since the epoch.
+    ///
+    /// The venue states a time the one way it states it, and the counterpart
+    /// formats it for the caller. A caller that asked for the other form and
+    /// was handed this one is reading a date as a number or a number as a
+    /// date; only the request that asked for it is affected, so it is kept per
+    /// request rather than for the session.
+    epoch_dates_by_req: Mutex<HashSet<i64>>,
 
     // Historical data keepUpToDate: req_ids that have completed initial batch.
     // Subsequent bars for these req_ids dispatch as historical_data_update.
@@ -710,6 +718,7 @@ impl ClientCore {
             market_data_type: AtomicI32::new(1),
             mdt_sent: Mutex::new(HashSet::new()),
             mdt_by_req: Mutex::new(HashMap::new()),
+            epoch_dates_by_req: Mutex::new(HashSet::new()),
             hist_initial_complete: Mutex::new(HashSet::new()),
             news_providers: Mutex::new("BRFG*BRFUPDN".into()),
             news_instruments: Mutex::new(HashSet::new()),
@@ -766,6 +775,7 @@ impl ClientCore {
         self.market_data_type.store(1, Ordering::Relaxed);
         self.mdt_sent.lock().unwrap().clear();
         self.mdt_by_req.lock().unwrap().clear();
+        self.epoch_dates_by_req.lock().unwrap().clear();
         self.hist_initial_complete.lock().unwrap().clear();
         *self.news_providers.lock().unwrap() = "BRFG*BRFUPDN".into();
         self.news_instruments.lock().unwrap().clear();
@@ -2476,10 +2486,37 @@ impl ClientCore {
         Ok(())
     }
 
+    /// Remember how a request asked for its bar times to be written.
+    ///
+    /// The reference client numbers the two forms: 1 for the venue's own
+    /// spelling, 2 for seconds since the epoch. Anything else is 1, which is
+    /// what that client does with a number it does not know.
+    pub fn note_date_format(&self, req_id: i64, format_date: i32) {
+        if format_date == 2 {
+            self.epoch_dates_by_req.lock().unwrap().insert(req_id);
+        } else {
+            self.epoch_dates_by_req.lock().unwrap().remove(&req_id);
+        }
+    }
+
+    /// A bar's time, written the way the request that asked for it wanted.
+    ///
+    /// Where the stamp cannot be read back to an instant it is handed over as
+    /// it came: a time nobody can parse is still what the venue said, and
+    /// replacing it with a zero would state an instant in 1970.
+    pub fn bar_time_for(&self, req_id: i64, stated: &str) -> String {
+        if !self.epoch_dates_by_req.lock().unwrap().contains(&req_id) {
+            return stated.to_string();
+        }
+        crate::config::ib_datetime_to_unix(stated)
+            .map(|secs| secs.to_string())
+            .unwrap_or_else(|| stated.to_string())
+    }
+
     /// Validate historical-request arguments before anything reaches the
-    /// engine: an unrecognized bar_size previously fell back to
-    /// 5-minute bars silently (via TWO divergent tables), and an
-    /// unrecognized what_to_show fell back to TRADES. The caller gets a
+    /// engine: an unrecognized bar_size falls back to 5-minute bars
+    /// silently through two divergent tables, and an unrecognized
+    /// what_to_show falls back to TRADES. The caller is answered with a
     /// synchronous Err at the call instead of plausible, wrong candles.
     pub fn validate_historical_args(
         bar_size: &str,

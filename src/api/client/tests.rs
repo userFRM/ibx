@@ -4669,3 +4669,59 @@ fn solving_an_option_answers_against_the_venues_own_model() {
     assert_eq!(heard.computed.len(), 1, "the volatility was answered");
     assert_eq!(heard.computed[0].0, 7);
 }
+
+/// A caller chooses how its bar times are written, and the choice is per
+/// request. Discarded, a caller that asked for seconds since the epoch is
+/// handed the venue's own spelling and reads a date where it expects a number.
+#[test]
+fn a_request_gets_its_bar_times_written_the_way_it_asked() {
+    #[derive(Default)]
+    struct Heard(Vec<(i64, String)>);
+    impl Wrapper for Heard {
+        fn historical_data(&mut self, req_id: i64, bar: &crate::api::types::BarData) {
+            self.0.push((req_id, bar.date.clone()));
+        }
+        // A request that has already answered with its history keeps speaking
+        // on this one, and its times are written the same way.
+        fn historical_data_update(&mut self, req_id: i64, bar: &crate::api::types::BarData) {
+            self.0.push((req_id, bar.date.clone()));
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let mut heard = Heard::default();
+
+    let bar = HistoricalBar {
+        time: "20260815-12:00:00".into(), open: 1.0, high: 2.0, low: 0.5,
+        close: 1.5, volume: 10, wap: 1.2, count: 3,
+    };
+    // The venue's own spelling, which is what a caller asking for nothing gets.
+    let _ = client.req_historical_data(
+        1, &spy(), "", "1 D", "1 day", "TRADES", true, 1, false,
+    );
+    shared.reference.push_historical_data(1, HistoricalResponse {
+        query_id: String::new(), timezone: String::new(),
+        bars: vec![bar.clone()], is_complete: true,
+    });
+    client.process_msgs(&mut heard);
+    assert_eq!(heard.0[0].1, "20260815-12:00:00", "the venue's own spelling");
+
+    // And seconds since the epoch for the request that asked for them.
+    let _ = client.req_historical_data(
+        2, &spy(), "", "1 D", "1 day", "TRADES", true, 2, false,
+    );
+    shared.reference.push_historical_data(2, HistoricalResponse {
+        query_id: String::new(), timezone: String::new(),
+        bars: vec![bar.clone()], is_complete: true,
+    });
+    client.process_msgs(&mut heard);
+    assert_eq!(heard.0[1].1, "1786795200", "seconds since the epoch");
+
+    // The first request is unaffected: the choice belongs to the request.
+    shared.reference.push_historical_data(1, HistoricalResponse {
+        query_id: String::new(), timezone: String::new(),
+        bars: vec![bar.clone()], is_complete: false,
+    });
+    client.process_msgs(&mut heard);
+    assert_eq!(heard.0[2].1, "20260815-12:00:00", "still the venue's spelling");
+}

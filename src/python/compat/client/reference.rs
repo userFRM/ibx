@@ -26,7 +26,10 @@ impl EClient {
         chart_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
-        let _ = (format_date, chart_options);
+        // How this request wants its bar times written, as on the other
+        // surface: the venue states one form and the caller may want the other.
+        self.core.note_date_format(req_id, format_date);
+        let _ = chart_options;
         // Whatever finished under this id before, this is a new request.
         if let Ok(wire) = wire_req_id(req_id) {
             self.core.historical_request_is_new(wire);
@@ -104,7 +107,7 @@ impl EClient {
             use_rth: use_rth != 0,
             filters: contract.lookup_filters(),
         })?;
-        let _ = format_date;
+        self.core.note_date_format(req_id, format_date);
         Ok(())
     }
 

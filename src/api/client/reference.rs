@@ -16,9 +16,12 @@ impl EClient {
     pub fn req_historical_data(
         &self, req_id: i64, contract: &Contract,
         end_date_time: &str, duration: &str, bar_size: &str,
-        what_to_show: &str, use_rth: bool, _format_date: i32, keep_up_to_date: bool,
+        what_to_show: &str, use_rth: bool, format_date: i32, keep_up_to_date: bool,
     ) -> Result<(), Refusal> {
         ClientCore::validate_historical_args(bar_size, what_to_show, keep_up_to_date)?;
+        // How this request wants its bar times written. The venue states one
+        // form; the counterpart writes whichever the caller asked for.
+        self.core.note_date_format(req_id, format_date);
         self.send(ControlCommand::FetchHistorical {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,
@@ -43,8 +46,10 @@ impl EClient {
 
     /// Request head timestamp. Matches `reqHeadTimeStamp` in C++.
     pub fn req_head_time_stamp(
-        &self, req_id: i64, contract: &Contract, what_to_show: &str, use_rth: bool, _format_date: i32,
+        &self, req_id: i64, contract: &Contract, what_to_show: &str, use_rth: bool,
+        format_date: i32,
     ) -> Result<(), Refusal> {
+        self.core.note_date_format(req_id, format_date);
         self.send(ControlCommand::FetchHeadTimestamp {
             req_id: wire_req_id(req_id)?,
             con_id: contract.con_id,

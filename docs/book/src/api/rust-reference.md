@@ -1013,7 +1013,7 @@ pub fn quote_by_instrument(&self, instrument: InstrumentId) -> Option<Quote>
 Request historical data.
 
 ```rust
-pub fn req_historical_data( &self, req_id: i64, contract: &Contract, end_date_time: &str, duration: &str, bar_size: &str, what_to_show: &str, use_rth: bool, _format_date: i32, keep_up_to_date: bool, ) -> Result<(), Refusal>
+pub fn req_historical_data( &self, req_id: i64, contract: &Contract, end_date_time: &str, duration: &str, bar_size: &str, what_to_show: &str, use_rth: bool, format_date: i32, keep_up_to_date: bool, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1053,7 +1053,7 @@ pub fn cancel_historical_data(&self, req_id: i64) -> Result<(), Refusal>
 Request head timestamp.
 
 ```rust
-pub fn req_head_time_stamp( &self, req_id: i64, contract: &Contract, what_to_show: &str, use_rth: bool, _format_date: i32, ) -> Result<(), Refusal>
+pub fn req_head_time_stamp( &self, req_id: i64, contract: &Contract, what_to_show: &str, use_rth: bool, format_date: i32, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
