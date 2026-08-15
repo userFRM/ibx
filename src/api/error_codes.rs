@@ -27,6 +27,13 @@ impl Refusal {
     /// The number the reference client reports a request made before
     /// connecting, or after the connection went, under.
     pub const NOT_CONNECTED: i32 = 504;
+    /// Binding orders entered elsewhere was asked for by a client that is not
+    /// the one they are bound to.
+    ///
+    /// The number the counterpart answers this with. It answers the request
+    /// itself rather than sending it on, so this is the whole of what happens.
+    pub const AUTO_BIND_NOT_THIS_CLIENT: i32 = 327;
+
     /// The venue said nothing at all before the wait ran out.
     ///
     /// This client's own number rather than the venue's: the reference client

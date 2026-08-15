@@ -386,3 +386,36 @@ def test_ewrapper_pnl_callbacks():
     assert w.events[0] == ("pnl", 1, 100.0)
     assert w.events[2] == ("account_summary", "NetLiquidation", "100000.00")
     assert w.events[4] == ("position_end",)
+
+
+def test_auto_binding_is_refused_only_for_a_client_that_is_not_zero():
+    """The counterpart answers this itself and never sends it on.
+
+    It refuses the request for any client but the one those orders bind to,
+    and otherwise sets a property of its own. This session hears about every
+    order on the account either way, so the refusal is the observable part.
+    """
+    from ibx import EClient, EWrapper
+
+    class W(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.errors = []
+
+        def error(self, req_id, code, msg, advanced=""):
+            self.errors.append((code, msg))
+
+    w = W()
+    c = EClient(w)
+    c._test_connect("T")
+
+    # Nothing names a client, so nothing is refused.
+    c.req_auto_open_orders(True)
+    c._test_dispatch_once()
+    assert not [e for e in w.errors if e[0] == 327]
+
+    # A client that is not the one those orders bind to is told so.
+    c._test_set_client_id(7)
+    c.req_auto_open_orders(True)
+    c._test_dispatch_once()
+    assert [e for e in w.errors if e[0] == 327], w.errors

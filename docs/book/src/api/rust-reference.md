@@ -711,7 +711,7 @@ pub fn req_completed_orders(&self, wrapper: &mut impl Wrapper)
 
 #### `req_auto_open_orders`
 
-Automatically bind future orders to this client.
+Automatically bind future orders to this client. Bind orders entered elsewhere to this client. Nothing goes to the venue: the counterpart answers this itself, setting a property of its own and refusing it for any client but the one those orders bind to. What that property gates does not arise here — this session is told about every order on the account, whether it placed them or not — and this surface names no client, so there is nothing to refuse and nothing left to do.
 
 ```rust
 pub fn req_auto_open_orders(&self, _b_auto_bind: bool)

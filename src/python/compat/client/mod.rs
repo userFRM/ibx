@@ -7,10 +7,9 @@ mod reference;
 mod ask;
 mod dispatch;
 mod stubs;
-pub(crate) use stubs::report_unserviceable;
 mod test_helpers;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -65,6 +64,13 @@ pub struct EClient {
     /// Every account this login holds, the first being `account_id`.
     pub(crate) accounts: Mutex<Vec<String>>,
     pub(crate) connected: AtomicBool,
+    /// The number this session connected under, as the caller gave it.
+    ///
+    /// One session holds the account here, so this does not route anything.
+    /// It is kept because the counterpart answers some calls by it — binding
+    /// orders entered elsewhere is refused for any client but zero — and a
+    /// caller that names one is answered the same way.
+    pub(crate) client_id: AtomicI32,
     /// Receiver for engine events (disconnects, etc.).
     pub(crate) event_rx: Mutex<Option<std::sync::mpsc::Receiver<Event>>>,
     /// Sender for test-injected events (test-only).
@@ -146,6 +152,7 @@ impl EClient {
     #[pyo3(signature = (wrapper))]
     fn new(wrapper: Py<PyAny>) -> Self {
         Self {
+            client_id: AtomicI32::new(0),
             wrapper,
             shared: Mutex::new(None),
             control_tx: Mutex::new(None),
@@ -336,7 +343,8 @@ impl EClient {
         *self._thread.lock().unwrap() = Some(handle);
         self.connected.store(true, Ordering::Release);
 
-        let _ = (port, client_id); // unused but kept for ibapi signature compat
+        self.client_id.store(client_id, Ordering::Release);
+        let _ = port; // kept for the reference client's signature
 
         // Fire initial callbacks synchronously, matching official Python ibapi
         // where connect_ack signals "socket ready" before run() is called.

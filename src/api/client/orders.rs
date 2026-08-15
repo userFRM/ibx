@@ -324,9 +324,15 @@ impl EClient {
     // ── Executions ──
 
     /// Automatically bind future orders to this client. Matches `reqAutoOpenOrders` in C++.
-    pub fn req_auto_open_orders(&self, _b_auto_bind: bool) {
-        // No-op: single-client engine, all orders are auto-bound.
-    }
+    /// Bind orders entered elsewhere to this client.
+    ///
+    /// Nothing goes to the venue: the counterpart answers this itself, setting
+    /// a property of its own and refusing it for any client but the one those
+    /// orders bind to. What that property gates does not arise here — this
+    /// session is told about every order on the account, whether it placed
+    /// them or not — and this surface names no client, so there is nothing to
+    /// refuse and nothing left to do.
+    pub fn req_auto_open_orders(&self, _b_auto_bind: bool) {}
 
     /// Request execution reports. Matches `reqExecutions` in C++.
     /// Replays stored executions (optionally filtered), firing `exec_details` +
