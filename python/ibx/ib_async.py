@@ -6,8 +6,7 @@ socket to a gateway on localhost. This replaces that one layer with this
 engine. Everything above it — the events, the async variants, the notebooks —
 runs unchanged, from the copy of `ib_async` already installed.
 
-Nothing of theirs is copied or modified: install `ib_async` as usual, and
-attach.
+No part of `ib_async` is copied or modified: install it as usual, and attach.
 
     from ib_async import IB, Stock
     import ibx.ib_async
@@ -355,14 +354,14 @@ def _their_type(name):
 
 
 def _as_theirs(value):
-    """One of ours, rebuilt as the same-named type of theirs.
+    """An ibx object, rebuilt as the same-named `ib_async` type.
 
     Both sides carry the reference client's own field names, so the conversion
-    is driven by their dataclass rather than written out per type or per
-    callback: a field they have and we do not keeps its default, and neither
-    side needs editing when the other gains one. Anything with no counterpart
-    of theirs — a number, a string, a type only we have — is handed over as it
-    is.
+    is driven by the `ib_async` dataclass rather than written out per type or
+    per callback: a field only `ib_async` declares keeps its default, and
+    neither side needs editing when the other gains one. Anything with no
+    counterpart there — a number, a string, an ibx-only type — is handed over
+    as it is.
     """
     import dataclasses
 
@@ -395,9 +394,9 @@ def _as_theirs(value):
 class _LoopBound:
     """ib_async's wrapper, reached under the names this engine calls.
 
-    A callback carrying an object hands over one of ours; their wrapper reads
-    one of theirs. Every argument is rebuilt on the way through, by its own
-    type name — so a callback nobody thought to list is carried too.
+    A callback carries an ibx object; the `ib_async` wrapper expects its own.
+    Every argument is rebuilt on the way through, by its own type name, so a
+    callback nobody thought to list is carried too.
     """
 
     #: The size that goes with each price, by tick type: bid, ask, last, and
@@ -519,7 +518,7 @@ _KEEPS_THE_SENTINEL = {
 
 
 def _as_ours(value):
-    """One of theirs, rebuilt as this engine's own type of the same name."""
+    """An `ib_async` object, rebuilt as this engine's type of the same name."""
     import dataclasses
 
     if value is None:

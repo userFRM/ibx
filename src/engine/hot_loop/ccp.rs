@@ -73,7 +73,7 @@ fn untracked_fill_target(
 /// Bound for an in-flight contract-details request (secdef reply or
 /// per-exchange fan-out). Refreshed on fan-out activity; on expiry the
 /// request surfaces error 200 + contract_details_end instead of hanging
-/// forever (ibx#227). A gateway rejection arrives in well under a second,
+/// forever. A gateway rejection arrives in well under a second,
 /// and a full 27-exchange fan-out completes within a few.
 const SECDEF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -86,7 +86,7 @@ const EXEC_ID_WINDOW: usize = 1024;
 /// through `Wrapper::error` since ibapi has no callback dedicated to an order
 /// held with a reason. Mirrors IB's generic order-message code (399) rather
 /// than the reject code (201) — an Inactive order is not rejected, it can
-/// still reactivate (ibx#250).
+/// still reactivate.
 const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
 
 /// The gateway's stated reason for a parked or rejected order: the tag 58 text
@@ -361,7 +361,7 @@ fn uncertain_update(
 
 /// How long a reconnect waits for the recovery push before judging the orders
 /// it did not mention. Generous, because a push that says nothing at all is
-/// indistinguishable from one that has not started (ibx#251).
+/// indistinguishable from one that has not started.
 const RECOVERY_PUSH_GRACE: Duration = Duration::from_secs(30);
 
 /// The same wait once the push has sent its own terminator. What is coming has
@@ -373,7 +373,7 @@ pub(crate) struct CcpState {
     /// Insertion order for `seen_exec_ids`, oldest at the front. Used to evict
     /// one entry at a time once the dedup window is full, instead of clearing
     /// the whole set — a wholesale clear would let a post-reconnect server
-    /// replay of a recently-seen ExecID double-count a fill (ibx#198).
+    /// replay of a recently-seen ExecID double-count a fill.
     pub(crate) exec_id_order: VecDeque<String>,
     pub(crate) bulletin_next_id: i32,
     /// Live news subscriptions: instrument, request id, and the providers the
@@ -389,7 +389,7 @@ pub(crate) struct CcpState {
     /// something once the recovery push is known to be complete. Armed
     /// generously at reconnect so the sweep still runs when the push says
     /// nothing at all, and re-armed tightly when the push's own terminator
-    /// arrives (ibx#251). Cleared on a disconnect so a second drop before the
+    /// arrives. Cleared on a disconnect so a second drop before the
     /// sweep cancels it rather than reaping against a dead session.
     pub(crate) recovery_sweep_at: Option<Instant>,
     /// Whether this connection has hydrated an order from the server's account
@@ -404,11 +404,11 @@ pub(crate) struct CcpState {
     /// deadline is swept by `sweep_contract_details` so a request the
     /// gateway never answers (SessionReject, dead socket, lost reply)
     /// surfaces error 200 + contract_details_end instead of hanging
-    /// forever (ibx#227).
+    /// forever.
     pub(crate) pending_secdef: Vec<(u32, bool, Instant)>,
     /// Requests awaiting a matching-symbols reply, with the deadline after
     /// which one is given up on. Recorded only for a request that actually went
-    /// out, and expired so a stale head cannot absorb a later reply (ibx#369).
+    /// out, and expired so a stale head cannot absorb a later reply.
     pub(crate) pending_matching_symbols: Vec<(u32, Instant)>,
     /// In-flight option chain requests: (req_id, symbol, underlying conId,
     /// deadline). The request states no id of its own, so the symbol is what
@@ -430,7 +430,7 @@ pub(crate) struct CcpState {
     /// Counter for internal schedule subscribe req IDs.
     pub(crate) next_schedule_sub_id: u32,
     /// Fan-out state for by-symbol secdef requests. Each entry tracks the
-    /// per-exchange `35=c` requests we issued in response to the master
+    /// per-exchange `35=c` requests issued in response to the master
     /// `35=d|320={api_req_id}|6046={list}` reply, and counts the per-exchange
     /// `35=d` replies as they arrive. `contract_details_end` fires for
     /// `api_req_id` once `received >= fanout_req_ids.len()`.
@@ -468,12 +468,12 @@ pub(crate) struct CcpState {
     /// Those the venue has now named, ready to be handled as though the id had
     /// been there all along.
     pub(crate) resolved_named: Vec<crate::types::ControlCommand>,
-    /// conIds we've already auto-fetched secdef for, keyed by con_id (dedup).
+    /// conIds already auto-fetched a secdef for, keyed by con_id (dedup).
     pub(crate) auto_fetched_conids: HashSet<i64>,
     /// Scanner results awaiting per-conId contract-detail enrichment.
     /// Each entry parks a parsed `<ScanResponse>` until every cache-miss
     /// con_id has been resolved via the same 35=d path that user-initiated
-    /// `reqContractDetails` uses. See ibx#156, ib-agent#142.
+    /// `reqContractDetails` uses.
     pub(crate) pending_scanner_enrichment: Vec<PendingScannerEnrichment>,
 }
 
@@ -494,7 +494,7 @@ pub(crate) struct PendingSchedulePair {
     pub deadline: Instant,
 }
 
-/// In-flight by-symbol fan-out: per-exchange `35=c` requests we sent after
+/// In-flight by-symbol fan-out: per-exchange `35=c` requests sent after
 /// the master `35=d` reply. Each per-exchange `35=d` reply (matched by tag
 /// 320 string) is forwarded to `api_req_id` as one `contract_details`.
 pub(crate) struct PendingFanout {
@@ -503,7 +503,7 @@ pub(crate) struct PendingFanout {
     pub received: usize,
     /// Idle deadline, refreshed on every per-exchange reply. One lost or
     /// unparseable fan-out reply out of ~27 previously left the counter
-    /// short forever and contract_details_end never fired (ibx#227).
+    /// short forever and contract_details_end never fired.
     pub deadline: Instant,
 }
 
@@ -604,7 +604,7 @@ impl CcpState {
     /// the oldest is evicted one at a time. This replaces a previous wholesale
     /// `clear()` that dropped the entire history at the cap, which let a
     /// post-reconnect server replay of a recently-seen ExecID double-count the
-    /// fill and corrupt the position (ibx#198).
+    /// fill and corrupt the position.
     pub(crate) fn record_exec_id(&mut self, exec_id: &str) -> bool {
         if !self.seen_exec_ids.insert(exec_id.to_string()) {
             return false;
@@ -641,7 +641,7 @@ impl CcpState {
                     }
                     Ok(_) => {
                         hb.last_ccp_recv = Instant::now();
-                        // RTT sample (ibx#158): interval from the test request
+                        // RTT sample: interval from the test request
                         // to the first inbound traffic after it. On a quiet
                         // link (the ping use case) that is the echo itself.
                         if let Some((_, sent_at)) = hb.pending_ccp_test.take() {
@@ -687,7 +687,7 @@ impl CcpState {
                             msgs.push(unsigned);
                         }
                         Frame::Control(_) => {
-                            // 8=1 / 8=X control state — not consumed on the order path (ibx#185).
+                        // 8=1 / 8=X control state — not consumed on the order path.
                         }
                     }
                 }
@@ -745,9 +745,9 @@ impl CcpState {
                 let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 let ref_tag = parsed.get(&371).map(|s| s.as_str()).unwrap_or("?");
                 log::warn!("SessionReject: reason='{reason}' refTag={ref_tag}");
-                // ibx#229: a rejection of an in-flight contract-details
+                // A rejection of an in-flight contract-details
                 // request was warn-only — the caller saw neither error()
-                // nor end (a hang until the ibx#227 sweep, and before that
+                // nor end (a hang until the sweep, and before that
                 // forever). The reject carries no request id, so attribute
                 // it only when it cannot be ambiguous: exactly one pending
                 // lookup. Otherwise the sweep bounds the damage.
@@ -789,14 +789,14 @@ impl CcpState {
                                 // deliver a bogus empty answer and orphan the
                                 // data frame that follows (observed live; the
                                 // same ack-then-data shape as the what-if
-                                // path). See ibx#228.
+                                // path).
                                 if extract_tag_value(msg, b"146=").is_none() {
                                     log::debug!("matching-symbols ack frame (no tag 146) — awaiting data frame");
                                 } else {
                                 // Match the reply to its request by the req_id
                                 // the server echoes in tag 320, NOT by queue
                                 // order: FIFO cross-attributes out-of-order
-                                // replies (ibx#228, same fix as pending_secdef).
+                                // replies (, same fix as pending_secdef).
                                 let echoed = extract_tag_value(msg, b"320=")
                                     .and_then(|v| v.parse::<u32>().ok());
                                 let pos = match echoed {
@@ -812,7 +812,7 @@ impl CcpState {
                                     // ("no such symbol") and MUST be delivered:
                                     // dropping it left the caller waiting forever
                                     // and the stale queue head misattributed
-                                    // every later reply (ibx#228).
+                                    // every later reply.
                                     shared.reference.push_matching_symbols(req_id, matches);
                                 } else {
                                     log::warn!(
@@ -977,7 +977,7 @@ impl CcpState {
                     // What a definition carried that nothing here reads. The
                     // point of asking about a contract is to be told about it,
                     // and a field that arrives and is dropped is a fact about
-                    // the contract nobody can see. Recorded rather than guessed
+                    // the contract nobody can Recorded rather than guessed
                     // at, so the gap is measurable from a real reply.
                     let unread = crate::control::contracts::unread_definition_tags(msg);
                     if !unread.is_empty() {
@@ -1040,7 +1040,7 @@ impl CcpState {
                 if let Some(idx) = fanout_idx {
                     if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
                         let api_req_id = self.pending_fanout[idx].api_req_id;
-                        // ibx#229: no con_id is "no definition for this
+                        // No con_id is "no definition for this
                         // exchange" — cache nothing and emit no row. The leg
                         // still counts toward the fan-out below, so the
                         // request completes.
@@ -1070,7 +1070,7 @@ impl CcpState {
                         }
                         // A leg the gateway cannot resolve carries no contract:
                         // it still completes the fan-out, but a zeroed row is
-                        // not a listing (ibx#400).
+                        // not a listing.
                         self.pending_fanout[idx].received += 1;
                         self.pending_fanout[idx].deadline = Instant::now() + SECDEF_TIMEOUT;
                         if self.pending_fanout[idx].received >= self.pending_fanout[idx].fanout_req_ids.len() {
@@ -1166,7 +1166,7 @@ impl CcpState {
                         }
                         let con_id = def.con_id as i64;
                         if con_id == 0 {
-                            // ibx#229: con_id=0 is the gateway saying "no
+                            // Con_id=0 is the gateway saying "no
                             // security definition", not a contract. Pushed as
                             // a row it is indistinguishable from a hit —
                             // empty symbol, and min_tick carrying its 0.01
@@ -1177,7 +1177,7 @@ impl CcpState {
                             // cannot resolve, which arrives contract-less (live:
                             // "BRK.A" for the "BRK A" listing). Drop the pending
                             // entry so the single-shot leg is not left parked
-                            // waiting for a definition that will not come (ibx#400).
+                            // waiting for a definition that will not come.
                             self.pending_secdef.retain(|(rid, ss, _)| *rid != req_id || *ss);
                             if !is_internal {
                                 shared.reference.push_historical_error(
@@ -1227,7 +1227,7 @@ impl CcpState {
                             if fanout_exchanges.is_empty() {
                                 // The master row may be parked awaiting its
                                 // schedule pair; firing end now would order
-                                // end BEFORE the row (ibx#227). Defer it to
+                                // end BEFORE the row. Defer it to
                                 // the pair's resolution (or its 3s sweep).
                                 if let Some(pair) = self.pending_schedule_pair.iter_mut()
                                     .find(|p| p.api_req_id == req_id)
@@ -1291,7 +1291,7 @@ impl CcpState {
         event_tx: &Option<SyncSender<Event>>,
         account_id: &str,
     ) {
-        // CCP recovery push format A (ib-agent#155, captured against live):
+        // CCP recovery push format A (, captured against live):
         // 35=8 with 150=0/39=0, tag 11 carries `<permId>.0`, the originating
         // orderId is in tag 6121. For these, prefer 6121 as the local key so
         // cancel_order(<prior-session orderId>) finds the right ClOrdID.
@@ -1314,7 +1314,7 @@ impl CcpState {
                 // broker liquidated with a leading L. Only the first was taken
                 // off, so every report on a liquidated position parsed to no
                 // order at all and the fill reached nobody: a forced
-                // liquidation was the one fill a caller could not see.
+                // liquidation was the one fill a caller could not
                 let stripped = s.strip_prefix('C').or_else(|| s.strip_prefix('L')).unwrap_or(s);
                 // Strip versioned suffix (.0, .1, .2) from modify-chained ClOrdIDs
                 let base = stripped.split('.').next().unwrap_or(stripped);
@@ -1326,7 +1326,7 @@ impl CcpState {
         // that is NOT in this session's context is a cross-session recovery entry
         // pushed by CCP on session establishment. Insert into context.open_orders
         // so subsequent cancel/modify ACKs at ~line 668 can match via
-        // context.order(clord_id) and emit OrderUpdate events to the user. ibx#191.
+        // context.order(clord_id) and emit OrderUpdate events to the user.
         let is_new_ack = parsed.get(&150).map(|s| s.as_str()) == Some("0")
             && parsed.get(&39).map(|s| s.as_str()) == Some("0");
         // The sentinel is dropped further down, but this recovery insert runs
@@ -1403,13 +1403,13 @@ impl CcpState {
             if let (Some(side), true) = (side, con_id != 0 && qty > 0) {
                 // Recovery is fed by gateway frames, so a full instrument
                 // table must degrade to a missing order rather than take the
-                // engine down (ibx#257). The reconnect burst replays every
+                // engine down. The reconnect burst replays every
                 // resting order, which is exactly when the table fills.
                 // Skipping only the insert keeps the order in last_clord and
                 // the rich-order cache, so req_open_orders still shows it —
                 // but it is NOT in the engine book, so a later fill or
                 // terminal status for it is dropped and no OrderUpdate
-                // reaches the caller (ibx#297). A missing order beats taking
+                // reaches the caller. A missing order beats taking
                 // the engine down; it is not a complete answer.
                 match context.try_register_instrument(con_id) {
                     None => log::warn!(
@@ -1428,7 +1428,7 @@ impl CcpState {
                     // Seeded from the recovery push rather than assumed zero.
                     // Without it a fresh process believes nothing has filled,
                     // and the replayed executions behind this record all look
-                    // like new quantity (ibx#320).
+                    // like new quantity.
                     filled: parsed.get(&14)
                         .and_then(|s| s.parse::<f64>().ok())
                         .map(|c| c as u32)
@@ -1436,8 +1436,8 @@ impl CcpState {
                     // An order this session never saw is working by the fact of
                     // being in the push. One whose state was not known stays
                     // not known here, so the status this very message carries
-                    // moves it — and the caller who was told it was unknown is
-                    // told what it turned out to be.
+                    // moves it, and the caller who was told it was unknown is
+                    // told what it is.
                     status: if prior.is_some() {
                         crate::types::OrderStatus::Uncertain
                     } else {
@@ -1514,7 +1514,7 @@ impl CcpState {
         // Record the ClOrdID exactly as the server reports it so subsequent
         // cancel/modify can echo back the same string. Skip cancel-ack frames
         // (tag 11 starts with 'C' there) — those carry the cancel request's
-        // own id, not the original order's. See ibx#179.
+        // own id, not the original order's.
         if let Some(raw_clord) = parsed.get(&11)
             && !raw_clord.starts_with('C') && raw_clord != "*" {
                 context.last_clord.insert(clord_id, raw_clord.clone());
@@ -1527,16 +1527,16 @@ impl CcpState {
         // preview (closing a position, cash-account sell) legitimately resolves
         // to init_margin_after == 0, and the gateway sends that as a numeric "0"
         // which must be delivered. Guarding on `> 0.0` silently dropped those
-        // and left the caller's pending what-if to time out (ibx#205).
+        // and left the caller's pending what-if to time out.
         // The not-ready ack is not always emitted — close/reject previews send a
         // single data frame — so accept the first data frame with no assumption
         // that an ack precedes it. A frame is the real preview when ANY of the
         // six margin fields (6826/6827/6828 before, 6092/6093/6094 after)
         // parses as a finite number, mirroring the gateway's own real-frame
         // test: each field is "set" when it parses, unset on nan/unparseable,
-        // and the frame is real when any field is set (ibx#213, ibx#214). The
+        // and the frame is real when any field is set. The
         // ack carries "n/a" in all six, so it never matches. Captured
-        // byte-level in ib-agent#160.
+        // byte-level in.
         if parsed.get(&6091).map(|s| s.as_str()) == Some("1") {
             const MARGIN_TAGS: [u32; 6] = [6826, 6827, 6828, 6092, 6093, 6094];
             let is_data_frame = MARGIN_TAGS.iter().any(|tag| {
@@ -1642,7 +1642,7 @@ impl CcpState {
                 // exchange (for example a limit order resting pre-market). Routing
                 // shows up on the same exec report as a non-empty ExDestination
                 // (tag 100) plus an exec ref (tag 198) other than "NONE"; before
-                // routing both are absent/"NONE". Captured in ib-agent#162 (ibx#210).
+                // routing both are absent/"NONE". Captured in.
                 let routed = parsed.get(&100).is_some_and(|s| !s.is_empty())
                     || parsed.get(&198).is_some_and(|s| s != "NONE" && !s.is_empty());
                 if routed {
@@ -1712,7 +1712,7 @@ impl CcpState {
             context.set_order_status_forced(clord_id, status);
         }
 
-        // The guard's verdict doubles as the change flag (ibx#212): a stale
+        // The guard's verdict doubles as the change flag: a stale
         // frame the guard rejects must not surface as an order_status either.
         // A refusal states no new status for the order — it says the request
         // was not carried out, and the order goes on under the terms it already
@@ -1724,7 +1724,7 @@ impl CcpState {
         // and 43=Y is PossDupFlag. Neither was read anywhere, and the only
         // thing standing between a replayed execution and a second booking was
         // the ExecID window — which a fresh process does not have, because it
-        // has never seen the ID (ibx#320). At session start the gateway replays
+        // has never seen the ID. At session start the gateway replays
         // recent executions, so a restart with open partially-filled orders
         // emitted a fill for something that happened before it started.
         let is_resend = ["Y", "y"].contains(&parsed.get(&97).map(|v| v.as_str()).unwrap_or(""))
@@ -1746,7 +1746,7 @@ impl CcpState {
         // Dedup key. An execution with no ExecID skipped the window entirely,
         // so a replayed copy booked a second time — and an absent tag 17 is the
         // shape a replay takes, which is precisely when the window matters
-        // (ibx#260). Falling back to the fields that identify an execution
+ //. Falling back to the fields that identify an execution
         // dedups it on its content instead of trusting it.
         //
         // CumQty is what separates two otherwise identical slices: it advances
@@ -1841,9 +1841,9 @@ impl CcpState {
                     shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
                     // The holding the caller reads is keyed by contract, and
                     // the broker restates that feed on its own schedule — never
-                    // because an order of ours filled. Left to it, a position
-                    // read back after a fill was the one the session started
-                    // with.
+                    // because an order filled. Left to that feed alone, a
+                    // position read back after a fill is the one the session
+                    // started with.
                     // The report names the contract it filled. An order placed
                     // by symbol registers an instrument that knows no contract
                     // id, so taking it from the instrument attributed nothing.
@@ -1904,7 +1904,7 @@ impl CcpState {
                 // empty for Inactive — it is not completed and may
                 // reactivate, so there is no snapshot field to carry the
                 // reason on. Route it through the same error() path a
-                // cancel/modify reject already uses instead (ibx#250).
+                // cancel/modify reject already uses instead.
                 if status == crate::types::OrderStatus::Inactive {
                     let reason = stated_reason(parsed);
                     if !reason.is_empty() {
@@ -1981,7 +1981,7 @@ impl CcpState {
             // reported a perfectly ordinary value for a code this does not know
             // and for an absent tag alike, so a caller reconciling its own
             // orders saw a plausible answer that disagreed with what it sent
-            // and nothing said so (ibx#307).
+            // and nothing said so.
             //
             // The sibling above passes the raw tag through instead; that works
             // there because an absent tag leaves it empty, while any non-empty
@@ -2090,7 +2090,7 @@ impl CcpState {
                 perm_id,
                 // Tag 14 (CumQty), not tag 151 (LeavesQty). The two are
                 // complements, so reporting the remainder as the filled amount
-                // makes a completed order read as entirely unfilled (ibx#309).
+                // makes a completed order read as entirely unfilled.
                 filled_quantity: cum_qty.unwrap_or_else(|| {
                     shared.orders.get_order_info(clord_id)
                         .map_or(0.0, |info| info.order.filled_quantity)
@@ -2157,8 +2157,8 @@ impl CcpState {
 
             let last_exec = api::Execution {
                 // What the report stated that nothing above names. A report
-                // carries far more than any one client reads, and what was read
-                // used to be the whole of what survived.
+                // carries far more than any one client reads, and what is not
+                // read is kept rather than dropped.
                 unnamed_fields: unnamed_execution_fields(raw),
                 exec_id: exec_id.to_string(),
                 time: transact_time,
@@ -2202,9 +2202,8 @@ impl CcpState {
                 // An execution report states a subset of a definition: it names
                 // the contract, not its long name, its trading class or the
                 // venues it may trade on. Caching it whole replaced a definition
-                // already fetched with a poorer one, so a later reader of the
-                // cache got a contract that had lost fields it used to have.
-                // Fill, do not replace.
+                // already fetched with a poorer one, leaving a later reader a
+                // contract missing fields. Fill, do not replace.
                 let merged = match shared.reference.get_contract(con_id) {
                     Some(mut known) => {
                         if !contract.symbol.is_empty() { known.symbol = contract.symbol.clone(); }
@@ -2224,7 +2223,7 @@ impl CcpState {
             // A trade cancel (150=H) or trade correction (150=G) restates an
             // execution the gateway has already reported, so it may legitimately
             // return a completed order to a working quantity. Every other report
-            // that would do that is a replay (ibx#262).
+            // that would do that is a replay.
             let info = RichOrderInfo { contract, order, order_state, last_exec };
             if matches!(exec_type, "G" | "H") {
                 shared.orders.push_order_correction(clord_id, info);
@@ -2296,14 +2295,14 @@ impl CcpState {
         // the opposite of the message being handled, and the engine's own view
         // governs subsequent cancels, modifies and reconnect bookkeeping — so a
         // phantom order persisted there while the cache row that would have
-        // surfaced it was removed (ibx#252).
+        // surfaced it was removed.
         //
         // Read as a positive statement, not as an absence: a missing or
         // unparseable tag 102 is synthesized as -1 here and says nothing, so it
         // takes the same path as the reasons that do mean the order is working.
         let unknown_order = reason_code == 1;
 
-        // Update local context only if we tracked the order in this session.
+        // Update local context only for an order tracked in this session.
         let instrument = if let Some(order) = context.order(oid).copied() {
             if unknown_order {
                 // Terminal and removed, which is what the gateway just said.
@@ -2315,7 +2314,7 @@ impl CcpState {
                 //
                 // A fill that races the rejection is not lost with the order:
                 // the untracked-fill path books it and moves the position
-                // (ibx#314).
+ //.
                 context.set_order_status_forced(oid, crate::types::OrderStatus::Cancelled);
                 context.retire_order(oid);
             } else {
@@ -2325,7 +2324,7 @@ impl CcpState {
                     crate::types::OrderStatus::Submitted
                 };
                 // Deliberate regression (PendingCancel back to working) — the
-                // ibx#212 guard would rightly block it on the ordinary path.
+                // guard would rightly block it on the ordinary path.
                 context.set_order_status_forced(oid, restore_status);
             }
             order.instrument
@@ -2432,7 +2431,7 @@ impl CcpState {
     }
 
     /// Drop pending schedule pairs past their deadline, emitting partial details.
-    /// Fail contract-details requests whose deadline has passed (ibx#227):
+    /// Fail contract-details requests whose deadline has passed:
     /// both plain/by-symbol secdef lookups the gateway never answered and
     /// by-symbol fan-outs missing one or more per-exchange replies. On
     /// expiry the caller gets error 200 plus contract_details_end, so a
@@ -2803,7 +2802,7 @@ impl CcpState {
             hb.last_ccp_sent = Instant::now();
         } else {
             // No CCP socket: the entry still gets a deadline, so the caller
-            // receives error 200 + end via the sweep instead of silence (ibx#227).
+            // receives error 200 + end via the sweep instead of silence.
             log::warn!("secdef request req_id={req_id} queued with no CCP socket");
         }
         // Known-conId lookup: single record, no paginated terminator.
@@ -2905,7 +2904,7 @@ impl CcpState {
                 "STK" => "CS", "FUT" => "FUT", "OPT" => "OPT", "IND" => "IND", other => other,
             };
             // Identifier lookup (ISIN/CUSIP): SecurityIDSource is the standard FIX
-            // code, 1 = CUSIP, 4 = ISIN (ib-agent#174). When a known one is set the
+            // code, 1 = CUSIP, 4 = ISIN. When a known one is set the
             // lookup rides the identifier and drops the symbol/secType/filters.
             let sec_id_source = match filters.sec_id_type.to_uppercase().as_str() {
                 "ISIN" => "4",
@@ -2915,7 +2914,7 @@ impl CcpState {
             let identifier_lookup = !filters.sec_id.is_empty() && !sec_id_source.is_empty();
 
             let strike_str = if filters.strike > 0.0 { format!("{}", filters.strike) } else { String::new() };
-            // PutOrCall: Call = 1, Put = 0 (ib-agent#171).
+            // PutOrCall: Call = 1, Put = 0.
             let right_code = match filters.right.to_uppercase().as_str() {
                 "C" | "CALL" => "1",
                 "P" | "PUT" => "0",
@@ -2924,7 +2923,7 @@ impl CcpState {
             // Exchange rides tag 100; primaryExchange (when set) rides tag 207 —
             // the two were previously conflated onto 207. localSymbol replaces the
             // plain symbol; the derivative/disambiguation filters are added only
-            // when set. Captured in ib-agent#171 (ibx#229).
+            // when set. Captured in.
             let mut fields: Vec<(u32, &str)> = vec![
                 (fix::TAG_MSG_TYPE, "c"),
                 (fix::TAG_SENDING_TIME, &ts),
@@ -2934,7 +2933,7 @@ impl CcpState {
             if identifier_lookup {
                 // Identifier lookup: the identifier and its source replace the
                 // symbol/secType/filters; exchange and currency still ride
-                // (ib-agent#174).
+ //.
                 fields.push((22, sec_id_source));
                 fields.push((48, &filters.sec_id));
             } else {
@@ -3007,11 +3006,9 @@ impl CcpState {
     }
 
     pub(crate) fn send_matching_symbols_request(&mut self, req_id: u32, pattern: &str, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
-        // Recorded only where the request went out. It used to be recorded
-        // whether or not it was sent — the send error was discarded, and the
-        // push sat outside the block that needs a connection at all — so a
-        // request issued while the transport was down was queued as pending
-        // with nothing on the wire to answer it (ibx#369).
+        // Recorded only where the request went out, so a request issued while
+        // the transport is down is not queued as pending with nothing on the
+        // wire to answer it.
         let Some(conn) = ccp_conn.as_mut() else {
             log::warn!("Matching symbols request req_id={req_id} pattern='{pattern}' not sent: no CCP transport");
             return;
@@ -3038,7 +3035,7 @@ impl CcpState {
     /// Nothing expired them, so an unanswered request stayed in the queue for
     /// the life of the process — and the reply matcher falls back to the head
     /// of that queue when a reply carries no echoed request id, so a stale entry
-    /// could absorb a later request's answer (ibx#369).
+    /// could absorb a later request's answer.
     pub(crate) fn sweep_pending_matching_symbols(&mut self) {
         if self.pending_matching_symbols.is_empty() {
             return;
@@ -3195,7 +3192,7 @@ impl CcpState {
         // The message has repeating 100=EXCHANGE|6813=NAME pairs grouped by sections.
         // Sections: 6523=category|6811=category_name for stock categories,
         //           8128=N and 8129=N separate stock/derivative sections.
-        // We parse all 100/6813 pairs into DepthMktDataDescription entries.
+        // Every 100/6813 pair becomes a DepthMktDataDescription entry.
         let mut descs: Vec<DepthMktDataDescription> = Vec::new();
         let mut current_sec_type = "STK".to_string();
 
@@ -3241,7 +3238,7 @@ impl CcpState {
         self.recovery_sweep_at = None;
         // The engine stops believing these statuses here, and said so to
         // nobody — so the API layer went on reporting the pre-disconnect
-        // status and `req_open_orders` kept asserting it (ibx#251).
+        // status and `req_open_orders` kept asserting it.
         context.mark_orders_uncertain();
         for order in context.uncertain_orders() {
             let update = uncertain_update(&order, shared.orders.get_order_info(order.order_id));
@@ -3318,7 +3315,7 @@ impl CcpState {
 
             // Resting open orders are pushed unsolicited by CCP as 35=8 with
             // 150=0/39=0 carrying originating clientId (6119) and orderId (6121),
-            // terminated by 11='*' sentinel. See ib-agent#155, ibx#191.
+            // terminated by 11='*' sentinel.
             hb.last_ccp_sent = Instant::now();
             log::info!("CCP reconnected, sent account/position re-subscribe");
         }
@@ -3483,7 +3480,7 @@ fn handle_pnl_response(msg: &[u8], shared: &SharedState) {
                 seed.cost_midnight = v.parse::<f64>().ok().filter(|c| c.is_finite());
             } else if let Some(v) = part.strip_prefix("6822=") {
                 // moneyTradedSinceMidnight: signed net cash, SELL positive / BUY
-                // negative. Stored with the wire sign; poll_pnl adds it (ib-agent#163).
+                // negative. Stored with the wire sign; poll_pnl adds it.
                 seed.money_traded = v.parse().unwrap_or(0.0);
             } else if let Some(v) = part.strip_prefix("6099=") {
                 seed.realized_pnl = v.parse().unwrap_or(0.0);
@@ -3527,8 +3524,8 @@ fn handle_pnl_prices(msg: &[u8], shared: &SharedState) {
 /// Handle 6040=75 position + market price feed.
 /// Fires at init and after each fill. Contains repeating group: 146=count × (6008=conId, 6064=qty, 6101=avgCost).
 /// The wire only carries conId/qty/avgCost — no symbol/secType. For any held conId not yet in the
-/// reference cache, we issue an internal secdef request so the wrapper-facing Contract is populated
-/// by the time `req_positions` is called (#154).
+/// reference cache, an internal secdef request goes out so the wrapper-facing Contract is
+/// populated by the time `req_positions` is called.
 impl CcpState {
     pub(crate) fn handle_position_feed(
         &mut self,
@@ -3548,8 +3545,8 @@ impl CcpState {
     // `None` until this entry carries a parseable, finite quantity. A zero
     // default meant an entry without one flattened a live position, published
     // it to reqPositions and both P&L paths, and emitted a PositionUpdate
-    // saying flat — the same defect ibx#261 fixed on the account-update path
-    // (ibx#296). A genuine flat still arrives as an explicit `6064=0`.
+    // saying flat — the same defect fixed on the account-update path
+ //. A genuine flat still arrives as an explicit `6064=0`.
     let mut qty: Option<f64> = None;
     // `None` where the row states no cost. Folding that into a zero made an
     // absent cost indistinguishable from a real one, and publishing it erased
@@ -3608,9 +3605,9 @@ impl CcpState {
     }
     }
 
-    /// Issue an internal secdef request for `con_id` if the reference cache is cold and we
-    /// haven't already auto-fetched it this session. The reply path populates the cache via
-    /// the existing 35=d handler; we don't track the response.
+    /// Issue an internal secdef request for `con_id` where the reference cache is cold and
+    /// none has been auto-fetched this session. The reply path populates the cache through
+    /// the existing 35=d handler; the response is not tracked.
     fn auto_fetch_secdef_if_cold(
         &mut self,
         con_id: i64,
@@ -3651,8 +3648,8 @@ impl CcpState {
             return;
         }
         // Issue one secdef request per cold con_id. If another flow has already
-        // requested the same con_id (auto_fetched_conids contains it) we skip
-        // the send but still wait — its reply will populate the cache and
+        // requested the same con_id — auto_fetched_conids holds it — the send
+        // is skipped and the wait stands: that reply populates the cache and
         // release this entry via try_release_scanner_enrichments.
         for &con_id in &awaiting {
             if !self.auto_fetched_conids.contains(&con_id) {
@@ -3689,8 +3686,8 @@ impl CcpState {
     }
 
     /// Flush scanner enrichments past their deadline, dispatching whatever
-    /// entries we have (some may still have blank fields if the secdef reply
-    /// never arrived). Prevents indefinite hangs on a missing reply.
+    /// entries are held, blank fields included where the secdef reply never
+    /// arrived. Prevents an indefinite hang on a missing reply.
     pub(crate) fn sweep_scanner_enrichments(&mut self, shared: &SharedState) {
         if self.pending_scanner_enrichment.is_empty() { return; }
         let now = Instant::now();
@@ -3790,7 +3787,7 @@ fn handle_position_elsewhere(
     // An absent quantity means this frame carries no quantity, not that the
     // holding is gone. Defaulting to zero publishes a real holding as flat, and
     // `"NaN".parse()` succeeds, so a non-finite value does the same by another
-    // route. Both are how the two sibling paths went wrong (ibx#261, ibx#296);
+    // route. Both are how the two sibling paths went wrong;
     // this one kept the defect after they were fixed.
     let Some(position) = parsed.get(&6064)
         .and_then(|s| s.parse::<f64>().ok())
@@ -3829,7 +3826,7 @@ pub(crate) fn handle_position_update(
     // An absent quantity means this frame carries no quantity, not that the
     // account is flat. Defaulting to 0 reconciled the engine's position to zero
     // off a marks-only frame and published a flat book to reqPositions and both
-    // P&L paths until the next frame that did carry 6064 (ibx#261).
+    // P&L paths until the next frame that did carry 6064.
     let position_raw: Option<f64> = parsed.get(&6064)
         .and_then(|s| s.parse::<f64>().ok())
         // `"NaN".parse()` succeeds and `NaN as i64` is 0, so a non-finite
@@ -3837,7 +3834,7 @@ pub(crate) fn handle_position_update(
         // tag did. Route it to no-data instead.
         .filter(|v| v.is_finite());
     let position: Option<f64> = position_raw;
-    // Tag map verified against the updatePortfolio callback (ib-agent#172):
+    // Tag map verified against the updatePortfolio callback:
     // 6101 = averageCost, 6065 = marketPrice (per share), 6067 = marketValue,
     // 6100 = unrealizedPNL, 6099 = realizedPNL. Earlier code read 6065 as the
     // average cost, which is actually the market price.
@@ -3939,12 +3936,13 @@ mod tests {
         m
     }
 
-    /// ibx#261: a frame carrying marks but no quantity must leave the position
-    /// alone. Reading absent as zero reconciled a live position to flat and
-    /// published it to reqPositions and both P&L paths.
+    /// A frame carrying marks but no quantity leaves the position alone.
+    /// Reading absent as zero reconciles a live position to flat and publishes
+    /// it to reqPositions and both P&L paths.
+    ///
     /// The average cost is written into a row that persists, so a frame that
-    /// omits the tag must not replace a real one with zero — the same rule the
-    /// quantity follows, on the price side.
+    /// omits the tag must not replace a real one with zero either — the same
+    /// rule the quantity follows, on the price side.
     #[test]
     fn a_frame_without_an_average_cost_keeps_the_stored_one() {
         let mut context = Context::new();
@@ -4011,7 +4009,7 @@ mod tests {
     /// would report position 0 to reqPositions and both P&L paths.
     /// Same class as the absent tag: `"NaN".parse::<f64>()` succeeds and
     /// `NaN as i64` is 0, so a non-finite value reached the flatten path by
-    /// exactly the route ibx#261 closed.
+    /// exactly the route closed.
     #[test]
     fn a_non_finite_quantity_is_treated_as_no_quantity() {
         for bad in ["NaN", "inf", "-inf"] {
@@ -4041,9 +4039,9 @@ mod tests {
             "no position row may be fabricated from a marks-only frame");
     }
 
-    // Regression for ibx#198: the fill-dedup set must NOT be wiped wholesale
-    // when it reaches its cap. A recently-seen ExecID has to stay deduplicated
-    // so a post-reconnect server replay can't double-count the fill.
+    // The fill-dedup set is not wiped wholesale when it reaches its cap: a
+    // recently-seen ExecID stays deduplicated, so a post-reconnect replay
+    // cannot double-count the fill.
     #[test]
     fn record_exec_id_dedupes_within_window() {
         let mut ccp = CcpState::new();
@@ -4085,7 +4083,7 @@ mod tests {
 
     // Build a what-if (6091=1) ExecReport map for order 42. `margin_fields`
     // holds (tag, literal wire value) pairs exactly as the gateway puts them
-    // on the wire (ib-agent#160).
+    // on the wire.
     fn what_if_frame(margin_fields: &[(u32, &str)]) -> std::collections::HashMap<u32, String> {
         let mut m = std::collections::HashMap::new();
         m.insert(11u32, "42".to_string()); // ClOrdID
@@ -4097,7 +4095,7 @@ mod tests {
     }
 
     // The full six margin fields of the captured true-zero close preview
-    // (ib-agent#160 scenario 2b).
+    // ( scenario 2b).
     const ZERO_CLOSE_FIELDS: [(u32, &str); 6] = [
         (6826, "976.07"), (6827, "887.34"), (6828, "945924.53"),
         (6092, "0"), (6093, "0"), (6094, "945923.47"),
@@ -4197,7 +4195,7 @@ mod tests {
     /// `filled_quantity` was taken from tag 151 (LeavesQty), the *unfilled*
     /// remainder, rather than tag 14 (CumQty). The two are complements, so a
     /// partially filled order reported the wrong number and a completed one —
-    /// LeavesQty zero — reported as entirely unfilled (ibx#309).
+    /// LeavesQty zero — reported as entirely unfilled.
     #[test]
     fn filled_quantity_is_the_filled_amount_not_the_remainder() {
         let mut ccp = CcpState::new();
@@ -4546,9 +4544,9 @@ mod tests {
         assert_eq!(context.position(instrument), 300.0, "the server's number wins, it is not added");
     }
 
-    /// ibx#296: the 75 feed defaulted its running quantity to zero, so an entry
-    /// carrying a conId but no parseable 6064 flattened a live position and
-    /// published it — the same defect ibx#261 fixed on the account-update path.
+    /// The 75 feed leaves a position alone where its running quantity is
+    /// absent: an entry carrying a conId but no parseable 6064 would otherwise
+    /// flatten a live position and publish it, as on the account-update path.
     #[test]
     fn a_position_feed_entry_without_a_quantity_leaves_the_position_alone() {
         for body in [
@@ -4649,9 +4647,9 @@ mod tests {
         );
     }
 
-    // ibx#205: a margin-reducing preview (close, cash-account sell) resolves to a
+    // A margin-reducing preview (close, cash-account sell) resolves to a
     // post-trade init margin of exactly 0, which the gateway sends as numeric "0"
-    // (ib-agent#160). The old `> 0.0` guard dropped it and the caller timed out.
+ //. The old `> 0.0` guard dropped it and the caller timed out.
     #[test]
     fn what_if_zero_init_margin_is_delivered() {
         let (mut ccp, mut context, shared) = what_if_test_state();
@@ -4665,7 +4663,7 @@ mod tests {
     }
 
     // The not-ready ack carries the literal "n/a" in all six margin fields
-    // (ib-agent#160); it must be skipped so only the real data frame surfaces.
+ //; it must be skipped so only the real data frame surfaces.
     #[test]
     fn what_if_not_ready_ack_is_skipped() {
         let (mut ccp, mut context, shared) = what_if_test_state();
@@ -4680,7 +4678,7 @@ mod tests {
         assert!(context.order(42).is_some());
     }
 
-    // ibx#213: the gateway's real-frame test is "any of the six margin fields
+    // The gateway's real-frame test is "any of the six margin fields
     // is set", not "6092 is set". A preview that omits 6092 but carries
     // numeric siblings must be delivered, with the absent field read as 0.
     #[test]
@@ -4696,7 +4694,7 @@ mod tests {
         assert!(context.order(42).is_none());
     }
 
-    // ibx#214: "nan" parses as f64::NAN, so it passed the old parse-success
+    // "nan" parses as f64::NAN, so it passed the old parse-success
     // gate and surfaced as a bogus zero-margin preview. The gateway treats
     // nan as unset, so an all-nan frame is not a data frame.
     #[test]
@@ -4726,11 +4724,11 @@ mod tests {
             (945923.47 * PRICE_SCALE as f64) as Price);
     }
 
-    // ibx#210: a working order carries wire 39=0 whether it is routed or not.
+    // A working order carries wire 39=0 whether it is routed or not.
     // The gateway reports PreSubmitted while it waits (e.g. placed pre-market)
     // and Submitted only once routed to an exchange. The discriminator is the
     // routing tags on the same exec report, not a distinct wire status
-    // (ib-agent#162).
+ //.
     fn ord_status_test_state() -> (CcpState, Context, SharedState) {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
@@ -4801,12 +4799,12 @@ mod tests {
         (CcpState::new(), context, SharedState::new())
     }
 
-    /// ibx#320: at session start the gateway replays recent executions, each
-    /// carrying its original ExecID and a resend marker. A fresh process has
-    /// never seen that ID, so the dedup window cannot stop it — and the order
-    /// is tracked by then, because the recovery insert ran first. The result
-    /// was a fill event and a position move for something that happened before
-    /// the process started.
+    /// At session start the venue replays recent executions, each carrying its
+    /// original ExecID and a resend marker. A fresh process has never seen that
+    /// ID, so the dedup window cannot stop it, and the order is tracked by then
+    /// because the recovery insert runs first. The marker is what keeps it from
+    /// becoming a fill event and a position move for something that happened
+    /// before the process started.
     #[test]
     fn a_resent_execution_does_not_book_a_fill() {
         for marker in [(97u32, "Y"), (43u32, "Y")] {
@@ -4831,7 +4829,7 @@ mod tests {
         assert_eq!(context.position(0), 10.0);
     }
 
-    /// ibx#320 end to end, as a fresh process sees it: the gateway replays the
+    /// end to end, as a fresh process sees it: the gateway replays the
     /// order as a recovery record and then replays its executions. The record
     /// carries the cumulative quantity already filled, so the executions behind
     /// it state nothing new. Treating that record as unfilled made every one of
@@ -4929,10 +4927,10 @@ mod tests {
         assert_eq!(context.position(0), 20.0);
     }
 
-    /// ibx#260: the dedup window was skipped entirely when tag 17 was absent,
-    /// which is the shape a replay takes — so the copy booked a second time and
-    /// the position doubled. Without an ExecID the execution is keyed on the
-    /// fields that identify it instead.
+    /// Without an ExecID the execution is keyed on the fields that identify
+    /// it, rather than skipping the dedup window. Absent tag 17 is a shape a
+    /// replay takes, so skipping it books the copy a second time and doubles
+    /// the position.
     #[test]
     fn an_execution_without_an_exec_id_is_still_deduplicated() {
         let (mut ccp, mut context, shared) = tracked_order_state();
@@ -5010,10 +5008,10 @@ mod tests {
         assert_eq!(context.order(42).unwrap().filled, 9, "and nothing is double-booked");
     }
 
-    /// ibx#344: the ExecID window evicts oldest-first, so a replay batch deeper
-    /// than the window no longer holds its own head and the duplicate booked a
-    /// second time. For an order this session tracks, that window was the only
-    /// guard.
+    /// The ExecID window evicts oldest-first, so a replay batch deeper than
+    /// the window no longer holds its own head and the duplicate would book a
+    /// second time. For an order this session tracks, that window is the only
+    /// guard the ID itself provides.
     ///
     /// A replayed execution is marked, so it is booked on the cumulative
     /// quantity it reports rather than on the increment — and a copy that
@@ -5097,10 +5095,10 @@ mod tests {
         assert_eq!(shared.orders.drain_fills().len(), 1, "the execution is still bookable");
         assert_eq!(context.position(0), 10.0);
     }
-    /// ibx#369: the request was recorded as pending whether or not it went out.
-    /// The send error was discarded and the push sat outside the block that
-    /// needs a connection at all, so a request issued while the transport was
-    /// down was queued with nothing on the wire to answer it.
+    /// A request is recorded as pending only where it went out. Recording it
+    /// regardless — discarding the send error, pushing outside the block that
+    /// needs a connection — queues a request issued while the transport is down
+    /// with nothing on the wire to answer it.
     #[test]
     fn a_matching_symbols_request_that_was_not_sent_is_not_recorded() {
         let mut ccp = CcpState::new();
@@ -5510,12 +5508,11 @@ mod tests {
             assert_eq!(order.side, expected, "Side={tag54}");
         }
     }
-    /// ibx#307: an unrecognised or absent tag 59 was reported as `DAY`, and the
-    /// fallback that knows what the caller actually submitted could never run,
-    /// because every arm of the wire match produced a non-empty string.
-    ///
-    /// `DAY` is an ordinary value, so a caller reconciling its own orders got a
-    /// plausible answer that disagreed with what it sent, with nothing to say so.
+    /// An unrecognised or absent tag 59 leaves the wire match with nothing to
+    /// report, so the fallback that knows what the caller submitted can run. An
+    /// arm producing `DAY` for those cases keeps the fallback from ever
+    /// running, and `DAY` is an ordinary value: a caller reconciling its own
+    /// orders gets a plausible answer that disagrees with what it sent.
     #[test]
     fn an_unknown_time_in_force_falls_back_to_the_one_that_was_submitted() {
         // A tracked order submitted GTC, so a wrong answer is visibly wrong.
@@ -5557,11 +5554,11 @@ mod tests {
     /// The case the test above cannot reach: an order this session never
     /// placed, arriving on the session-start recovery push with no tag 59.
     ///
-    /// There is nothing to recover the time-in-force from, and the recovery
-    /// insert used to invent `GTC` — which the report path then read as though
-    /// it were the caller's own. An invented GTC rests until cancelled; an
-    /// invented DAY expires with the session. Neither is knowledge, so the
-    /// safer guess is the one that does not leave an order resting.
+    /// There is nothing to recover the time-in-force from, and an invented one
+    /// would be read as though it were the caller's own. An invented GTC rests
+    /// until cancelled; an invented DAY expires with the session. Neither is
+    /// knowledge, so the safer of the two is the one that does not leave an
+    /// order resting.
     #[test]
     fn a_recovered_order_without_a_time_in_force_states_none() {
         let mut ccp = CcpState::new();
@@ -5627,12 +5624,11 @@ mod tests {
         context.update_order_status(42, crate::types::OrderStatus::PendingCancel);
     }
 
-    /// ibx#252: a cancel answered with UnknownOrder says the order does not
-    /// exist on the gateway's side. Forcing it back to working asserted the
-    /// opposite of the message being handled, and the engine's own view governs
-    /// subsequent cancels, modifies and reconnect bookkeeping — so a phantom
-    /// order persisted there while the cache row that would have surfaced it
-    /// was removed.
+    /// A cancel answered with UnknownOrder says the order does not exist on
+    /// the venue's side. Forcing it back to working asserts the opposite of the
+    /// message being handled, and the engine's own view governs subsequent
+    /// cancels, modifies and reconnect bookkeeping, so a phantom order persists
+    /// there while the cache row that would surface it is removed.
     #[test]
     fn an_unknown_order_rejection_retires_the_order() {
         let mut ccp = CcpState::new();
@@ -5664,7 +5660,7 @@ mod tests {
     }
 
     /// A fill that raced the rejection is recoverable, on the terms the
-    /// untracked-fill path sets (ibx#314): the execution has to carry its
+    /// untracked-fill path sets: the execution has to carry its
     /// contract id, because nothing else says which instrument moved, and it
     /// must not be resend-marked, because a replayed execution for an order
     /// this session does not track is history rather than news. An execution
@@ -5752,7 +5748,7 @@ mod tests {
             crate::types::OrderStatus::Submitted);
     }
 
-    // ibx#250: 39=I (Inactive) and 39=8 (Rejected) both stringify to
+    // 39=I (Inactive) and 39=8 (Rejected) both stringify to
     // "Inactive" downstream (client_core::order_status_str), but must not be
     // treated the same here. A parked (39=I) order's reason is queued for
     // delivery through Wrapper::error, and its completed_status stays empty
@@ -5849,7 +5845,7 @@ mod tests {
         assert_eq!(info.order_state.reject_reason, "No valid bid/ask (reason code 1)");
     }
 
-    // ibx#238 / ib-agent#172: in the UP portfolio snapshot the average cost is
+    // /: in the UP portfolio snapshot the average cost is
     // tag 6101 and 6065 is the market price. The handler previously read 6065 as
     // the average cost. Verify the mapping and that all marks are stored.
     #[test]
@@ -5876,7 +5872,7 @@ mod tests {
     }
 
     // The lean position feed carries no marks; it must not zero the marks the
-    // portfolio snapshot set (ibx#238).
+    // portfolio snapshot set.
     #[test]
     fn lean_position_feed_does_not_clobber_marks() {
         let shared = SharedState::new();
@@ -5896,7 +5892,7 @@ mod tests {
         assert_eq!(pi.unrealized_pnl, 100 * PRICE_SCALE);
     }
 
-    // ibx#220: the TIF decoder must be the exact inverse of the outbound
+    // The TIF decoder must be the exact inverse of the outbound
     // encoder. The old map decoded '7' (never emitted) as OPG and dropped
     // OPG and AUC to "".
     #[test]
@@ -5913,7 +5909,7 @@ mod tests {
         assert_eq!(decode_tif(b'7'), "");
     }
 
-    // ── ibx#227: contract-details deadline sweep ──
+    // ── contract-details deadline sweep ──
 
     #[test]
     fn sweep_times_out_pending_secdef_with_error_and_end() {
@@ -5969,7 +5965,7 @@ mod tests {
         assert_eq!(shared.reference.drain_contract_details_end(), vec![9]);
     }
 
-    // ── ibx#229: a con_id=0 secdef reply is "not found", not a contract ──
+    // ── a con_id=0 secdef reply is "not found", not a contract ──
 
     /// The gateway's "no security definition" answer: a `35=d` echoing the
     /// request id and carrying con_id 0 — no symbol, no price-increment block.
@@ -6187,7 +6183,7 @@ mod tests {
         assert!(ccp.pending_fanout.is_empty());
     }
 
-    // ── ibx#228: matching-symbols attribution ──
+    // ── matching-symbols attribution ──
 
     fn matching_symbols_msg(req_id: &str, symbols: &[(&str, &str)]) -> Vec<u8> {
         let count = symbols.len().to_string();
@@ -6286,7 +6282,7 @@ mod tests {
 
         // Unknown pattern: zero matches. Must still pop req 1 and deliver
         // the empty answer — previously this poisoned the queue head and
-        // every later reply was off by one, forever (ibx#228).
+        // every later reply was off by one, forever.
         let msg = matching_symbols_msg("1", &[]);
         ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
 
@@ -6312,7 +6308,7 @@ mod tests {
 
         // The not-ready ack (no tag 146) arrives first — it must not pop the
         // request; delivering it as an empty answer orphans the data frame
-        // that follows (observed live, ibx#228).
+        // that follows (observed live).
         let msg = matching_symbols_ack("1");
         ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
         assert!(shared.reference.drain_matching_symbols().is_empty());
@@ -6955,9 +6951,8 @@ mod tests {
 mod unnamed_execution_tests {
     use super::*;
 
-    /// A report carries far more than any one client reads, and what was read
-    /// used to be the whole of what survived. A fact the venue stated about a
-    /// fill could not be reached and nothing said it had arrived.
+    /// A report carries far more than any one client reads. What is not read
+    /// is kept, so a fact the venue stated about a fill remains reachable.
     #[test]
     fn a_field_a_report_states_and_nothing_names_is_kept() {
         let frame = b"35=8\x0117=E1\x0132=100\x019997=something\x019998=42\x01";
@@ -6994,8 +6989,8 @@ mod stated_account_value_tests {
     use crate::bridge::SharedState;
 
     /// The venue states a great many more figures than any client names, and a
-    /// figure nobody named is still a figure about the account. They used to be
-    /// dropped where they arrived with nothing to say they had come.
+    /// figure nobody named is still a figure about the account. They are kept
+    /// where they arrive rather than dropped.
     #[test]
     fn a_figure_nothing_names_is_still_kept() {
         let shared = SharedState::new();

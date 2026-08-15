@@ -247,7 +247,7 @@ class TestSessionFeatures:
         smart_updates = [u for u in updates if u.get("is_smart_depth")]
         assert len(smart_updates) > 0, "No updates with is_smart_depth=True"
 
-        # Verify we get both bids and asks
+        # Both bids and asks arrive
         bids = [u for u in updates if u["side"] == 1 and u["price"] > 0]
         asks = [u for u in updates if u["side"] == 0 and u["price"] > 0]
         assert len(bids) > 0, "No SmartDepth bids"
@@ -361,7 +361,7 @@ class TestSessionFeatures:
     # ── reqMktDepthExchanges ──
 
     def test_depth_exchanges_returns_exchanges(self):
-        """reqMktDepthExchanges returns 50+ exchanges with STK and FUT."""
+        """ReqMktDepthExchanges returns 50+ exchanges with STK and FUT."""
         self.c.req_mkt_depth_exchanges()
         got = self.w.got_depth_exchanges.wait(timeout=10)
         assert got, "No depth exchanges received"

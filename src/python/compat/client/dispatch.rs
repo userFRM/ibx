@@ -49,7 +49,7 @@ impl EClient {
         // `rx` from the guard would hold the mutex across the 1100 callback,
         // and a handler answering connectivity loss with disconnect() locks the
         // same mutex — non-reentrant, GIL held, so the interpreter freezes
-        // rather than one call failing (ibx#268, same shape as ibx#265).
+        // rather than one call failing (, same shape as).
         let events: Vec<Event> = {
             let guard = self.event_rx.lock().unwrap();
             guard.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default()
@@ -63,7 +63,7 @@ impl EClient {
             // Mark disconnected BEFORE the callback. A handler that answers
             // 1100 with disconnect() then connect() establishes a new session
             // and sets connected=true; storing false afterwards would clobber
-            // the new session's state (ibx#268).
+            // the new session's state.
             self.connected.store(false, Ordering::Release);
             call_wrapper!(self.wrapper, py, "error", (-1i64, 1100i64, "Connectivity between client and server has been lost", ""));
         }
@@ -112,13 +112,11 @@ impl EClient {
 
             // Track execution for req_executions.
             //
-            // The venue states the execution's own id and the time it happened,
-            // and both are already held against the order. They used to be made
-            // up here instead — the id from the order number and a counter, the
-            // time from a monotonic count of nanoseconds since this process
-            // started. Neither is the venue's, and the id is the one thing a
-            // fill is reconciled against a broker's own record by, so no fill
-            // this surface reported could ever be matched to one.
+            // The venue states the execution's own id and the time it
+            // happened, and both are held against the order. Neither is
+            // composed here: an id built from an order number and a counter is
+            // not the venue's, and the id is what a fill is reconciled against
+            // a broker's own record by.
             let rich_info = shared.orders.get_order_info(fill.order_id);
             let exec_id = rich_info
                 .as_ref()
@@ -298,14 +296,14 @@ impl EClient {
             // Reason 1 is UnknownOrder: the gateway has said the order does not
             // exist, and the engine has already retired its record. The client's
             // own record has to go with it, or the open-order snapshot keeps
-            // reporting the order the rejection was about (ibx#252).
+            // reporting the order the rejection was about.
             if reject.reason_code == 1 {
                 self.core.untrack_order(reject.order_id);
             }
             call_wrapper!(self.wrapper, py, "error", (reject.order_id as i64, code, msg.as_str(), ""));
         }
 
-        // Drain inactive-order reasons -> error (ibx#250)
+        // Drain inactive-order reasons -> error
         for (order_id, code, msg) in shared.orders.drain_order_inactive() {
             call_wrapper!(self.wrapper, py, "error", (order_id as i64, code as i64, msg.as_str(), ""));
         }
@@ -479,7 +477,7 @@ impl EClient {
             self.core.open_orders.lock().unwrap().remove(&wi.order_id);
         }
 
-        // Drain HMDS query errors -> error (ibx#186). Surface gateway-side validation
+        // Drain HMDS query errors -> error. Surface gateway-side validation
         // failures (e.g. "Invalid time length") that previously vanished silently.
         for (req_id, code, msg) in shared.reference.drain_historical_errors_for_dispatch() {
             call_wrapper!(self.wrapper, py, "error", (req_id as i64, code as i64, msg.as_str(), ""));
@@ -702,7 +700,7 @@ impl EClient {
                 let bar_obj = BarData::new(
                     format!("{}", bar.timestamp), bar.open, bar.high, bar.low, bar.close,
                     bar.volume as i64, bar.wap, bar.count,
-                    String::new(), // streaming bars carry no timezone (ibx#234)
+                    String::new(), // streaming bars carry no timezone
                 );
                 let bar_py = Py::new(py, bar_obj)?.into_any();
                 call_wrapper!(self.wrapper, py, "historical_data_update", (req_id as i64, &bar_py));

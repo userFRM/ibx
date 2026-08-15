@@ -21,7 +21,7 @@ use crate::auth::crypto::{aes_cbc_decrypt, aes_cbc_encrypt};
 /// same session do not produce the same file.
 const SALT_LEN: usize = 32;
 
-/// Format marker. A file that does not open with this is not ours.
+/// Format marker. A file that does not open with this is not one of these.
 const MAGIC: &[u8; 8] = b"IBXSESS\x01";
 
 /// What a resumed connect needs. All four are established at login and none can

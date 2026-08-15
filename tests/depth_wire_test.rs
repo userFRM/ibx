@@ -60,7 +60,7 @@ fn raw_farm_subscribe_test() {
                 ibx::protocol::connection::Frame::Fix(d) |
                 ibx::protocol::connection::Frame::FixComp(d) |
                 ibx::protocol::connection::Frame::Binary(d) => d.as_slice(),
-                // Control-state frames are not consumed downstream (ibx#185).
+                // Control-state frames are not consumed downstream.
                 ibx::protocol::connection::Frame::Control(_) => continue,
             };
             // Decompress if FIXCOMP

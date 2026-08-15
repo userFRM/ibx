@@ -1,4 +1,4 @@
-"""Tests for ibapi-compatible connection lifecycle (issue #55).
+"""Tests for ibapi-compatible connection lifecycle.
 
 Unit tests verify API signatures and error handling without a live gateway.
 Compatibility tests (marked @pytest.mark.live) require IB paper trading gateway.
@@ -68,7 +68,7 @@ def test_error_callback():
 
 
 def test_error_callback_default_json():
-    """error() advanced_order_reject_json defaults to empty string."""
+    """Error() advanced_order_reject_json defaults to empty string."""
     w = ConnectionWrapper()
     w.error(-1, 2104, "test")
     assert len(w.events) == 1
@@ -88,7 +88,7 @@ def test_eclient_is_connected_default():
 
 
 def test_eclient_disconnect_idempotent():
-    """disconnect() should not raise even when not connected."""
+    """Disconnect() should not raise even when not connected."""
     client = EClient(EWrapper())
     client.disconnect()
     client.disconnect()  # second call also safe
@@ -96,13 +96,13 @@ def test_eclient_disconnect_idempotent():
 
 
 def test_eclient_get_account_id_empty():
-    """get_account_id() returns empty string when not connected."""
+    """Get_account_id() returns empty string when not connected."""
     client = EClient(EWrapper())
     assert client.get_account_id() == ""
 
 
 def test_eclient_req_ids_not_connected():
-    """req_ids() dispatches next_valid_id even without connection."""
+    """Req_ids() dispatches next_valid_id even without connection."""
     w = ConnectionWrapper()
     client = EClient(w)
     client.req_ids()
@@ -111,7 +111,7 @@ def test_eclient_req_ids_not_connected():
 
 
 def test_eclient_req_ids_with_num():
-    """req_ids() accepts num_ids parameter."""
+    """Req_ids() accepts num_ids parameter."""
     w = ConnectionWrapper()
     client = EClient(w)
     client.req_ids(5)

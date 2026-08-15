@@ -81,7 +81,7 @@ pub use orders::parse_algo_params;
 /// the timeout (via [`GatewayConfig::ib_key_timeout_secs`] when building through
 /// the lower-level API), or supplying a `code_provider`. Paper logins skip the
 /// gate entirely. An `info`-level log line is emitted when the wait begins
-/// (`RUST_LOG=info`). See ibx#203 / ibx#207.
+/// (`RUST_LOG=info`).
 ///
 /// # Multiple engines per process
 ///
@@ -111,11 +111,11 @@ pub struct EClientConfig {
     /// takes it on connect. A Rust caller could not state it at all, so a
     /// session meant to only look could still trade.
     pub readonly: bool,
-    /// What the gateway's own file used to hold.
+    /// What a gateway holds in its own configuration file.
     ///
     /// A gateway is a process configured by a file beside it; this client is a
     /// library, so those settings are stated here instead of in a file nobody
-    /// writes. Applied as the session opens, and for the whole process — see
+    /// writes. Applied as the session opens, and for the whole process
     /// [`GatewaySettings`](crate::api::settings::GatewaySettings).
     pub gateway: crate::api::settings::GatewaySettings,
     /// `false` enters the live second-factor approval gate on connect (blocking).
@@ -127,7 +127,7 @@ pub struct EClientConfig {
     /// Supplies the second-factor code. Required for accounts whose factor is
     /// an authenticator code — those have no push to fall back to, and connect
     /// fails without it. For IBKey accounts it selects Challenge/Response over
-    /// waiting for a mobile push, so `None` is fine there (ibx#208, ibx#282).
+    /// waiting for a mobile push, so `None` is fine there.
     pub code_provider: Option<crate::auth::session::CodeProvider>,
     /// Offer a session captured earlier, instead of logging in again.
     ///
@@ -149,7 +149,7 @@ pub struct EClientConfig {
     /// The default recovers on its own and keeps trying, which is what a
     /// process that must stay up wants and what having no gateway makes this
     /// library's job. Set it to bound the effort, or to be told about a loss
-    /// and decide yourself. See
+    /// and decide yourself.
     /// [`ReconnectConfig`](crate::api::reliability::ReconnectConfig).
     pub reconnect: crate::api::reliability::ReconnectConfig,
     /// Keep the session in this file, so a restart can offer it without a
@@ -192,7 +192,7 @@ pub struct EClientConfig {
 /// fires [`connection_closed`](crate::api::wrapper::Wrapper::connection_closed) once and
 /// [`is_connected()`](EClient::is_connected) turns false. No error callback is
 /// raised for this: the connectivity error codes are pushed by the server, not
-/// synthesized locally (ibx#242).
+/// synthesized locally.
 pub struct EClient {
     pub(crate) shared: Arc<SharedState>,
     pub(crate) control_tx: SyncSender<ControlCommand>,
@@ -230,7 +230,7 @@ impl Drop for EClient {
 /// it as a `u32`, and the callbacks report back whatever was encoded. A cast
 /// would answer under an id the caller never used — and `next_order_id()`
 /// hands out ids well past `u32::MAX`, so the ibapi idiom of one counter for
-/// orders and requests hit it on the first call. Refuse instead (ibx#285).
+/// orders and requests hit it on the first call. Refuse instead.
 pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
     u32::try_from(req_id).map_err(|_| {
         Refusal::validation(format!(
@@ -300,7 +300,7 @@ impl EClient {
     /// Attaching a channel makes the engine build events it would otherwise
     /// skip, which for bar batches and contract definitions means one deep copy
     /// each. Use [`connect()`](EClient::connect) when you only need the wrapper
-    /// callbacks (ibx#242).
+    /// callbacks.
     pub fn connect_with_events(
         config: &EClientConfig,
         capacity: usize,
@@ -469,7 +469,7 @@ impl EClient {
     // ── Connection ──
 
     /// False after [`disconnect()`](EClient::disconnect), and after a
-    /// `process_msgs()` call that observed the engine stopping (ibx#242).
+    /// `process_msgs()` call that observed the engine stopping.
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
     }

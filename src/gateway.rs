@@ -77,12 +77,12 @@ pub(crate) const DEFAULT_TRADING_FARM: &str = "usfarm";
 
 /// Parse a farm-route string from the auth-server's routing tags.
 ///
-/// Three accepted shapes (per ib-agent#128):
+/// Three accepted shapes:
 ///   `"<host>/<farm>"`            — tag 6145 (trading)
 ///   `"<host>/<farm>/<port>"`     — tags 6171 (mktdata) / 8008 (secdef)
 ///
 /// Port is informational only — ibx routes all farm channels to the same
-/// data-port discovered via `misc_port()`. We just need (host, farm).
+/// data-port discovered via `misc_port()`. Only (host, farm) is taken.
 /// Returns `None` for empty or malformed input.
 pub fn parse_farm_route(route: &str) -> Option<(String, String)> {
     if route.is_empty() { return None; }
@@ -95,10 +95,10 @@ pub fn parse_farm_route(route: &str) -> Option<(String, String)> {
 
 /// The trading route a reconnect should use.
 ///
-/// The auth server states one per account, and the reconnect used to ignore it
-/// — announcing the literal `usfarm` and connecting to the host the caller
-/// configured, so a regional account reconnected under a farm it is not on
-/// (ibx#295). Empty means no route was parsed, which is the case the literals
+/// The auth server states one per account, and the reconnect uses it rather
+/// than announcing a literal farm and connecting to the host the caller
+/// configured, which would put a regional account on a farm it is not on
+///. Empty means no route was parsed, which is the case the literals
 /// were there for; the initial connect falls back the same way.
 pub(crate) fn reconnect_trading_route(auth: &ReconnectAuth) -> (String, String) {
     let host = if auth.trading_host.is_empty() {
@@ -146,7 +146,7 @@ fn has_complete_response_frame(buf: &[u8]) -> bool {
 
 /// Compute token short hash for farm logon (FIX tag 8483).
 ///
-/// Per ib-agent#125: gateway always emits this as **8 hex chars padded with
+/// gateway always emits this as **8 hex chars padded with
 /// leading zeros**. `format!("{:x}", n)` is wrong when `hash_int`'s high
 /// nibble is zero — server silently rejects the FIX 35=A logon in that case.
 pub fn token_short_hash(session_token: &BigUint) -> String {
@@ -169,8 +169,8 @@ pub fn token_short_hash(session_token: &BigUint) -> String {
 /// Tag 8361 = `"(rolling)"` is load-bearing: it marks the client as a
 /// rolling-release build, which bypasses the server's IB_BUILD allow-list
 /// check. Without it the server rejects with "The TWS build you are
-/// currently running is no longer supported." Per ib-agent#141 the
-/// official client also keeps 6397/6947/8098, so we leave them in.
+/// currently running is no longer supported." Per the
+/// The reference client also keeps 6397/6947/8098, so they stay.
 ///
 /// Tag 6947 carries the JVM default timezone (e.g. `Europe/Paris`,
 /// `America/New_York`). The auth server doesn't validate it — `UTC` is
@@ -306,7 +306,7 @@ pub fn farm_logon_exchange(
 ) -> io::Result<FarmLogon> {
     // Poll on a short read timeout and tolerate transient WouldBlock/TimedOut
     // returns until an overall deadline. A single slow response segment from a
-    // high-latency regional gateway must not tear down the connection (ibx#237).
+    // high-latency regional gateway must not tear down the connection.
     stream.set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
     let deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
     let mut buf = Vec::new();
@@ -315,7 +315,7 @@ pub fn farm_logon_exchange(
     let mut heartbeat_secs: Option<u64> = None;
 
     for _msg_num in 0..20 {
-        // Read until we have a complete frame
+        // Read until a frame is complete
         let msg = loop {
             if let Some((msg, consumed)) = try_frame_farm_msg(&buf) {
                 buf.drain(..consumed);
@@ -382,7 +382,7 @@ pub fn farm_logon_exchange(
                 }
 
                 // Check for auth challenge → respond with token, fall back to SRP if rejected.
-                // Outcome asymmetry (ib-agent#153, ibx#187):
+                // Outcome asymmetry:
                 //   PASSED  — token accepted, continue
                 //   UNKNOWN — server cache miss, recover via SRP on this socket
                 //   FAILED  — `do_soft_token` returns Err; the OUTER reconnect loop
@@ -394,7 +394,7 @@ pub fn farm_logon_exchange(
                     // gateway can coalesce its final response with the farm logon
                     // ACK. Threading `buf` through keeps those trailing ACK bytes
                     // so the loop below re-frames them instead of stalling on a
-                    // read for bytes already consumed (ibx#237).
+                    // read for bytes already consumed.
                     match do_soft_token(stream, session_token, &mut buf)? {
                         session::SoftTokenOutcome::Passed => {}
                         session::SoftTokenOutcome::Unknown => {
@@ -497,7 +497,7 @@ fn try_frame_farm_msg(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
 /// A constructor parameter rather than a setter called afterwards: leaving
 /// these blank for the caller to fill meant one binding filled them and the
 /// other did not, and every reconnect scheduler silently refused to run on the
-/// empty host (ibx#378). The compiler asks for them now.
+/// empty host. The compiler asks for them now.
 pub struct CallerAuth {
     /// What this session runs under.
     pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
@@ -571,7 +571,7 @@ pub struct ReconnectAuth {
     /// What the client string encoded to.
     pub encoded: String,
     /// Historical-data farm routing parsed from the auth-server response.
-    /// Used by HMDS reconnect (ibx#187) — empty when no HMDS route was parsed.
+    /// Used by HMDS reconnect — empty when no HMDS route was parsed.
     pub hmds_host: String,
     /// Which historical farm the venue routed this session to.
     pub hmds_farm: String,
@@ -579,7 +579,7 @@ pub struct ReconnectAuth {
     /// when the auth server stated none, rather than carrying the fallback the
     /// initial connect materializes. The distinction matters: an empty host
     /// lets the reconnect use whatever host the session has now, which a
-    /// redirect may have changed since (ibx#295).
+    /// redirect may have changed since.
     pub trading_host: String,
     /// Which trading farm.
     pub trading_farm: String,
@@ -658,8 +658,8 @@ fn nobody_answered(e: &io::Error) -> bool {
 /// A host the venue named, and the port it named it on.
 ///
 /// The venue states `host:port` in a redirect. Falls back to the port this
-/// session is already on when it states only a host, which is the common case
-/// and the only one this client used to handle.
+/// session is already on when it states only a host, which is the common
+/// case.
 fn host_and_port(target: &str, fallback: u16) -> (&str, u16) {
     match target.split_once(':') {
         Some((host, port)) => (host, port.parse().unwrap_or(fallback)),
@@ -773,7 +773,7 @@ pub struct Gateway {
     /// CCP HMAC initial IV (kb[48..64]) for selective signing.
     pub ccp_sign_iv: Vec<u8>,
     /// Historical-data farm routing parsed from the auth-server response,
-    /// retained for HMDS reconnect (ibx#187).
+    /// retained for HMDS reconnect.
     pub hmds_host: String,
     /// Which historical farm the venue routed this session to.
     pub hmds_farm: String,
@@ -952,7 +952,7 @@ pub fn connect_farm(
     log::info!("{farm_id} sent routing request (6556={channel_id})");
 
     // Read routing response. Frame-based termination: poll with a short
-    // timeout, break as soon as we have at least one complete FIXCOMP frame
+    // timeout, break as soon as one complete FIXCOMP frame is held
     // buffered. The 5-s read timeout remains as the worst-case fallback.
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
     let mut resp_buf = Vec::new();
@@ -1062,7 +1062,7 @@ pub fn connect_farm(
                 }
             }
             crate::protocol::connection::Frame::Control(raw) => {
-                // 8=1 / 8=X control state — extracted, not routed (ibx#185).
+            // 8=1 / 8=X control state — extracted, not routed.
                 log::debug!("{} ignoring control frame: {} bytes", farm_id, raw.len());
             }
         }
@@ -1204,7 +1204,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
             let redirect_host = target.split(':').next().unwrap_or(&target).to_string();
             log::info!("CCP reconnect redirected to {redirect_host}");
             drop(tls);
-            // Floor before following (ibx#218): this runs on the background
+            // Floor before following: this runs on the background
             // reconnect thread, and an instant re-dial chain risks the same
             // rate limiting the backoff ladder exists for.
             std::thread::sleep(Duration::from_secs(2));
@@ -1266,7 +1266,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     // A read that times out here is the data start still being on its way, not
     // its absence. Giving up on the first one failed the reconnect outright and
     // sent the whole thing round the backoff ladder again — the initial connect
-    // already retries to an overall deadline (ibx#196) and describes itself as
+    // already retries to an overall deadline and describes itself as
     // mirroring this path, which never did it.
     let fix_deadline = std::time::Instant::now()
         + std::time::Duration::from_secs_f64(TIMEOUT_FIX_LOGON * 2.0);
@@ -1358,7 +1358,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
 
     // Short poll timeout + overall deadline so a slow response segment from a
     // high-latency gateway is retried, not treated as a fatal logon failure
-    // (ibx#237, same tolerance as the farm-logon path).
+    // (, same tolerance as the farm-logon path).
     tls.get_ref().set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
     let fix_deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
     for _ in 0..5 {
@@ -1485,9 +1485,9 @@ fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &BigUint) -> 
 pub struct GatewayConfig {
     /// What this session runs under, settled before it opened.
     ///
-    /// Held per session rather than read from the process as it goes: a second
-    /// session in one process used to write its own settings where the first
-    /// session's reconnects would find them.
+    /// Held per session rather than read from the process as it goes, so a
+    /// second session in one process cannot write its own settings where the
+    /// first session's reconnects would find them.
     pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
     /// The login.
     pub username: String,
@@ -1650,7 +1650,7 @@ fn run_second_factor(
     // loud: sending 775 at it gets the socket closed before any challenge,
     // and skipping the gate leaves the server waiting until the connect
     // dies with "Never received data start after auth". Neither names the
-    // cause (ibx#279). See `second_factor_route` for why an absent type is
+    // cause. See `second_factor_route` for why an absent type is
     // the one case that is not an error.
     let route = second_factor_route(sf.paper, &sf.token_type);
     if !sf.paper {
@@ -1661,7 +1661,7 @@ fn run_second_factor(
     }
     if route == SecondFactorRoute::SecurityCode {
         // Authenticator-code accounts take the 774 exchange rather than the
-        // IBKey push. The same code_provider supplies the code (ibx#282).
+        // IBKey push. The same code_provider supplies the code.
         let deadline = std::time::Instant::now()
             + std::time::Duration::from_secs(sf.timeout_secs);
         log::info!(
@@ -1698,7 +1698,7 @@ fn run_second_factor(
         // Live logins enter a human-approval window here: connect() blocks
         // until the second factor is approved (mobile push) or this deadline
         // fires. Announce it up front so a stalled connect() reads as
-        // "waiting for approval" rather than a hang (ibx#203 / ibx#207).
+        // "waiting for approval" rather than a hang.
         // Accounts with no second factor fall straight through (Skipped).
         if sf.code_provider.is_none() {
             log::info!(
@@ -1790,15 +1790,15 @@ fn second_factor_route(paper: bool, token_type: &str) -> SecondFactorRoute {
 /// The buffer the init burst is scanned in.
 ///
 /// The auth-server's logon ACK arrives DEFLATE-compressed inside one or more
-/// `8=FIXCOMP` envelopes (per ib-agent#129). The compressed body is ~30 kB on
+/// `8=FIXCOMP` envelopes. The compressed body is ~30 kB on
 /// the wire but expands to ~48 kB of plaintext carrying the routing tags
-/// 6145/6171/8008, which the tag scan needs to see.
+/// 6145/6171/8008, which the tag scan needs to
 ///
 /// The inflated plaintext belongs to that scan and nowhere else. The engine is
 /// handed the burst exactly as it arrived and decompresses the same segments
 /// itself, so appending the plaintext to the engine's copy delivered every
 /// message in the burst twice from a single delivery — once from the segment,
-/// once from the appended copy (ibx#317). Takes the burst by reference so the
+/// once from the appended copy. Takes the burst by reference so the
 /// engine's copy cannot be the one that grows.
 fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
     let mut scan = init_data.to_vec();
@@ -2000,10 +2000,8 @@ impl Gateway {
             Ok(data) => data,
             Err(e) if e.to_string().starts_with("REDIRECT:") => {
                 let target = e.to_string().strip_prefix("REDIRECT:").unwrap().to_string();
-                // Where the venue sent this session, on the port it named. The
-                // port used to be dropped for the one this client connects on
-                // by default, which is right until the day it is not, and then
-                // it is a connection to a port nothing is listening on.
+                // Where the venue sent this session, carrying the port it
+                // named alongside the host.
                 let (redirect_host, redirect_port) = host_and_port(&target, port);
                 log::info!("Redirected to {redirect_host}:{redirect_port}, reconnecting...");
                 drop(tls);
@@ -2026,7 +2024,7 @@ impl Gateway {
         // The subtype is account- and session-specific, so the compiled-in
         // default only ever matches the profile it was captured from; every
         // other account has its SWCR_TOKEN rejected and the socket closed
-        // before a challenge is issued (ibx#279).
+        // before a challenge is issued.
         let (server_token_type, server_token_sub_type) =
             parse_auth_start_token(&auth_start_text(&auth_start)?);
 
@@ -2076,7 +2074,7 @@ impl Gateway {
                 // Skipped on paper logins; live logins enter a wait state if the
                 // account has a second factor configured server-side.
                 // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
-                // ib-agent#125 that body carries none, so this stays `None` on both
+                // that body carries none, so this stays `None` on both
                 // live paths and the farm logon falls back to the SRP session key.
                 let soft_token = run_second_factor(&mut tls, SecondFactor {
                     paper: config.paper,
@@ -2093,9 +2091,9 @@ impl Gateway {
 
         // Receive post-auth messages (encrypted via 534) and wait for the
         // data-farm start (NS_FIX_START). A transient stall here must not be
-        // fatal: a single read timeout used to `break` and bubble a hard error
-        // even though the data start was still pending, and keepalive chatter
-        // could exhaust a fixed iteration budget before it arrived (ibx#196).
+        // fatal. A single read timeout does not end the wait while the data
+        // start is still pending, and keepalive chatter does not exhaust a
+        // fixed iteration budget before it arrives.
         // Retry within an overall deadline and ignore intervening messages,
         // mirroring the CCP-reconnect path.
         tls.get_ref().set_read_timeout(Some(Duration::from_secs_f64(TIMEOUT_FIX_LOGON)))?;
@@ -2179,7 +2177,7 @@ impl Gateway {
         if !fix_ready {
             // TimedOut (not Other) so callers can distinguish a transient
             // post-auth handshake miss — which is retryable — from a genuine
-            // auth failure (ibx#196).
+            // auth failure.
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "Never received data start after auth",
@@ -2192,9 +2190,9 @@ impl Gateway {
         tls.write_all(&logon_msg)?;
         tls.flush()?;
 
-        // Read FIX messages until we get the logon ACK (35=A) with session info.
+        // Read FIX messages until the logon ACK (35=A) carrying session info.
         // Short poll timeout + overall deadline so a slow ACK segment from a
-        // high-latency gateway is retried, not fatal (ibx#237).
+        // high-latency gateway is retried, not fatal.
         tls.get_ref().set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
         let ack_deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
         let mut account_id = String::new();
@@ -2214,7 +2212,7 @@ impl Gateway {
         let mut raw_enabled_features = String::new();
         let mut white_branding_id = String::new();
         let mut raw_misc_urls = String::new();
-        // Per ib-agent#128: the auth-logon ACK tells us which farms this
+        // the auth-logon ACK tells us which farms this
         // account is routed to. Hardcoding `usfarm`/`ushmds` only works for
         // US accounts; EU accounts need eufarm/euhmds/secdefeu, etc.
         // Format of 6145: "<host>/<farm>"; 6171/8008: "<host>/<farm>/<port>"
@@ -2227,7 +2225,7 @@ impl Gateway {
             // The auth-logon ACK arrives as `8=FIXCOMP` with a DEFLATE-
             // compressed inner body containing the per-account routing tags
             // (6145/6171/8008) and other init data. Inflate before parsing.
-            // (See ib-agent#128 + #129.)
+            // (See + #129.)
             let mut response = raw_response.clone();
             if raw_response.starts_with(b"8=FIXCOMP\x01") {
                 let inflated_msgs = fixcomp::fixcomp_decompress(&raw_response)?;
@@ -2303,7 +2301,7 @@ impl Gateway {
                 }
             }
 
-            // Farm routing (per ib-agent#128) — server tells us which farms
+            // Farm routing — server tells us which farms
             // this account is permissioned for. EU accounts get `eufarm`,
             // US get `usfarm`, etc. Read once from whichever auth msg has it.
             if let Some(v) = fields.get(&6145)
@@ -2354,14 +2352,14 @@ impl Gateway {
                 }
             }
 
-            // Stop once we have the logon ACK or server config message
+            // Stop on the logon ACK or the server config message
             if msg_type == "A" || msg_type == "U" {
                 break;
             }
         }
         tls.get_ref().set_read_timeout(None)?;
 
-        // Fall back to our auth session_id if server didn't provide one (Python does the same)
+        // Fall back to the auth session_id where the server states none
         if server_session_id.is_empty() {
             server_session_id = session_id.clone();
         }
@@ -2438,12 +2436,12 @@ impl Gateway {
         log::info!("Init sequence sent ({} messages, seq now {})", ccp_seq - 1, ccp_seq);
 
         // Drain init responses — extract account ID + farm routing tags.
-        // Per ib-agent#134 read-throughput investigation (2026-05-05):
+        // read-throughput investigation (2026-05-05):
         // the burst's bulk (~28 kB compressed) arrives in ~300 ms continuous,
         // after which the server emits 67-byte keep-alive trickles every ~10 s
         // until it FINs the socket at ~140 s. A 300 ms idle-gap is past any
         // intra-burst jitter (the burst is continuous) and well short of the
-        // 10 s keep-alive trickle interval, so we exit promptly after burst-end.
+        // 10 s keep-alive trickle interval, so the read ends promptly after the burst.
         tls.get_ref().set_read_timeout(Some(Duration::from_millis(300)))?;
         let mut init_data: Vec<u8> = Vec::with_capacity(65536);
         let mut tmp_buf = vec![0u8; 65536];
@@ -2456,9 +2454,9 @@ impl Gateway {
                     || e.kind() == io::ErrorKind::TimedOut =>
                 {
                     // First 1-s idle gap = burst is done. Anything past
-                    // this is the server's 10-s keep-alive trickle, which
-                    // we don't want to drain (would push grace-window
-                    // messages past the server-side deadline).
+                    // this is the server's 10-s keep-alive trickle, which is
+                    // left undrained: draining it pushes grace-window messages
+                    // past the server-side deadline.
                     break;
                 }
                 Err(e) => return Err(e),
@@ -2473,8 +2471,8 @@ impl Gateway {
 
         // Scan init response for account ID and gateway-local init tags
         let init_str = String::from_utf8_lossy(&scan_data);
-        // TEMP diagnostic (ib-agent#128 follow-up): log every part containing
-        // "farm" or "hmds" so we can locate the routing tags.
+        // Log every part naming "farm" or "hmds", which is where the routing
+        // tags sit.
         for part in init_str.split('\x01') {
             if part.contains("farm") || part.contains("hmds") || part.contains("secdef") {
                 log::info!("Init scan: routing-shaped part = {part:?}");
@@ -2517,7 +2515,7 @@ impl Gateway {
             }
         }
 
-        // Per ib-agent#134: CCP server FINs the connection ~12s after the
+        // CCP server FINs the connection ~12s after the
         // init-burst response if no application-level traffic arrives in the
         // grace window — heartbeats alone do not satisfy "client alive".
         // Send Account-Register (35=U|6040=6, account in tag 6095) followed
@@ -2624,16 +2622,16 @@ impl Gateway {
         ccp_conn.seed_buffer(&init_data);
 
         // --- Phase 3: Data farm connections ---
-        // Per ib-agent#143/#144/#145: the official Gateway opens exactly 3 authed TCP
+        // /#144/#145: the official Gateway opens exactly 3 authed TCP
         // sessions per login — MARKET_DATA (tag 6145), HISTORICAL_DATA (tag 6171), and
-        // SECDEFARM (tag 8008, UI/telemetry only — not used by ibx). Per ib-agent#125/
+        // SECDEFARM (tag 8008, UI/telemetry only — not used by ibx). Per/
         // #131/#133: the SOFT token is `SHA1(strip(S))` where S is the SRP shared
         // secret. `do_srp` returns exactly that via `srp_compute_k`, so `session_key`
         // IS the SOFT token — no further hashing. (Tag 8483's per-channel SHA1 is
         // added by `token_short_hash` at the build-logon site.) Tag 6386 is an S3
         // object key, not a token source.
         let farm_token: BigUint = soft_token.clone().unwrap_or_else(|| session_key.clone());
-        // Per ib-agent#128: read the farm names from the auth-server's
+        // read the farm names from the auth-server's
         // routing tags rather than hardcoding `usfarm`/`ushmds`. EU accounts
         // are routed to `eufarm`/`euhmds`/`secdefeu`, US to `usfarm`/`ushmds`,
         // etc. Format of the route strings:
@@ -2672,7 +2670,7 @@ impl Gateway {
         let secdef = parse_farm_route(&secdef_route);
         log::info!("Farm routing: trading={trading_host}/{trading_farm}, mktdata={mktdata_host}/{mktdata_farm}");
 
-        // Retain HMDS routing for the reconnect loop (ibx#187) — the values
+        // Retain HMDS routing for the reconnect loop — the values
         // below are moved into the thread::scope closures.
         let hmds_host_for_gw = mktdata_host.clone();
         let hmds_farm_for_gw = mktdata_farm.clone();
@@ -2807,10 +2805,9 @@ impl Gateway {
         //
         // There is no request for this list: the counterpart serves it from the
         // logon alone, and an empty tag means the account is entitled to
-        // nothing. A fallback list of eight Dow Jones and Briefing providers
-        // used to stand in, which told a caller it held entitlements it does
-        // not — and a caller enumerating providers and then asking for an
-        // article gets a refusal it cannot explain.
+        // nothing. A fallback list would state entitlements the account does
+        // not hold, and a caller enumerating providers and then asking for an
+        // article receives a refusal it cannot explain.
         //
         // Wire format: "code1/name1,code2/name2,…". Read as though the pairs
         // were separated by semicolons and the halves by commas, one provider
@@ -3308,11 +3305,11 @@ mod tests {
 
     use super::*;
 
-    /// ibx#317: the init burst is handed to the engine still compressed, and
-    /// the engine decompresses the same segments itself. Appending the inflated
-    /// plaintext to that buffer — rather than to a copy taken for the local tag
-    /// scan — put every message in the burst in front of the engine twice from
-    /// a single delivery.
+    /// The init burst is handed to the engine still compressed, and the engine
+    /// decompresses the same segments itself. The inflated plaintext is
+    /// appended to a copy taken for the local tag scan, not to that buffer:
+    /// appending to the buffer puts every message in the burst in front of the
+    /// engine twice from a single delivery.
     #[test]
     fn the_inflated_init_content_is_scanned_but_not_handed_to_the_engine() {
         let inner = b"8=FIX.4.2\x0135=B\x0158=ROUTING\x016145=farm-a\x0110=000\x01";
@@ -3369,7 +3366,7 @@ mod tests {
 
     #[test]
     fn the_channel_role_comes_from_the_farm_not_its_name() {
-        // ibx#253: the role was keyed on the literal "ushmds", so a regional
+        // The role was keyed on the literal "ushmds", so a regional
         // historical-data farm was established on the trading channel. The
         // caller names the farm, which is the discriminator that holds for
         // every farm name — including `cashhmds`, which this codebase connects
@@ -3406,7 +3403,7 @@ mod tests {
 
     #[test]
     fn token_short_hash_always_8_chars() {
-        // Per ib-agent#125: gateway pads to 8 hex chars. Brute-force search
+        // gateway pads to 8 hex chars. Brute-force search
         // over small inputs to find one whose SHA1 ends in a high-nibble
         // zero, then assert padding kicks in.
         for n in 0u64..10_000 {
@@ -3712,10 +3709,10 @@ mod tests {
         }
     }
 
-    /// ibx#295: the reconnect announced the literal `usfarm` and dialled the
-    /// configured host, ignoring the route the auth server gave for the
-    /// account. The historical-data reconnect beside it has always carried both
-    /// — this is the trading side catching up.
+    /// The trading reconnect announces the farm and dials the host the auth
+    /// server gave for the account, rather than a literal `usfarm` and the
+    /// configured host. The historical-data reconnect beside it carries both
+    /// the same way.
     #[test]
     fn a_reconnect_uses_the_route_the_auth_server_gave() {
         assert_eq!(
@@ -3820,9 +3817,9 @@ mod soft_dollar_tier_tests {
             .collect()
     }
 
-    /// A real logon's own words. This used to fail every entry, and a list
-    /// written into this client stood in for it — a list which was itself a
-    /// transcription of this very reply, so it looked right while nothing was
+    /// A real logon's own words. A list written into this client would stand
+    /// in for it — itself a transcription of this very reply, so it would look
+    /// right while nothing was
     /// being read.
     #[test]
     fn the_tiers_a_real_logon_states_are_read() {

@@ -43,7 +43,7 @@ impl EClient {
 
     /// Surface the end of the session: `connection_closed`, once, with no error
     /// callback. Covers both an engine-side loss and an explicit
-    /// [`disconnect()`](EClient::disconnect) (ibx#242).
+    /// [`disconnect()`](EClient::disconnect).
     ///
     /// Queued data is dispatched before this fires, so a caller that stops
     /// polling on `connection_closed` still sees everything the engine had
@@ -122,11 +122,11 @@ impl EClient {
             let report = CommissionAndFeesReport {
                 exec_id: exec.exec_id.clone(),
                 commission_and_fees: commission_and_fees_f,
-                // The currency the venue stated on this execution. It used to
-                // be the dollar whatever the venue said, so a fill on a
-                // contract denominated in anything else reported its cost in a
-                // currency it was not charged in. Empty where the venue stated
-                // none: a currency nobody stated is not the dollar by default.
+                // The currency the venue stated on this execution. Empty
+                // where it stated none: a currency nobody stated is not the
+                // dollar by default, and a fill on a contract denominated in
+                // anything else would otherwise report a cost in a currency it
+                // was not charged in.
                 currency: c.currency.clone(),
                 realized_pnl: f64::MAX,
                 yield_amount: f64::MAX,
@@ -167,14 +167,14 @@ impl EClient {
             // Reason 1 is UnknownOrder: the gateway has said the order does not
             // exist, and the engine has already retired its record. The client's
             // own record has to go with it, or the open-order snapshot keeps
-            // reporting the order the rejection was about (ibx#252).
+            // reporting the order the rejection was about.
             if reject.reason_code == 1 {
                 self.core.untrack_order(reject.order_id);
             }
             wrapper.error(reject.order_id as i64, code, &msg, "");
         }
 
-        // Inactive (39=I) order reasons → error (ibx#250). order_status above
+        // Inactive (39=I) order reasons → error. order_status above
         // already reported the "Inactive" string; this carries why.
         for (order_id, code, msg) in self.shared.orders.drain_order_inactive() {
             wrapper.error(order_id as i64, code as i64, &msg, "");
@@ -358,7 +358,7 @@ impl EClient {
             }
         }
 
-        // HMDS query errors → error (ibx#186). Drain before historical_data so a
+        // HMDS query errors → error. Drain before historical_data so a
         // QueryError that also queued an empty terminal HistoricalResponse fires
         // wrapper.error first, then wrapper.historical_data_end.
         for (req_id, code, msg) in self.shared.reference.drain_historical_errors() {
@@ -502,7 +502,7 @@ impl EClient {
             wrapper.histogram_data(req_id as i64, &items);
         }
 
-        // Historical ticks — route to the variant-specific callback (iso ibapi).
+        // Historical ticks route to the variant-specific callback, as in ibapi.
         for (req_id, data, _query_id, done) in self.shared.reference.drain_historical_ticks() {
             match &data {
                 HistoricalTickData::Midpoint(_) => wrapper.historical_ticks(req_id as i64, &data, done),

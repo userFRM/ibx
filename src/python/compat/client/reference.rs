@@ -320,7 +320,7 @@ impl EClient {
     /// Request market rule details.
     fn req_market_rule(&self, py: Python<'_>, market_rule_id: i32) -> PyResult<()> {
         // Released before the callback below — see the note in
-        // req_completed_orders (ibx#268).
+        // req_completed_orders.
         let shared = self.shared.lock().unwrap().clone();
         if let Some(shared) = shared
             && let Some(rule) = shared.reference.market_rule(market_rule_id) {

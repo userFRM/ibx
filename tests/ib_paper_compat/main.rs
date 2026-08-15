@@ -8,7 +8,7 @@
 //!
 //! Prices here are written scaled, grouped as dollars and cents:
 //! `1_00_000_000` is $1.00 at `PRICE_SCALE`. The grouping is the unit, which
-//! is why the digits are not grouped in threes.
+//! Is why the digits are not grouped in threes.
 #![allow(clippy::inconsistent_digit_grouping)]
 
 mod account;
@@ -334,7 +334,7 @@ fn compat_suite() {
     conns = connection::phase_connection_recovery(conns, &gw, &config);
     conns = ensure_ccp_alive(conns, &mut gw, &config);
 
-    // ── New compatibility test phases (issues #83-#93) ──
+    // ── New compatibility test phases (issues #83-) ──
     conns = multi_asset::phase_global_venues(conns);
     conns = multi_asset::phase_forex_order(conns);
     conns = multi_asset::phase_futures_order(conns);
@@ -354,7 +354,7 @@ fn compat_suite() {
     }
     conns = account::phase_account_summary(conns);
 
-    // ── New test phases (issues #92-#95) ──
+    // ── New test phases (issues #92-) ──
     if needs_ticks {
         conns = market_data::phase_tick_stress_test(conns);
     } else {
@@ -420,7 +420,7 @@ fn compat_suite() {
     conns = connection::phase_update_param(conns);
     conns = coverage::phase_endpoint_coverage(conns);
 
-    // ── Session-independent forex fallback phases (issue #91) ──
+    // ── Session-independent forex fallback phases ──
     // EUR.USD trades ~24h Sun-Fri, so these cover tick reception when US stocks are closed.
     if !needs_ticks {
         conns = market_data::phase_forex_market_data(conns);
@@ -450,7 +450,7 @@ fn compat_suite() {
     common::no_phase_lost_the_session_unasked();
 }
 
-/// ibx#186 focused live entry — runs only the QueryError phase so you don't
+/// Live entry that runs only the QueryError phase, so you do not
 /// pay the full ~128-phase suite cost just to validate this fix.
 #[test]
 fn query_error_phase_live() {
@@ -460,7 +460,7 @@ fn query_error_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    println!("=== ibx#186 focused live test ===\n");
+    println!("=== QueryError live test ===\n");
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
 
@@ -668,9 +668,9 @@ fn box_top_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
-/// ibx#191 PR A focused live entry — validates that after a full disconnect,
+/// Live entry: after a full disconnect,
 /// a fresh `Gateway::connect` receives the CCP recovery push (35=8 with
-/// 150=0/39=0 per ib-agent#155) and that a subsequent
+/// 150=0/39=0, and a subsequent
 /// `cancel_order(<prior_session_orderId>)` succeeds.
 ///
 /// Two `Gateway::connect` calls in one process. Paper account skips the IBKey
@@ -686,7 +686,7 @@ fn cross_session_recovery_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    println!("=== ibx#191 PR A: cross-session recovery test ===\n");
+    println!("=== cross-session recovery test ===\n");
 
     // ─── Session A: place resting GTC LMT BUY 1 SPY @ $1 (far below market) ───
     println!("Session A: connecting + placing resting LMT GTC BUY 1 SPY @ $1");
@@ -761,7 +761,7 @@ fn cross_session_recovery_phase_live() {
 
     let join = run_hot_loop(hot_loop);
 
-    // CCP delivers the recovery push <1s after session establishment per ib-agent#155.
+    // CCP delivers the recovery push <1s after session establishment.
     // Sleep a few seconds so handle_exec_report has time to populate last_clord.
     std::thread::sleep(Duration::from_secs(3));
 
@@ -794,7 +794,7 @@ fn cross_session_recovery_phase_live() {
         "Session B: cancel not confirmed within 30s — recovery push likely not parsed correctly. Cleanup orderId={order_id} via GUI.");
 
     println!("  Session B: cancel confirmed in {cancel_ms}ms");
-    println!("\n  PASS — cross-session cancel works (ibx#191 PR A validated)\n");
+    println!("\n  PASS — cross-session cancel works\n");
 }
 
 /// What this session answers. Counts every user message it sends of its own
@@ -943,7 +943,7 @@ fn routing_table_probe() {
     drop(hmds);
 }
 
-/// ibx#191 PR B focused live entry — validates `EClient::cancel_order_by_perm_id`.
+/// Live entry that validates `EClient::cancel_order_by_perm_id`.
 /// Places a resting LMT GTC, captures the broker-assigned `permId` from
 /// `order_status`-flavored OrderUpdate events, then cancels by permId (not by
 /// local orderId) and asserts Cancelled.
@@ -957,7 +957,7 @@ fn cancel_by_perm_id_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    println!("=== ibx#191 PR B: cancel_order_by_perm_id ===\n");
+    println!("=== cancel_order_by_perm_id ===\n");
     let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
@@ -1054,12 +1054,12 @@ fn cancel_by_perm_id_phase_live() {
         "cancel not confirmed within 30s — cleanup orderId={order_id} via GUI");
 
     println!("  Cancel confirmed in {cancel_ms}ms");
-    println!("\n  PASS — cancel_order_by_perm_id works (ibx#191 PR B validated)\n");
+    println!("\n  PASS — cancel_order_by_perm_id works\n");
 }
 
-/// ibx#224 / ibx#215 focused live entry — validates the `SubmitEx` wire path:
+/// Live entry that validates the `SubmitEx` wire path:
 /// a bracket-style child (STP, GTC, parent_id + oca_group) placed against a
-/// resting parent. Before ibx#224 those attrs were dropped and the child
+/// resting parent. Without them the attributes are dropped and the child
 /// went live as an unlinked DAY stop.
 ///
 /// Flow: parent LMT GTC BUY 1 SPY @ $1 (never fills) → child STP GTC SELL 1
@@ -1077,7 +1077,7 @@ fn submit_ex_bracket_child_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    println!("=== ibx#224/ibx#215: SubmitEx bracket child ===\n");
+    println!("=== SubmitEx bracket child ===\n");
     let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
@@ -1101,7 +1101,7 @@ fn submit_ex_bracket_child_phase_live() {
     // cross-session test).
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: parent_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send parent failed");
 
-    // Child: the ibx#224 shape — STP + GTC + parent_id + oca_group. A sell
+    // Child shape: STP + GTC + parent_id + oca_group. A sell
     // stop at $0.50 can never trigger even if something goes wrong.
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
         order_id: child_id, instrument: inst_id, side: Side::Sell, qty: 1,
@@ -1174,12 +1174,12 @@ fn submit_ex_bracket_child_phase_live() {
 
     assert!(parent_cancelled, "parent cancel not confirmed within 30s — check GUI");
     assert!(child_cancelled,
-        "child did NOT cascade-cancel with its parent — parent link not honored on the wire (ibx#224)");
+        "child did NOT cascade-cancel with its parent — parent link not honored on the wire");
 
-    println!("\n  PASS — SubmitEx child linked, held, and cascade-cancelled (ibx#224/ibx#215 validated)\n");
+    println!("\n  PASS — SubmitEx child linked, held, and cascade-cancelled\n");
 }
 
-/// ibx#216 focused live entry — validates snap-to-tick on the outbound path.
+/// Live entry that validates snap-to-tick on the outbound path.
 /// Subscribes SPY market data (the subscribe ack carries the tick size the
 /// engine stores), then places a resting LMT GTC BUY 1 SPY at the off-grid
 /// price $1.001234. The engine must snap it to $1.00 before encoding; the
@@ -1194,7 +1194,7 @@ fn snap_to_tick_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    println!("=== ibx#216: snap-to-tick ===\n");
+    println!("=== snap-to-tick ===\n");
     let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
@@ -1240,7 +1240,7 @@ fn snap_to_tick_phase_live() {
             }
         }
     }
-    assert!(!rejected, "off-grid price was rejected — snap-to-tick did not apply (ibx#216)");
+    assert!(!rejected, "off-grid price was rejected — snap-to-tick did not apply");
     assert!(acked, "order never acked within 30s — cleanup orderId={order_id} via GUI");
 
     // Read the price back from the server-echoed open-order cache.
@@ -1267,12 +1267,12 @@ fn snap_to_tick_phase_live() {
 
     let echoed = echoed.expect("order missing from the open-order cache after ack");
     assert!((echoed - 1.00).abs() < 1e-9,
-        "server echoed lmt_price {echoed} — expected the snapped 1.00 (ibx#216)");
+        "server echoed lmt_price {echoed} — expected the snapped 1.00");
 
-    println!("\n  PASS — off-grid price snapped to the tick grid and accepted (ibx#216 validated)\n");
+    println!("\n  PASS — off-grid price snapped to the tick grid and accepted\n");
 }
 
-/// ibx#231 / ibx#227 focused live entry — validates that the new deadline
+/// Live entry that validates that the deadline
 /// sweeps do NOT fire on healthy traffic: a normal contract-details lookup
 /// (by con_id and by symbol, including the fan-out) and a normal historical
 /// request all still complete with rows/bars followed by their end signals,
@@ -1289,7 +1289,7 @@ fn timeout_sweeps_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    println!("=== ibx#231/ibx#227: happy paths under the deadline sweeps ===\n");
+    println!("=== happy paths under the deadline sweeps ===\n");
     let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
@@ -1331,7 +1331,7 @@ fn timeout_sweeps_phase_live() {
     }).expect("send details by con_id failed");
     let (rows, end, _) = wait_details(6001, "by-conId SPY");
     assert!(rows >= 1, "by-conId lookup returned no rows");
-    assert!(end, "by-conId end never fired — sweep may have eaten the reply (ibx#227)");
+    assert!(end, "by-conId end never fired — sweep may have eaten the reply");
 
     // 2. By symbol — exercises the fan-out counter and the deferred-end path.
     control_tx.send(ControlCommand::FetchContractDetails {
@@ -1341,8 +1341,8 @@ fn timeout_sweeps_phase_live() {
     }).expect("send details by symbol failed");
     let (rows, end, row_after_end) = wait_details(6002, "by-symbol AAPL fan-out");
     assert!(rows >= 1, "by-symbol lookup returned no rows");
-    assert!(end, "by-symbol end never fired within 30s (ibx#227)");
-    assert!(!row_after_end, "a row arrived AFTER end — ordering regression (ibx#227)");
+    assert!(end, "by-symbol end never fired within 30s");
+    assert!(!row_after_end, "a row arrived AFTER end — ordering regression");
 
     // 3. Historical bars — must complete without tripping the idle sweep.
     control_tx.send(ControlCommand::FetchHistorical {
@@ -1366,20 +1366,20 @@ fn timeout_sweeps_phase_live() {
         }
     }
     println!("  historical SPY 5D/1day: bars={bars} complete={complete} err={hist_err:?}");
-    assert!(hist_err.is_none(), "healthy historical request errored: {hist_err:?} (ibx#231 sweep too eager?)");
+    assert!(hist_err.is_none(), "healthy historical request errored: {hist_err:?}");
     assert!(complete && bars >= 3, "historical did not complete (bars={bars})");
 
     let _ = control_tx.send(ControlCommand::Shutdown);
     let _ = join.join();
 
-    println!("\n  PASS — happy paths complete under the deadline sweeps (ibx#231/ibx#227 validated)\n");
+    println!("\n  PASS — happy paths complete under the deadline sweeps\n");
 }
 
-/// ibx#233 / ibx#228 focused live entry.
-/// Part 1 (ibx#233): subscribe SPY, cancel, re-subscribe — the second
+/// Live entry, two parts.
+/// Part 1: subscribe SPY, cancel, re-subscribe — the second
 /// registration must REUSE the reclaimed slot id, proving unsubscribed
 /// contracts no longer consume the instrument table.
-/// Part 2 (ibx#228): a symbol search with zero matches must still deliver
+/// Part 2: a symbol search with zero matches must still deliver
 /// (an empty answer on the right req_id), and a following search must land
 /// on ITS req_id — previously the empty result poisoned the queue and every
 /// later reply was misattributed.
@@ -1393,7 +1393,7 @@ fn reclaim_and_symbol_search_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    println!("=== ibx#233/ibx#228: slot reclaim + symbol search ===\n");
+    println!("=== slot reclaim + symbol search ===\n");
     let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
     let account_id = gw.account_id.clone();
@@ -1429,7 +1429,7 @@ fn reclaim_and_symbol_search_phase_live() {
     let id2 = subscribe("re-subscribe");
     println!("  re-subscribe: instrument id {id2}");
     assert_eq!(id2, id1,
-        "reclaimed slot must be reused — the cap would stay cumulative (ibx#233)");
+        "reclaimed slot must be reused — the cap would stay cumulative");
 
     // ── Part 2: symbol search ──
     control_tx.send(ControlCommand::FetchMatchingSymbols { req_id: 7001, pattern: "ZZZZQQXX".into() })
@@ -1439,14 +1439,14 @@ fn reclaim_and_symbol_search_phase_live() {
     while Instant::now() < deadline && !empty_delivered {
         for (rid, matches) in shared.reference.drain_matching_symbols() {
             println!("  symbol_samples: req_id={} matches={}", rid, matches.len());
-            assert_eq!(rid, 7001, "reply misattributed (ibx#228)");
+            assert_eq!(rid, 7001, "reply misattributed");
             assert!(matches.is_empty(), "garbage pattern should have no matches");
             empty_delivered = true;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     assert!(empty_delivered,
-        "empty symbol-search result was never delivered — queue poisoned (ibx#228)");
+        "empty symbol-search result was never delivered — queue poisoned");
 
     control_tx.send(ControlCommand::FetchMatchingSymbols { req_id: 7002, pattern: "AAPL".into() })
         .expect("send matching symbols failed");
@@ -1455,7 +1455,7 @@ fn reclaim_and_symbol_search_phase_live() {
     while Instant::now() < deadline && !aapl_delivered {
         for (rid, matches) in shared.reference.drain_matching_symbols() {
             println!("  symbol_samples: req_id={} matches={}", rid, matches.len());
-            assert_eq!(rid, 7002, "reply landed on the wrong req_id (ibx#228)");
+            assert_eq!(rid, 7002, "reply landed on the wrong req_id");
             assert!(!matches.is_empty(), "AAPL search should match");
             aapl_delivered = true;
         }
@@ -1466,10 +1466,10 @@ fn reclaim_and_symbol_search_phase_live() {
     let _ = control_tx.send(ControlCommand::Shutdown);
     let _ = join.join();
 
-    println!("\n  PASS — slot reclaimed and reused; symbol search attributes correctly (ibx#233/ibx#228 validated)\n");
+    println!("\n  PASS — slot reclaimed and reused; symbol search attributes correctly\n");
 }
 
-/// ibx#158 focused live entry — validates the on-demand RTT sample: send a
+/// focused live entry — validates the on-demand RTT sample: send a
 /// ping, expect a round-trip measurement to land in shared state.
 /// Run: cargo test --test ib_paper_compat rtt_ping_phase_live -- --ignored --nocapture
 #[test]
@@ -1481,7 +1481,7 @@ fn rtt_ping_phase_live() {
         None => { println!("Skipping: IB credentials not set"); return; }
     };
 
-    println!("=== ibx#158: RTT ping ===
+    println!("=== : RTT ping ===
 ");
     let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
         .expect("Gateway::connect failed");
@@ -1509,11 +1509,11 @@ fn rtt_ping_phase_live() {
     let _ = control_tx.send(ControlCommand::Shutdown);
     let _ = join.join();
 
-    let rtt = rtt.expect("RTT sample never arrived within 15s (ibx#158)");
+    let rtt = rtt.expect("RTT sample never arrived within 15s");
     println!("  measured RTT: {:.2} ms", rtt.as_secs_f64() * 1_000.0);
     assert!(rtt.as_millis() < 10_000, "implausible RTT: {rtt:?}");
 
     println!("
-  PASS — on-demand RTT sample delivered (ibx#158 validated)
+ PASS — on-demand RTT sample delivered
 ");
 }

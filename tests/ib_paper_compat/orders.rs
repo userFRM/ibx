@@ -772,7 +772,7 @@ pub(super) fn phase_limit_opg(conns: Conns) -> Conns {
         false)
 }
 
-// ─── Phase 33b: Instructions that used to be dropped ───
+// ─── Phase 33b: Instructions that must reach the wire ───
 
 pub(super) fn phase_carried_instructions_order(conns: Conns) -> Conns {
     let oid = next_order_id();
@@ -1220,7 +1220,7 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
     // Validate the dispatcher path (open_order with full OrderState — iso ibapi).
     // Construct an EClient on the same shared state and run process_msgs.
     // The engine pushes to shared.orders BEFORE emitting Event::WhatIf, so the
-    // response is still in shared.orders here even though we drained event_rx.
+    // response is still in shared.orders here even though event_rx was drained.
     let dispatcher_validated = if what_if_received {
         let (dummy_tx, _dummy_rx) = std::sync::mpsc::sync_channel(4096);
         let dummy_handle = std::thread::spawn(|| {});
@@ -1234,9 +1234,9 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
             ApiOrder::default(),
             inst_id,
         );
-        // Re-push the response since the engine already pushed it (we didn't drain
-        // shared.orders.drain_what_if_responses anywhere; only drained event_rx).
-        // Actually the response IS still in shared.orders.what_if_responses queue.
+        // Re-push the response: the engine already pushed it, and only
+        // event_rx was drained, so it is still in
+        // shared.orders.what_if_responses.
         let mut w = RecordingWrapper::default();
         eclient.process_msgs(&mut w);
 
@@ -1588,7 +1588,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
     conns
 }
 
-// ─── Phase 87: CancelReject Event path (issue #78) ───
+// ─── Phase 87: CancelReject Event path ───
 
 pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
     println!("--- Phase 87: CancelReject Event (bogus order cancel) ---");
@@ -1656,7 +1656,7 @@ pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
     conns
 }
 
-// ─── Phase 113: Rapid order dedup and interleaving (issue #100) ───
+// ─── Phase 113: Rapid order dedup and interleaving ───
 
 // Fails here at position 113 while the same five orders, submitted the same way
 // through EClient against a fresh session, all reach PreSubmitted and cancel

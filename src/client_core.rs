@@ -21,7 +21,7 @@ use crate::api::types::{
 use crate::bridge::SharedState;
 use crate::types::*;
 
-/// The only market data type the engine delivers (1 = realtime, ibx#234).
+/// The only market data type the engine delivers (1 = realtime).
 const MDT_REALTIME: i32 = 1;
 const MDT_FROZEN: i32 = 2;
 const MDT_DELAYED: i32 = 3;
@@ -155,9 +155,8 @@ pub fn account_summary_values(acct: &AccountState) -> [f64; 16] {
 /// Render an exchange-code bitmask to a letter string using the smart components
 /// table. Each set bit at position N picks `smart_components[N].exchange_letter`.
 ///
-/// Wire encoding pending live confirmation (deepentropy/ib-agent#120). Bit
-/// ordering and width are inferred from TWS-API parity expectations; the
-/// dispatch path tolerates an empty result if the mask layout differs.
+/// Bit ordering and width follow the TWS-API convention; the dispatch path
+/// tolerates an empty result where the mask layout differs.
 pub fn render_exchange_mask(mask: i64, shared: &SharedState) -> String {
     if mask == 0 {
         return String::new();
@@ -265,10 +264,9 @@ pub struct AccountUpdateBatch {
     pub delivered: bool,
     /// Whether the venue has now finished stating the account, said once.
     ///
-    /// This used to be the first field of any kind, which was this client's
-    /// own zeroed copy of an account the venue had not described yet: a caller
-    /// waiting for the account to arrive was told it had, and read figures the
-    /// venue had never sent.
+    /// Set when the venue signals the end of the account description, not on
+    /// the first field of any kind. A caller waiting for the account is
+    /// released once the figures it reads are the venue's own.
     pub finished: bool,
 }
 
@@ -336,7 +334,7 @@ pub fn is_open_status(status: &str) -> bool {
 /// `completed_status` too. It is populated only for terminal statuses
 /// (Filled/Cancelled/Rejected) and stays empty for a genuine Inactive, so an
 /// empty `completed_status` on an "Inactive" row means the order is parked,
-/// not dead (ibx#250).
+/// not dead.
 #[inline]
 pub fn is_open_or_reactivatable(status: &str, completed_status: &str) -> bool {
     is_open_status(status) || (status == "Inactive" && completed_status.is_empty())
@@ -362,7 +360,7 @@ pub fn order_status_str(status: OrderStatus) -> &'static str {
     }
 }
 
-// ── Order field validation (ibx#263) ──
+// ── Order field validation ──
 
 /// Reject a price/amount field that a saturating float-to-int cast would
 /// otherwise turn into a different, valid-looking number: NaN becomes 0,
@@ -383,7 +381,7 @@ fn require_finite_price(field: &str, v: f64) -> Result<(), String> {
 
 /// Parse the Adaptive algo's `adaptivePriority` tag. A missing tag defaults
 /// to Normal (IB's own default); a present-but-unrecognized value is
-/// refused instead of silently defaulting to Normal. See ibx#263.
+/// refused instead of silently defaulting to Normal.
 fn adaptive_priority(params: &[TagValue]) -> Result<AdaptivePriority, String> {
     match params.iter().find(|tv| tv.tag == "adaptivePriority") {
         None => Ok(AdaptivePriority::Normal),
@@ -475,7 +473,7 @@ pub struct TrackedOrder {
     /// (ibapi has no Rejected string), so that string alone cannot tell a
     /// dead order from a parked, reactivatable one — `collect_open_orders`
     /// uses this flag as the discriminator instead of widening
-    /// `is_open_status` (ibx#250).
+    /// `is_open_status`.
     pub rejected: bool,
 }
 
@@ -519,10 +517,9 @@ pub struct ClientCore {
     pub tbt_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     /// The other requests watching a contract that is already subscribed.
     ///
-    /// One contract holds one subscription on the wire, which is what the
-    /// counterpart holds too; it hands the same quote to every window that
-    /// asked for it. A second caller here used to be refused outright, so two
-    /// parts of one program could not watch the same contract.
+    /// One contract holds one subscription on the wire, as the counterpart
+    /// does, and the same quote is handed to every caller that asked for it.
+    /// Two parts of one program may watch the same contract.
     pub instrument_followers: Mutex<HashMap<InstrumentId, Vec<i64>>>,
     // con_id → InstrumentId for find_or_register_instrument lookup
     /// The engine slot each contract id was given.
@@ -606,7 +603,7 @@ pub struct ClientCore {
 
     // Historical data keepUpToDate: req_ids that have completed initial batch.
     // Subsequent bars for these req_ids dispatch as historical_data_update.
-    // Cleared when a request is made under the id again — see
+    // Cleared when a request is made under the id again
     // `historical_request_is_new`.
     /// Which historical requests have finished their first batch, so
     /// a later bar under the same id is a continuation rather than a new answer.
@@ -759,7 +756,7 @@ impl ClientCore {
 
     /// Wait for the hot loop to process a registration command and return the
     /// assigned ID. The engine replies Err when the instrument table is full
-    /// (ibx#233) — previously that condition killed the hot loop.
+    /// — previously that condition killed the hot loop.
     fn recv_registration(
         &self, reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>,
     ) -> Result<InstrumentId, Refusal> {
@@ -780,7 +777,7 @@ impl ClientCore {
     }
 
     /// The instrument this conId is already known to hold. `0` means the
-    /// contract carries no conId (ibx#278) and answers for no one: the engine
+    /// contract carries no conId and answers for no one: the engine
     /// resolves those by descriptor, so only it can say which slot they got.
     fn cached_instrument(&self, con_id: i64) -> Option<InstrumentId> {
         if con_id == 0 {
@@ -799,7 +796,7 @@ impl ClientCore {
 
     /// `instrument_to_req` maps ONE req_id per instrument: a second live
     /// subscription would clobber the first's reverse mapping and orphan it
-    /// silently — no ticks, no error (ibx#233). Names the refusal, or None
+    /// silently — no ticks, no error. Names the refusal, or None
     /// when this request is free to take the slot.
     fn follows_existing_subscription(&self, instrument: InstrumentId, req_id: i64) -> bool {
         let held = self.instrument_to_req.lock().unwrap();
@@ -974,7 +971,7 @@ impl ClientCore {
         // identity, so a duplicate can only be settled against the slot the
         // engine resolved — and refusing here, after `Subscribe` had already
         // gone out, left a live subscription the caller was told did not happen
-        // and held no req_id to cancel by (ibx#278). The engine now refuses
+        // and held no req_id to cancel by. The engine now refuses
         // before the subscribe reaches the wire and that refusal arrives here.
         let instrument_id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);
@@ -1064,7 +1061,7 @@ impl ClientCore {
     }
 
     /// Drop the client-side conId cache entries for an instrument id. The
-    /// engine may reclaim and reuse the slot after an unsubscribe (ibx#233);
+    /// engine may reclaim and reuse the slot after an unsubscribe;
     /// a stale cache entry would silently point the old conId at whatever
     /// contract inherits the id. A later request for that conId simply
     /// re-registers.
@@ -1323,9 +1320,8 @@ impl ClientCore {
     /// Store the requested market data type.
     ///
     /// The caller names the type once; the wire names it per subscription, on
-    /// field 9887. Subscriptions made after this take the mode it implies, so
-    /// a client that asks for delayed data gets delayed data — it used to be
-    /// stored, warned about, and never sent (ibx#234).
+    /// field 9887. Subscriptions made after this carry the mode it implies, so
+    /// a client that asks for delayed data receives delayed data.
     pub fn set_market_data_type(&self, mdt: i32) {
         if !matches!(mdt, MDT_REALTIME | MDT_FROZEN | MDT_DELAYED | MDT_DELAYED_FROZEN) {
             log::warn!("req_market_data_type({mdt}) names no known type; subscriptions stay realtime");
@@ -1347,14 +1343,12 @@ impl ClientCore {
     /// Check if the `market_data_type` callback should fire for this req_id.
     /// Returns `Some(type)` on the first call per req_id that has data, `None`
     /// thereafter. Always reports realtime — the DELIVERED type — rather than
-    /// echoing a requested type the engine never transmitted; the old echo
-    /// confirmed a state that did not exist (ibx#234).
+    /// echoing a type the engine did not transmit, which would confirm a state
+    /// the session is not in.
     pub fn check_mdt_needed(&self, req_id: i64, has_data: bool) -> Option<i32> {
         if has_data && self.mdt_sent.lock().unwrap().insert(req_id) {
-            // The type this subscription was made under. It used to always say
-            // realtime, because the requested type was never sent and saying
-            // anything else confirmed a state that did not exist. It is sent
-            // now, so this is what the data is.
+            // The type this subscription was made under, which is the type
+            // transmitted with it and therefore the type of the data.
             Some(
                 self.mdt_by_req
                     .lock()
@@ -1401,7 +1395,7 @@ impl ClientCore {
     /// an ordinary ibapi pattern, and the dispatch thread pushes fills through
     /// the same mutex. Handing back indices to be dereferenced later also
     /// raced `reset()`, which clears the vector. Snapshotting closes both
-    /// (ibx#265).
+ ///.
     pub fn snapshot_executions(&self, filter: &ExecutionFilter) -> Vec<StoredExecution> {
         let execs = self.executions.lock().unwrap();
         execs.iter().filter(|se| execution_matches(se, filter)).cloned().collect()
@@ -1474,7 +1468,7 @@ impl ClientCore {
         // The replace is rebuilt from the tracked record, which holds side,
         // price, quantity, order type, time-in-force and trigger — and nothing
         // else. Every attribute below rides a tag the replace does not carry,
-        // so a modify would state the order without it (ibx#248).
+        // so a modify would state the order without it.
         //
         // The bracket links are the costly pair. A replace that omits the
         // parent link or the OCA group leaves a child resting alone: a fill on
@@ -1537,7 +1531,7 @@ impl ClientCore {
     /// the attribute through on the very message that was supposed to carry it.
     ///
     /// One place, so the two bindings cannot diverge on either the rule or the
-    /// wording (ibx#248).
+    /// wording.
     pub fn modify_refusal(&self, order_id: u64, incoming: &ApiOrder) -> Option<String> {
         let why = self.tracked_order(order_id)
             .and_then(|tracked| Self::replace_cannot_restate(&tracked))
@@ -1574,7 +1568,7 @@ impl ClientCore {
     /// A cancel rejected as UnknownOrder retires the engine's record, and the
     /// client's own record has to go with it — the open-order snapshot unions
     /// the two, so leaving this one behind kept reporting the order the
-    /// rejection was about (ibx#252).
+    /// rejection was about.
     pub fn untrack_order(&self, order_id: u64) {
         self.open_orders.lock().unwrap().remove(&order_id);
     }
@@ -1584,12 +1578,12 @@ impl ClientCore {
     /// Takes the pre-stringification `OrderStatus` rather than the ibapi string
     /// so a Rejected transition stays distinct from a genuinely-Inactive one:
     /// both stringify to "Inactive", and only a genuine Inactive is
-    /// reactivatable and belongs back in the open-order snapshot (ibx#250).
+    /// reactivatable and belongs back in the open-order snapshot.
     ///
     /// Upserts, because an order recovered from an earlier session was never
     /// submitted by this client and so has no entry here. Doing nothing for it
     /// left `collect_open_orders` unable to tell it had just been withdrawn
-    /// (ibx#251). A fresh entry seeds contract and order from the same enriched
+ ///. A fresh entry seeds contract and order from the same enriched
     /// cache `collect_open_orders` reads, rather than leaving them blank.
     pub fn update_order_status(&self, shared: &SharedState, order_id: u64, status: OrderStatus, filled: f64, remaining: f64) {
         let mut orders = self.open_orders.lock().unwrap();
@@ -1630,7 +1624,7 @@ impl ClientCore {
         // The orders whose status this client has withdrawn. A disconnect marks
         // a tracked order unknown without touching the cached view, so the union
         // below re-imported it as working for the whole outage, contradicting
-        // the callback the caller had already been given (ibx#251). Scoped to
+        // the callback the caller had already been given. Scoped to
         // withdrawn statuses so the cache can still carry a genuinely newer one
         // — a terminal local status the cache has since superseded still wins.
         let status_withdrawn: std::collections::HashSet<u64> = self.open_orders.lock().unwrap()
@@ -1640,7 +1634,7 @@ impl ClientCore {
             .collect();
 
         // Local tracked orders (non-terminal, or genuinely-Inactive and
-        // still reactivatable — ibx#250), enriched from secdef cache
+        // still reactivatable —), enriched from secdef cache
         {
             let orders = self.open_orders.lock().unwrap();
             for (&oid, o) in orders.iter() {
@@ -1760,7 +1754,7 @@ impl ClientCore {
         };
 
         // Exchange-code string ticks: rendering is left to dispatch since it
-        // depends on shared.reference.smart_components(). Emit a delta record
+        // depends on shared.reference.smart_components. Emit a delta record
         // when the bitmask changes; dispatch resolves the letter string.
         let mut string_ticks = Vec::new();
         const EXCH_TICKS: &[(usize, i32)] = &[
@@ -1884,11 +1878,11 @@ impl ClientCore {
             // knowing either quantity, so it accrues before the guards below.
             total_realized += seed.map(|s| s.realized_pnl).unwrap_or(0.0);
 
-            // A position we held at midnight and cannot currently size is not
+            // A position held at midnight and not currently sizeable is not
             // a flat one: pricing the absence as zero reports the whole
             // overnight holding as sold. It is counted as unpriceable rather
             // than merely skipped, because a total missing one position is not
-            // a smaller correct answer (ibx#296).
+            // a smaller correct answer.
             if seed.is_some() && pi.is_none() {
                 unpriceable += 1;
                 continue;
@@ -1910,15 +1904,15 @@ impl ClientCore {
             };
             // What the position was worth at midnight. The venue states the
             // mark it closed the contract at, and that is what the overnight
-            // leg is valued against; a previous close of our own is only used
-            // where the venue said nothing.
+            // leg is valued against; a locally derived previous close is used
+            // only where the venue said nothing.
             let prev_close = Self::midnight_price(shared, con_id).unwrap_or(prev_close);
             if seed.and_then(|s| s.cost_midnight).is_none() && prev_close == 0 && qty_midnight != 0 {
                 continue;
             }
 
             // moneyTradedSinceMidnight (wire 6822) is signed net cash: SELL
-            // positive, BUY negative (ib-agent#163). An intraday-only position
+            // positive, BUY negative. An intraday-only position
             // has no seed row, so synthesize the opening trade's net cash:
             // -qty*avgCost (cash paid to open a long, received to open a short).
             let money_traded = match seed {
@@ -1946,7 +1940,7 @@ impl ClientCore {
         // con_id_to_instrument, so every position above hits `continue`). Fall back
         // to the gateway's account-level P&L, which the gateway pushes independently
         // of any market-data subscription. Without this the quote-derived totals stay
-        // [0,0,0] and no callback ever fires (ibx#239).
+        // [0,0,0] and no callback ever fires.
         // A position that could not be priced makes the client-side sum an
         // incomplete account total, not a smaller correct one — and the realized
         // figure has already accrued for it, so the three would not even agree
@@ -2010,7 +2004,7 @@ impl ClientCore {
             // this callback only its daily figure: the position, its value, the
             // unrealized and the realized are all still known, and suppressing
             // the callback would leave every one of them stale on the caller's
-            // side rather than reporting one it cannot compute (ibx#296).
+            // side rather than reporting one it cannot compute.
             let qty_midnight = seed.map_or(Some(0), |s| s.qty_midnight);
             // As in poll_pnl, the venue's own mark is what the overnight leg is
             // valued against, so the two callbacks value the same position from
@@ -2026,7 +2020,7 @@ impl ClientCore {
             }
 
             // moneyTradedSinceMidnight (wire 6822) is signed net cash: SELL
-            // positive, BUY negative (ib-agent#163). Synthesize the opening
+            // positive, BUY negative. Synthesize the opening
             // trade's net cash for an intraday-only position (no seed row).
             let money_traded = match seed {
                 Some(s) => s.money_traded,
@@ -2079,11 +2073,8 @@ impl ClientCore {
     /// The account figures to deliver, as the venue stated them.
     ///
     /// Built from the venue's own statements rather than from this client's
-    /// typed copy of them. The typed copy exists before the venue has said
-    /// anything, so a session used to open by reporting every figure as zero
-    /// in no currency, and the real ones arrived afterwards beside them — a
-    /// caller reading the first NetLiquidation it found was told the account
-    /// was empty.
+    /// typed copy, which exists before the venue has stated anything and would
+    /// otherwise report every figure as zero in no currency.
     ///
     /// Each figure is delivered once and again whenever it changes, per
     /// currency: a figure stated in two currencies is two figures.
@@ -2113,9 +2104,8 @@ impl ClientCore {
 
         let delivered = !fields.is_empty();
         // Said once, when the venue has stopped adding to the account. The
-        // first field of any kind used to say it, and the figures that matter
-        // arrive seconds later: a caller that waits for this and then reads
-        // the account found what it came for missing.
+        // figures that matter arrive seconds after the first field of any
+        // kind, so the first field is not the signal.
         let mut last = self.last_account_field.lock().unwrap();
         if delivered {
             *last = Some(std::time::Instant::now());
@@ -2154,7 +2144,7 @@ impl ClientCore {
         } else {
             let prev = prev_guard.as_ref().unwrap();
             // Marks are part of the row: a mark move (each account-updates
-            // snapshot) is a genuine update, so compare them too (ibx#238).
+            // snapshot) is a genuine update, so compare them too.
             current.iter().filter(|pi| {
                 !prev.iter().any(|pp| pp.con_id == pi.con_id
                     && pp.position == pi.position
@@ -2231,7 +2221,7 @@ impl ClientCore {
 
         // Reject non-finite and out-of-range numerics up front, before any
         // caller-visible order gets built from a NaN, an Infinity, or a
-        // magnitude the wire's fixed-point i64 can't hold. See ibx#263.
+        // magnitude the wire's fixed-point i64 can't hold.
         require_finite_price("lmt_price", order.lmt_price)?;
         require_finite_price("aux_price", order.aux_price)?;
         require_finite_price("discretionary_amt", order.discretionary_amt)?;
@@ -2299,7 +2289,6 @@ impl ClientCore {
         // broker immediately when place_order is called; there is no
         // staging concept. Accepting it would send a "staged" bracket
         // parent live on its own, so reject loudly at the call instead.
-        // See: https://github.com/deepentropy/ibx/issues/226
         if !order.transmit {
             return Err(
                 "transmit=false is not supported: orders are transmitted \
@@ -2314,7 +2303,6 @@ impl ClientCore {
         // Financial-advisor allocation is not wire-encoded, so an accepted
         // fa_group would put the whole size on the connected account rather
         // than spread it across the group, with nothing to show for it.
-        // See: https://github.com/deepentropy/ibx/issues/96
         // Same class as the FA fields below, and sharper: no encoder reads
         // `order.account` — every order carries tag 1 from the session account —
         // so the quantity fills on the connected account. The echo then confirms
@@ -2385,7 +2373,6 @@ impl ClientCore {
         }
 
         // Reject orders that require aux_price when it is zero — prevents silent no-trigger bugs.
-        // See: https://github.com/deepentropy/ibx/issues/115
         match order_type.as_str() {
             "STP" | "STP PRT" | "MIT" if order.aux_price == 0.0 => {
                 return Err(format!(
@@ -2418,7 +2405,7 @@ impl ClientCore {
     }
 
     /// Validate historical-request arguments before anything reaches the
-    /// engine (ibx#232): an unrecognized bar_size previously fell back to
+    /// engine: an unrecognized bar_size previously fell back to
     /// 5-minute bars silently (via TWO divergent tables), and an
     /// unrecognized what_to_show fell back to TRADES. The caller gets a
     /// synchronous Err at the call instead of plausible, wrong candles.
@@ -2671,7 +2658,7 @@ impl ClientCore {
         // through one encoder. Choosing per type between an attribute-carrying
         // request and a plain one is how an order type ends up shipping without
         // something the caller set — unlinked, immediate-DAY bracket children
-        // (ibx#224), then the same defect again for the adjustable stop (#240)
+ //, then the same defect again for the adjustable stop (#240)
         // and for adaptive, algo and what-if (#318).
 
         // The legs live on the contract, not the order, so they are attached
@@ -2754,7 +2741,7 @@ impl ClientCore {
         // its trigger is reached. Signalled by a non-empty adjustedOrderType,
         // which is empty on every ordinary order, so this affects nothing else.
         // A Trail/TrailLimit conversion carries the trailing amount + unit
-        // (tags 6260/6269, ib-agent#167). (ibx#225)
+        // (tags 6260/6269).
         if !order.adjusted_order_type.is_empty() {
             let adjusted = match order.adjusted_order_type.to_uppercase().as_str() {
                 "STP" => AdjustedOrderType::Stop,
@@ -2771,7 +2758,7 @@ impl ClientCore {
                 order.adjusted_trailing_amount
             };
             // Through SubmitEx like every other order type, so a bracket child
-            // keeps its parent link, its OCA group and its tif (ibx#240).
+            // keeps its parent link, its OCA group and its tif.
             return Ok(ControlCommand::Order(OrderRequest::SubmitEx {
                 order_id, instrument, side, qty,
                 kind: OrderKind::AdjustableStop {
@@ -2814,7 +2801,7 @@ impl ClientCore {
                     // 1.239, truncates to 1.23. validate_order has already
                     // confirmed the value is finite, non-negative and fits
                     // u32 once scaled; this is a documented rounding, not a
-                    // coercion. See ibx#263.
+                    // coercion.
                     let pct = (order.trailing_percent * 100.0) as u32;
                     ex(OrderKind::TrailPct { trail_pct: pct, trail_stop_price: trail_stop })
                 } else {
@@ -2922,8 +2909,7 @@ mod tests {
     use crate::api::types::OrderState as ApiOrderState;
 
     /// An account holding nothing still has a P&L, and a P&L of zero is an
-    /// answer. Both used to report nothing: the empty position list returned
-    /// early, and a zero matched the state a fresh subscription starts in.
+    /// answer. Neither an empty position list nor a zero value withholds it.
     #[test]
     fn an_account_with_no_positions_still_reports_its_pnl() {
         let core = ClientCore::new();
@@ -2961,7 +2947,7 @@ mod tests {
         }
     }
 
-    // ── Rejected/Inactive snapshot admission (ibx#250) ──
+    // ── Rejected/Inactive snapshot admission ──
 
     #[test]
     fn is_open_or_reactivatable_admits_genuine_inactive() {
@@ -3216,7 +3202,7 @@ mod tests {
         assert!((second[0].unrealized_pnl - 360.0).abs() < 1e-6, "unrealized moved");
     }
 
-    /// ibx#296, consumer side. Dropping an unusable position row stops the feed
+ ///, consumer side. Dropping an unusable position row stops the feed
     /// publishing a flat, but P&L reads the absence back as zero shares and
     /// reports the whole overnight holding as sold. Held 10 at a $730 close,
     /// now $735: the honest answer is 50, the flat reading is -7300, and with
@@ -3338,7 +3324,7 @@ mod tests {
 
     #[test]
     fn poll_pnl_seeded_position_traded_intraday_uses_signed_net_cash() {
-        // ibx#221 / ib-agent#163: a position held at midnight AND traded intraday
+        // /: a position held at midnight AND traded intraday
         // carries a non-zero moneyTradedSinceMidnight (6822), signed SELL+/BUY-.
         // The daily formula must ADD it. Sold 3 of 10 at $110 (avg $100): the
         // seed carries +330 net cash (sell proceeds) and +30 realized.
@@ -3415,17 +3401,16 @@ mod tests {
         assert!((update.realized_pnl - 4.00).abs() < 1e-6, "real={}", update.realized_pnl);
     }
 
-    /// A contract this session never quoted is exactly what used to send the
-    /// whole account to the gateway's own figures. The venue states a price for
-    /// it and states what it was worth at midnight, so the position is valued
-    /// from those and the account total is the client's again.
+    /// A contract this session never quoted is valued from what the venue
+    /// states for it: a price, and what it was worth at midnight. The account
+    /// total is computed from those rather than deferred elsewhere.
     #[test]
     fn the_overnight_leg_is_valued_at_the_mark_the_venue_states() {
         let core = ClientCore::new();
         let shared = SharedState::new();
         core.subscribe_pnl(31);
 
-        // Quoted at 101.25 now, with no previous close of our own. The venue
+        // Quoted at 101.25 now, with no locally derived previous close. The venue
         // states the mark it closed the contract at, which is what the
         // overnight leg is valued against.
         seed_pnl_position(&core, &shared, 5001, 0, 10.0, 100.00, 101.25, 0.0);
@@ -3646,11 +3631,11 @@ mod tests {
         core.subscribe_pnl_single(7, 1);
         assert_eq!(core.poll_pnl_single(&shared).len(), 1);
     }
-    /// ibx#318: adaptive, algo and what-if returned out of `build_order_request`
-    /// before the extended-attribute block was reached, so a caller could set
-    /// outside-RTH, a parent link, an OCA group or a non-DAY tif on any of them
-    /// and have it accepted and dropped. Asserted on the request the API layer
-    /// produces, which is the boundary where the drop happened.
+    /// Adaptive, algo and what-if orders leave `build_order_request` through
+    /// their own branches, and each still reaches the extended-attribute
+    /// block: outside-RTH, a parent link, an OCA group and a non-DAY tif are
+    /// carried on all of them rather than accepted and dropped. Asserted on
+    /// the request the API layer produces, which is where a drop would occur.
     #[test]
     fn the_algo_order_types_carry_the_attributes_the_caller_set() {
         let base = ApiOrder {

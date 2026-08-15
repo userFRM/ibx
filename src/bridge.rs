@@ -132,7 +132,7 @@ pub enum Event {
 /// took a whole one. The payload itself is held as words rather than a plain
 /// copy of the struct, so the concurrent read and write are both defined
 /// operations — a version counter can discard a torn snapshot but cannot make
-/// the racing access that produced it legal (ibx#388).
+/// the racing access that produced it legal.
 #[repr(align(64))]
 pub struct SeqQuote {
     version: AtomicU64,
@@ -343,8 +343,8 @@ pub struct MarketDataState {
     ///
     /// Every message it sends is stamped with the time it sent it. Reporting
     /// this machine's clock instead would answer the question a caller asked —
-    /// how far apart are we and the venue — with the one number that cannot
-    /// tell them.
+    /// how far apart this machine and the venue are — with the one number
+    /// that cannot tell them.
     venue_time: Mutex<Option<String>>,
     /// Messages the venue sent that nothing here reads, named once each:
     /// which connection, and what it was. Empty is the claim that this client
@@ -375,7 +375,7 @@ impl MarketDataState {
     /// Read a quote snapshot (lock-free via SeqLock).
     /// Unchecked hot-path accessor: `id` must be a registered InstrumentId
     /// (< MAX_INSTRUMENTS) or this panics. External surfaces go through
-    /// `try_quote` (ibx#234).
+    /// `try_quote`.
     #[inline]
     pub fn quote(&self, id: InstrumentId) -> Quote {
         self.quotes[id as usize].read()
@@ -383,7 +383,7 @@ impl MarketDataState {
 
     /// Bounds-checked quote read for user-supplied instrument ids: an
     /// out-of-range id is a caller error, not a reason to panic the process
-    /// through the language boundary (ibx#234).
+    /// through the language boundary.
     #[inline]
     pub fn try_quote(&self, id: InstrumentId) -> Option<Quote> {
         if (id as usize) < MAX_INSTRUMENTS {
@@ -573,7 +573,7 @@ pub struct OrderState {
     /// Reason for a genuinely-Inactive (39=I) transition: (order_id, ibapi
     /// error code, message). ibapi has no callback dedicated to "order
     /// parked with reason", so this is drained into `Wrapper::error` the
-    /// same way a cancel/modify reject is (ibx#250).
+    /// same way a cancel/modify reject is.
     order_inactive: Mutex<Vec<(u64, i32, String)>>,
 }
 
@@ -643,7 +643,7 @@ impl OrderState {
     }
 
     /// Drain reasons for genuinely-Inactive (39=I) transitions, each as
-    /// (order_id, ibapi error code, message) — see `order_inactive` (ibx#250).
+    /// (order_id, ibapi error code, message) — see `order_inactive`.
     pub fn drain_order_inactive(&self) -> Vec<(u64, i32, String)> {
         self.order_inactive.lock().unwrap().drain(..).collect()
     }
@@ -662,8 +662,8 @@ impl OrderState {
     /// genuinely open IB state, or a genuinely-Inactive (39=I) order that can
     /// still reactivate. A rejected order also stringifies to "Inactive"
     /// (ibapi has no Rejected string) but always carries a non-empty
-    /// `completed_status`, which is how the two are told apart — see
-    /// `is_open_or_reactivatable` (ibx#250). Terminal entries (Filled /
+    /// `completed_status`, which is how the two are told apart
+    /// `is_open_or_reactivatable`. Terminal entries (Filled /
     /// Cancelled / Rejected) are filtered out so `req_open_orders` does not
     /// leak historical orders that are still cached for `req_completed_orders`
     /// lookups.
@@ -767,7 +767,7 @@ impl OrderState {
     /// remembered that an order was done, so a replayed frame — the reconnect
     /// open-order burst racing a fill, or any message the gateway resends —
     /// wrote `Submitted` over the terminal entry, and `req_open_orders` then
-    /// reported a completed order as live (ibx#262).
+    /// reported a completed order as live.
     ///
     /// The cached status alone cannot carry that knowledge, because completing
     /// an order evicts its cache row: the replayed frame finds nothing to refuse
@@ -833,7 +833,7 @@ pub struct ReferenceState {
     historical_ticks: Mutex<Vec<(u32, HistoricalTickData, String, bool)>>,
     historical_schedules: Mutex<Vec<(u32, HistoricalScheduleResponse)>>,
     /// Errors surfaced by HMDS for in-flight reference queries (req_id, code, message).
-    /// Drained by the dispatcher and forwarded to `Wrapper::error`. ibx#186.
+    /// Drained by the dispatcher and forwarded to `Wrapper::error`.
     historical_errors: Mutex<Vec<(u32, i32, String)>>,
     market_rules: Mutex<Vec<MarketRule>>,
     depth_exchanges_cache: Mutex<Vec<DepthMktDataDescription>>,
@@ -1732,7 +1732,7 @@ impl PortfolioState {
                 if !info.currency.is_empty() { existing.currency = info.currency; }
                 if !info.multiplier.is_empty() { existing.multiplier = info.multiplier; }
                 // Marks are owned by set_position_marks; leave them untouched so
-                // the lean position feed can't zero them (ib-agent#172).
+                // the lean position feed can't zero them.
             }
             None => { map.insert(info.con_id, info); }
         }
@@ -1741,9 +1741,9 @@ impl PortfolioState {
     /// Apply a fill of this account's own to the holding it changes.
     ///
     /// The broker states holdings on a feed of its own and does not restate
-    /// them when an order of ours fills, so a holding read back during the
-    /// session was the one the session started with. The terminal keeps its
-    /// own count between statements and so does this.
+    /// them when an order fills, so a holding read back during the session is
+    /// otherwise the one the session started with. The reference client keeps
+    /// its own count between statements and so does this.
     ///
     /// `delta` is signed by side and `price` is what the fill paid, both per
     /// unit. Adding to a holding averages the new cost in; reducing one leaves
@@ -1774,7 +1774,7 @@ impl PortfolioState {
 
     /// Update the per-position marks (from the account-updates portfolio message).
     /// Kept separate from set_position_info so the lean position feed, which has
-    /// no marks, does not overwrite them (ib-agent#172).
+    /// no marks, does not overwrite them.
     #[doc(hidden)] pub fn set_position_marks(&self, con_id: i64, market_price: Price, market_value: Price, unrealized_pnl: Price, realized_pnl: Price) {
         let mut map = self.position_infos.lock().unwrap();
         let entry = map.entry(con_id).or_insert_with(|| PositionInfo { con_id, ..Default::default() });
@@ -1840,12 +1840,12 @@ pub struct SharedState {
     pub portfolio: PortfolioState,
     /// Last measured auth-connection round-trip time in nanoseconds
     /// (0 = never measured). Sampled from the test-request/echo cycle —
-    /// see `HotLoop` liveness and `ControlCommand::Ping` (ibx#158).
+    /// see `HotLoop` liveness and `ControlCommand::Ping`.
     ccp_rtt_ns: AtomicU64,
     /// Set by the hot loop when the session is over (connection lost, engine
     /// stopped, or reconnect exhausted). Read-and-clear by the client so the
     /// `connection_closed` callback can fire without an event channel
-    /// (ibx#242). The `Event::Disconnected` channel path is optional; this
+ ///. The `Event::Disconnected` channel path is optional; this
     /// flag is always populated.
     connection_lost: AtomicBool,
     /// Set when a reconnect recovered a loss that was announced. Read-and-clear
@@ -1901,7 +1901,7 @@ impl SharedState {
         }
     }
 
-    /// Signal that the session is over. Hot-loop side (ibx#242).
+    /// Signal that the session is over. Hot-loop side.
     #[doc(hidden)]
     #[inline]
     pub fn set_connection_lost(&self) {
@@ -1930,13 +1930,13 @@ impl SharedState {
         self.connection_restored.swap(false, Ordering::AcqRel)
     }
 
-    /// Record an auth-connection RTT sample (ibx#158). Hot-loop side.
+    /// Record an auth-connection RTT sample. Hot-loop side.
     #[inline]
     pub fn set_ccp_rtt(&self, rtt: std::time::Duration) {
         self.ccp_rtt_ns.store(rtt.as_nanos().min(u64::MAX as u128) as u64, Ordering::Relaxed);
     }
 
-    /// Last measured auth-connection round-trip time, if any (ibx#158).
+    /// Last measured auth-connection round-trip time, if any.
     /// A gauge, not a benchmark: the sample is the interval from a test
     /// request to the first inbound traffic that followed it, which on an
     /// active feed can undercount by racing data already in flight.
@@ -2161,11 +2161,11 @@ mod tests {
         }
     }
 
-    /// ibx#262: nothing remembered that an order had completed, so a replayed
-    /// frame wrote `Submitted` over the terminal entry and `req_open_orders`
-    /// reported a completed order as live. A strategy then re-manages a position
-    /// it already has, or cancels an order that no longer exists, with the
-    /// open-order snapshot corroborating the wrong picture.
+    /// A completed order is remembered as completed, so a replayed frame
+    /// cannot write `Submitted` over the terminal entry and have
+    /// `req_open_orders` report it as live. A strategy reading that would
+    /// re-manage a position it already holds, or cancel an order that no
+    /// longer exists, with the open-order snapshot corroborating it.
     #[test]
     fn a_completed_order_is_not_returned_to_the_open_book() {
         for terminal in ["Filled", "Cancelled", "Rejected"] {

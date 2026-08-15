@@ -31,9 +31,8 @@ fn build_conid_subscribe_tags(
     let con_id_str = (con_id as u32).to_string();
     // Subscribing by conId alone is a supported shape — `Contract` defaults
     // both fields to empty, and the in-tree benchmark does exactly that. Keep
-    // the smart-routed stock those callers used to get rather than sending an
-    // empty SecurityType and Exchange, which is the silent partial-ack this
-    // change exists to remove.
+    // the smart-routed stock those callers expect rather than sending an empty
+    // SecurityType and Exchange, which the venue answers with a partial ack.
     let exchange = if exchange.is_empty() { "SMART" } else { exchange };
     let sec_type = if sec_type.is_empty() { "STK" } else { sec_type };
     let fix_exchange = crate::control::contracts::exchange_to_fix(exchange);
@@ -182,10 +181,9 @@ const TRADING_STATUS_REQUEST_TYPE: u32 = 437;
 /// The tick that states which venue each bit of a quote's exchange mask means.
 ///
 /// The server sends the map itself — every venue's name and the character it
-/// is reported under, in the order the bits refer to. This client used to
-/// carry a table of eight venues written into its own source, which named
-/// nothing for any other venue and could not be checked against what the
-/// server assigns.
+/// is reported under, in the order the bits refer to. A table written into
+/// this client's own source would name nothing for any venue absent from it,
+/// and could not be checked against what the server assigns.
 const BBO_EXCHANGE_MAP_REQUEST_TYPE: u32 = 626;
 
 /// The kind of market data a subscription asks for, on tag 264.
@@ -453,15 +451,15 @@ impl FarmState {
     ///
     /// The resubscribe record is the reason this matters. Before it existed a
     /// reclaimed slot replayed nothing; now it replays the old contract's
-    /// descriptor against whatever contract holds the id at reconnect (ibx#288).
+    /// descriptor against whatever contract holds the id at reconnect.
     ///
     /// `md_req_to_instrument` is deliberately not consulted. A subscribe fills
     /// it and `instrument_md_reqs` together, so it says nothing the first check
     /// does not already cover — and an entry left there after an unsubscribe is
-    /// a defect in its own right (ibx#289), not a reason to pin the slot. Held
+    /// a defect in its own right, not a reason to pin the slot. Held
     /// on that basis, a subscribe/unsubscribe cycle would consume a slot
     /// permanently and the instrument cap would become cumulative per session,
-    /// which is the failure ibx#233 exists to prevent.
+    /// which is the failure exists to prevent.
     pub(crate) fn holds_market_data(&self, instrument: InstrumentId) -> bool {
         self.instrument_md_reqs.iter().any(|(id, _)| *id == instrument)
             || self.md_resub_info.iter().any(|r| r.0 == instrument)
@@ -559,7 +557,7 @@ impl FarmState {
                         self.farm_msg_buf.push(unsigned);
                     }
                     Frame::Control(_) => {
-                        // 8=1 / 8=X control state — not consumed on the farm path (ibx#185).
+                    // 8=1 / 8=X control state — not consumed on the farm path.
                     }
                 }
             }
@@ -705,7 +703,7 @@ impl FarmState {
 
             // The extended 35=P format carries a full 8-bit byte width, so a
             // magnitude can reach i64::MAX and the scaling multiply wrapped to
-            // an arbitrary price in release builds (ibx#272). Drop the price
+            // an arbitrary price in release builds. Drop the price
             // rather than pinning it: a saturated value is ~92e9 at
             // PRICE_SCALE, which reads downstream as an ordinary quote, and
             // leaving the previous one standing is the honest failure.
@@ -760,7 +758,7 @@ impl FarmState {
                     }
                 }
                 // Quantities are fixed-point, the same way prices are; every
-                // reader divides by `QTY_SCALE` on the way out (ibx#287).
+                // reader divides by `QTY_SCALE` on the way out.
                 tick_decoder::O_BID_SIZE => { q.bid_size = qty_from_counted(tick.magnitude, size_tick); }
                 tick_decoder::O_ASK_SIZE => { q.ask_size = qty_from_counted(tick.magnitude, size_tick); }
                 tick_decoder::O_LAST_SIZE => { q.last_size = qty_from_counted(tick.magnitude, size_tick); }
@@ -769,12 +767,12 @@ impl FarmState {
                 // type also carried a `yyyymmdd` value in capture, and a date
                 // read as an epoch is worse than no timestamp. Type 21 is a
                 // per-second offset against it and is left undecoded until a
-                // capture settles how the two combine (ibx#303).
+                // capture settles how the two combine.
                 // Type 23 was previously folded in here and is now dropped:
                 // it did not appear once in 733 captured entries on a future,
                 // and it was writing a raw magnitude of unknown unit into a
                 // nanosecond field. Left unmapped until a capture identifies
-                // it rather than guessed at (ibx#303).
+                // it rather than guessed at.
                 tick_decoder::O_TS_BASE if tick.magnitude > 1_000_000_000 => {
                     q.timestamp_ns = (tick.magnitude as u64).saturating_mul(1_000_000_000);
                 }
@@ -1180,7 +1178,7 @@ impl FarmState {
         // while the farm is down — `handle_disconnect` cleared that list — so
         // an unsubscribe issued during an outage would otherwise leave the
         // record standing and the reconnect would re-subscribe an instrument
-        // the caller explicitly cancelled (ibx#288).
+        // the caller explicitly cancelled.
         self.md_resub_info.retain(|(id, ..)| *id != instrument);
         let reqs = match self.instrument_md_reqs.iter()
             .position(|(id, _)| *id == instrument)
@@ -1197,7 +1195,7 @@ impl FarmState {
         // the slot has been reclaimed and reused, binding this subscription's
         // server_tag AND its minTick onto whatever contract now holds the
         // slot — prices for the new contract then scale by the old one's tick
-        // size, which reads as plausible rather than broken (ibx#289).
+        // size, which reads as plausible rather than broken.
         self.md_req_to_instrument.retain(|(req_id, _)| !reqs.contains(req_id));
         // And what was asked for under those requests, for the same reason: a
         // number the venue hands to the next subscription would otherwise
@@ -1504,7 +1502,7 @@ impl FarmState {
             // min_tick is what it counts its prices in. Stating none means
             // whole ones.
             let counted_in = if size_tick > 0.0 { size_tick } else { 1.0 };
-            // Parse field tags, pushing a depth update each time we complete a price+size pair.
+            // Parse field tags, pushing a depth update on each complete price+size pair.
             let mut price: f64 = 0.0;
             let mut size: f64 = 0.0;
             let mut side: i32 = 1;
@@ -1527,7 +1525,7 @@ impl FarmState {
                 let new_side = if is_ask { 0 } else { 1 };
                 if snapshot { is_snapshot = true; }
 
-                // If side changes and we have a pending pair, flush it first
+                // A side change with a pending pair flushes it first
                 if has_price && has_size && new_side != side {
                     let position = if side == 0 { let p = ask_position; ask_position += 1; p }
                                   else { let p = bid_position; bid_position += 1; p };
@@ -1849,7 +1847,7 @@ impl FarmState {
     /// The L1 subscriptions to re-issue on a new farm connection, drained from
     /// the record that survives a disconnect. `handle_disconnect` clears
     /// `instrument_md_reqs`, so selecting from that list re-subscribes nothing
-    /// and the reconnect silently delivers no market data (ibx#288). Skips
+    /// and the reconnect silently delivers no market data. Skips
     /// instruments whose slot was reclaimed while the farm was down.
     fn take_resub_targets(
         &mut self,
@@ -1884,7 +1882,7 @@ impl FarmState {
         // disconnect for exactly this purpose — the same shape the depth path
         // below uses. Driving this off `instrument_md_reqs` re-subscribed
         // nothing, because `handle_disconnect` clears that list before the
-        // reconnect runs (ibx#288).
+        // reconnect runs.
         let active = self.take_resub_targets(&context.market);
         self.md_req_to_instrument.clear();
         self.instrument_md_reqs.clear();
@@ -2356,7 +2354,7 @@ mod decode_publish_tests {
 
     /// The producer half of the quantity contract. Everything downstream
     /// divides by `QTY_SCALE`, so a decode path that stores the wire magnitude
-    /// raw delivers quantities 10_000x too small (ibx#287) — and nothing else
+    /// raw delivers quantities 10_000x too small — and nothing else
     /// in the suite reaches this function, which is why that shipped.
     #[test]
     fn decoded_quantities_are_stored_as_fixed_point() {
@@ -2409,7 +2407,7 @@ mod resub_tests {
     /// A disconnect clears `instrument_md_reqs` and keeps `md_resub_info`.
     /// Selecting the reconnect's work from the cleared list re-subscribed
     /// nothing, so the farm came back healthy and delivered no ticks for the
-    /// rest of the session (ibx#288).
+    /// rest of the session.
     ///
     /// Drives the real `handle_disconnect` rather than simulating what it does
     /// — the test-only hook that skips the clearing is what let this survive,
@@ -2469,7 +2467,7 @@ mod resub_tests {
 
     /// The other side of keeping a slot resident: it has to become releasable
     /// again, or the guard turns a bounded pool into a leak and the instrument
-    /// cap becomes cumulative-per-session — the failure ibx#233 exists to
+    /// cap becomes cumulative-per-session — the failure exists to
     /// prevent. Every route out of a subscription has to clear all three
     /// references, whether the farm is up or down.
     #[test]
@@ -2649,9 +2647,8 @@ mod tests {
 
     /// Subscribing by conId alone is a supported shape: `Contract` defaults
     /// both descriptive fields to empty and the in-tree benchmark relies on it.
-    /// Those callers used to get a smart-routed stock from the two literals;
-    /// sending an empty SecurityType and Exchange instead would reintroduce the
-    /// silent partial ack from the other side.
+    /// Those callers receive a smart-routed stock from the two literals;
+    /// sending an empty SecurityType and Exchange would draw a partial ack.
     #[test]
     fn conid_subscribe_falls_back_when_the_contract_is_not_described() {
         let bare = build_conid_subscribe_tags(true, 1, 2, 265598, "", "", 0, "T");
@@ -2694,11 +2691,10 @@ mod stale_ack_tests {
     use super::*;
     use crate::engine::context::Context;
 
-    /// A `35=Q` in flight when the unsubscribe goes out used to resolve its
-    /// request id afterwards. If the slot had been reclaimed and reused by
-    /// then, the ack bound its server_tag and minTick onto the new contract,
-    /// whose prices then scaled by the previous contract's tick size — a
-    /// plausible wrong price rather than an obvious fault (ibx#289).
+    /// A `35=Q` in flight when the unsubscribe goes out resolves its request
+    /// id before the slot can be reclaimed. Resolving afterwards would bind its
+    /// server tag and minTick onto whichever contract took the slot, scaling
+    /// that contract's prices by the previous one's tick size.
     #[test]
     fn a_late_ack_for_an_unsubscribed_request_is_ignored() {
         let mut farm = FarmState::new();
@@ -2776,7 +2772,7 @@ mod price_scaling_tests {
     /// A magnitude the price scaling cannot represent must leave the previous
     /// quote standing. Wrapping it publishes an arbitrary price — the probe
     /// for this test produces -1000000, a negative price indistinguishable
-    /// downstream from a real quote (ibx#272).
+    /// downstream from a real quote.
     #[test]
     fn a_price_that_cannot_be_scaled_does_not_replace_the_quote() {
         let mut farm = FarmState::new();
@@ -2911,7 +2907,7 @@ mod depth_identity_tests {
 
     /// The venue echoes back the id it was asked under, so an id taken from
     /// the caller cannot be told apart from one this client allocated. Every
-    /// book is asked for under one of ours and mapped back.
+    /// book is asked for under an id this client allocated, and mapped back.
     #[test]
     fn a_callers_id_is_never_what_the_venue_is_asked_under() {
         let mut farm = FarmState::new();

@@ -44,10 +44,10 @@ def test_a_misspelled_setting_is_refused():
 def test_a_session_states_its_own_settings():
     """Settings belong to the session that stated them, not to the process.
 
-    They used to be written into the process environment as a session opened,
-    so a second session in one process silently retargeted the first: whichever
-    connected last decided the time zone, the build, and where the market-data
-    connection went for both.
+    Written into the process environment as a session opens, a second session
+    in one process silently retargets the first: whichever connects last
+    decides the time zone, the build, and where the market-data connection
+    goes for both.
     """
     client = ibx.EClient(ibx.EWrapper())
     # Refused before anything is sent, so a misspelling cannot open a session

@@ -85,11 +85,11 @@ pub const TIMEOUT_FIX_READ: f64 = 30.0;
 /// Overall wall-clock budget for a farm logon exchange (key exchange excluded).
 /// Raised from 5 s: on a high-latency regional gateway a single response
 /// segment can lag past 5 s, and the read must retry against this deadline
-/// rather than treat one timeout as fatal (ibx#237).
+/// rather than treat one timeout as fatal.
 pub const TIMEOUT_FARM_LOGON: f64 = 20.0;
 /// Poll granularity for farm logon reads. Short so a transient WouldBlock /
 /// TimedOut (os error 35 on macOS) is retried against the deadline instead of
-/// aborting the connection (ibx#237).
+/// aborting the connection.
 pub const FARM_LOGON_POLL_MS: u64 = 250;
 /// How long the login's handshake may take.
 pub const TIMEOUT_SSL_AUTH: u64 = 20;
@@ -404,7 +404,7 @@ mod expiry_tests {
     #[test]
     fn named_zone_converts_with_dst() {
         // June -> US/Eastern is EDT (UTC-4): 18:00 local == 22:00 UTC.
-        // Matches the gateway capture (ib-agent#158).
+        // Matches the gateway capture.
         let eastern = instant("20260620 18:00:00 US/Eastern");
         let utc = instant("20260620 22:00:00 UTC");
         assert_eq!(eastern, utc, "EDT 18:00 must equal 22:00 UTC");

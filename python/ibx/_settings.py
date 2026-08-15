@@ -1,4 +1,4 @@
-"""The settings that used to live in the gateway's own file.
+"""The settings a gateway keeps in its own configuration file.
 
 A gateway is a process, and a process is configured by a file next to it and a
 window in front of it. This client is a library, so the same settings belong on

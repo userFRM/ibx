@@ -72,7 +72,7 @@ impl EClient {
 
         // The engine can take up to REGISTRATION_TIMEOUT to reply; release
         // the GIL for the round trip so a slow reply stalls this call, not
-        // every Python thread (ibx#271). Own the contract fields first —
+        // every Python thread. Own the contract fields first —
         // `contract` itself must not cross the detach boundary.
         let con_id = contract.con_id;
         let symbol = contract.symbol.clone();
@@ -171,7 +171,7 @@ impl EClient {
             reply_tx: None,
         })?;
         // Same registration-wait hazard as req_mkt_data: release the GIL for
-        // the reply round trip (ibx#271).
+        // the reply round trip.
         let con_id = contract.con_id;
         let symbol = contract.symbol.clone();
         let (sec_type, exchange) = (contract.sec_type.clone(), contract.exchange.clone());
@@ -196,7 +196,7 @@ impl EClient {
         Ok(())
     }
 
-    /// Request an auth-connection round-trip time sample (ibx#158): sends a
+    /// Request an auth-connection round-trip time sample: sends a
     /// lightweight liveness probe with no side effects on subscriptions,
     /// contract caches, or pacing budgets. Poll `last_rtt_ms()` after a
     /// moment for the result.
@@ -207,7 +207,7 @@ impl EClient {
     }
 
     /// Last measured auth-connection round-trip time in milliseconds, or
-    /// None if never measured (ibx#158). A gauge, not a benchmark — see
+    /// None if never measured. A gauge, not a benchmark
     /// `req_ping`. Also sampled automatically by the engine's own liveness
     /// probes.
     fn last_rtt_ms(&self) -> PyResult<Option<f64>> {
@@ -218,7 +218,7 @@ impl EClient {
         Ok(shared.last_ccp_rtt().map(|d| d.as_secs_f64() * 1_000.0))
     }
 
-    /// NOT supported end to end (ibx#234): the requested type (1=live,
+    /// NOT supported end to end: the requested type (1=live,
     /// 2=frozen, 3=delayed, 4=delayed-frozen) is stored locally but never
     /// sent to the gateway, so subscriptions always deliver realtime data
     /// and delayed tick variants never arrive. Requesting a non-realtime
@@ -343,7 +343,7 @@ impl EClient {
             Some(s) => s,
             None => return Ok(None),
         };
-        // Out-of-range id: None, not a cross-language panic (ibx#234).
+        // Out-of-range id: None, not a cross-language panic.
         let Some(q) = shared.market.try_quote(instrument) else {
             return Ok(None);
         };

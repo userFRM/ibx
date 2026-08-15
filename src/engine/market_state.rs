@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use crate::types::{InstrumentId, Price, Qty, Quote, PRICE_SCALE, MAX_INSTRUMENTS};
 
-/// Sentinel conId marking a freed instrument slot (ibx#233). Cannot collide
+/// Sentinel conId marking a freed instrument slot. Cannot collide
 /// with a real conId (0 occurs in practice for conId-less contracts).
 const FREE_SLOT: i64 = i64::MIN;
 
@@ -36,7 +36,7 @@ pub struct MarketState {
     /// High-water mark: slots ever allocated (iteration bound). Freed slots
     /// below this mark are reused via `free_ids` before new ones are taken,
     /// so the MAX_INSTRUMENTS cap bounds CONCURRENT instruments, not the
-    /// session's cumulative total (ibx#233).
+    /// session's cumulative total.
     active_count: u32,
     /// Freed slot ids available for reuse.
     free_ids: Vec<InstrumentId>,
@@ -63,9 +63,8 @@ pub struct MarketState {
     size_ticks: [f64; MAX_INSTRUMENTS],
     /// Per-instrument symbol name. Flat array indexed by InstrumentId.
     symbols: [Option<String>; MAX_INSTRUMENTS],
-    /// Per-instrument security type (API string, e.g. "STK"/"CASH"). Empty
-    /// slot = unknown, treated as stock. Registration used to DROP this
-    /// field silently (ibx#217).
+    /// Per-instrument security type (API string, e.g. `STK`, `CASH`). An empty
+    /// slot is unknown and treated as a stock. Carried through registration.
     sec_types: [Option<String>; MAX_INSTRUMENTS],
     /// Per-instrument requested exchange. Empty slot = default routing.
     exchanges: [Option<String>; MAX_INSTRUMENTS],
@@ -74,7 +73,7 @@ pub struct MarketState {
     /// are equal for an option's call and put at different strikes, so matching
     /// on those alone put both in one slot — the second contract's quotes and
     /// its minTick landed on the first, and minTick is what snaps an order's
-    /// price (ibx#278). Empty for anything that carries no such identity.
+    /// price. Empty for anything that carries no such identity.
     option_keys: [Option<String>; MAX_INSTRUMENTS],
 }
 
@@ -105,7 +104,7 @@ impl MarketState {
 
     /// Register an IB contract by conId, returns the assigned InstrumentId, or
     /// None when MAX_INSTRUMENTS distinct contracts are live concurrently
-    /// (ibx#233). Freed slots are reused first, so unsubscribed contracts
+ ///. Freed slots are reused first, so unsubscribed contracts
     /// no longer count against the cap. Callers holding a contract that may
     /// carry no conId want `try_register_contract`.
     pub fn try_register(&mut self, con_id: i64) -> Option<InstrumentId> {
@@ -141,7 +140,7 @@ impl MarketState {
     }
 
     /// Register a client-supplied contract, which may carry no conId. `0` is
-    /// not an identity (ibx#278): keyed on it, every contract specified the
+    /// not an identity: keyed on it, every contract specified the
     /// ordinary way — symbol, secType, exchange — collapses into the slot the
     /// first one took, and orders on it go out under that contract's symbol.
     /// Match the descriptor across the live slots instead, and leave `0` out
@@ -228,12 +227,12 @@ impl MarketState {
 
     /// Register an IB contract, returns the assigned InstrumentId.
     /// Panics when the table is full — use `try_register` on any path that
-    /// must survive that condition (the engine's handlers do; ibx#233).
+    /// must survive that condition (the engine's handlers do;).
     pub fn register(&mut self, con_id: i64) -> InstrumentId {
         self.try_register(con_id).expect("too many instruments")
     }
 
-    /// Reclaim an instrument slot (ibx#233): the id becomes reusable by the
+    /// Reclaim an instrument slot: the id becomes reusable by the
     /// next registration. Clears the quote, symbol, tick size, conId maps
     /// and any server tags pointing at the slot. Returns the conId that was
     /// registered, or None if the id is out of range or already free.
@@ -270,7 +269,7 @@ impl MarketState {
     /// one exchange — `35=Q` acks for L1 and `35=L` ticker setup for news
     /// routing — and only tick and news routing read them back, so this is
     /// safe where the instrument is going away and where its L1 subscription
-    /// ends with no news subscription left on it (ibx#292).
+    /// ends with no news subscription left on it.
     pub fn clear_server_tags_for(&mut self, instrument: InstrumentId) {
         self.server_tag_to_instrument.retain(|_, id| *id != instrument);
     }
@@ -322,9 +321,8 @@ impl MarketState {
     }
 
     /// Record the security type and requested exchange for an instrument
-    /// (ibx#217): order encoders derive their routing tags from these
-    /// instead of hardcoding stock-on-SMART. Empty strings leave the
-    /// defaults in place.
+    /// Order encoders derive their routing tags from these rather than
+    /// stating stock-on-SMART. Empty strings leave the defaults in place.
     pub fn set_routing(&mut self, id: InstrumentId, sec_type: &str, exchange: &str) {
         if !sec_type.is_empty() {
             self.sec_types[id as usize] = Some(sec_type.to_uppercase());
@@ -334,23 +332,23 @@ impl MarketState {
         }
     }
 
-    /// Routing tags for an outbound order on this instrument (ibx#217):
+    /// Routing tags for an outbound order on this instrument:
     /// (security type, destination).
     ///
     /// The security type is the instrument's real one, in its wire spelling —
     /// which is what every caller puts on tag 167. The API-facing name and the
     /// wire name differ for stocks, where the gateway answers `CS` on every
     /// execution report, so an instrument with no recorded type defaults to
-    /// `CS` rather than to the API's `STK` (ibx#328).
+    /// `CS` rather than to the API's `STK`.
     ///
     /// Destination rules: IBKRATS resolves to IDEALPRO for CASH and BEST
     /// otherwise; CASH without an explicit venue routes to IDEALPRO; any other
     /// explicit non-SMART exchange is respected; everything else routes BEST —
     /// the wire form of default routing. The reference encoder structurally
     /// cannot emit "SMART": it canonicalizes to it internally and translates to
-    /// "BEST" at the encode boundary (ib-agent#165), and sending "SMART" was
+    /// "BEST" at the encode boundary, and sending "SMART" was
     /// observed to produce NO ack at all for pre-market opening-auction orders
-    /// while the gateway answers "BEST" in ~130ms (ib-agent#164).
+    /// while the gateway answers "BEST" in ~130ms.
     /// The contract identity an order has to restate for anything a symbol does
     /// not name on its own: expiry, strike, right, multiplier. `None` for a
     /// stock or a currency pair, which those fields do not distinguish.
@@ -685,7 +683,7 @@ mod tests {
         }
     }
 
-    // ── ibx#217: routing derivation ──
+    // ── routing derivation ──
 
     /// An order that states a currency states the contract's, not the one most
     /// contracts happen to use.
@@ -748,7 +746,7 @@ mod tests {
         assert_eq!(ms.order_routing(stk2), ("CS".into(), "NYSE".into()));
 
         // A type the client cannot classify is sent empty rather than as a
-        // stock, so the gateway rejects it visibly (ibx#223).
+        // stock, so the gateway rejects it visibly.
         let unknown = ms.register(21);
         ms.set_routing(unknown, "WIDGET", "NYSE");
         assert_eq!(ms.order_routing(unknown), ("".into(), "NYSE".into()));
@@ -773,7 +771,7 @@ mod tests {
         assert_eq!(ms.order_routing(reused), ("CS".into(), "BEST".into()));
     }
 
-    // ── ibx#233: unregister + slot reuse ──
+    // ── unregister + slot reuse ──
 
     #[test]
     fn try_register_full_returns_none_not_panic() {
@@ -804,7 +802,7 @@ mod tests {
 
     #[test]
     fn cap_bounds_concurrent_not_cumulative() {
-        // The ibx#233 watchlist scenario: cycle far more than MAX_INSTRUMENTS
+        // The watchlist scenario: cycle far more than MAX_INSTRUMENTS
         // distinct contracts through one session, one live at a time.
         let mut ms = MarketState::new();
         for i in 0..(MAX_INSTRUMENTS as i64 * 4) {

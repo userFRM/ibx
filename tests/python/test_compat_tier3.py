@@ -240,7 +240,7 @@ def test_req_historical_schedule_signature():
 # ═══════════════════════════════════════════════════════════
 
 def test_set_server_log_level_all_levels():
-    """set_server_log_level should succeed for all valid levels."""
+    """Set_server_log_level should succeed for all valid levels."""
     c, w = make_client()
     for level in [1, 2, 3, 4, 5]:
         c.set_server_log_level(level)

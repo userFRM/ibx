@@ -170,7 +170,7 @@ fn element_body<'a>(xml: &'a str, tag: &str, from: usize) -> Option<(&'a str, us
 /// values in one comma-separated run. An action stating fewer values than its
 /// kind names is kept with the rest empty rather than dropped: a partial answer
 /// from the venue is still the venue's answer, and discarding it would leave a
-/// series looking unadjusted for a reason nobody could see.
+/// series looking unadjusted for a reason nobody could
 pub fn parse_adjustments(xml: &str) -> (AdjustedContract, Vec<Adjustment>) {
     let mut contract = AdjustedContract::default();
     if let Some((v, _)) = element_body(xml, "conc", 0) {

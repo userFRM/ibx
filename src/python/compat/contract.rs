@@ -1626,7 +1626,7 @@ impl Order {
             // Unset is f64::MAX on both sides, so leaving it to Default made a
             // caller's offset indistinguishable from absent and the wire fell
             // back to lmt_price: a TRAIL LIMIT could not set its offset from
-            // Python at all (ibx#395).
+            // Python at all.
             lmt_price_offset: self.lmt_price_offset,
             tif: self.tif.clone(),
             outside_rth: self.outside_rth,
@@ -2142,7 +2142,7 @@ pub struct BarData {
     pub wap: f64,
     #[pyo3(get, set)]
     pub bar_count: i32,
-    /// Timezone of `date` as reported by the reply (ibx#234) — previously
+    /// Timezone of `date` as reported by the reply — previously
     /// parsed and then discarded, leaving the bare timestamp string as the
     /// only (unverifiable) evidence of what the bar times mean. Empty on
     /// streaming updates, which carry no timezone of their own.
@@ -2207,7 +2207,7 @@ impl Contract {
 pub struct ContractDetails {
     /// Stored as `Py<Contract>` so the getter hands Python THE contained
     /// object, not a copy: with a plain field, `details.contract.con_id = x`
-    /// mutated a temporary clone and was a silent no-op (ibx#230).
+    /// mutated a temporary clone and was a silent no-op.
     #[pyo3(get, set)]
     pub contract: Py<Contract>,
     #[pyo3(get, set)]
@@ -2485,7 +2485,7 @@ impl Clone for ContractDetails {
 
 impl ContractDetails {
     /// Fresh instance with an owned default Contract. `Py<Contract>` has no
-    /// Default, so this replaces the derived constructor (ibx#230).
+    /// Default, so this replaces the derived constructor.
     pub fn new_default(py: Python<'_>) -> Self {
         Self {
             contract: Py::new(py, Contract::default()).expect("Contract allocation failed"),
@@ -2568,7 +2568,7 @@ impl ContractDetails {
         let c = Contract {
             con_id: def.con_id as i64,
             // Official API string ("STK"), not the Debug derive ("Stock"): the
-            // returned Contract must round-trip into another request (ibx#230).
+            // returned Contract must round-trip into another request.
             sec_type: def.sec_type.to_api_str().to_string(),
             symbol: def.symbol.clone(),
             exchange: def.exchange.clone(),
@@ -2584,7 +2584,7 @@ impl ContractDetails {
 
         Self {
             contract: Py::new(py, c).expect("Contract allocation failed"),
-            // Parsed from the reply all along but thrown away (ibx#230).
+            // Parsed from the reply all along but thrown away.
             market_name: def.market_name.clone(),
             min_tick: def.min_tick,
             order_types: def.order_types.join(","),
@@ -2923,10 +2923,9 @@ impl DepthMktDataDescriptionPy {
 /// One step of a contract's price ladder: where it starts, and what the price
 /// moves in above it.
 ///
-/// A pair of numbers is what this used to hand over, and the reference client
-/// hands over an object with names on it — so did the Rust surface here, while
-/// the Python one did not, and a program reading `lowEdge` off what it was
-/// given found a tuple.
+/// The reference client hands over an object with names on it, as the Rust
+/// surface here does, so a program reading `lowEdge` off what it is given
+/// finds a field rather than a tuple element.
 #[pyclass(from_py_object, name = "PriceIncrement")]
 #[derive(Debug, Clone)]
 pub struct PriceIncrementPy {
@@ -3027,7 +3026,7 @@ mod tests {
     /// `f64::MAX` on both sides, so a value dropped in conversion is not merely
     /// lost, it is indistinguishable from absent, and the wire falls back to
     /// `lmt_price` — the order goes out with an offset the caller never chose
-    /// (ibx#395).
+ ///.
     #[test]
     fn a_python_trail_limit_offset_survives_the_conversion() {
         let o = Order {
@@ -3049,7 +3048,7 @@ mod tests {
     fn contract_default_values() {
         // The defaults ibx actually presents, which are the ones its `#[new]`
         // signature declares — not ibapi's empty strings. This test asserted the
-        // latter and had never run to say otherwise (ibx#381).
+        // latter and had never run to say otherwise.
         let c = Contract::default();
         assert_eq!(c.con_id, 0);
         assert_eq!(c.symbol, "");
@@ -3117,8 +3116,8 @@ mod tests {
         assert_eq!(attrs.discretionary_amt, (0.05 * PRICE_SCALE_F) as Price);
     }
 
-    /// A TRAIL LIMIT carries all three fields `to_api` used to drop, and each
-    /// reaches the wire as a distinct value, so the assertions can't pass on a
+    /// A TRAIL LIMIT carries all three fields, and each reaches the wire as a
+    /// distinct value, so the assertions cannot pass on a
     /// default: the limit offset is tag 6370 and falls back to `lmt_price`
     /// when unset, which is why the two are set to different numbers here.
     #[test]

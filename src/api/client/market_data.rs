@@ -15,7 +15,7 @@ impl EClient {
     /// `generic_tick_list` is NOT transmitted to the gateway, with one
     /// exception: "292" additionally subscribes per-contract news. Other
     /// generic tick types (RTVolume and friends) have no emission path, and
-    /// `tick_generic` never fires (ibx#234) — the venue asks for those under
+    /// `tick_generic` never fires — the venue asks for those under
     /// numbers of its own rather than the ones this list uses, and this client
     /// does not know the mapping.
     ///
@@ -49,7 +49,7 @@ impl EClient {
     /// The frozen mode keeps thinly-traded names quoting after-hours, when the
     /// realtime feed is silent.
     ///
-    /// A contract holds one subscription at a time (ibx#233), so this states
+    /// A contract holds one subscription at a time, so this states
     /// the mode for that subscription rather than adding a parallel one — to
     /// compare modes on one contract, cancel between them. To set the mode for
     /// every subscription instead of naming it per request, call
@@ -96,13 +96,10 @@ impl EClient {
 
     /// Subscribe to every trade or every quote change on a contract.
     ///
-    /// This used to refuse outright, on the reasoning that the feed rode a
-    /// service of its own which this client could not reach. That reasoning was
-    /// wrong. The feed rides the historical farm this client already reaches —
-    /// the counterpart registers it there under the name "TickByTick" beside
-    /// the five-second bars that already stream — and no list of services is
-    /// involved. The account is entitled; a missing entitlement arrives as the
-    /// venue's own refusal, not as silence.
+    /// The feed rides the historical farm, registered there under the name
+    /// `TickByTick` beside the five-second bars. No separate service is
+    /// involved. A missing entitlement arrives as the venue's own refusal
+    /// rather than as silence.
     ///
     /// What was actually wrong was reading what came back. The subscription was
     /// always right, which is why the venue acknowledged it and assigned a
@@ -204,7 +201,7 @@ impl EClient {
     }
 
     /// Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen).
-    /// Request an auth-connection round-trip time sample (ibx#158): sends a
+    /// Request an auth-connection round-trip time sample: sends a
     /// lightweight liveness probe with no side effects on subscriptions,
     /// contract caches, or pacing budgets. The result lands asynchronously —
     /// poll `last_rtt()` after a moment. No-op while a probe is already in
@@ -213,7 +210,7 @@ impl EClient {
         self.send(ControlCommand::Ping)
     }
 
-    /// Last measured auth-connection round-trip time, if any (ibx#158).
+    /// Last measured auth-connection round-trip time, if any.
     /// A gauge, not a benchmark: the sample is the interval from a probe to
     /// the first inbound traffic that followed it, which on an active feed
     /// can undercount by racing data already in flight. Also sampled
@@ -222,7 +219,7 @@ impl EClient {
         self.shared.last_ccp_rtt()
     }
 
-    /// NOT supported end to end (ibx#234): the requested type is stored
+    /// NOT supported end to end: the requested type is stored
     /// locally but never sent to the gateway, so subscriptions always
     /// deliver realtime data and delayed tick variants never arrive.
     /// Requesting a non-realtime type logs a warning, and the
@@ -248,7 +245,7 @@ impl EClient {
     }
 
     /// Direct SeqLock read by InstrumentId (for callers who track IDs themselves).
-    /// Returns None for an out-of-range id — this used to panic (ibx#234).
+    /// Returns `None` for an id outside the instrument table.
     #[inline]
     pub fn quote_by_instrument(&self, instrument: InstrumentId) -> Option<Quote> {
         self.shared.market.try_quote(instrument)

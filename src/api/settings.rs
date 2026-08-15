@@ -1,4 +1,4 @@
-//! The settings that used to live in the gateway's own file.
+//! The settings a gateway keeps in its own configuration file.
 //!
 //! A gateway is a process, and a process is configured by a file beside it and
 //! a window in front of it. This client is a library and has neither, so the
@@ -7,8 +7,7 @@
 //!
 //! They are stated on [`EClientConfig`](crate::api::client::EClientConfig)
 //! alongside the login, because a caller has one session and should not have
-//! to configure it in two places — one of which, until now, was the process
-//! environment.
+//! to configure it in two places.
 //!
 //! **Each session runs under its own.** They are settled once, as the session
 //! opens, into a [`SessionSettings`] the session carries: two sessions in one
@@ -94,9 +93,8 @@ pub const UNAVAILABLE: &[(&str, &str)] = &[
 /// Every setting a session runs under, resolved to a value.
 ///
 /// Settled once, as the session opens, and immutable afterwards. Two sessions
-/// in one process each hold their own: what used to happen is that the second
-/// session's settings were written into the process environment and the first
-/// session's reconnects picked them up.
+/// in one process each hold their own, so one session's settings cannot reach
+/// another session's reconnects through the process environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSettings {
     /// The zone the session states its times in.

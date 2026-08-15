@@ -1,7 +1,7 @@
 //! Multi-step scenario tests for ibx.
 //!
 //! Each test exercises a realistic workflow spanning multiple API calls
-//! and verifying the full sequence of state transitions and callbacks.
+//! And verifying the full sequence of state transitions and callbacks.
 
 use std::sync::Arc;
 
@@ -324,7 +324,7 @@ fn market_data_subscribe_ticks_unsubscribe() {
     let (client, _rx, shared) = test_client();
     shared.market.set_instrument_count(1);
 
-    // Manually map since we bypass the real engine
+    // Mapped by hand, since the real engine is bypassed
     client.map_req_instrument(1, 0);
 
     // Simulate quote arriving
@@ -357,7 +357,7 @@ fn market_data_multi_instrument_independent() {
     let (client, _rx, shared) = test_client();
     shared.market.set_instrument_count(2);
 
-    // Manually map since we bypass the real engine
+    // Mapped by hand, since the real engine is bypassed
     client.map_req_instrument(1, 0);
     client.map_req_instrument(2, 1);
 

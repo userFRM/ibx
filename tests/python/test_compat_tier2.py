@@ -87,7 +87,7 @@ def test_req_scanner_subscription_with_options():
 # ═══════════════════════════════════════════════════════════
 
 def test_req_news_providers_fires_callback():
-    """req_news_providers should fire news_providers callback."""
+    """Req_news_providers should fire news_providers callback."""
     calls = []
     class W(EWrapper):
         def news_providers(self, providers):
@@ -100,7 +100,7 @@ def test_req_news_providers_fires_callback():
 
 
 def test_req_news_providers_returns_list():
-    """req_news_providers should pass a list to the callback."""
+    """Req_news_providers should pass a list to the callback."""
     result = []
     class W(EWrapper):
         def news_providers(self, providers):

@@ -139,8 +139,8 @@ def test_a_refusal_quotes_the_venue_rather_than_reporting_a_timeout():
 def test_a_dispatch_loop_running_beside_an_ask_does_not_eat_its_answer():
     """The facade keeps a pump running while its calls ask questions.
 
-    Both read the same queues. Whichever ran first used to empty them, and the
-    other reported that nothing arrived.
+    Both read the same queues. Without arbitration, whichever runs first
+    empties them and the other reports that nothing arrived.
     """
     c = connected()
     mine = c._test_peek_ask_id()

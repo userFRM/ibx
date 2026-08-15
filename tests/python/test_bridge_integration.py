@@ -1,4 +1,4 @@
-"""Python ↔ Rust bridge compatibility tests (issue #70).
+"""Python ↔ Rust bridge compatibility tests.
 
 These tests exercise the REAL ibx Rust module — not mocks.
 They use _test_* helpers to inject data into SharedState and verify
@@ -705,8 +705,8 @@ class TestWhatIfDispatch:
     def test_what_a_preview_costs_rides_the_order_and_nothing_else(self):
         """What an order would cost is reported on the order.
 
-        It used to ride `why_held` on a status, which is a field for saying why
-        an order is held. The status is gone with it: a preview is not an
+        It does not ride `why_held` on a status, which is a field for saying
+        why an order is held, and no status accompanies it: a preview is not an
         order, and a status for one that was never placed is what the reference
         client's own wrapper complains about.
         """
@@ -819,9 +819,9 @@ class TestAccountDispatch:
         nlv_event = [e for e in events if e[1] == "NetLiquidation"][0]
         assert nlv_event[2] == "100000.00"
         # The currency is whatever the venue stated for this figure. Nothing
-        # stated one here, so nothing is claimed: this used to assert dollars,
-        # which the client said whatever the venue reported, and an account held
-        # in euros was described in a currency it does not hold.
+        # stated one here, so nothing is claimed. Asserting dollars would have
+        # the client say so whatever the venue reported, describing an account
+        # held in euros in a currency it does not hold.
         assert nlv_event[3] == ""
         assert nlv_event[4] == "DU12345"
 
@@ -995,7 +995,7 @@ class TestEdgeCases:
             c._test_connect()
 
     def test_req_ids_without_connection(self):
-        """req_ids fires next_valid_id even without connect."""
+        """Req_ids fires next_valid_id even without connect."""
         w = RecordingWrapper()
         c = EClient(w)
         c.req_ids()

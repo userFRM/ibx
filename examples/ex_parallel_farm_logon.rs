@@ -3,8 +3,8 @@
 //! The `Gateway::connect` flow currently serializes farm logons (see
 //! `gateway.rs:1482`), citing a possible "competing login" rejection on live.
 //! Parallelizing would roughly halve the farm-logon phase. This example
-//! measures sequential vs parallel timings and reports whether both farms
-//! authenticate successfully.
+//! Measures sequential vs parallel timings and reports whether both farms
+//! Authenticate successfully.
 //!
 //! Run paper (default):
 //!   $env:RUST_LOG="info"; cargo run --release --example ex_parallel_farm_logon

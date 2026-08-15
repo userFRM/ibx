@@ -203,7 +203,7 @@ mod tests {
 
         // g^x mod N = 5^2 mod 23 = 25 mod 23 = 2
         // k * g^x mod N = 3 * 2 = 6
-        // We need B > k*g^x mod N for simplicity; pick server public B=20
+        // B > k*g^x mod N keeps the arithmetic simple; server public B=20
         let b_pub = BigUint::from(20u32);
 
         // base = (B - k*g^x) mod N = (20 - 6) mod 23 = 14

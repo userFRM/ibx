@@ -50,9 +50,9 @@ use super::contract::Contract;
 pub struct EClient {
     /// Reference to the EWrapper (which is typically `self` in the `App(EWrapper, EClient)` pattern).
     pub(crate) wrapper: Py<PyAny>,
-    /// Set by connect(), cleared by disconnect().
+    /// Set by connect(), cleared by disconnect.
     pub(crate) shared: Mutex<Option<Arc<SharedState>>>,
-    /// Set by connect(), cleared by disconnect().
+    /// Set by connect(), cleared by disconnect.
     pub(crate) control_tx: Mutex<Option<SyncSender<ControlCommand>>>,
     pub(crate) next_order_id: AtomicU64,
     /// Where the last id handed out is kept, and under which key. Empty when
@@ -60,7 +60,7 @@ pub struct EClient {
     /// alone and lets it collide with what an earlier one used.
     pub(crate) order_id_store: Mutex<Option<(std::path::PathBuf, String)>>,
     pub(crate) _thread: Mutex<Option<thread::JoinHandle<()>>>,
-    /// Set by connect(), cleared by disconnect().
+    /// Set by connect(), cleared by disconnect.
     pub(crate) account_id: Mutex<Option<String>>,
     /// Every account this login holds, the first being `account_id`.
     pub(crate) accounts: Mutex<Vec<String>>,
@@ -86,9 +86,9 @@ impl Drop for EClient {
             let _ = tx.send(ControlCommand::Shutdown);
         }
         if let Some(h) = self._thread.lock().unwrap().take() {
-            // A wedged engine (ibx#254) never returns from join(). Detach so
+            // A wedged engine never returns from join. Detach so
             // that stall parks this thread, not the whole interpreter
-            // (ibx#271). try_attach, not attach: dealloc also runs during
+ //. try_attach, not attach: dealloc also runs during
             // interpreter shutdown (and `wrapper` commonly points back at
             // the object embedding this EClient, so the cyclic GC — not
             // just refcounting — can be the one calling drop), and attach
@@ -111,7 +111,7 @@ impl Drop for EClient {
 /// refusing rather than truncating. `next_order_id()` starts at
 /// milliseconds-since-epoch, so the ibapi idiom of one counter for orders and
 /// requests is past `u32::MAX` on the first call, and a truncated id answers
-/// under one the caller never used (ibx#285).
+/// under one the caller never used.
 pub(crate) fn wire_req_id(req_id: i64) -> PyResult<u32> {
     crate::api::client::wire_req_id(req_id)
         .map_err(|refusal| PyRuntimeError::new_err(refusal.message))
@@ -179,7 +179,7 @@ impl EClient {
     /// Multiple ``EClient`` instances can run concurrently in one process; each
     /// owns its own state, sockets, and engine thread, and ``connect()`` does
     /// not serialize across instances. If you pin engines via ``core_id``, give
-    /// each a distinct value. See ibx#203 / ibx#207.
+    /// each a distinct value.
     #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None, order_id_file=None))]
     #[allow(clippy::too_many_arguments)]
     fn connect(
@@ -384,7 +384,7 @@ impl EClient {
             let _ = tx.send(ControlCommand::Shutdown);
         }
         if let Some(h) = self._thread.lock().unwrap().take() {
-            // Same wedged-engine hazard as Drop (ibx#254): release the GIL
+            // Same wedged-engine hazard as Drop: release the GIL
             // for the join so a stuck engine thread stalls only this call.
             py.detach(|| { let _ = h.join(); });
         }
@@ -609,7 +609,7 @@ impl EClient {
     /// not gone) and `send` is meant to wait for it to drain, so the send
     /// itself stays blocking. What must not happen is waiting with the GIL
     /// held, stalling every Python thread instead of just this call
-    /// (ibx#271), so the wait runs detached, and only the actual send
+ ///, so the wait runs detached, and only the actual send
     /// crosses that boundary; `cmd` must already be a plain owned value by
     /// the time it's built (never touching Python state once detached).
     pub(crate) fn send_control(py: Python<'_>, tx: &SyncSender<ControlCommand>, cmd: ControlCommand) -> PyResult<()> {
@@ -675,7 +675,7 @@ impl EClient {
     /// Find instrument ID for a contract, registering if needed. The hot
     /// loop can take up to `REGISTRATION_TIMEOUT` to reply, so the round
     /// trip runs with the GIL released: otherwise a slow reply stalls every
-    /// Python thread, not just this call (ibx#271).
+    /// Python thread, not just this call.
     pub(crate) fn find_or_register_instrument(&self, py: Python<'_>, contract: &Contract) -> PyResult<u32> {
         let tx = self.tx()?;
         let con_id = contract.con_id;
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn eclient_default_state() {
-        // Can't construct without Python, but we can test the parsing helpers
+        // Not constructible without Python; the parsing helpers stand alone
         let tv = [TagValue { tag: "maxPctVol".into(), value: "0.1".into() },
             TagValue { tag: "startTime".into(), value: "09:30:00".into() },
             TagValue { tag: "endTime".into(), value: "16:00:00".into() }];

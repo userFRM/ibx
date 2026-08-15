@@ -320,7 +320,7 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
 
     assert!(!completed.is_empty(), "Expected at least one completed order after cancel");
     let co = completed.iter().find(|c| c.order_id == order_id);
-    assert!(co.is_some(), "Completed order for our order_id not found");
+    assert!(co.is_some(), "completed order for the placed order_id not found");
     let co = co.unwrap();
     assert!(
         matches!(co.status, OrderStatus::Cancelled | OrderStatus::Rejected),
@@ -957,7 +957,7 @@ pub(super) fn phase_pnl_subscribe_command(conns: Conns) -> Conns {
 
     // The server pushes 6040=143 midnight seeds — one repeating group per open
     // position. A flat paper account yields no seeds, which is a valid outcome, so
-    // we wait a bounded window and log whatever arrived rather than requiring seeds.
+    // a bounded window is waited and whatever arrived is logged, rather than requiring seeds.
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut seeds_seen = 0usize;
     while Instant::now() < deadline {
@@ -1016,7 +1016,7 @@ pub(super) fn phase_news_bulletins(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    // News bulletins are sporadic — we may or may not receive any.
+    // News bulletins are sporadic; none may arrive in the window.
     // The test validates the drain mechanism works without panicking.
     println!("  Total bulletins received: {total_bulletins}");
     if total_bulletins > 0 {

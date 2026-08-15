@@ -22,7 +22,6 @@ pub(crate) fn drain_and_send_orders(
     event_tx: &Option<std::sync::mpsc::SyncSender<crate::bridge::Event>>,
 ) {
     // If CCP is disconnected, leave orders in the pending buffer for retry after reconnect.
-    // See: https://github.com/deepentropy/ibx/issues/116
     if disconnected {
         return;
     }
@@ -80,7 +79,7 @@ pub(crate) fn drain_and_send_orders(
             _ => None,
         };
         // Snap every price to the contract's tick grid before encoding
-        // (ibx#216). The tick comes from the market-data subscription ack;
+ //. The tick comes from the market-data subscription ack;
         // without one it is 0 and prices pass through unchanged.
         if let Some(instrument) = order_req.instrument() {
             order_req.snap_prices(context.market.min_tick_scaled(instrument));
@@ -189,7 +188,7 @@ pub(crate) fn drain_and_send_orders(
                     (204, CUSTOMER),
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
-                    (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
+                    (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3
                 ]);
 
                 // 3. Stop-loss child: stop exit, linked to parent, in OCA group
@@ -219,7 +218,7 @@ pub(crate) fn drain_and_send_orders(
                     (204, CUSTOMER),
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
-                    (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3 (ibx#215)
+                    (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3
                 ]))
             }
             OrderRequest::SubmitLimitFractional { order_id, instrument, side, qty, price } => {
@@ -288,10 +287,9 @@ pub(crate) fn drain_and_send_orders(
                 let orig = context.order(order_id).copied();
                 let spec = context.submitted.get(&order_id).cloned();
                 // What the replace states. A zero field states nothing, so the
-                // resting order's value stays in force — which is what the
-                // encoder used to do for every field, so a caller changing the
-                // order type, the time-in-force or the trigger had the change
-                // accepted, acknowledged, and dropped (ibx#349, ibx#372).
+                // resting order's value stays in force. The fields a caller
+                // changed are stated, so a change to the order type, the
+                // time-in-force or the trigger is not accepted and dropped.
                 // Whether the caller named the type, kept before the fallback
                 // below overwrites it. A trigger on the request only means one
                 // when the replace also states what it is replacing into.
@@ -301,7 +299,7 @@ pub(crate) fn drain_and_send_orders(
                 let tif = if tif != 0 { tif } else { orig.map_or(b'0', |o| o.tif) };
                 // Modify carries no instrument, so `snap_prices` cannot reach
                 // it and both price-like fields are snapped here against the
-                // tracked order's grid (ibx#216). The trigger needs it as much
+                // tracked order's grid. The trigger needs it as much
                 // as the limit does — a moved stop off the grid is rejected by
                 // the gateway the same way a limit is.
                 let (price, stop_price) = orig.map_or((price, stop_price), |o| {
@@ -332,7 +330,7 @@ pub(crate) fn drain_and_send_orders(
                 // A pegged or relative order tracks its offset in `stop_price`,
                 // so its replace does restate that on 99 — unchanged from
                 // before, and one of the reasons those types are refused a
-                // modify outright (ibx#334).
+                // modify outright.
                 // A two-legged type carries a trigger when it has one, and it
                 // has one either because the resting order did or because this
                 // replace states it. Reading only the resting order sent a
@@ -389,13 +387,13 @@ pub(crate) fn drain_and_send_orders(
                 context.modify_versions.insert(order_id, new_ver);
                 let clord_str = format!("{order_id}.{new_ver}");
                 // OrigClOrdID matches whatever the server last recorded for
-                // this order (which may pre-date the versioned scheme — ibx#179).
+                // this order (which may pre-date the versioned scheme —).
                 let orig_clord = context
                     .last_clord
                     .get(&order_id)
                     .cloned()
                     .unwrap_or_else(|| format!("{order_id}.{prev_ver}"));
-                // Pre-seed `last_clord` with what we're about to emit so a
+                // Pre-seed `last_clord` with the id about to be emitted, so a
                 // subsequent cancel before the modify-ack still references the
                 // right version.
                 context.last_clord.insert(order_id, clord_str.clone());
@@ -472,7 +470,7 @@ pub(crate) fn drain_and_send_orders(
                 // OutsideRTH, from the order the caller resubmitted rather than
                 // hard-coded: the tracked record cannot express it, and asserting
                 // 1 unconditionally opted every modified order into the extended
-                // session (ibx#247). Same position it held in the capture.
+                // session. Same position it held in the capture.
                 if outside_rth {
                     fields.push((6433, "1"));
                 }
@@ -529,7 +527,7 @@ pub(crate) fn drain_and_send_orders(
         match result {
             Ok(()) => hb.last_ccp_sent = Instant::now(),
             Err(e) => {
-                // The caller is told, which is the whole of ibx#116 — it was
+                // The caller is told, which is the whole of — it was
                 // the silence that left a phantom position. What it is told is
                 // that the state is not known: a write reporting failure may
                 // already have put the frame on the wire, as the transport
@@ -596,7 +594,7 @@ fn send_cancel(
     order_id: u64,
 ) -> std::io::Result<()> {
     // OrigClOrdID must match exactly what the server has on record. Prefer the
-    // string last observed on the wire (see ibx#179 — legacy orders recorded
+    // string last observed on the wire (see — legacy orders recorded
     // without a `.{ver}` suffix won't match a computed `{id}.0`). Fall back to
     // the versioned scheme when there is no observation yet (fresh-order
     // place->immediate-cancel before the ack round-trip).
@@ -650,11 +648,11 @@ fn fix_side(side: Side) -> &'static str {
 }
 
 /// Synthesize the PendingCancel phase when a cancel request goes out
-/// (ibx#211): the server acks a normal cancel with the terminal code only —
-/// it never sends the pending-cancel code — so without this local
-/// transition consumers jump straight from Submitted to Cancelled. The
-/// server's ack (or a fill that raced the cancel) then advances the status;
-/// a cancel reject restores the working status via the forced setter.
+/// The server acks a normal cancel with the terminal code only and never
+/// sends the pending-cancel code, so without this local transition consumers
+/// jump straight from Submitted to Cancelled. The server's ack, or a fill that
+/// raced the cancel, then advances the status; a cancel reject restores the
+/// working status through the forced setter.
 fn synthesize_pending_cancel(
     context: &mut Context,
     shared: &Arc<SharedState>,
@@ -682,7 +680,7 @@ fn synthesize_pending_cancel(
 
 /// Map the OCA type code (1..=4) to its tag 6209 wire label. 0/unset and
 /// out-of-range coerce to 3 (ReduceOnFillNonBlock), the gateway default
-/// (ibx#215).
+///.
 /// Unit a trailing amount is expressed in, on tag 6268: percent, as against
 /// an absolute amount (0) or ticks (1).
 const TRAIL_UNIT_PERCENT: u32 = 100;
@@ -742,7 +740,7 @@ fn currency_for(
 }
 
 
-/// One shared encoder for every extended order submission (ibx#224): the
+/// One shared encoder for every extended order submission: the
 /// order-type-specific tags come from `kind`; the TIF and the full
 /// `OrderAttrs` block are emitted identically for all kinds.
 /// `SubmitLimitEx`, `SubmitTrailingStopPctEx` and `SubmitEx` all route
@@ -752,7 +750,7 @@ fn currency_for(
 /// name on its own. Without these an option order says nothing about which
 /// strike, right or expiry it means and a future says nothing about its
 /// contract month, which is why those types were refused outright rather than
-/// sent under-specified (ibx#202).
+/// sent under-specified.
 fn push_contract_identity(
     fields: &mut Vec<(u32, String)>,
     context: &Context,
@@ -954,7 +952,7 @@ fn send_order_ex(
             fields.push((99, format_price(stop_price).to_string())); // StopPx
         }
         K::TrailingStop { trail_amt, .. } => {
-            // Per ib-agent#136 capture: amount-based trailing stop carries
+            // capture: amount-based trailing stop carries
             // the trail amount in both 99 and 211 and requires 18=a.
             let t = format_price(trail_amt).to_string();
             fields.push((40, "P".to_string()));
@@ -962,7 +960,7 @@ fn send_order_ex(
             fields.push((211, t));
         }
         K::TrailingStopLimit { lmt_offset, trail_amt, .. } => {
-            // Per ib-agent#136 capture: TRAIL LIMIT uses OrdType=TSL, no
+            // capture: TRAIL LIMIT uses OrdType=TSL, no
             // tag 44, no tag 18; trail amount in both 99 and 211; 6370 is
             // the limit-vs-trail offset.
             let t = format_price(trail_amt).to_string();
@@ -995,7 +993,7 @@ fn send_order_ex(
             fields.push((99, format_price(stop_price).to_string()));
         }
         K::Lit { price, stop_price } => {
-            fields.push((40, "LT".to_string())); // per ib-agent#138
+            fields.push((40, "LT".to_string()));
             fields.push((44, format_price(price).to_string()));
             fields.push((99, format_price(stop_price).to_string()));
         }
@@ -1056,13 +1054,13 @@ fn send_order_ex(
             fields.push((40, "P".to_string()));
         }
         K::Rel { offset } => {
-            // Per ib-agent#138 capture: Relative shares OrdType=P and is
+            // capture: Relative shares OrdType=P and is
             // disambiguated by 18=R; peg offset on 211, no tag 44.
             fields.push((40, "P".to_string()));
             fields.push((211, format_price(offset).to_string()));
         }
         K::Adaptive { price, .. } => {
-            // Per ib-agent#136 capture: Adaptive needs 18=e (ExecInst = adaptive
+            // capture: Adaptive needs 18=e (ExecInst = adaptive
             // algo wrapper). Without it the gateway rejects with "Invalid value
             // in field # 18". The strategy and its one parameter are appended
             // after the attribute block, where the encoder this replaced put them.
@@ -1107,7 +1105,7 @@ fn send_order_ex(
     fields.push((6211, String::new()));
     fields.push((6238, String::new()));
     // MIDPX / SNAP* / PEG* require a directed exchange; everything else
-    // routes per the instrument's registered routing (ibx#217).
+    // routes per the instrument's registered routing.
     let destination = match kind {
         K::MidPrice { .. }
         | K::SnapMkt { .. }
@@ -1119,7 +1117,7 @@ fn send_order_ex(
     };
     fields.push((100, destination.clone()));
     // Secondary routing field — the reference encoder always writes it
-    // alongside the destination (ib-agent#165).
+    // alongside the destination.
     fields.push((6210, destination));
     // What the contract is priced in, where the caller has said. It was a
     // constant, which is right for a US instrument and wrong for every other:
@@ -1226,8 +1224,8 @@ fn push_order_attrs(
     if !exec_inst.is_empty() {
         fields.push((18, exec_inst));
     }
-    // Instructions the caller set that used to reach no encoder. Each changes
-    // what is traded, so each goes on the wire: a volatility order priced in
+    // Instructions the caller set. Each changes what is traded, so each goes
+    // on the wire: a volatility order priced in
     // volatility, an offset the venue works from, a discretion the floor is
     // told about, the caller's own reference, and whether this opens a position
     // or closes one.
@@ -1640,7 +1638,7 @@ fn push_order_attrs(
     // Adjustable-stop tags last, keeping the position they held in the encoder
     // this path replaced: after 204 and the attribute block, not in among the
     // order-type tags. Values and conditions are unchanged; only the encoder
-    // they come from is new (ibx#240).
+    // they come from is new.
     if let K::AdjustableStop {
         trigger_price,
         adjusted_order_type,
@@ -1659,7 +1657,7 @@ fn push_order_attrs(
             fields.push((6262, format_price(*adjusted_stop_limit_price).to_string()));
         }
         // Trailing amount + unit for a Trail/TrailLimit conversion
-        // (ib-agent#167, ibx#225).
+ //.
         if matches!(
             adjusted_order_type,
             crate::types::AdjustedOrderType::Trail | crate::types::AdjustedOrderType::TrailLimit
@@ -1723,7 +1721,7 @@ fn push_order_attrs(
                 fields.push((44, format_price(*price_cap).to_string()));
             }
         }
-        // Optional initial stop trigger (ib-agent#173).
+        // Optional initial stop trigger.
         K::TrailingStop { trail_stop_price, .. }
         | K::TrailingStopLimit { trail_stop_price, .. }
         | K::TrailPct { trail_stop_price, .. }
@@ -1735,7 +1733,7 @@ fn push_order_attrs(
     }
 
     // Strategy and preview tags last, in the position they held in the encoders
-    // this path replaced: after 204 and the attribute block (ibx#318).
+    // this path replaced: after 204 and the attribute block.
     match &kind {
         K::Adaptive { priority, .. } => {
             fields.push((847, "Adaptive".to_string()));
@@ -2119,7 +2117,7 @@ mod tests {
         assert_ne!(names[0], names[1], "a retried cancel needs its own name: {names:?}");
     }
 
-    /// ibx#349, ibx#372: the replace restated the tracked order's type,
+ ///,: the replace restated the tracked order's type,
     /// time-in-force and trigger, so a caller changing any of them had the
     /// change accepted, acknowledged and dropped. Asserted on the bytes,
     /// because the request-level tests passed throughout.
@@ -2649,7 +2647,7 @@ mod tests {
         }
     }
 
-    // ibx#211: an outbound cancel synthesizes the PendingCancel phase the
+    // An outbound cancel synthesizes the PendingCancel phase the
     // server never sends for a normal cancel.
     #[test]
     fn synthesize_pending_cancel_updates_and_notifies() {
@@ -2681,11 +2679,11 @@ mod tests {
         assert!(shared.orders.drain_order_updates().is_empty());
     }
 
-    /// ibx#318: adaptive, algo and what-if orders returned early into their own
-    /// encoders, which carried no attribute block at all — so outside-RTH, the
-    /// parent link and the OCA group were accepted by the API and silently
-    /// dropped, and the tif was hard-coded to DAY. Asserted on the bytes,
-    /// because the enum-level tests passed throughout.
+    /// Adaptive, algo and what-if orders reach their own encoders and still
+    /// carry the attribute block: outside-RTH, the parent link, the OCA group
+    /// and the caller's tif go on the wire rather than being accepted by the
+    /// API and dropped. Asserted on the bytes, which is where an encoder that
+    /// omits the block differs from one that does not.
     #[test]
     fn adaptive_wire_carries_the_attributes_and_keeps_its_algo_tags() {
         let msg = send_kind_for_test(
@@ -3005,9 +3003,9 @@ mod tests {
         assert_eq!(tag("111=").as_deref(), Some("100"), "the displayed quantity: {msg}");
     }
 
-    /// ibx#240: the tags a bracket child cannot ship without. Asserted on the
-    /// bytes `send_order_ex` puts on the wire, not on the request enum — the
-    /// enum-level tests passed throughout the period the child shipped naked.
+    /// The tags a bracket child cannot ship without. Asserted on the bytes
+    /// `send_order_ex` puts on the wire rather than on the request enum, which
+    /// carries them whether or not the encoder emits them.
     #[test]
     fn adjustable_stop_wire_carries_parent_oca_and_tif() {
         use std::io::Read;
@@ -3182,7 +3180,7 @@ mod tests {
         // base type tags before 59, exactly where the dedicated encoder this
         // path replaced put them. Tag order is not supposed to carry meaning,
         // but this path had a shipped layout and there is no reason to change
-        // it as a side effect (ibx#240).
+        // it as a side effect.
         let pos = |t: &str| msg.split('\u{1}').position(|f| f.starts_with(t));
         assert!(pos("40=") < pos("59="), "base type tags precede tif: {msg}");
         assert!(pos("99=") < pos("59="), "stop price precedes tif: {msg}");
@@ -3236,10 +3234,10 @@ mod modify_wire_tests {
         drain(&mut context)
     }
 
-    /// ibx#247: the replace asserted 6433=1 unconditionally, so an RTH-only
-    /// order was opted into the extended session by its first modify. Pins the
-    /// flag's captured position — straight after 6122, ahead of where the
-    /// order is working — in both polarities.
+    /// The replace states 6433 as the caller set it, so an RTH-only order is
+    /// not opted into the extended session by its first modify. Pins the flag's
+    /// position — straight after 6122, ahead of where the order is working — in
+    /// both polarities.
     #[test]
     fn modify_emits_outside_rth_only_when_the_caller_set_it() {
         let on = replace_bytes(true);
@@ -3253,11 +3251,10 @@ mod modify_wire_tests {
         assert!(off.contains("|6122=c|100="), "the rest of the message is unchanged: {off}");
     }
 
-    /// ibx#324: a stop has no limit leg, so the price a caller supplies to a
-    /// modify can only mean the trigger. Writing it to tag 44 and restating the
-    /// original trigger in 99 leaves the stop where it was — and on a live
-    /// gateway the replace is rejected outright, so the order the caller meant
-    /// to move ends up Inactive.
+    /// A stop has no limit leg, so the price a caller supplies to a modify can
+    /// only mean the trigger. Writing it to tag 44 and restating the original
+    /// trigger in 99 leaves the stop where it was, and the venue rejects the
+    /// replace outright, so the order the caller meant to move ends Inactive.
     #[test]
     fn modifying_a_stop_moves_its_trigger() {
         let mut context = Context::new();
@@ -3422,7 +3419,7 @@ mod modify_wire_tests {
     /// An option order that does not restate expiry, strike and right names no
     /// particular contract: the symbol alone is the whole chain. That is why
     /// non-stock orders were refused rather than sent, and carrying the identity
-    /// is what makes sending one safe (ibx#202).
+    /// is what makes sending one safe.
     #[test]
     fn an_option_order_names_its_contract() {
         let mut context = Context::new();
@@ -3650,11 +3647,11 @@ mod modify_wire_tests {
         assert!(sent.contains("|99=600|"), "the trigger is restated unchanged: {sent}");
     }
 
-    /// ibx#311: the bracket was the last submit path emitting a bare ClOrdID.
-    /// A cancel that has seen no echo yet computes `{id}.{ver}` for OrigClOrdID,
-    /// so a leg cancelled before its first execution report named an id the
-    /// gateway is not holding — and tag 6107 disagreed with the parent link
-    /// `send_order_ex` puts on a child of the same order.
+    /// A cancel that has seen no echo yet computes `{id}.{ver}` for
+    /// OrigClOrdID, so a bracket leg must be submitted under that same form: a
+    /// bare ClOrdID names an id the venue is not holding once the leg is
+    /// cancelled before its first execution report. Tag 6107 must also agree
+    /// with the parent link `send_order_ex` puts on a child of the same order.
     #[test]
     fn a_bracket_leg_is_submitted_under_the_id_its_cancel_will_name() {
         let mut context = Context::new();
@@ -3722,10 +3719,10 @@ mod outside_rth_polarity_tests {
     /// it, never that it is absent when they did not. Making every encoder emit
     /// it unconditionally therefore failed no test.
     ///
-    /// That is the shape ibx#247 took on the replace path, where a hard-coded
+    /// That is the shape took on the replace path, where a hard-coded
     /// 6433 opted every modified order into the extended session. An order
     /// widened to outside regular hours fills at prices the caller never meant
-    /// to trade at, and no callback distinguishes it (ibx#352).
+    /// to trade at, and no callback distinguishes it.
     /// A named submit path, invoked as (context, instrument, outside_rth).
     type SubmitCase = (&'static str, fn(&mut Context, u32, bool) -> crate::types::OrderId);
 
@@ -4035,9 +4032,9 @@ mod outside_rth_polarity_tests {
     }
 
     /// A ladder and a hedge each go out under the tags the vendor's own
-    /// attributes declare for them. Both used to reach no encoder, so an order
-    /// that asked for either got a plain one instead — one order for the whole
-    /// size, or a position with nothing against it.
+    /// attributes declare for them. Without them an order asking for either
+    /// would go out plain: one order for the whole size, or a position with
+    /// nothing against it.
     #[test]
     fn a_scale_and_a_hedge_go_out_under_their_own_tags() {
         use std::io::Read;

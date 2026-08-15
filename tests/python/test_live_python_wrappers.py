@@ -617,7 +617,7 @@ class TestAccount:
         # position_end fires even if no positions
         got_end = wrapper.got_position_end.wait(timeout=10)
         if not got_end:
-            # req_positions delivers data synchronously in our implementation
+            # req_positions delivers data synchronously here
             time.sleep(1)
 
         end_events = wrapper._get_events("position_end")
@@ -645,7 +645,7 @@ class TestAccount:
         assert len(events) > 0
 
     def test_account_updates(self, ib_connection):
-        """req_account_updates triggers update_account_value callbacks."""
+        """Req_account_updates triggers update_account_value callbacks."""
         wrapper, client = ib_connection
         wrapper.got_account_value.clear()
 

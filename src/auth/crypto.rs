@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn tls10_prf_key_expansion() {
-        // Verify we can produce 104-byte key block (as used in SecureChannel)
+        // A 104-byte key block, the width SecureChannel consumes
         let secret = vec![0xABu8; 48];
         let seed = vec![0xCDu8; 64];
         let key_block = tls10_prf(&secret, "key expansion", &seed, 104);

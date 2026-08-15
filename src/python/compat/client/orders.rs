@@ -373,7 +373,7 @@ impl EClient {
         let snapshot = self.core.snapshot_executions(&filter);
         // Snapshot before any Python call: the callback runs with the GIL
         // held, and re-entering a path that locks `executions` would freeze
-        // the interpreter, not just this thread (ibx#265).
+        // the interpreter, not just this thread.
         for se in snapshot {
             let c_py = Py::new(py, Contract::from_api(&se.contract))?.into_any();
 
@@ -429,7 +429,7 @@ impl EClient {
         // Bind the clone out of the guard first. A MutexGuard temporary in an
         // if-let scrutinee lives to the end of the body, so cloning alone does
         // not release it — a callback re-entering disconnect() would deadlock
-        // on this same mutex (ibx#268).
+        // on this same mutex.
         let shared = self.shared.lock().unwrap().clone();
         if let Some(shared) = shared {
             let completed = shared.orders.drain_completed_orders();
@@ -506,7 +506,7 @@ impl EClient {
                             tif: o.order.tif.clone(),
                             account: o.order.account.clone(),
                             perm_id: o.order.perm_id,
-                            // The value ibx#309 corrected; without it a completed
+                            // The value corrected; without it a completed
                             // order reads as entirely unfilled on this surface.
                             filled_quantity: o.order.filled_quantity,
                             ..Default::default()

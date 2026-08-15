@@ -1,7 +1,7 @@
 //! Error path, edge case, and concurrency tests for ibx.
 //!
 //! Validates that the library handles bad inputs, boundary conditions,
-//! and concurrent access without panics or data races.
+//! And concurrent access without panics or data races.
 
 use std::sync::Arc;
 use std::thread;
@@ -201,7 +201,7 @@ fn disconnect_during_active_subscription() {
 fn disconnect_during_pending_order_uncertain_status() {
     let (client, _rx, shared) = test_client();
 
-    // Order was pending when we disconnect
+    // The order was pending at the disconnect
     shared.orders.push_order_update(OrderUpdate {
         order_id: 50, instrument: 0, status: OrderStatus::Uncertain,
         filled_qty: 0.0, remaining_qty: 100.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,

@@ -5,7 +5,7 @@
 //! waits thirty seconds where an ordinary broken socket waits one — and the
 //! difference matters most at the two ends: a login the server refused is not
 //! going to be accepted on the next attempt, and a session another login took
-//! is not ours to take back.
+//! is not this client's to take back.
 //!
 //! So a failure is classified before it is retried, and the classification
 //! decides whether to retry at all.

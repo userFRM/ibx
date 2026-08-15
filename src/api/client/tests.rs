@@ -312,7 +312,7 @@ fn an_order_defined_by_more_than_its_type_is_not_modified() {
             crate::types::OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true },
         )),
         // Every attribute below rides a tag the replace does not carry, so a
-        // modify would state the order without it (ibx#248). The bracket links
+        // modify would state the order without it. The bracket links
         // are the costly pair: a child sent without its parent or OCA group
         // rests alone, and a fill on the sibling no longer cancels it.
         ("bracket child", |o| o.parent_id = 4242),
@@ -574,13 +574,11 @@ fn parse_algo_pct_vol() {
 }
 
 /// An algorithm this client does not model is not an algorithm the venue does
-/// not offer, and it used to be refused as though it were.
+/// not offer, and is not refused as though it were.
 ///
-/// This pinned the older behaviour, where a caller could use only the five
-/// strategies this file names. Which ones an account may use is stated at
-/// logon and enforced by the venue, so the refusal was a narrower answer than
-/// the venue's own — and the reference client forwards these without reading
-/// them.
+/// Which strategies an account may use is stated at logon and enforced by the
+/// venue, so refusing here would be a narrower answer than the venue's own.
+/// The reference client forwards these without reading them.
 #[test]
 fn parse_algo_unsupported() {
     let carried = parse_algo_params("unknown", &[]).expect("carried, not refused");
@@ -593,7 +591,7 @@ fn parse_algo_unsupported() {
     assert!(parse_algo_params("vwap", &bad).is_err());
 }
 
-// ── ibx#263: malformed / non-finite algo params must be rejected, not
+// ── malformed / non-finite algo params must be rejected, not
 // silently coerced into a valid-looking default ──
 
 #[test]
@@ -797,7 +795,7 @@ fn req_mkt_data_ex_propagates_mode_9887() {
     }
 }
 
-// ibx#233: a second live subscription on the same contract would clobber
+// A second live subscription on the same contract would clobber
 // the first's reverse mapping and orphan it silently. Reject at the call.
 #[test]
 fn a_second_caller_watches_the_subscription_that_is_up() {
@@ -832,14 +830,14 @@ fn a_second_caller_watches_the_subscription_that_is_up() {
     assert_eq!(withdraw, Some(0), "the last one out withdraws it");
 }
 
-// ibx#278: a contract given the ordinary ibapi way carries conId 0. Cached as
+// A contract given the ordinary ibapi way carries conId 0. Cached as
 // an identity it maps every later symbol onto the first one's instrument, and
-// the ibx#233 guard above then refuses them all — a symbol-only client could
+// the guard above then refuses them all — a symbol-only client could
 // hold exactly one subscription.
 #[test]
 fn a_second_symbol_is_not_a_duplicate_of_the_first_con_id_less_contract() {
     let (client, rx, _shared) = test_client();
-    // What a live symbol-only subscription under req_id 1 used to leave behind.
+    // What a live symbol-only subscription under req_id 1 leaves behind.
     client.core.con_id_to_instrument.lock().unwrap().insert(0, 0);
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
 
@@ -914,11 +912,8 @@ fn a_session_from_another_account_is_not_offered() {
     assert!(!offered(&cfg("someone-else", false)), "nor a session of the other kind");
 }
 
-/// Tick-by-tick used to be refused outright, on the reasoning that its feed
-/// rode a service this client could not reach. That reasoning was wrong: it
-/// rides the historical farm this client already reaches, and the account is
-/// entitled. The subscription is sent now, and what could not be made sense of
-/// was the reply rather than the request.
+/// Tick-by-tick rides the historical farm this client already reaches, not a
+/// service of its own, so the subscription is sent and the venue answers it.
 #[test]
 fn req_tick_by_tick_data_is_sent_rather_than_refused() {
     let (client, _rx, _shared) = test_client();
@@ -1010,7 +1005,7 @@ fn place_order_limit() {
 
 #[test]
 fn place_order_trailing_stop_carries_initial_trigger() {
-    // ibx#225 Part B / ib-agent#173: a plain amount trailing stop can carry an
+    // Part B /: a plain amount trailing stop can carry an
     // initial stop trigger (trailStopPrice); it must reach the request.
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
@@ -1050,7 +1045,7 @@ fn place_order_trailing_stop_without_trigger_is_unset() {
 
 #[test]
 fn place_order_adjustable_trail_carries_trailing_amount_and_unit() {
-    // ibx#225 / ib-agent#167: a base STP that converts to a TRAIL must carry
+    // /: a base STP that converts to a TRAIL must carry
     // the trailing amount and unit through to the AdjustableStop request.
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
@@ -1084,7 +1079,7 @@ fn place_order_adjustable_trail_carries_trailing_amount_and_unit() {
 
 #[test]
 fn place_order_adjustable_stop_carries_bracket_attrs_and_tif() {
-    // ibx#240: an adjustable stop used as a bracket child must stay linked to
+    // An adjustable stop used as a bracket child must stay linked to
     // its parent and its OCA group and keep the caller's tif. Routing it around
     // the extended-attrs path shipped the child naked, unlinked and DAY.
     let (client, rx, shared) = test_client();
@@ -1117,7 +1112,7 @@ fn place_order_adjustable_stop_carries_bracket_attrs_and_tif() {
 
 #[test]
 fn modify_carries_outside_rth_from_the_resubmitted_order() {
-    // ibx#247: the replace asserted 6433=1 unconditionally, so an order placed
+    // The replace asserted 6433=1 unconditionally, so an order placed
     // with outside_rth=false came back outside-RTH after any modify. The flag
     // has to travel with the modify, since the tracked record has no field for
     // it.
@@ -1214,7 +1209,7 @@ fn place_order_limit_hidden_carries_the_attribute() {
     }
 }
 
-// ── ibx#224: every order type must carry attrs + tif when set ──
+// ── every order type must carry attrs + tif when set ──
 
 #[test]
 fn place_order_stop_with_parent_and_gtc_uses_submit_ex() {
@@ -1279,7 +1274,7 @@ fn place_order_trailing_amount_with_oca_uses_submit_ex() {
                 if trail_amt == (2.0 * PRICE_SCALE_F) as i64));
             assert_eq!(tif, b'1');
             assert_eq!(attrs.oca_group_str, "exit_9");
-            assert_eq!(attrs.oca_type, 2); // ibx#215
+            assert_eq!(attrs.oca_type, 2);
         }
         _ => panic!("expected a Ex order, got {cmd:?}"),
     }
@@ -1303,7 +1298,7 @@ fn place_order_empty_tif_is_day() {
     }
 }
 
-// ── ibx#226: transmit=false must be rejected, not silently ignored ──
+// ── transmit=false must be rejected, not silently ignored ──
 
 #[test]
 fn place_order_transmit_false_is_rejected() {
@@ -1318,7 +1313,7 @@ fn place_order_transmit_false_is_rejected() {
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
 }
 
-// ── ibx#96: FA allocation must be rejected, not silently dropped ──
+// ── FA allocation must be rejected, not silently dropped ──
 
 /// No encoder reads an FA field, so an accepted one fills the whole size on
 /// the connected account instead of spreading it across the advisor group.
@@ -1396,7 +1391,7 @@ fn place_order_all_or_none_trail_is_rejected() {
     assert!(rx.try_recv().is_err());
 }
 
-// ── ibx#215: oca_type carried and coerced ──
+// ── oca_type carried and coerced ──
 
 #[test]
 fn attrs_oca_type_coerces_out_of_range_to_unset() {
@@ -1787,7 +1782,7 @@ fn place_order_unsupported_type_returns_error() {
 fn place_order_non_stk_contract_rejected() {
     // An option's symbol names a whole chain. Without an expiry, strike or
     // right the order cannot say which contract it means, and the gateway would
-    // fill whichever one it picked (ibx#202).
+    // fill whichever one it picked.
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
     // No contract id: an id names one contract on its own and the venue takes
@@ -1927,10 +1922,10 @@ fn cancel_order_sends_cancel_command() {
     }
 }
 
-/// ibx#265: the executions mutex must not be held while user callbacks run.
-/// A wrapper that re-enters a path locking `executions` is an ordinary ibapi
-/// pattern (re-requesting from `exec_details`), and holding the lock across it
-/// deadlocks — in Python with the GIL held, freezing the interpreter.
+/// The executions mutex is not held while user callbacks run. A wrapper that
+/// re-enters a path locking `executions` is an ordinary ibapi pattern —
+/// re-requesting from `exec_details` — and holding the lock across it
+/// deadlocks, in Python with the GIL held, freezing the interpreter.
 #[test]
 fn req_executions_does_not_hold_the_lock_across_callbacks() {
     struct Reentrant<'a> {
@@ -2390,7 +2385,7 @@ fn req_historical_data_sends_fetch_historical() {
             assert!(use_rth);
             // The contract's own fields have to leave the client, or the
             // engine has nothing but the old constants to fall back on
-            // (ibx#305). `spy()` states a destination and no security type, so
+ //. `spy()` states a destination and no security type, so
             // the destination arrives as given and the type arrives empty for
             // the engine to substitute — tested at its source.
             assert_eq!(sec_type, "");
@@ -2420,14 +2415,14 @@ fn req_historical_data_carries_the_contract_s_own_type_and_venue() {
     }
 }
 
-// ── ibx#232: unknown bar_size / what_to_show reject instead of silently
+// ── unknown bar_size / what_to_show reject instead of silently
 // falling back to 5-minute / TRADES bars ──
 
 #[test]
 fn req_historical_data_rejects_unknown_bar_size() {
     let (client, rx, _shared) = test_client();
-    // The issue's exact repro: "1 Min" (wrong case) used to return 5-minute
-    // candles with no error.
+    // A bar size in the wrong case is refused rather than answered with
+    // five-minute candles.
     let err = client.req_historical_data(5, &spy(), "", "2 D", "1 Min", "TRADES", true, 1, false).unwrap_err();
     assert!(err.message.contains("bar_size"), "got: {err}");
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
@@ -2444,8 +2439,8 @@ fn req_historical_data_rejects_unknown_what_to_show() {
 #[test]
 fn req_historical_data_rejects_unsupported_keep_up_to_date_size() {
     let (client, rx, _shared) = test_client();
-    // "1 min" is valid on the batch path but not supported for streaming —
-    // it used to silently downgrade to 5-minute bars on this path only.
+    // "1 min" is valid on the batch path and not supported for streaming, and
+    // is refused here rather than downgraded to five-minute bars.
     let err = client.req_historical_data(5, &spy(), "", "1 D", "1 min", "TRADES", true, 1, true).unwrap_err();
     assert!(err.message.contains("keep_up_to_date"), "got: {err}");
     assert!(rx.try_recv().is_err());
@@ -2571,7 +2566,7 @@ fn req_contract_details_sends_fetch() {
 
 #[test]
 fn req_contract_details_forwards_filter_fields() {
-    // ibx#229 / ib-agent#171: a by-symbol lookup must carry the disambiguation
+    // /: a by-symbol lookup must carry the disambiguation
     // filters (primary exchange, local symbol, expiry/strike/right, multiplier,
     // trading class) instead of dropping them.
     let (client, rx, _shared) = test_client();
@@ -2606,7 +2601,7 @@ fn req_contract_details_forwards_filter_fields() {
 
 #[test]
 fn req_contract_details_forwards_identifier_lookup() {
-    // ibx#229 / ib-agent#174: an identifier lookup (ISIN) must carry secId and
+    // /: an identifier lookup (ISIN) must carry secId and
     // secIdType through to the fetch command.
     let (client, rx, _shared) = test_client();
     let contract = Contract {
@@ -2875,7 +2870,7 @@ fn quote_escape_hatch() {
     assert!(client.quote(99).is_none());
 }
 
-// ibx#158: RTT is None until measured, then reflects the stored sample;
+// RTT is None until measured, then reflects the stored sample;
 // req_ping goes out as a Ping command.
 #[test]
 fn rtt_none_until_measured_and_ping_sends_command() {
@@ -2901,7 +2896,7 @@ fn quote_by_instrument_direct() {
     let quote = client.quote_by_instrument(2).expect("registered id");
     assert_eq!(quote.ask, 300 * PRICE_SCALE);
 
-    // ibx#234: an out-of-range id is a caller error, not a panic across
+    // An out-of-range id is a caller error, not a panic across
     // the language boundary.
     assert!(client.quote_by_instrument(999).is_none());
 }
@@ -3015,9 +3010,9 @@ fn process_msgs_dispatches_order_updates() {
     assert!(w.events.iter().any(|e| e.starts_with("order_status:45:Inactive")));
 }
 
-/// ibx#250: a parked (39=I) order's reason reaches the caller through
-/// Wrapper::error, on top of the order_status "Inactive" callback above —
-/// ibapi has no callback dedicated to "order held with reason".
+/// A parked (39=I) order's reason reaches the caller through `Wrapper::error`,
+/// on top of the order_status "Inactive" callback above: ibapi has no callback
+/// dedicated to an order held with a reason.
 #[test]
 fn process_msgs_dispatches_inactive_reason_as_error() {
     let (client, _rx, shared) = test_client();
@@ -3027,7 +3022,7 @@ fn process_msgs_dispatches_inactive_reason_as_error() {
     assert!(w.events.iter().any(|e| e == "error:46:399:Order held pending margin check"));
 }
 
-/// ibx#250 end-to-end: a genuinely-Inactive order dispatched through the real
+/// end-to-end: a genuinely-Inactive order dispatched through the real
 /// `process_msgs` path (not a direct `ClientCore` call) stays in the
 /// open-order snapshot, while a Rejected one — which stringifies to the same
 /// "Inactive" — does not resurrect into it.
@@ -3144,7 +3139,7 @@ fn process_msgs_dispatches_all_quote_fields() {
     assert!(w.events.iter().any(|e| e.starts_with("tick_price:1:14:"))); // open
     // tick_size for: bid_size(0), ask_size(3), last_size(5), volume(8).
     // Assert the delivered quantity, not just that a tick appeared — the
-    // scaling defect in ibx#287 fired every one of these with a value four
+    // scaling defect in fired every one of these with a value four
     // orders of magnitude off, and a `starts_with` check passed throughout.
     let delivered = |prefix: &str| -> Option<f64> {
         w.events.iter().find(|e| e.starts_with(prefix))
@@ -3590,8 +3585,8 @@ fn process_msgs_dispatches_historical_ticks() {
     assert!(w.events.iter().any(|e| e == "historical_ticks:8:true"));
 }
 
-/// Regression: historical-tick variants must route to their variant-specific
-/// callback (iso ibapi). Was: all three flowed through historical_ticks().
+/// Each historical-tick variant routes to its own callback, as in ibapi,
+/// rather than all three arriving through `historical_ticks`.
 #[test]
 fn process_msgs_routes_historical_tick_variants() {
     let (client, _rx, shared) = test_client();
@@ -4116,7 +4111,7 @@ fn token_type_default_is_empty() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Connection loss (ibx#242)
+// Connection loss
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
