@@ -694,7 +694,7 @@ fn api_gt_suite() {
         // Try multiple times — CompletedOrder may arrive slightly after OrderStatus
         for _ in 0..5 {
             poll(&client, &mut wrapper, Duration::from_millis(500));
-            client.req_completed_orders(&mut wrapper);
+            client.req_completed_orders(false, &mut wrapper);
             if wrapper.events.lock().unwrap().iter().any(|c| matches!(c, Cb::CompletedOrder { .. })) {
                 break;
             }

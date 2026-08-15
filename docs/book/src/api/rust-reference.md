@@ -697,14 +697,15 @@ pub fn req_all_open_orders(&self, wrapper: &mut impl Wrapper)
 
 #### `req_completed_orders`
 
-Request completed orders. Immediately delivers all archived completed orders, then calls `completed_orders_end`.
+Request completed orders. Immediately delivers every completed order this session archived, then calls `completed_orders_end`. `api_only` is taken and not applied. It asks for orders entered through an API rather than by hand, and nothing this client holds says which an order was: the completed orders are the ones this session saw, and the venue states no origin on them. Passing `true` is answered with all of them rather than with a guess at which were typed.
 
 ```rust
-pub fn req_completed_orders(&self, wrapper: &mut impl Wrapper)
+pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper)
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
+| `api_only` | `bool` |  |
 | `wrapper` | `&mut impl Wrapper` | Wrapper callback receiver for synchronous delivery. |
 
 ---

@@ -428,6 +428,12 @@ impl EClient {
     }
 
     /// Request completed orders.
+    ///
+    /// `api_only` is taken and not applied. It asks for orders entered through
+    /// an API rather than by hand, and nothing this client holds says which an
+    /// order was: the completed orders are the ones this session saw, and the
+    /// venue states no origin on them. Passing `true` is answered with all of
+    /// them rather than with a guess at which were typed.
     #[pyo3(signature = (api_only=false))]
     fn req_completed_orders(&self, py: Python<'_>, api_only: bool) -> PyResult<()> {
         let _ = api_only;
