@@ -82,6 +82,26 @@ impl EClient {
             if shared.portfolio.account_download_complete() { break; }
             py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
         }
+        // A position feed names a holding by id and leaves the rest to the
+        // definition, which the engine asks for as the feed is read. That
+        // answer lands a moment after the account download is called complete,
+        // so reading straight through hands back a holding with no symbol,
+        // security type or currency on it — one a caller can neither price nor
+        // close — and nothing reads it again later.
+        //
+        // Bounded, and only while something is still unnamed: a definition the
+        // venue never sends must cost a caller a wait, not a hang.
+        let waited_from = std::time::Instant::now();
+        loop {
+            let unnamed = shared.portfolio.position_infos().into_iter().any(|pi| {
+                pi.symbol.is_empty() && self.core.get_contract(pi.con_id, &shared).is_none()
+            });
+            if !unnamed || waited_from.elapsed() > std::time::Duration::from_secs(2) {
+                break;
+            }
+            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(20)));
+        }
+
         let positions = shared.portfolio.position_infos();
         for pi in &positions {
             let c_py = Py::new(py, self.position_contract(pi, &shared))?.into_any();
