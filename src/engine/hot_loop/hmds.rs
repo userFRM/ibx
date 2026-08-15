@@ -12,7 +12,7 @@ use super::{HeartbeatState, emit, clone_for_event, find_body_after_tag, extract_
 
 /// Idle bound for an in-flight historical query: if no bar segment, error,
 /// or completion arrives for this long, the request is failed with error 162
-/// and a terminal sentinel instead of hanging forever (ibx#231). The
+/// and a terminal sentinel instead of hanging forever. The
 /// gateway's pacing limiter drops requests silently, which is otherwise
 /// indistinguishable from a permanent hang.
 const HISTORICAL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -56,7 +56,7 @@ pub(crate) struct HmdsState {
     /// The deadline is refreshed on every matched bar segment and swept by
     /// `sweep_pending_historical` — a gateway that goes silent (e.g. the
     /// pacing limiter tripping) no longer hangs the request forever
-    /// (ibx#231). keepUpToDate entries are exempt: they stay resident by
+ ///. keepUpToDate entries are exempt: they stay resident by
     /// design and their bars flow on a different path.
     pub(crate) pending_historical: Vec<(String, u32, Instant)>,
     pub(crate) pending_head_ts: Vec<(String, u32)>,
@@ -90,12 +90,12 @@ pub(crate) struct HmdsState {
 }
 
 /// Wire security type for a historical query. Empty falls back to the stock
-/// encoding, which is what every caller got unconditionally before (ibx#305).
+/// encoding, which is what every caller got unconditionally before.
 ///
 /// A type the enum does not list is passed through rather than emptied. The
 /// enum covers the types the order path understands, and `to_fix` deliberately
 /// blanks anything else so an unclassified instrument cannot masquerade as a
-/// stock (ibx#223) — but that reasoning is about the order path. A historical
+/// stock — but that reasoning is about the order path. A historical
 /// query for a valid type the enum happens not to carry, `FOP` say, would
 /// otherwise be narrowed to nothing. The descriptive branch of the subscribe
 /// path passes such types through in the same way.
@@ -109,7 +109,7 @@ pub(crate) struct HmdsState {
 /// client has already lost: a contract returned by `req_contract_details` for
 /// an unlisted type arrives with an empty `sec_type`, because the enum cannot
 /// carry it, and an empty type still means stock here. That round trip needs
-/// the enum to stop discarding what it cannot name (ibx#230).
+/// the enum to stop discarding what it cannot name.
 fn hist_sec_type(sec_type: &str) -> String {
     if sec_type.is_empty() {
         return "CS".to_string();
@@ -254,7 +254,7 @@ impl HmdsState {
     /// the dead socket in place, and the reconnect scheduler returns early
     /// while a connection is present — so the transport was stuck for the life
     /// of the process, on both the liveness timeout and the ordinary
-    /// receive-error path (ibx#367).
+    /// receive-error path.
     pub(crate) fn disconnect(&mut self, hmds_conn: &mut Option<Connection>) {
         self.disconnected = true;
         *hmds_conn = None;
@@ -404,7 +404,7 @@ impl HmdsState {
                             msgs.push(unsigned);
                         }
                         Frame::Control(_) => {
-                            // 8=1 / 8=X control state — not consumed on the data path (ibx#185).
+                        // 8=1 / 8=X control state — not consumed on the data path.
                         }
                     }
                 }
@@ -494,17 +494,17 @@ impl HmdsState {
                         if let Some(pos) = self.pending_historical.iter().position(|(qid, _, _)| resp.query_id.starts_with(qid.as_str())) {
                             let (_, req_id, _) = self.pending_historical[pos];
                             let is_complete = resp.is_complete;
-                            // Activity on this query — push the idle deadline out (ibx#231).
+                            // Activity on this query — push the idle deadline out.
                             self.pending_historical[pos].2 = Instant::now() + HISTORICAL_IDLE_TIMEOUT;
                             // Bar completion rides <eoq>true> in the final segmented
                             // ResultSetBar; earlier segments carry <eoq>false>
-                            // (ib-agent#169). Kept at debug: fires per bar batch.
+ //. Kept at debug: fires per bar batch.
                             log::debug!(
                                 "HMDS W matched: req_id={} query_id={:?} eoq={} bars={}",
                                 req_id, resp.query_id, is_complete, resp.bars.len()
                             );
                             // Clone only when someone is listening on the event
-                            // channel — a bar batch is a deep copy (ibx#242).
+                            // channel — a bar batch is a deep copy.
                             let for_event = clone_for_event(event_tx, &resp);
                             shared.reference.push_historical_data(req_id, resp);
                             if let Some(data) = for_event {
@@ -514,9 +514,9 @@ impl HmdsState {
                                 self.pending_historical.remove(pos);
                             }
                         } else {
-                            // ibx#182 follow-up: diagnostic bisect — when parse_bar_response
-                            // returns Some but the query_id doesn't match any in-flight
-                            // pending_historical, the response is silently dropped.
+                            // A parsed response whose query_id matches no
+                            // in-flight pending_historical is reported rather
+                            // than dropped.
                             log::warn!(
                                 "HMDS W parsed but no pending_historical match: resp.query_id={:?} eoq={} bars={} pending={:?}",
                                 resp.query_id, resp.is_complete, resp.bars.len(), self.pending_historical
@@ -588,7 +588,7 @@ impl HmdsState {
                         }
                     }
                     else if xml_tag.contains("<QueryError>") {
-                        // ibx#186: gateway rejected the query (e.g. "Invalid time length").
+                        // Gateway rejected the query (e.g. "Invalid time length").
                         // Without this branch the pending entry leaks forever and the
                         // consumer sees no completion or error event.
                         let query_id = crate::control::historical::extract_xml_tag(xml_tag, "id")
@@ -679,13 +679,13 @@ impl HmdsState {
                         }
                     }
                     else {
-                        // ibx#182 follow-up: bumped from debug to warn so silent
-                        // drops in the W cascade surface at Info-level apps.
+                        // Warn, not debug: a drop in the W cascade is visible
+                        // to an application logging at info.
                         log::warn!("HMDS unmatched W response (len={}): {:?}", xml_tag.len(), xml_tag);
                     }
                 } else {
-                    // ibx#183 follow-up: W message with no 6118 payload — fourth
-                    // silent-drop path missed in the original cascade audit.
+                    // A W message with no 6118 payload carries no bars; it is
+                    // reported rather than dropped silently.
                     log::warn!("HMDS W with no tag 6118 (msg_len={})", msg.len());
                 }
             }
@@ -705,7 +705,7 @@ impl HmdsState {
                                         let req_id = *req_id;
                                         // ScanResponse only carries con_ids; contract metadata must be
                                         // resolved via 35=c on CCP. Park results with cache-miss con_ids
-                                        // for the engine to enrich before dispatch (see ibx#156, ib-agent#142).
+                                        // for the engine to enrich before dispatch.
                                         let any_cold = result.entries.iter().any(|e| {
                                             e.con_id != 0
                                                 && shared.reference.get_contract(e.con_id as i64).is_none()
@@ -760,7 +760,7 @@ impl HmdsState {
                             // historical request (any bar size). Not a bar frame and
                             // not a completion sentinel — bar completion rides
                             // <eoq>true> in the ResultSetBar. Recognized and skipped
-                            // (ib-agent#169, ibx#183).
+ //.
                         }
                         _ => {}
                     }
@@ -768,9 +768,9 @@ impl HmdsState {
             }
             "G" => self.handle_rtbar_data(msg, shared),
             other => {
-                // ibx#183 follow-up: was a silent _ => {} arm — log unhandled
-                // msg_types so we can catch frames that bypass the W cascade
-                // entirely (e.g. completion sentinels delivered as a different type).
+                // Log unhandled msg_types rather than swallowing them, so a
+                // frame bypassing the W cascade — a completion sentinel
+                // delivered under another type — is visible.
                 // Recorded as well as logged: a claim that this client reads
                 // everything the venue sends is only checkable if what it does
                 // not read is written down.
@@ -1073,7 +1073,7 @@ impl HmdsState {
         self.next_hmds_query_id += 1;
 
         // One shared table, rejection instead of a silent Min5/TRADES
-        // fallback (ibx#232). The client validates synchronously before the
+        // fallback. The client validates synchronously before the
         // command is sent; this is the engine-side backstop for raw
         // control-channel callers.
         let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
@@ -1161,7 +1161,7 @@ impl HmdsState {
 
         // Same shared table as the batch path — the second, five-entry copy
         // silently downgraded "1 min" (and 16 other sizes) to Min5 on this
-        // path only (ibx#232). Unsupported streaming sizes reject loudly.
+        // path only. Unsupported streaming sizes reject loudly.
         let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
             Ok(dt) => dt,
             Err(e) => {
@@ -1216,7 +1216,7 @@ impl HmdsState {
             // Held across the send: the next IV is derived from this frame, so
             // committing it for a frame the transport refuses or fails to put
             // on the wire desynchronises the chain the peer verifies against,
-            // and the next authentic frame no longer matches (ibx#254).
+            // and the next authentic frame no longer matches.
             let mut iv_guard = sign_iv.lock().unwrap();
             let (to_send, next_iv) = if !sign_key.is_empty() {
                 let (signed, new_iv) = fix::fix_sign(&compressed, sign_key, &iv_guard);
@@ -1229,7 +1229,7 @@ impl HmdsState {
                 // is exempt from the idle sweep because a keep-up-to-date
                 // request is a subscription rather than a single answer — so a
                 // refused send left a request nothing would ever answer and
-                // nothing would ever expire (ibx#254).
+                // nothing would ever expire.
                 log::warn!("keepUpToDate req_id={req_id} not sent: {e}");
                 super::push_hmds_error(shared, req_id, e.to_string(), true);
                 return false;
@@ -1272,7 +1272,7 @@ impl HmdsState {
 
     pub(crate) fn send_head_timestamp_request(&mut self, req_id: u32, con_id: i64, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
         // Same shared table as the bar paths — this was a third divergent
-        // copy with a silent TRADES fallback (ibx#232).
+        // copy with a silent TRADES fallback.
         let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
             Ok(dt) => dt,
             Err(e) => {
@@ -1570,7 +1570,7 @@ impl HmdsState {
         self.pending_schedule.push((query_id, req_id));
     }
 
-    /// Fail historical queries whose idle deadline has passed (ibx#231).
+    /// Fail historical queries whose idle deadline has passed.
     /// Mirrors the `<QueryError>` path: surfaces error 162 plus a terminal
     /// `is_complete=true` sentinel so a consumer blocked on
     /// historical_data_end unblocks with no API change. keepUpToDate
@@ -1616,10 +1616,9 @@ impl HmdsState {
 mod historical_contract_tests {
     use super::{hist_exchange, hist_sec_type};
 
-    /// The substitution the engine applies to whatever the client sent. The
-    /// query builder honoured these fields before this change too, so testing
-    /// it alone cannot tell the fix from the bug — the constants used to be
-    /// applied here, above it.
+    /// The substitution the engine applies to whatever the client sent.
+    /// Exercised here rather than on the query builder alone, which honours
+    /// these fields either way and so cannot show where they are applied.
     #[test]
     fn a_stated_security_type_reaches_the_wire_in_its_own_spelling() {
         assert_eq!(hist_sec_type("FUT"), "FUT");
@@ -1657,10 +1656,9 @@ mod historical_contract_tests {
 
 #[cfg(test)]
 mod tests {
-    /// ibx#254: a keep-up-to-date request whose send is refused was still
-    /// A reconnect that only replaced the socket left every tick-by-tick
-    /// stream behind on the dead one. The transport reported healthy, so
-    /// nothing anywhere said the data had stopped.
+    /// A reconnect resubscribes the tick-by-tick streams. Replacing the socket
+    /// alone leaves every stream behind on the dead one while the transport
+    /// reports healthy, so nothing anywhere states that the data has stopped.
     #[test]
     fn a_reconnect_puts_the_tick_by_tick_streams_back() {
         let mut hmds = HmdsState::new();
@@ -1808,7 +1806,7 @@ mod tests {
 
     #[test]
     fn segmented_bar_reply_completes_on_eoq_true() {
-        // ibx#183 / ib-agent#169: a segmented bar reply carries <eoq>false> on
+        // /: a segmented bar reply carries <eoq>false> on
         // early frames and <eoq>true> on the final one. The pending entry must
         // persist through the false frames and be released on the true frame.
         let mut hmds = HmdsState::new();
@@ -1831,7 +1829,7 @@ mod tests {
 
     #[test]
     fn conadj_response_frame_is_skipped_without_disturbing_pending() {
-        // ibx#183 / ib-agent#169: the 6040=10022 ConAdjResponse (corporate
+        // /: the 6040=10022 ConAdjResponse (corporate
         // actions) is pushed once per contract on the first historical request.
         // It must be recognized and skipped, not treated as bar or completion.
         let mut hmds = HmdsState::new();
@@ -1897,7 +1895,7 @@ mod tests {
         assert!(shared.reference.drain_historical_data().is_empty());
     }
 
-    // ── ibx#232: unknown bar_size rejects at the engine too (backstop for
+    // ── unknown bar_size rejects at the engine too (backstop for
     // raw control-channel callers; the client validates synchronously) ──
 
     #[test]
@@ -1920,7 +1918,7 @@ mod tests {
         assert!(hist[0].1.is_complete);
     }
 
-    // ── ibx#231: idle-deadline sweep ──
+    // ── idle-deadline sweep ──
 
     #[test]
     fn sweep_times_out_idle_historical_with_error_and_end_sentinel() {

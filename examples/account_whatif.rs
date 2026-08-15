@@ -1,13 +1,13 @@
 //! Preview the margin impact of an order without placing it ("what-if").
 //!
 //! Setting `Order.what_if = true` asks the broker to return the order's margin
-//! and commission impact instead of transmitting it. The preview arrives on the
+//! And commission impact instead of transmitting it. The preview arrives on the
 //! `open_order` callback as an `OrderState` whose margin fields are populated
 //! (init / maintenance margin and equity-with-loan, each before / change /
-//! after), followed by a single `PreSubmitted` status. Nothing reaches the book.
+//! After), followed by a single `PreSubmitted` status. Nothing reaches the book.
 //!
 //! This example resolves AXTI, reads a reference price, then runs a what-if for
-//! a 100-share BUY LMT and prints the margin delta.
+//! A 100-share BUY LMT and prints the margin delta.
 //!
 //! Usage:
 //!   IB_USERNAME=... IB_PASSWORD=... cargo run --example account_whatif [qty]

@@ -212,7 +212,7 @@ pub(super) fn phase_cancel_historical(mut conns: Conns, gw: &Gateway, config: &G
     conns
 }
 
-/// ibx#186: gateway rejects certain bar_size/duration combos with a QueryError
+/// The gateway rejects certain bar_size/duration combinations with a QueryError
 /// XML payload on HMDS. Validates that the rejection now surfaces as a queued
 /// error (code 162) + terminal historical_data sentinel rather than leaking the
 /// pending entry forever.
@@ -510,7 +510,7 @@ pub(super) fn phase_historical_news(mut conns: Conns, gw: &Gateway, config: &Gat
         if !results.is_empty() {
             for (req_id, headlines, has_more) in &results {
                 // Step 4: Verify SPECIFIC VALUES
-                assert_eq!(*req_id, 8500, "req_id should match what we sent");
+                assert_eq!(*req_id, 8500, "req_id should match the one sent");
                 println!("  Got {} headlines (has_more={})", headlines.len(), has_more);
                 // Headlines themselves need a news subscription, which this
                 // login holds for none of the providers the venue lists: every
@@ -1073,7 +1073,7 @@ pub(super) fn phase_scanner_params(mut conns: Conns, gw: &Gateway, config: &Gate
             }
         }
         if got_params && got_scan { break; }
-        // If we have params but no scan after a while, don't wait forever
+        // Params but no scan after a while: do not wait forever
         if got_params && Instant::now() > deadline - Duration::from_secs(5) { break; }
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -1192,7 +1192,7 @@ pub(super) fn phase_historical_ohlc_validation(conns: Conns, _gw: &Gateway, _con
     conns
 }
 
-// ─── Phase 111: Large historical dataset — 1 year daily bars (issue #99) ───
+// ─── Phase 111: Large historical dataset — 1 year daily bars ───
 
 pub(super) fn phase_large_historical_dataset(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
     println!("--- Phase 111: Large Historical Dataset (SPY, 1 year of daily bars) ---");
@@ -1265,7 +1265,7 @@ pub(super) fn phase_large_historical_dataset(mut conns: Conns, gw: &Gateway, con
     conns
 }
 
-// ─── Phase 112: DST boundary historical data (issue #98) ───
+// ─── Phase 112: DST boundary historical data ───
 
 pub(super) fn phase_dst_boundary_historical(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
     println!("--- Phase 112: DST Boundary Historical Data (SPY, bars spanning March DST) ---");
@@ -1432,7 +1432,7 @@ pub(super) fn phase_cancel_data_requests(mut conns: Conns, gw: &Gateway, config:
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     // Cancelled requests should produce no responses (or at most partial data
-    // that arrived before the cancel was processed — we tolerate that)
+    // that arrived before the cancel was processed, which is tolerated)
     println!("  All 4 cancel commands processed without crash");
     println!("  PASS\n");
     conns

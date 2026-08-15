@@ -148,25 +148,25 @@ def test_contract_description_repr():
 # ═══════════════════════════════════════
 
 def test_req_market_data_type_live():
-    """req_market_data_type(1) = live data."""
+    """Req_market_data_type(1) = live data."""
     client = EClient(EWrapper())
     client.req_market_data_type(1)  # should not raise
 
 
 def test_req_market_data_type_frozen():
-    """req_market_data_type(2) = frozen data."""
+    """Req_market_data_type(2) = frozen data."""
     client = EClient(EWrapper())
     client.req_market_data_type(2)
 
 
 def test_req_market_data_type_delayed():
-    """req_market_data_type(3) = delayed data."""
+    """Req_market_data_type(3) = delayed data."""
     client = EClient(EWrapper())
     client.req_market_data_type(3)
 
 
 def test_req_market_data_type_delayed_frozen():
-    """req_market_data_type(4) = delayed-frozen data."""
+    """Req_market_data_type(4) = delayed-frozen data."""
     client = EClient(EWrapper())
     client.req_market_data_type(4)
 
@@ -176,7 +176,7 @@ def test_req_market_data_type_delayed_frozen():
 # ═══════════════════════════════════════
 
 def test_req_mkt_depth_signature():
-    """req_mkt_depth accepts ibapi signature without raising."""
+    """Req_mkt_depth accepts ibapi signature without raising."""
     client = EClient(EWrapper())
     client._test_connect()
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -184,7 +184,7 @@ def test_req_mkt_depth_signature():
 
 
 def test_req_mkt_depth_defaults():
-    """req_mkt_depth works with minimal args."""
+    """Req_mkt_depth works with minimal args."""
     client = EClient(EWrapper())
     client._test_connect()
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -192,14 +192,14 @@ def test_req_mkt_depth_defaults():
 
 
 def test_cancel_mkt_depth_signature():
-    """cancel_mkt_depth accepts ibapi signature."""
+    """Cancel_mkt_depth accepts ibapi signature."""
     client = EClient(EWrapper())
     client._test_connect()
     client.cancel_mkt_depth(1)
 
 
 def test_cancel_mkt_depth_with_smart_depth():
-    """cancel_mkt_depth accepts is_smart_depth kwarg."""
+    """Cancel_mkt_depth accepts is_smart_depth kwarg."""
     client = EClient(EWrapper())
     client._test_connect()
     client.cancel_mkt_depth(1, is_smart_depth=True)
@@ -210,7 +210,7 @@ def test_cancel_mkt_depth_with_smart_depth():
 # ═══════════════════════════════════════
 
 def test_req_open_orders_empty():
-    """req_open_orders delivers open_order_end when no orders exist."""
+    """Req_open_orders delivers open_order_end when no orders exist."""
     w = Tier1Wrapper()
     client = EClient(w)
     client._test_connect()
@@ -230,7 +230,7 @@ def test_req_open_orders_only_open_order_end():
 
 
 def test_req_all_open_orders_empty():
-    """req_all_open_orders delivers open_order_end like req_open_orders."""
+    """Req_all_open_orders delivers open_order_end like req_open_orders."""
     w = Tier1Wrapper()
     client = EClient(w)
     client._test_connect()
@@ -243,7 +243,7 @@ def test_req_all_open_orders_empty():
 # ═══════════════════════════════════════
 
 def test_req_executions_empty():
-    """req_executions delivers exec_details_end when no executions exist."""
+    """Req_executions delivers exec_details_end when no executions exist."""
     w = Tier1Wrapper()
     client = EClient(w)
     client.req_executions(1)
@@ -260,7 +260,7 @@ def test_req_executions_only_end():
 
 
 def test_req_executions_with_filter():
-    """req_executions accepts a filter parameter."""
+    """Req_executions accepts a filter parameter."""
     w = Tier1Wrapper()
     client = EClient(w)
     client.req_executions(1, None)  # filter=None is valid
@@ -272,7 +272,7 @@ def test_req_executions_with_filter():
 # ═══════════════════════════════════════
 
 def test_req_historical_ticks_not_connected():
-    """req_historical_ticks raises when not connected."""
+    """Req_historical_ticks raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -282,7 +282,7 @@ def test_req_historical_ticks_not_connected():
 
     assert probe.not_connected, "the call reports rather than raising"
 def test_req_historical_ticks_defaults_not_connected():
-    """req_historical_ticks with defaults raises when not connected."""
+    """Req_historical_ticks with defaults raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -291,7 +291,7 @@ def test_req_historical_ticks_defaults_not_connected():
 
     assert probe.not_connected, "the call reports rather than raising"
 def test_req_historical_ticks_bid_ask_not_connected():
-    """req_historical_ticks with BID_ASK raises when not connected."""
+    """Req_historical_ticks with BID_ASK raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -304,7 +304,7 @@ def test_req_historical_ticks_bid_ask_not_connected():
 # ═══════════════════════════════════════
 
 def test_req_real_time_bars_not_connected():
-    """req_real_time_bars raises when not connected."""
+    """Req_real_time_bars raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -313,7 +313,7 @@ def test_req_real_time_bars_not_connected():
 
     assert probe.not_connected, "the call reports rather than raising"
 def test_req_real_time_bars_defaults_not_connected():
-    """req_real_time_bars with defaults raises when not connected."""
+    """Req_real_time_bars with defaults raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -322,7 +322,7 @@ def test_req_real_time_bars_defaults_not_connected():
 
     assert probe.not_connected, "the call reports rather than raising"
 def test_cancel_real_time_bars_not_connected():
-    """cancel_real_time_bars raises when not connected."""
+    """Cancel_real_time_bars raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     client.cancel_real_time_bars(1)
@@ -334,7 +334,7 @@ def test_cancel_real_time_bars_not_connected():
 # ═══════════════════════════════════════
 
 def test_cancel_head_time_stamp_not_connected():
-    """cancel_head_time_stamp raises when not connected."""
+    """Cancel_head_time_stamp raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     client.cancel_head_time_stamp(1)
@@ -346,13 +346,13 @@ def test_cancel_head_time_stamp_not_connected():
 # ═══════════════════════════════════════
 
 def test_req_sec_def_opt_params_signature():
-    """req_sec_def_opt_params accepts ibapi signature without raising."""
+    """Req_sec_def_opt_params accepts ibapi signature without raising."""
     client = EClient(EWrapper())
     client.req_sec_def_opt_params(1, "AAPL", "", "STK", 265598)
 
 
 def test_req_sec_def_opt_params_defaults():
-    """req_sec_def_opt_params works with minimal args."""
+    """Req_sec_def_opt_params works with minimal args."""
     client = EClient(EWrapper())
     client.req_sec_def_opt_params(1, "AAPL")
 
@@ -362,7 +362,7 @@ def test_req_sec_def_opt_params_defaults():
 # ═══════════════════════════════════════
 
 def test_req_matching_symbols_not_connected():
-    """req_matching_symbols raises when not connected."""
+    """Req_matching_symbols raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     client.req_matching_symbols(1, "AAPL")
@@ -374,7 +374,7 @@ def test_req_matching_symbols_not_connected():
 # ═══════════════════════════════════════
 
 def test_req_current_time_fires_callback():
-    """req_current_time dispatches current_time callback with unix timestamp."""
+    """Req_current_time dispatches current_time callback with unix timestamp."""
     w = Tier1Wrapper()
     client = EClient(w)
     client.req_current_time()
@@ -387,7 +387,7 @@ def test_req_current_time_fires_callback():
 
 
 def test_req_current_time_reasonable_value():
-    """req_current_time returns a time close to now."""
+    """Req_current_time returns a time close to now."""
     w = Tier1Wrapper()
     client = EClient(w)
     before = int(time.time())
@@ -595,7 +595,7 @@ def test_full_ibapi_app_pattern_with_tier1():
 # ═══════════════════════════════════════
 
 def test_mkt_depth_options_list():
-    """req_mkt_depth accepts mkt_depth_options list like ibapi."""
+    """Req_mkt_depth accepts mkt_depth_options list like ibapi."""
     client = EClient(EWrapper())
     client._test_connect()
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -603,7 +603,7 @@ def test_mkt_depth_options_list():
 
 
 def test_req_mkt_depth_exchanges_signature():
-    """req_mkt_depth_exchanges takes no parameters like ibapi."""
+    """Req_mkt_depth_exchanges takes no parameters like ibapi."""
     client = EClient(EWrapper())
     # Should not raise (method exists, no params needed)
     # Note: actual request requires connection, but method should exist
@@ -611,7 +611,7 @@ def test_req_mkt_depth_exchanges_signature():
 
 
 def test_real_time_bars_options_list():
-    """req_real_time_bars with options list raises when not connected."""
+    """Req_real_time_bars with options list raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")
@@ -620,7 +620,7 @@ def test_real_time_bars_options_list():
 
     assert probe.not_connected, "the call reports rather than raising"
 def test_historical_ticks_misc_options():
-    """req_historical_ticks with misc_options raises when not connected."""
+    """Req_historical_ticks with misc_options raises when not connected."""
     probe = NotConnectedProbe()
     client = EClient(probe)
     contract = Contract(con_id=265598, symbol="AAPL")

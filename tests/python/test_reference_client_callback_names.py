@@ -2,9 +2,9 @@
 
 The reference client names its callbacks with the words run together; this one
 names them with underscores. A caller who brings a wrapper written against the
-reference client defines its names, and every call used to land on the do-nothing
-default this base class supplies — so their callbacks never ran, and nothing said
-so. Silence is the whole of the fault.
+reference client defines its names. Without the aliases below, every call lands
+on the do-nothing default this base class supplies: those callbacks never run,
+and nothing says so. Silence is the whole of the fault.
 """
 import threading
 from ibx import EClient, EWrapper
@@ -15,7 +15,7 @@ def _watchdog(seconds=5.0):
 
 
 def test_a_wrapper_named_the_reference_way_is_called():
-    """orderStatus, not order_status — the names genuinely differ here."""
+    """OrderStatus, not order_status — the names genuinely differ here."""
     class ReferenceStyle(EWrapper):
         def __init__(self):
             self.seen = []

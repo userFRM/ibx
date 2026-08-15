@@ -113,7 +113,7 @@ pub fn xyz_build_soft_token(state: u32, x: &str, y: &str, z: &str) -> Vec<u8> {
 
 /// Build the second-factor approval init message (state=1).
 ///
-/// Layout per ib-agent#123 — 5-slot header + 4 string fields in body:
+/// Layout per — 5-slot header + 4 string fields in body:
 ///
 /// ```text
 /// Header (5 slots, 20 B):
@@ -155,8 +155,7 @@ pub fn xyz_build_swcr_token_init(token_sub_type: &str) -> Vec<u8> {
 /// Sent after the server's state=2 challenge when the user has chosen the
 /// 8-character response-code variant in the IBKey dialog (as opposed to
 /// tapping Approve on the push notification). The literal ASCII code goes
-/// in the `M.z` slot — no transformation client-side. Layout per
-/// ib-agent#149:
+/// in the `M.z` slot — no transformation client-side. Layout:
 ///
 /// ```text
 /// Header (5 slots, 20 B):
@@ -167,9 +166,8 @@ pub fn xyz_build_swcr_token_init(token_sub_type: &str) -> Vec<u8> {
 ///   M.A  = ""        (challenge-response slot, empty for IBKey C/R)
 /// ```
 ///
-/// Note: state=3 carries 3 body strings, not 4 — the `M.D` token sub-type
-/// field present at state=1 is omitted here (verified against the 40-byte
-/// capture in ib-agent#149).
+/// state=3 carries 3 body strings, not 4: the `M.D` token sub-type field
+/// present at state=1 is omitted here, matching the 40-byte capture.
 pub fn xyz_build_swcr_token_code_submission(code: &str) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&20u32.to_be_bytes());             // version
@@ -337,7 +335,7 @@ mod tests {
 
     // ── Second-factor approval (IBKey / SWCR_TOKEN) ─────────────────
 
-    /// The authenticator-code frame, byte for byte (ibx#282). One message,
+    /// The authenticator-code frame, byte for byte. One message,
     /// code 1, the code in the security-token slot — the shape the reference
     /// client puts on the wire after SRP passes. Verified against a live login.
     #[test]
@@ -373,7 +371,7 @@ mod tests {
 
     #[test]
     fn swcr_token_init_matches_canonical_bytes() {
-        // Reference: deepentropy/ib-agent#123. This is the literal 40-byte
+        // This is the literal 40-byte
         // inner XYZ payload one successful gateway login put on the wire,
         // with token_sub_type="2a".
         let expected: Vec<u8> = vec![
@@ -398,7 +396,7 @@ mod tests {
 
     #[test]
     fn swcr_token_code_submission_matches_canonical_bytes() {
-        // Reference: deepentropy/ib-agent#149. The literal 40-byte inner XYZ
+        // The literal 40-byte inner XYZ
         // payload one successful Challenge/Response login put on the wire,
         // with code="02226534".
         let expected: Vec<u8> = vec![

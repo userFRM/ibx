@@ -31,7 +31,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | --- | :---: | --- |
 | Top of book | ✅ Supported | Streaming and snapshot; US equities and FX; `scripts/sdk_sweep.py`, `tests/python/test_live_quotes.py`. Concurrent subscribers on one contract share one wire subscription |
 | Market depth (L2) | ✅ Supported | A book is asked for once, at the venue named, and every level names it. Ten levels a side on ib_async's own ticker, and 95,985 levels over a 175-minute session on this client's wrapper; `tests/python/test_ib_async_depth.py` holds the delivery without a session. On this account IEX answers — its Level II is fee-waived — and returns 227 levels on one SPY subscription; NASDAQ and CME refuse by name, and the refusal reaches the caller. A book asked for on no particular venue is acknowledged and produces nothing, which is what an account with no aggregate entitlement is answered with. `tests/python/test_live_depth.py`, `src/bin/capture_depth.rs` |
-| Historical bars | ✅ Supported | 9 markets in one session (`src/bin/capture_global.rs`); `keepUpToDate` verified in `tests/python/test_issue_100.py` |
+| Historical bars | ✅ Supported | 9 markets in one session (`src/bin/capture_global.rs`); `keepUpToDate` verified in `tests/python/test_historical_and_scanner.py` |
 | Historical ticks and schedules | ✅ Supported | `scripts/sdk_sweep.py`; unsupported tick types return an error rather than substituting another series |
 | Tick-by-tick quotes | ✅ Supported | FX and US equities, concurrent streams, each record carrying its request id; `tests/python/test_live_python_wrappers.py` |
 | Tick-by-tick trades | ✅ Supported | 67,785 trades over a 20-minute session; 327 in the first twenty seconds of one subscription. `Last` and `AllLast` are distinct streams, and a stream is asked for by the venue's id for the contract, which is resolved first when the caller states a description |
@@ -59,9 +59,9 @@ Verification runs against a paper account on IBKR production servers, and the or
 
 | Capability | Status | Verification |
 | --- | :---: | --- |
-| Account values and summary | ✅ Supported | 135 values, each in the currency the server states; subscribed at connect; `tests/python/test_issue_98.py` |
-| Positions and P&L | ✅ Supported | Delivered on login and after each fill; `tests/python/test_issue_98.py` |
-| Managed accounts | ✅ Supported | `tests/python/test_issue_98.py` |
+| Account values and summary | ✅ Supported | 135 values, each in the currency the server states; subscribed at connect; `tests/python/test_account_updates_and_pnl.py` |
+| Positions and P&L | ✅ Supported | Delivered on login and after each fill; `tests/python/test_account_updates_and_pnl.py` |
+| Managed accounts | ✅ Supported | `tests/python/test_account_updates_and_pnl.py` |
 | Financial advisor configuration | 🔬 Implemented | Request reaches the server on both clients; the response requires an advisor account |
 
 ## Reference data
@@ -70,7 +70,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | --- | :---: | --- |
 | Contract details | ✅ Supported | 11 of 12 resolved across 9 countries; the 12th matched 2 contracts and returned an ambiguity error rather than a selection; `src/bin/capture_global.rs` |
 | Option chains, symbol search | ✅ Supported | `scripts/sdk_sweep.py` |
-| Scanners, fundamentals | ✅ Supported | 697 KB scanner parameter set, fundamental report; `tests/python/test_issue_100.py` |
+| Scanners, fundamentals | ✅ Supported | 697 KB scanner parameter set, fundamental report; `tests/python/test_historical_and_scanner.py` |
 | News | ✅ Supported | 117 providers parsed. Headline retrieval requires a news subscription; this account holds none, and every provider returns an empty result set |
 | Exchange directory | ✅ Supported | 203 exchanges, in the two sections the venue states them in: shares and derivatives. What each carries and which group each aggregates into are not stated by the venue and are not stated here |
 | Corporate events calendar | ✅ Supported | The calendar states what it carries — 43 event types with their field schemas, 179 KB — over the security-definition connection, and answers an event query with a well-formed result. Events themselves require a Wall Street Horizon subscription; this account holds none, and every query, by contract and by filter, is answered with an empty set. A query can be withdrawn: it is one message and one answer, so what is withdrawn is the answer. `src/bin/capture_calendar.rs` |

@@ -1,5 +1,5 @@
 //! Gateway-local methods that read init data from shared state.
-//! Data is populated during connection by Gateway::populate_init_data().
+//! Data is populated during connection by Gateway::populate_init_data.
 //! Methods that are not yet supported log a warning.
 
 use crate::api::wrapper::Wrapper;

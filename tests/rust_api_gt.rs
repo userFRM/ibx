@@ -1144,7 +1144,7 @@ fn api_gt_suite() {
         let has_end = cbs.iter().any(|c| matches!(c, Cb::HistoricalDataEnd { .. }));
 
         // After cancel, the pending entry is removed, so the stream eventually stops.
-        // The key: cancel didn't crash, and we got fewer bars than a full 1M request
+        // The cancel did not crash, and fewer bars arrived than a full 1M request
         // (~8000 bars). HistoricalDataEnd should NOT arrive (pending entry removed).
         if !has_end {
             println!("PASS (cancelled, {} partial bars, no end marker)", bars.len());

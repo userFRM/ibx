@@ -89,7 +89,7 @@ fn main() {
         let _ = ibx::protocol::fix::fix_parse(&fix_framed);
     });
 
-    // ── 4. fast_msg_type extraction (what we'd replace fix_parse with) ──
+    // ── 4. fast_msg_type extraction, the alternative to fix_parse ──
     bench("fast_msg_type (byte scan)", ITERATIONS, || {
         let _ = fast_msg_type(&fix_framed);
     });

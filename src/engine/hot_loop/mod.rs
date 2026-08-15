@@ -38,19 +38,19 @@ use farm::FarmState;
 use ccp::CcpState;
 use hmds::HmdsState;
 
-/// Auth server heartbeat interval — single source in config (ibx#219
+/// Auth server heartbeat interval — single source in config (
 /// removed the duplicate definitions here).
 const CCP_HEARTBEAT_SECS: u64 = crate::config::CCP_HEARTBEAT;
 /// Farm heartbeat interval — single source in config.
 const FARM_HEARTBEAT_SECS: u64 = crate::config::FARM_HEARTBEAT;
-/// Liveness (ibx#219), aligned with the gateway's transport thresholds:
-/// send a test request when nothing has been received for this long...
+/// Liveness, aligned with the gateway's transport thresholds:
+/// send a test request when nothing has been received for this long..
 pub const LIVENESS_TEST_SECS: u64 = 15;
 /// ...and declare the connection dead when nothing has been received for
 /// this long. The old scheme declared death at ~21s — racing the server's
 /// own ~35s reset and losing to transient stalls the server tolerates.
 pub const LIVENESS_DEAD_SECS: u64 = 35;
-/// Grace window after (re)connect before liveness is enforced (ibx#219):
+/// Grace window after (re)connect before liveness is enforced:
 /// early-connection jitter must not trigger a false disconnect during a
 /// period the server itself treats as warm-up. Heartbeats are still sent.
 pub const LIVENESS_WARMUP_SECS: u64 = 60;
@@ -82,7 +82,7 @@ pub struct HotLoop {
     /// table is bounded, so they are reconsidered once the account is flat
     /// rather than being lost until the process ends.
     pinned_by_position: Vec<InstrumentId>,
-    /// Next scheduled CCP/farm reconnect attempt (jittered backoff, ibx#218).
+    /// Next scheduled CCP/farm reconnect attempt (jittered backoff).
     ccp_next_attempt_at: Option<Instant>,
     farm_next_attempt_at: Option<Instant>,
     /// Farm connection for market data (market data farm).
@@ -119,7 +119,7 @@ pub struct HotLoop {
     farm_reconnect_attempt: u32,
     pending_ccp_reconnect: Option<Receiver<io::Result<Connection>>>,
     ccp_reconnect_attempt: u32,
-    /// HMDS reconnect state (ibx#187). Drives a background reconnect loop with
+    /// HMDS reconnect state. Drives a background reconnect loop with
     /// exponential backoff when the historical-data farm is down — initial
     /// connect failed, or a future runtime disconnect detector trips it.
     pending_hmds_reconnect: Option<Receiver<io::Result<Connection>>>,
@@ -135,7 +135,7 @@ pub struct HotLoop {
 }
 
 /// Consecutive HMDS reconnect failures before the loss is logged as an error
-/// (ibx#187). Retries do not stop there: the servers go down for maintenance
+///. Retries do not stop there: the servers go down for maintenance
 /// nightly and come back on their own, and a client that gave up after ~2
 /// minutes would stay dark until someone restarted the process — the same
 /// failure the gateway has when its restart token is unset. Attempts continue
@@ -163,7 +163,7 @@ pub struct HeartbeatState {
     /// Pending test request for auth: (test_req_id, sent_at).
     pub pending_ccp_test: Option<(String, Instant)>,
     /// When each connection (re)connected — liveness is not enforced during
-    /// the warm-up window that follows (ibx#219).
+    /// the warm-up window that follows.
     pub ccp_up_since: Instant,
     pub farm_up_since: Instant,
     pub hmds_up_since: Instant,
@@ -348,8 +348,8 @@ impl HotLoop {
     /// Run the hot loop under `catch_unwind`. On panic, log the payload and
     /// emit `Event::Disconnected` so consumers see the dead engine without
     /// having to wait for the next outbound call to fail. Use this from the
-    /// engine-spawn site instead of `run()` directly (ibx#182).
-    /// try_register + full-table rejection (ibx#233). On a full table the
+    /// engine-spawn site instead of `run()` directly.
+    /// try_register + full-table rejection. On a full table the
     /// reply channel gets an Err — the caller's request fails loudly and the
     /// hot loop keeps running. Previously this was an assert! that killed
     /// the engine for the rest of the process.
@@ -403,10 +403,10 @@ impl HotLoop {
     }
 
     /// Reclaim an instrument slot if nothing references it any more
-    /// (ibx#233): no open orders, no market data, no tick-by-tick
-    /// subscription, no news subscription. A reused id would repoint those
-    /// references at the wrong contract, so referenced slots stay resident
-    /// until released.
+    /// Reclaimed only with nothing referring to the slot: no open orders, no
+    /// market data, no tick-by-tick subscription, no news subscription. A
+    /// reused id would repoint those references at the wrong contract, so a
+    /// referenced slot stays resident until released.
     fn try_reclaim_instrument(&mut self, instrument: InstrumentId) {
         if !self.context.open_orders_for(instrument).is_empty() {
             return;
@@ -414,7 +414,7 @@ impl HotLoop {
         // Market data was missing from this list. Cancelling tick-by-tick or
         // news on an instrument that also holds an L1 subscription freed the
         // slot underneath it, and the resubscribe record then replayed the old
-        // contract's descriptor against the id's new occupant (ibx#288).
+        // contract's descriptor against the id's new occupant.
         if self.farm.holds_market_data(instrument) {
             return;
         }
@@ -481,7 +481,7 @@ impl HotLoop {
                 &mut self.farm_conn, &mut self.context, &self.shared,
                 &self.event_tx, &mut self.hb,
             );
-            let _ = farm_was_ok; // reconnects are scheduled below (ibx#218)
+            let _ = farm_was_ok; // reconnects are scheduled below
 
             // 1b. Busy-poll historical socket for tick-by-tick data
             self.hmds.poll(
@@ -496,8 +496,8 @@ impl HotLoop {
             );
 
             // 1c. Hand off any scanner results with cache-miss con_ids to CCP for
-            //     contract-detail fan-out (ibx#156). Mirrors what the gateway does
-            //     internally for binary-API scanner clients — see ib-agent#142.
+            // contract-detail fan-out. Mirrors what the gateway does
+            // internally for binary-API scanner clients.
             for (req_id, result) in self.hmds.cold_scanner_results.drain(..).collect::<Vec<_>>() {
                 self.ccp.start_scanner_enrichment(
                     req_id, result, &mut self.ccp_conn, &self.shared, &mut self.hb,
@@ -573,7 +573,7 @@ impl HotLoop {
             self.ccp.sweep_pending_subscribes(&self.shared);
             self.ccp.sweep_pending_named(&self.shared);
             self.hmds.sweep_pending_historical(&self.shared);
-            let _ = ccp_was_ok; // reconnects are scheduled below (ibx#218)
+            let _ = ccp_was_ok; // reconnects are scheduled below
 
             // 4. Check control_plane_rx (SPSC) for commands
             self.poll_control_commands();
@@ -582,7 +582,7 @@ impl HotLoop {
             self.check_heartbeats();
 
             // 5b. Poll pending reconnects and schedule the next attempts
-            //     (jittered backoff instead of immediate re-dials, ibx#218)
+            // (jittered backoff instead of immediate re-dials)
             self.poll_farm_reconnect();
             self.poll_ccp_reconnect();
             self.poll_hmds_reconnect();
@@ -599,7 +599,7 @@ impl HotLoop {
             // 7. With every transport down there is no socket to poll and no
             //    socket to be quick for, so the spin above buys nothing and
             //    costs a core — on a laptop that is the battery and the fans,
-            //    which is how this gets noticed (ibx#399). Parking only in that
+            // which is how this gets noticed. Parking only in that
             //    state leaves the connected path exactly as it was; a reconnect
             //    is scheduled on a backoff measured in seconds, so a millisecond
             //    here delays nothing, including shutdown.
@@ -631,7 +631,7 @@ impl HotLoop {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => true,
         };
 
-        // Drain the buffer so we can mutably borrow self in the loop body.
+        // Drain the buffer first, so the loop body can mutably borrow self.
         // Requests held for want of a contract id come first: they were asked
         // for before anything still in the buffer.
         // A book held for want of the list of venues that offer one, now that
@@ -670,7 +670,7 @@ impl HotLoop {
                     // resolved. Refusing after the subscribe had already gone out
                     // left the caller told it failed while a live subscription
                     // bound the second contract's tag and minTick onto the first,
-                    // with no id to cancel it by (ibx#278).
+                    // with no id to cancel it by.
                     match self.register_or_reject(con_id, symbol.clone(), &sec_type, &exchange, &option_key, &None) {
                         None => {
                             if let Some(tx) = &reply_tx {
@@ -681,9 +681,8 @@ impl HotLoop {
                         }
                         // Already subscribed, so nothing goes to the venue
                         // again: one contract holds one subscription on the
-                        // wire, and the caller watches the one that is up. It
-                        // used to be refused, so two parts of one program
-                        // could not watch the same contract.
+                        // wire, and the caller watches the one that is up, so
+                        // two parts of one program may watch one contract.
                         Some(id) if self.farm.holds_market_data(id) => {
                             if let Some(tx) = &reply_tx {
                                 let _ = tx.send(Ok(id));
@@ -735,7 +734,7 @@ impl HotLoop {
                     // The tags are dead with the requests that earned them, and
                     // `try_reclaim_instrument` below only drops them when the
                     // slot itself goes — so a pinned instrument accumulated one
-                    // per ack until the next farm drop (ibx#292). News is the
+                    // per ack until the next farm drop. News is the
                     // one reader that outlives the L1 request: ticker setup
                     // registers into the same map and news routes on it, so a
                     // live news subscription keeps them.
@@ -794,7 +793,7 @@ impl HotLoop {
                     let _ = (key, value);
                 }
                 ControlCommand::Ping => {
-                    // On-demand RTT sample (ibx#158). Reuses the liveness
+                    // On-demand RTT sample. Reuses the liveness
                     // test-request machinery; a pending liveness test is
                     // already a measurement in flight, so don't stomp it.
                     if self.hb.pending_ccp_test.is_none()
@@ -1373,7 +1372,7 @@ impl HotLoop {
 
 
     /// Schedule-then-spawn farm reconnects on the jittered backoff ladder
-    /// (ibx#218). Called every loop iteration; no-op while connected or an
+ ///. Called every loop iteration; no-op while connected or an
     /// attempt is in flight.
     fn maybe_spawn_farm_reconnect(&mut self) {
         if !self.farm.disconnected || self.pending_farm_reconnect.is_some() {
@@ -1392,7 +1391,7 @@ impl HotLoop {
         match self.farm_next_attempt_at {
             None => {
                 let delay = reconnect_backoff(self.farm_reconnect_attempt);
-                log::info!("Farm reconnect attempt {} scheduled in {:?} (ibx#218)",
+                log::info!("Farm reconnect attempt {} scheduled in {:?}",
                     self.farm_reconnect_attempt + 1, delay);
                 self.farm_next_attempt_at = Some(Instant::now() + delay);
             }
@@ -1426,7 +1425,7 @@ impl HotLoop {
         match self.ccp_next_attempt_at {
             None => {
                 let delay = reconnect_backoff(self.ccp_reconnect_attempt);
-                log::info!("CCP reconnect attempt {} scheduled in {:?} (ibx#218)",
+                log::info!("CCP reconnect attempt {} scheduled in {:?}",
                     self.ccp_reconnect_attempt + 1, delay);
                 self.ccp_next_attempt_at = Some(Instant::now() + delay);
             }
@@ -1529,7 +1528,7 @@ impl HotLoop {
                 self.pending_farm_reconnect = None;
                 // Notify once after three straight failures; retries continue
                 // on the backoff ladder — the old 3-attempt hard cap gave up
-                // sooner than the gateway would (ibx#218).
+                // sooner than the gateway would.
                 if self.farm_reconnect_attempt == 3 {
                     log::error!("Farm auto-reconnect failed 3 times — notifying (retries continue)");
                     self.loss_announced = true;
@@ -1630,7 +1629,7 @@ impl HotLoop {
                         + retry::delay_for(reason, reconnect_backoff(self.ccp_reconnect_attempt)),
                 );
                 self.pending_ccp_reconnect = None;
-                // See the farm path: notify once, keep retrying (ibx#218).
+                // See the farm path: notify once, keep retrying.
                 if self.ccp_reconnect_attempt == 3 {
                     log::error!("CCP auto-reconnect failed 3 times — notifying (retries continue)");
                     self.loss_announced = true;
@@ -1648,7 +1647,7 @@ impl HotLoop {
 
     /// If HMDS is down and a backoff window has elapsed, spawn the next attempt.
     /// Auto-schedules the first attempt when the engine starts with no HMDS
-    /// connection — covers the ibx#187 case where initial soft-token returned
+    /// connection — covers the case where initial soft-token returned
     /// FAILED and the gateway dropped the socket.
     fn maybe_spawn_hmds_reconnect(&mut self) {
         if self.hmds_conn.is_some() { return; }
@@ -1813,7 +1812,7 @@ impl HotLoop {
                 // check only sends a TestRequest when none is outstanding — so
                 // a fresh connection went silent-to-dead without ever being
                 // probed. The warm-up starts here too, or the new session is
-                // already past it (ibx#367).
+                // already past it.
                 self.hb.pending_hmds_test = None;
                 self.hb.hmds_up_since = Instant::now();
                 self.hmds_reconnect_attempt = 0;
@@ -1972,7 +1971,7 @@ impl std::ops::Deref for StackStr {
     type Target = str;
     #[inline]
     fn deref(&self) -> &str {
-        // SAFETY: We only write ASCII digits, '.', '-', and ':'
+        // SAFETY: only ASCII digits, '.', '-' and ':' are written
         unsafe { std::str::from_utf8_unchecked(&self.buf[..self.len as usize]) }
     }
 }
@@ -2010,7 +2009,7 @@ pub(crate) fn emit(event_tx: &Option<SyncSender<Event>>, event: Event) {
 /// Use this wherever the payload is a deep copy (bar batches, contract
 /// definitions): the value goes to `SharedState` by move and the clone is paid
 /// for only when someone is listening. With no channel — the default for the
-/// Rust client — nothing is copied at all (ibx#242).
+/// Rust client — nothing is copied at all.
 ///
 /// Clone first, push second, emit last, so the event never becomes visible
 /// before the same data is readable from `SharedState`.
@@ -2019,11 +2018,11 @@ pub(crate) fn clone_for_event<T: Clone>(event_tx: &Option<SyncSender<Event>>, va
     event_tx.as_ref().map(|_| value.clone())
 }
 
-/// Backoff schedule for HMDS reconnect attempts (ibx#187, ib-agent#153).
+/// Backoff schedule for HMDS reconnect attempts.
 /// `min(64, 3 * 2^(attempt-1))` seconds — approximates the captured cadence
 /// of 3.2 / 11.4 / 18.5 / 42.7 / 63.7 s the official client uses.
 #[inline]
-/// Jittered reconnect backoff for CCP/farm (ibx#218), mirroring the
+/// Jittered reconnect backoff for CCP/farm, mirroring the
 /// gateway's ladder: delay = min(2s floor + ladder + jitter, 82s). The
 /// ladder climbs 0/5/15/30/50/60s per consecutive failure and the jitter
 /// range grows 5s -> 20s (+5s per failure). Immediate rapid-fire re-dials
@@ -2044,11 +2043,11 @@ pub(crate) fn hmds_reconnect_backoff(attempt: u32) -> std::time::Duration {
 }
 
 /// Surface an "HMDS unavailable" error for `req_id` when the historical-data
-/// socket isn't connected. Mirrors the QueryError surface (ibx#186): code 162
+/// socket isn't connected. Mirrors the QueryError surface: code 162
 /// via `push_historical_error` for the consumer's `error()` callback, plus —
 /// for historical-bar requests only — a terminal empty-bars response so
 /// `historical_data_end` fires. Without this, requests issued while HMDS is
-/// down hang silently (ibx#187).
+/// down hang silently.
 pub(crate) fn push_hmds_unavailable(shared: &SharedState, req_id: u32, from_historical: bool) {
     push_hmds_error(
         shared, req_id,
@@ -2117,7 +2116,7 @@ pub(crate) fn format_price(price: Price) -> StackStr {
 /// Parse a FIX tag value as a Price (fixed-point). Returns 0 if absent,
 /// unparseable, or non-finite. Rust's f64 parser accepts "nan"/"inf", but on
 /// the wire those are not-available sentinels, not values: the gateway's own
-/// field parser maps nan/unparseable to unset (ibx#214). Without the finite
+/// field parser maps nan/unparseable to unset. Without the finite
 /// filter, "nan" saturated to 0 and "inf" to i64::MAX.
 pub(crate) fn parse_price_tag(val: Option<&String>) -> Price {
     val.and_then(|s| s.parse::<f64>().ok())
@@ -2129,7 +2128,7 @@ pub(crate) fn parse_price_tag(val: Option<&String>) -> Price {
 /// Decode a wire TIF byte to the API TIF string. Exact inverse of
 /// `api::types::Order::tif_byte` (DTC also encodes to '6' and decodes as GTD).
 /// The old inline map decoded '7' (never emitted) as OPG and dropped
-/// OPG ('2') and AUC ('8') to "" (ibx#220).
+/// OPG ('2') and AUC ('8') to "".
 pub(crate) fn decode_tif(tif: u8) -> &'static str {
     match tif {
         b'0' => "DAY", b'1' => "GTC", b'2' => "OPG", b'3' => "IOC",
@@ -2377,11 +2376,11 @@ mod tests {
         );
     }
 
-    /// ibx#367: the liveness timeout set the disconnected flag and left the
-    /// dead socket in place, and the reconnect scheduler returns early while a
-    /// connection is present — so the first HMDS liveness timeout was permanent
-    /// for the life of the process. Historical requests issued afterwards
-    /// targeted the abandoned socket and never completed.
+    /// The liveness timeout clears the connection as well as setting the
+    /// disconnected flag. The reconnect scheduler returns early while a
+    /// connection is present, so leaving the dead socket in place makes the
+    /// first HMDS liveness timeout permanent for the life of the process, with
+    /// every later historical request targeting the abandoned socket.
     #[test]
     fn an_hmds_disconnect_lets_its_reconnect_run() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
@@ -2633,15 +2632,15 @@ mod tests {
     use crate::types::*;
     use std::time::Duration;
 
-    /// ibx#278: a contract specified the ordinary ibapi way — symbol, secType,
-    /// exchange, no conId — arrives here with conId 0. Keyed on that, every
-    /// such contract resolves to whichever one registered first: quotes land
-    /// in one slot and an order built from it goes out under the first
+    /// A contract specified the ordinary ibapi way — symbol, secType,
+    /// exchange, no conId — arrives here with conId 0. Keyed on that alone,
+    /// every such contract resolves to whichever one registered first: quotes
+    /// land in one slot and an order built from it goes out under the first
     /// contract's symbol.
     /// Two conId-less options on one underlying differ only by strike and right,
     /// which the descriptor did not carry: both landed in one slot, so the put's
     /// quotes and its minTick overwrote the call's — and minTick is what snaps an
-    /// order's price (ibx#278).
+    /// order's price.
     #[test]
     fn two_conid_less_options_on_one_underlying_do_not_share_a_slot() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
@@ -2695,7 +2694,7 @@ mod tests {
         assert_eq!(hl.register_or_reject(0, "QQQ".into(), "", "", "", &None), Some(qqq));
     }
 
-    // ibx#214: f64::from_str accepts "nan"/"inf", so a not-available sentinel
+    // F64::from_str accepts "nan"/"inf", so a not-available sentinel
     // of "nan" collapsed to price 0 (and "inf" saturated to i64::MAX) instead
     // of being treated as unset.
     #[test]
@@ -2799,7 +2798,7 @@ mod tests {
         engine.set_control_rx(rx);
         engine.running = true;
 
-        // Drop sender — simulates EClient being dropped without disconnect().
+        // Drop sender — simulates EClient being dropped without disconnect.
         drop(tx);
 
         engine.poll_once();
@@ -2814,7 +2813,7 @@ mod tests {
 
     #[test]
     fn shutdown_sets_connection_lost_flag_without_event_channel() {
-        // ibx#242: the flag path must work with no event channel attached,
+        // The flag path must work with no event channel attached,
         // which is the default for the Rust client.
         let shared = Arc::new(SharedState::new());
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -2841,10 +2840,9 @@ mod tests {
         assert!(shared.take_connection_lost());
     }
 
-    /// A fully disconnected engine used to run the loop flat out: every poll
-    /// returns immediately with nothing, so the iteration count was bounded
-    /// only by clock speed and one core sat at 100% until the process was
-    /// killed (ibx#399).
+    /// A fully disconnected engine parks rather than running the loop flat
+    /// out. Every poll returns immediately with nothing, so an unparked loop is
+    /// bounded only by clock speed and holds one core at full occupancy.
     ///
     /// Counted in iterations rather than CPU time, because that is what tells a
     /// parked loop from a spinning one on any machine. A free spin manages
@@ -2875,7 +2873,7 @@ mod tests {
 
     #[test]
     fn clone_for_event_skips_the_copy_when_no_channel() {
-        // ibx#242: with no listener the deep copy must not happen at all.
+    // With no listener the deep copy must not happen at all.
         let payload = vec![1u8, 2, 3];
         assert!(clone_for_event(&None, &payload).is_none());
 
@@ -2959,7 +2957,7 @@ mod tests {
         assert_eq!(raw(1), "0.00000001");
     }
 
-    // ibx#218: the CCP/farm ladder — floor 2s, ladder 0/5/15/30/50/60s,
+    // The CCP/farm ladder — floor 2s, ladder 0/5/15/30/50/60s,
     // jitter range growing 5s -> 20s, ceiling 82s.
     #[test]
     fn reconnect_backoff_ladder_bounds() {
@@ -2979,7 +2977,7 @@ mod tests {
         expect(50, 62_000, 82_001); // ladder index capped
     }
 
-    // ibx#219: the liveness ladder must sit inside the server's own thresholds
+    // The liveness ladder must sit inside the server's own thresholds
     // (test at 15s, dead at 35s, warm-up 60s). Ordering is a `const _` assert.
     #[test]
     fn liveness_thresholds_ordered() {
@@ -2991,8 +2989,8 @@ mod tests {
     #[test]
     fn hmds_reconnect_backoff_matches_captured_cadence() {
         use std::time::Duration;
-        // Captured cadence (ib-agent#153): 3.2 / 11.4 / 18.5 / 42.7 / 63.7 s.
-        // Our schedule: 3 / 6 / 12 / 24 / 48 / 64 s — captures the doubling
+        // Captured cadence: 3.2 / 11.4 / 18.5 / 42.7 / 63.7 s.
+        // This schedule: 3 / 6 / 12 / 24 / 48 / 64 s — follows the doubling
         // shape and caps at the 64 s ceiling.
         assert_eq!(hmds_reconnect_backoff(1), Duration::from_secs(3));
         assert_eq!(hmds_reconnect_backoff(2), Duration::from_secs(6));
@@ -3027,7 +3025,7 @@ mod tests {
     /// them and it returns early while an open order, a tick-by-tick or a news
     /// subscription pins the slot. Every subscribe/unsubscribe cycle on a
     /// pinned instrument then left one behind until the next farm drop
-    /// (ibx#292).
+ ///.
     #[test]
     fn an_l1_unsubscribe_hands_back_its_tags_on_a_pinned_instrument() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);

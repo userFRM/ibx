@@ -1,4 +1,4 @@
-"""The settings that used to live in the gateway's own file."""
+"""The settings a gateway keeps in its own configuration file."""
 
 import pytest
 

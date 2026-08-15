@@ -73,7 +73,7 @@ pub fn ns_parse(payload: &[u8]) -> Option<(u32, u32, Vec<String>)> {
     // uppercasing is not length-preserving: U+0131 and U+017F both uppercase
     // to a single ASCII byte, so a payload beginning "m\u{131}\u{17F}c" passed the
     // check while byte 4 sat inside a character — and slicing a `&str` there
-    // is a panic (same class as ibx#258).
+    // is a panic (same class as).
     //
     // The framed receive path does not reach it: `is_ns_text` admits only an
     // ASCII digit or a literal "MISC" before dispatching here. This is the

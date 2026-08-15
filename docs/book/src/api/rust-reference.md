@@ -32,7 +32,7 @@ pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error
 
 #### `connect_with_events`
 
-Connect to IB and start the engine with an [`Event`] channel attached. Returns the client plus a receiver carrying every [`Event`] the engine produces. This is a second, optional delivery path that runs alongside [`process_msgs()`](EClient::process_msgs) — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks (ibx#242).
+Connect to IB and start the engine with an [`Event`] channel attached. Returns the client plus a receiver carrying every [`Event`] the engine produces. This is a second, optional delivery path that runs alongside [`process_msgs()`](EClient::process_msgs) — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks.
 
 ```rust
 pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>>
@@ -114,7 +114,7 @@ pub fn seed_instrument(&self, con_id: i64, instrument: InstrumentId)
 
 #### `is_connected`
 
-False after [`disconnect()`](EClient::disconnect), and after a `process_msgs()` call that observed the engine stopping (ibx#242).
+False after [`disconnect()`](EClient::disconnect), and after a `process_msgs()` call that observed the engine stopping.
 
 ```rust
 pub fn is_connected(&self) -> bool
@@ -615,7 +615,7 @@ pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Re
 
 #### `cancel_order_by_perm_id`
 
-Cancel an order identified by `permId` — stable across sessions. `permId` is the broker-assigned identifier returned in `order_status` callbacks and surfaced in account tools. Useful for cancelling an order placed in a prior session, where the local `order_id` is not retained. Per ib-agent#154 the CCP cancel frame is orderId-only, so ibx looks up the local `order_id` from `permId` in the open-order cache (populated by `place_order` callbacks or by the CCP session-recovery push hydrated in `handle_exec_report`). Fails if `perm_id` is not currently tracked.
+Cancel an order identified by `permId` — stable across sessions. `permId` is the broker-assigned identifier returned in `order_status` callbacks and surfaced in account tools. Useful for cancelling an order placed in a prior session, where the local `order_id` is not retained. the CCP cancel frame is orderId-only, so ibx looks up the local `order_id` from `permId` in the open-order cache (populated by `place_order` callbacks or by the CCP session-recovery push hydrated in `handle_exec_report`). Fails if `perm_id` is not currently tracked.
 
 ```rust
 pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), Refusal>
@@ -741,7 +741,7 @@ pub fn req_executions(&self, req_id: i64, filter: &ExecutionFilter, wrapper: &mu
 
 #### `parse_algo_params`
 
-Parse algo strategy and TagValue params into internal AlgoParams. A key the caller never set defaults the way IB's own algos do (0.0, false, or the documented default enum value). A key the caller *did* set — even to an empty string — is refused if it doesn't parse, instead of silently taking that same default: a typo like `riskAversion="Aggresive"` used to submit a Neutral algo with no error, and `maxPctVol=""` used to submit 0.0. See ibx#263.
+Parse algo strategy and TagValue params into internal AlgoParams. A key the caller never set defaults the way IB's own algos do (0.0, false, or the documented default enum value). A key the caller *did* set — even to an empty string — is refused if it does not parse, rather than taking that same default: `riskAversion="Aggresive"` would otherwise submit a Neutral algo with no error, and `maxPctVol=""` would submit 0.0.
 
 ```rust
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal>
@@ -760,7 +760,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 
 #### `req_mkt_data`
 
-Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) have no emission path, and `tick_generic` never fires (ibx#234) — the venue asks for those under numbers of its own rather than the ones this list uses, and this client does not know the mapping. Delayed and frozen data are requested, contrary to what this said: name the type on [`req_market_data_type`](EClient::req_market_data_type) and every subscription after it carries the mode, or state it per request with [`req_mkt_data_ex`](EClient::req_mkt_data_ex). The table there gives the wire shape of each.
+Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) have no emission path, and `tick_generic` never fires — the venue asks for those under numbers of its own rather than the ones this list uses, and this client does not know the mapping. Delayed and frozen data are requested, contrary to what this said: name the type on [`req_market_data_type`](EClient::req_market_data_type) and every subscription after it carries the mode, or state it per request with [`req_mkt_data_ex`](EClient::req_mkt_data_ex). The table there gives the wire shape of each.
 
 ```rust
 pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, ) -> Result<(), Refusal>
@@ -780,7 +780,7 @@ pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list:
 
 #### `req_mkt_data_ex`
 
-Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time (ibx#233), so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`.
+Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`.
 
 ```rust
 pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool, mode_9887: i32, ) -> Result<(), Refusal>
@@ -817,7 +817,7 @@ pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_tick_by_tick_data`
 
-Subscribe to every trade or every quote change on a contract. This used to refuse outright, on the reasoning that the feed rode a service of its own which this client could not reach. That reasoning was wrong. The feed rides the historical farm this client already reaches — the counterpart registers it there under the name "TickByTick" beside the five-second bars that already stream — and no list of services is involved. The account is entitled; a missing entitlement arrives as the venue's own refusal, not as silence. What was actually wrong was reading what came back. The subscription was always right, which is why the venue acknowledged it and assigned a ticker id, and then nothing could be made of the frames that followed.
+Subscribe to every trade or every quote change on a contract. The feed rides the historical farm, registered there under the name `TickByTick` beside the five-second bars. No separate service is involved. A missing entitlement arrives as the venue's own refusal rather than as silence. What was actually wrong was reading what came back. The subscription was always right, which is why the venue acknowledged it and assigned a ticker id, and then nothing could be made of the frames that followed.
 
 ```rust
 pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type: &str, number_of_ticks: i32, ignore_size: bool, ) -> Result<(), Refusal>
@@ -924,7 +924,7 @@ pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_ping`
 
-Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen). Request an auth-connection round-trip time sample (ibx#158): sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. The result lands asynchronously — poll `last_rtt()` after a moment. No-op while a probe is already in flight or the connection is down.
+Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen). Request an auth-connection round-trip time sample: sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. The result lands asynchronously — poll `last_rtt()` after a moment. No-op while a probe is already in flight or the connection is down.
 
 ```rust
 pub fn req_ping(&self) -> Result<(), Refusal>
@@ -936,7 +936,7 @@ pub fn req_ping(&self) -> Result<(), Refusal>
 
 #### `last_rtt`
 
-Last measured auth-connection round-trip time, if any (ibx#158). A gauge, not a benchmark: the sample is the interval from a probe to the first inbound traffic that followed it, which on an active feed can undercount by racing data already in flight. Also sampled automatically whenever liveness sends its own probe.
+Last measured auth-connection round-trip time, if any. A gauge, not a benchmark: the sample is the interval from a probe to the first inbound traffic that followed it, which on an active feed can undercount by racing data already in flight. Also sampled automatically whenever liveness sends its own probe.
 
 ```rust
 pub fn last_rtt(&self) -> Option<std::time::Duration>
@@ -948,7 +948,7 @@ pub fn last_rtt(&self) -> Option<std::time::Duration>
 
 #### `req_market_data_type`
 
-NOT supported end to end (ibx#234): the requested type is stored locally but never sent to the gateway, so subscriptions always deliver realtime data and delayed tick variants never arrive. Requesting a non-realtime type logs a warning, and the `market_data_type` callback reports the DELIVERED type (realtime) rather than echoing the request.
+NOT supported end to end: the requested type is stored locally but never sent to the gateway, so subscriptions always deliver realtime data and delayed tick variants never arrive. Requesting a non-realtime type logs a warning, and the `market_data_type` callback reports the DELIVERED type (realtime) rather than echoing the request.
 
 ```rust
 pub fn req_market_data_type(&self, market_data_type: i32)
@@ -992,7 +992,7 @@ pub fn quote(&self, req_id: i64) -> Option<Quote>
 
 #### `quote_by_instrument`
 
-Direct SeqLock read by InstrumentId (for callers who track IDs themselves). Returns None for an out-of-range id — this used to panic (ibx#234).
+Direct SeqLock read by InstrumentId (for callers who track IDs themselves). Returns `None` for an id outside the instrument table.
 
 ```rust
 pub fn quote_by_instrument(&self, instrument: InstrumentId) -> Option<Quote>

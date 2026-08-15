@@ -1,19 +1,19 @@
 //! Every wire parser, against input the venue would never send.
 //!
 //! A parser reads bytes off a socket. What arrives is whatever the socket
-//! produced — a frame cut off mid-field by a close, a length that overruns what
-//! followed it, a byte flipped in transit. None of that may take the process
-//! down, because a client that panics on one malformed frame loses the session
-//! and every subscription on it.
+//! Produced — a frame cut off mid-field by a close, a length that overruns what
+//! Followed it, a byte flipped in transit. None of that may take the process
+//! Down, because a client that panics on one malformed frame loses the session
+//! And every subscription on it.
 //!
 //! Each parser is given: every prefix of a well-formed frame, that frame with
-//! one byte replaced at each position, and runs of bytes that are not a frame
-//! at all. The assertion is the absence of a panic — a parser that unwraps a
+//! One byte replaced at each position, and runs of bytes that are not a frame
+//! At all. The assertion is the absence of a panic — a parser that unwraps a
 //! `None`, slices past an end, or subtracts below zero fails the test by
-//! aborting it.
+//! Aborting it.
 //!
 //! The corruption is generated rather than recorded: a fixed sequence, so a
-//! failure is reproducible from the test name and nothing else.
+//! Failure is reproducible from the test name and nothing else.
 
 use ibx::control::contracts;
 use ibx::control::fundamental;

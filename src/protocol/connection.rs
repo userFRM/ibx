@@ -26,7 +26,7 @@ pub enum Frame {
     /// 8=1 / 8=X control message (token-auth / encrypted control state).
     /// Same length-prefixed framing as 8=O; not consumed downstream, but
     /// extracted explicitly so it cannot clobber FIXCOMP frames queued behind
-    /// it in the same recv slice (ibx#185).
+    /// it in the same recv slice.
     Control(Vec<u8>),
 }
 
@@ -75,7 +75,7 @@ impl Write for Stream {
 /// goes out on the one hot-loop thread, so an unbounded write stops that thread
 /// evaluating liveness, servicing shutdown, or polling a reconnect — and the
 /// heartbeat that exists to detect a wedged peer is itself a write, so the
-/// detector cannot run in exactly the case it was built for (ibx#254).
+/// detector cannot run in exactly the case it was built for.
 ///
 /// This bounds a single write syscall, not a whole frame: a peer draining a
 /// trickle keeps resetting it and a large frame can take proportionally longer.
@@ -285,7 +285,7 @@ impl Connection {
             // length-prefixed, trailer-free framing of 8=O. Recognizing them
             // here keeps them out of the buf.clear() arm below, which would
             // otherwise wipe any FIXCOMP frame queued behind them in the same
-            // recv slice (ibx#185).
+            // recv slice.
             let fix_pos = find_subsequence(&self.buf, b"8=FIX.");
             let o_pos = find_subsequence(&self.buf, b"8=O\x01");
             let one_pos = find_subsequence(&self.buf, b"8=1\x01");
@@ -298,10 +298,9 @@ impl Connection {
             let earliest = match earliest {
                 Some(e) => e,
                 None => {
-                    // ibx#183 follow-up: dump the FULL payload (hex + ascii) of
-                    // anything we're about to discard. We need the whole frame
-                    // for upstream analysis (ib-agent#152 sister fixture), not
-                    // just a 64-byte prefix.
+                    // Dump the full payload, hex and ascii, of anything
+                    // discarded here. A 64-byte prefix is not enough to tell
+                    // a framing error from a genuinely malformed frame.
                     let full_hex: String = self.buf
                         .iter()
                         .map(|b| format!("{b:02x}"))
@@ -339,7 +338,7 @@ impl Connection {
 
             // 8=1 / 8=X control protocol: same length-delimited framing as 8=O
             // (body length in tag 9, no checksum trailer). Extracted as Control
-            // frames and ignored downstream (ibx#185).
+            // frames and ignored downstream.
             if self.buf.starts_with(b"8=1\x01") || self.buf.starts_with(b"8=X\x01") {
                 if let Some(total) = binary_msg_length(&self.buf)
                     && self.buf.len() >= total {
@@ -369,11 +368,10 @@ impl Connection {
 
     /// Unsign a received frame using the read IV, chaining the IV.
     ///
-    /// `None` means the frame did not verify and must not be parsed. The result
-    /// used to be a `(bytes, bool)` pair and every one of the twelve callers
-    /// discarded the flag, so a tampered frame — an order ack, a fill, an
-    /// account push — was applied exactly like an authentic one. Returning no
-    /// message is the same information in a form a caller cannot ignore.
+    /// `None` means the frame did not verify and must not be parsed. Returning
+    /// no message states that in a form a caller cannot discard, which a
+    /// validity flag beside the bytes would be: a tampered order ack, fill or
+    /// account push would otherwise be applied like an authentic one.
     ///
     /// A failed frame also leaves the IV alone, because the IV it would advance
     /// to is derived from the body the signature just failed to vouch for.
@@ -382,10 +380,9 @@ impl Connection {
     ///
     /// This costs the case where a genuine frame is damaged in exactly its
     /// signature: its body is intact, so the derived IV would have been the
-    /// sender's true next one, and the connection is left unable to verify what
-    /// follows until it reconnects. That case cannot be told apart from an
-    /// injection here, and the reasoning for preferring this side is set out
-    /// where the decision is made, below.
+    /// sender's true next one, and the connection cannot verify what follows
+    /// until it reconnects. That case is indistinguishable from an injection
+    /// here, and the reasoning for preferring this side is set out below.
     pub fn unsign(&mut self, msg: &[u8]) -> Option<Vec<u8>> {
         if self.read_key.is_empty() {
             return Some(msg.to_vec()); // no signing configured
@@ -456,7 +453,7 @@ impl Connection {
     /// separates a transport that can carry on from one that cannot: a frame
     /// sent in part leaves the signature chain desynchronised and the first
     /// such failure is final, while a write that moved nothing can be retried
-    /// (ibx#254). Once final, every later send fails fast rather than putting
+ ///. Once final, every later send fails fast rather than putting
     /// more frames on a wire the peer can no longer verify.
     fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()> {
         if self.write_failed {
@@ -600,9 +597,8 @@ mod tests {
     use crate::protocol::fix::fix_build;
     use crate::protocol::fixcomp::fixcomp_build;
 
-    /// Helper: create a Connection-like buffer and test frame extraction.
-    /// We can't easily create a TlsStream in tests, so we test the framing
-    /// functions directly.
+    /// A Connection-like buffer for frame-extraction tests. A `TlsStream` is
+    /// not constructible here, so the framing functions are exercised directly.
 
     #[test]
     fn fix_msg_length_basic() {
@@ -689,7 +685,7 @@ mod tests {
     }
 
     /// Helper: create a Connection with a dummy TCP stream for buffer tests.
-    /// We connect to a local listener so we get a valid TcpStream.
+    /// Connects to a local listener, which yields a valid `TcpStream`.
     fn test_connection_with_buf(buf: Vec<u8>) -> Connection {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -794,7 +790,7 @@ mod tests {
 
     #[test]
     fn frame_extraction_control_8_1() {
-        // 8=1 token-auth state message (35=X family). Mirrors ib-agent#152 slice 2.
+    // 8=1 token-auth state message (35=X family). Mirrors slice 2.
         let msg = build_control_frame("1", b"35=X\x011137=ABCDEF\x01");
         let mut conn = test_connection_with_buf(msg.clone());
         let frames = conn.extract_frames();
@@ -822,7 +818,7 @@ mod tests {
 
     #[test]
     fn frame_extraction_control_then_fixcomp_zero_loss() {
-        // ibx#185 acceptance: an 8=1 control frame ahead of a FIXCOMP frame in
+        // acceptance: an 8=1 control frame ahead of a FIXCOMP frame in
         // the same buffer must NOT trigger buf.clear() — the FIXCOMP queued
         // behind it has to survive byte-for-byte.
         let control = build_control_frame("1", b"35=X\x019=0045\x01PASSED\x01");
@@ -892,9 +888,8 @@ mod tests {
         conn
     }
 
-    /// A frame that does not verify must not reach a parser. The result used to
-    /// be a pair whose validity flag every caller discarded, so a tampered
-    /// order ack or fill was applied like an authentic one.
+    /// A frame that does not verify must not reach a parser. A validity flag
+    /// beside the bytes can be discarded by a caller; no message cannot.
     #[test]
     fn a_frame_that_fails_verification_is_not_returned() {
         let key = b"0123456789abcdef";
@@ -996,12 +991,12 @@ mod tests {
             "the tag text inside a value is not the signature field",
         );
     }
-    /// ibx#254: the hot loop is one thread driving three transports, and every
-    /// send went out through an unbounded `write_all`. A peer that stops
-    /// draining without closing blocks that thread — so liveness cannot be
-    /// evaluated, shutdown cannot be serviced, and the reconnect cannot be
-    /// polled. The heartbeat that exists to detect a wedged peer is itself a
-    /// write, so the detector cannot run in exactly the case it was built for.
+    /// The hot loop is one thread driving three transports, so no send may
+    /// block it without bound. A peer that stops draining without closing
+    /// blocks an unbounded `write_all`, and with the thread blocked liveness
+    /// cannot be evaluated, shutdown cannot be serviced and the reconnect
+    /// cannot be polled. The heartbeat that detects a wedged peer is itself a
+    /// write, so the detector would not run in the case it exists for.
     #[test]
     fn a_write_timeout_is_configured_on_both_constructors() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1050,8 +1045,8 @@ mod tests {
 
         // And every later send is refused by this connection rather than
         // attempted on the socket. Asserted on the message, not the kind: a
-        // dead peer produces a broken pipe of its own, so only our own wording
-        // distinguishes "refused without trying" from "tried and failed".
+        // dead peer produces a broken pipe of its own, so only this client's
+        // wording separates "refused without trying" from "tried and failed".
         for label in ["send_raw", "send_fix", "send_fixcomp"] {
             let err = match label {
                 "send_raw" => conn.send_raw(b"x").unwrap_err(),

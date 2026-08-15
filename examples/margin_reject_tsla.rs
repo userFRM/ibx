@@ -1,10 +1,10 @@
 //! Submit a TSLA order sized past available margin and capture the rejection.
 //!
 //! The size is derived, not guessed: a 1-share `what_if` returns the per-share
-//! initial margin and the account's equity-with-loan (available funds). The
-//! real order is then sized to ~2x available margin so the broker's pre-submit
-//! margin check rejects it. The limit is priced below the market so the order
-//! is non-marketable and cannot fill — only the margin check fires.
+//! Initial margin and the account's equity-with-loan (available funds). The
+//! Real order is then sized to ~2x available margin so the broker's pre-submit
+//! Margin check rejects it. The limit is priced below the market so the order
+//! Is non-marketable and cannot fill — only the margin check fires.
 //!
 //! Usage:
 //!   IB_USERNAME=... IB_PASSWORD=... cargo run --example margin_reject_tsla

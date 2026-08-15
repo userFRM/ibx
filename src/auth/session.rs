@@ -124,7 +124,7 @@ pub fn get_session_id() -> String {
 
 /// Path of the persistent 8-hex machine_id file used in tag 6351.
 ///
-/// Per ib-agent#132: the Java client reads/creates `%USERPROFILE%\hwid`
+/// the Java client reads/creates `%USERPROFILE%\hwid`
 /// on Windows or `$HOME/.hwid` elsewhere, persists 8 hex chars there, and
 /// reuses it across logons. IB binds that prefix to the IBKey enrollment
 /// at first-login time; live farms silent-drop logons whose prefix isn't
@@ -396,7 +396,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     };
 
     let data_fields = extract_srp_data(&fields2, username);
-    // Server may provide N and g, or we use defaults
+    // The server may state N and g; otherwise the defaults apply
     let (n, g) = if data_fields.len() >= 2 {
         if let (Some(server_n), Some(server_g)) = (
             BigUint::parse_bytes(data_fields[0].as_bytes(), 16),
@@ -537,12 +537,12 @@ const MAX_FARM_MSG_SIZE: usize = 65536;
 /// auth response and the farm logon ACK that follows it into a single read.
 /// This returns exactly the framed message and leaves any surplus bytes in
 /// `carry` so the caller can hand them to the next reader. Discarding that tail
-/// dropped the logon ACK and stalled the exchange (ibx#237).
+/// dropped the logon ACK and stalled the exchange.
 fn recv_8eq1(stream: &mut TcpStream, carry: &mut Vec<u8>) -> io::Result<Vec<u8>> {
     let mut tmp = [0u8; 4096];
     // Tolerate transient WouldBlock/TimedOut (os error 35 on macOS) from the
     // short poll timeout until an overall deadline; a slow segment from a
-    // high-latency regional gateway must not fail the auth exchange (ibx#237).
+    // high-latency regional gateway must not fail the auth exchange.
     let deadline = std::time::Instant::now()
         + std::time::Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
     loop {
@@ -737,7 +737,7 @@ fn hex_dump(bytes: &[u8]) -> String {
 pub const IB_KEY_DEFAULT_TIMEOUT_SECS: u64 = 1080;
 
 /// Default IBKey token sub-type used in the SWCR_TOKEN state=1 body. Matches
-/// the captured reference profile in ib-agent#123. Some accounts/SWCR
+/// the captured reference profile in. Some accounts/SWCR
 /// configurations require a different value — override via
 /// [`crate::gateway::GatewayConfig::ib_key_token_sub_type`].
 pub const IB_KEY_DEFAULT_TOKEN_SUB_TYPE: &str = "2a";
@@ -1072,9 +1072,9 @@ pub fn do_security_code_2fa<S: Read + Write>(
 ///
 /// If the server jumps straight to a non-XYZ NS message (e.g. CONNECT_RESPONSE),
 /// returns `Skipped` and logs the path — the unread NS message is then handled
-/// by the post-auth loop. (We can't `unread`, so this branch is reached only
-/// when the very first reply is XYZ AUTH_FINISH PASSED with no preceding
-/// state=2.)
+/// by the post-auth loop. There is no `unread`, so this branch is reached only
+/// where the very first reply is XYZ AUTH_FINISH PASSED with no preceding
+/// state=2.
 pub fn do_ib_key_2fa<S: Read + Write>(
     stream: &mut S,
     token_sub_type: &str,
@@ -1085,7 +1085,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
 
     // Send SWCR_TOKEN state=1. The username slot is empty in state=1; the
     // tokenSubType (account-specific, typically "2a") is the only non-empty
-    // body field. See ib-agent#123 for the canonical wire layout.
+    // body field. See for the canonical wire layout.
     let init = xyz::xyz_build_swcr_token_init(token_sub_type);
     let framed = xyz::xyz_wrap(&init);
     stream.write_all(&framed)?;
@@ -1117,11 +1117,11 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 || e.kind() == io::ErrorKind::ConnectionAborted =>
             {
                 // Server closed the socket. Two distinct cases:
-                //   - We never received state=2: server rejected the SWCR_TOKEN
+                //   - No state=2 arrived: the server rejected the SWCR_TOKEN
                 //     init, the account doesn't have IBKey enabled, or the wire
                 //     format is wrong. Fast (seconds).
-                //   - We received state=2 then got socket-close: the real ~18 min
-                //     server-side approval deadline fired (see ib-agent#76).
+                //   - state=2 arrived and then the socket closed: the ~18 min
+                // server-side approval deadline fired.
                 let msg = if saw_challenge {
                     "2FA approval timed out (server closed socket; ~18 min server-side deadline)"
                 } else {
@@ -1202,7 +1202,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 // Challenge/Response result. Server responds PASSED → falls
                 // through to AUTH_FINISH (state=3); FAILED → server skips
                 // AUTH_FINISH and tears the socket down (no retry loop —
-                // ib-agent#149).
+ //).
                 let result = fields.iter().rev().find(|s| !s.is_empty()).cloned().unwrap_or_default();
                 if result.eq_ignore_ascii_case("PASSED") {
                     log::info!("2FA gate: C/R code accepted (state=4 PASSED)");
@@ -1231,7 +1231,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 }
                 if passed {
                     log::info!("2FA gate: approved");
-                    // Per ib-agent#125: AUTH_FINISH carries no token — body is
+                    // AUTH_FINISH carries no token — body is
                     // just `["", "PASSED"]`. The SOFT token used for downstream
                     // farm logons (tag 8483) is the SRP-derived K_soft, which
                     // ibx already computes correctly via `srp_compute_k`
@@ -1265,8 +1265,8 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 ));
             }
             RecvMsg::Xyz { msg_id, state, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN => {
-                // A state we don't model is the server refusing in a shape we
-                // haven't seen. Looping answers it with keepalives until the
+                // An unmodelled state is the server refusing in an unrecognised
+                // shape. Looping answers it with keepalives until the
                 // client deadline and then reports a timeout, which hides the
                 // reason for the ~18 min the operator spends waiting.
                 return Err(ib_key_err(
@@ -1291,8 +1291,8 @@ pub fn do_ib_key_2fa<S: Read + Write>(
             match rx.try_recv() {
                 Ok(result) => {
                     pending_code = None;
-                    // Don't burn a single-use code on a login we're about to
-                    // abandon: the deadline check at the top of the loop would
+                    // A single-use code is not spent on a login about to be
+                    // abandoned: the deadline check at the top of the loop would
                     // fire before the server's answer could be read.
                     if Instant::now() < deadline {
                         submit_swcr_code(stream, &result?)?;
@@ -1336,7 +1336,6 @@ pub fn do_soft_token(
 
     if state2 == 5 {
         // Farm rejected soft token — SRP fallback needed.
-        // See: https://github.com/deepentropy/ibx/issues/123
         log::warn!("SOFT_TOKEN: farm returned state 5 (UNKNOWN) — SRP fallback needed");
         return Ok(SoftTokenOutcome::Unknown);
     }
@@ -1562,7 +1561,7 @@ mod tests {
         assert_eq!(parts[1].len(), 4, "Millis part must be zero-padded to 4 hex chars");
     }
 
-    // ── IBKey Challenge/Response gate (ibx#176) ─────────────────────────────
+    // ── IBKey Challenge/Response gate ─────────────────────────────
 
     /// Timestamp echoed in the scripted server's keepalive probes.
     const PROBE_TS: &str = "20260430-22:58:25";
@@ -1639,7 +1638,7 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> { Ok(()) }
     }
 
-    // ── recv_8eq1 framing / coalesced tail (ibx#237) ────────────────────────
+    // ── recv_8eq1 framing / coalesced tail ────────────────────────
 
     /// Build a framed `8=1` message with the given inner payload.
     fn framed_8eq1(payload: &[u8]) -> Vec<u8> {
@@ -1672,7 +1671,7 @@ mod tests {
         assert!(try_frame_8eq1(&hdr).is_err());
     }
 
-    /// The exact ibx#237 regression: a gateway coalesces the final auth
+    /// The exact regression: a gateway coalesces the final auth
     /// response and the farm logon ACK that follows it into one TCP read.
     /// `recv_8eq1` must return only the framed `8=1` message and preserve the
     /// trailing ACK bytes in the carry buffer, not discard them.
@@ -1732,7 +1731,7 @@ mod tests {
     }
 
     // The machine_id is persistent (read from the hwid file / IBX_HWID env,
-    // created once — see read_or_create_hwid, ib-agent#132), so repeated calls
+    // created once — see read_or_create_hwid), so repeated calls
     // must return the SAME id. This test previously asserted the pre-#132
     // behavior (random id per call) and failed once a hwid file existed.
     #[test]
@@ -2022,7 +2021,7 @@ mod tests {
         assert_ne!(combined & FLAG_OK_TO_REDIRECT, 0);
         assert_ne!(combined & FLAG_PAPER_CONNECT, 0);
         assert_ne!(combined & FLAG_SOFT_TOKEN, 0);
-        // A flag we did NOT set should be absent
+        // A flag that was not set is absent
         assert_eq!(combined & FLAG_IS_FARM, 0);
     }
 
@@ -2224,7 +2223,7 @@ mod tests {
         ))
     }
 
-    // ── do_security_code_2fa — authenticator code (ibx#282) ─────────────
+    // ── do_security_code_2fa — authenticator code ─────────────
 
     #[test]
     fn security_code_gate_sends_the_code_and_accepts_passed() {
@@ -2646,7 +2645,7 @@ mod tests {
 
     #[test]
     fn security_code_gate_surfaces_an_unexpected_774_code() {
-        // Any 774 that is not the result carries a failure the caller must see
+        // Any 774 that is not the result carries a failure the caller must
         // rather than wait out.
         let mut stream = RepliesAfterWrite::new(frame_xyz(&xyz::xyz_build(
             xyz::XYZ_MSG_SECURITY_CODE, 4, "", &["whatever"],
@@ -2748,19 +2747,19 @@ mod tests {
 
     #[test]
     fn ib_key_2fa_skipped_when_server_passes_immediately() {
-        // Server replies AUTH_FINISH(771) state=5 PASSED right after our init —
+        // The server replies AUTH_FINISH(771) state=5 PASSED right after the init —
         // no SWCR_TOKEN(state=2) preceded it, so this is the no-2FA fast path.
         let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 5, "user", &["PASSED"]);
         let mut stream = ScriptedStream::new(frame_xyz(&auth_finish));
         let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap();
         assert_eq!(outcome, IbKeyOutcome::Skipped);
 
-        // Verify we sent the SWCR_TOKEN init carrying the tokenSubType.
+        // The SWCR_TOKEN init carries the tokenSubType.
         let written_payload = &stream.written[8..]; // skip NS frame header
         let (msg_id, _, state, fields) = xyz::xyz_parse_response(written_payload).unwrap();
         assert_eq!(msg_id, xyz::XYZ_MSG_SWCR_TOKEN);
         assert_eq!(state, 1);
-        // Per the canonical layout (see ib-agent#123), tokenSubType is the
+        // Per the canonical layout, tokenSubType is the
         // last (and only non-empty) string field; preceding slots are empty.
         assert_eq!(fields.last().map(|s| s.as_str()), Some("2a"),
             "tokenSubType must be the last field; got {fields:?}");
@@ -2850,7 +2849,7 @@ mod tests {
 
     #[test]
     fn ib_key_2fa_socket_close_before_challenge_says_likely_rejection() {
-        // Server closes the socket immediately after our SWCR_TOKEN init —
+        // The server closes the socket immediately after the SWCR_TOKEN init —
         // no challenge ever arrived. The diagnostic message must NOT blame
         // the 18 min deadline (which would mislead users into "approve faster"
         // when the real fix is "your account doesn't use IBKey").
@@ -2874,11 +2873,11 @@ mod tests {
         assert!(err.to_string().contains("rejected"));
     }
 
-    // ── do_ib_key_2fa — Challenge/Response (ib-agent#149) ───────────────
+    // ── do_ib_key_2fa — Challenge/Response ───────────────
 
     #[test]
     fn ib_key_2fa_cr_submits_code_then_passes_on_auth_finish_state_3() {
-        // Replay of ib-agent#149 run A (success path). Captured fixtures:
+        // Replay of run A (success path). Captured fixtures:
         //   state=2: sessionId="399 830", challenge=10a447bc…0c9dc714 (20B / 40 hex),
         //            AVTH_URL=clientam.com/ibkr/ibkey/seamless?S=…
         //   user types "02226534" from the IBKey app
@@ -2931,7 +2930,7 @@ mod tests {
 
         // The state=3 frame must be byte-for-byte the 40-byte run-A capture.
         assert!(stream.written.windows(submission.len()).any(|f| f == submission),
-            "state=3 submission must byte-match the ib-agent#149 run-A capture");
+            "state=3 submission must byte-match the recorded capture");
         // Nothing was waited on: an unattended login submits before any probe.
         let heartbeat = ns_build_heart_beat(NS_VERSION, PROBE_TS);
         assert!(!stream.written.windows(heartbeat.len()).any(|f| f == heartbeat),
@@ -2941,7 +2940,7 @@ mod tests {
     /// A provider that waits on a human outlives the fast-path grace, so the
     /// code lands on the probe-driven path. The gate must answer the server's
     /// keepalives throughout: called inline, it answers none of them, which is
-    /// what cost the C/R path its connection (ibx#244).
+    /// what cost the C/R path its connection.
     #[test]
     fn ib_key_2fa_cr_slow_provider_keeps_heartbeats_flowing() {
         const CODE: &str = "02226534";
@@ -3087,8 +3086,8 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::Interrupted);
     }
 
-    /// A SWCR_TOKEN state the gate doesn't model is the server refusing in a
-    /// shape we haven't seen. Looping on it answers the refusal with keepalives
+    /// A SWCR_TOKEN state the gate does not model is the server refusing in an
+    /// unrecognised shape. Looping on it answers the refusal with keepalives
     /// until the client deadline — 18 min by default — and then reports
     /// TimedOut, so the operator retries against a server that already said no.
     #[test]

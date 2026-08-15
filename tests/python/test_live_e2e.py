@@ -1,4 +1,4 @@
-"""Python end-to-end compatibility test against live IB paper account (issue #85).
+"""Python end-to-end compatibility test against live IB paper account.
 
 Requires IB_USERNAME and IB_PASSWORD environment variables.
 Run with: pytest tests/python/test_live_e2e.py -v --timeout=120
@@ -182,7 +182,7 @@ class TestLiveE2E:
         assert self.wrapper.got_order_status.wait(timeout=30), "No order status received"
 
         status_events = [e for e in self.wrapper.events if e[0] == "order_status" and e[1] == oid]
-        assert len(status_events) > 0, "Should have order_status for our order"
+        assert len(status_events) > 0, "the placed order should have an order_status"
 
         # Cancel
         self.client.cancel_order(oid, "")
@@ -198,13 +198,13 @@ class TestLiveE2E:
             "Order should be cancelled or rejected"
 
     def test_display_groups(self):
-        """Verify display group API calls work (issue #90).
+        """Verify display group API calls work.
 
         The groups are the seven the reference client offers, kept by the
         client itself: a caller that puts a contract in a group and another
         that follows it are kept in step here, where the counterpart kept them
-        in step between windows. This used to answer with none of them, which
-        told a caller that followed one that there was nothing to follow.
+        in step between windows. Answering with none of them tells a caller
+        that followed one that there is nothing to follow.
         """
         assert self.wrapper.got_next_id.wait(timeout=10)
 

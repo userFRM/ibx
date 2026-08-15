@@ -811,7 +811,7 @@ impl Order {
     ///
     /// Only the types a modify is accepted for are mapped; everything else is
     /// refused before it reaches a replace, and 0 tells the encoder to keep
-    /// whatever the resting order holds (ibx#349).
+    /// whatever the resting order holds.
     pub fn ord_type_byte(&self) -> u8 {
         match self.order_type.to_uppercase().as_str() {
             "MKT" => b'1',
@@ -868,7 +868,7 @@ impl Order {
             hidden: self.hidden,
             outside_rth: self.outside_rth,
             // good_after_time (tag 168) wire format is not yet captured against
-            // the gateway; left unset until verified (see ibx#199 / ib-agent).
+            // the gateway; left unset until verified (see / ib-agent).
             good_after: 0,
             good_till,
             good_till_date_ymd,
@@ -953,7 +953,7 @@ impl Order {
             combo_legs: Vec::new(),
             primary_exchange: String::new(),
             delta_neutral_contract: None,
-            // Valid trigger-method codes only (ibx#223): the raw `as u8`
+            // Valid trigger-method codes only: the raw `as u8`
             // cast wrapped the gateway's -1 (Unknown) to 255, and
             // out-of-range codes went to the wire verbatim. Anything
             // unrecognized coerces to 0 (default = not emitted), matching
@@ -967,7 +967,7 @@ impl Order {
             conditions_cancel_order: self.conditions_cancel_order,
             conditions_ignore_rth: self.conditions_ignore_rth,
             // Keep 1..=4; anything else is "unset" and emits the gateway
-            // default 3 (ReduceOnFillNonBlock). See ibx#215.
+            // default 3 (ReduceOnFillNonBlock).
             oca_type: match self.oca_type {
                 1..=4 => self.oca_type as u8,
                 _ => 0,
@@ -1380,7 +1380,7 @@ pub struct BarData {
     pub wap: f64,
     /// How many trades made it.
     pub bar_count: i32,
-    /// Timezone of `date` as reported by the reply (ibx#234) — previously
+    /// Timezone of `date` as reported by the reply — previously
     /// parsed and then discarded, leaving the bare timestamp string as the
     /// only (unverifiable) evidence of what the bar times mean. Empty on
     /// streaming updates, which carry no timezone of their own.
@@ -1620,7 +1620,7 @@ impl ContractDetails {
         };
         Self {
             contract: c,
-            // Parsed from the reply all along but thrown away (ibx#230).
+            // Parsed from the reply all along but thrown away.
             market_name: def.market_name.clone(),
             min_tick: def.min_tick,
             order_types: def.order_types.join(","),
@@ -1896,7 +1896,7 @@ mod tests {
         assert_eq!(cd.min_tick, 0.0);
     }
 
-    // ibx#223: the raw cast wrapped -1 to 255 and forwarded out-of-range
+    // The raw cast wrapped -1 to 255 and forwarded out-of-range
     // trigger codes to the wire verbatim.
     #[test]
     fn attrs_trigger_method_coerces_invalid_codes() {
@@ -1907,7 +1907,7 @@ mod tests {
         }
     }
 
-    // ibx#230: the reported Contract must round-trip — sec_type is the
+    // The reported Contract must round-trip — sec_type is the
     // official API string, and market_name is no longer thrown away.
     #[test]
     fn contract_details_from_definition_round_trips() {
@@ -1974,7 +1974,7 @@ mod tests {
             ("hidden", |o| o.hidden = true),
             ("outside_rth", |o| o.outside_rth = true),
             // Named by the predicate but deliberately not carried: `attrs()`
-            // hardcodes `good_after` to 0 pending a wire capture (ibx#199), so
+            // hardcodes `good_after` to 0 pending a wire capture, so
             // this entry pins the routing rather than an emitted tag.
             ("good_after_time", |o| o.good_after_time = "20260311 09:30:00".into()),
             ("good_till_date", |o| o.good_till_date = "20260311 16:00:00".into()),

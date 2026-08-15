@@ -140,10 +140,10 @@ pub(super) fn phase_contract_details_by_symbol(conns: Conns) -> Conns {
 
 /// A caller asks what hours a contract trades.
 ///
-/// This used to subscribe to the contract on the market-data connection and
-/// watch the trading connection for a schedule to appear, which is a guess at a
-/// mechanism rather than the one the client uses: the schedule is asked for
-/// against the definition, and arrives paired with it. So the phase tested a
+/// The schedule is asked for against the definition and arrives paired with
+/// it. Subscribing on the market-data connection and watching the trading
+/// connection for a schedule to appear is a guess at a mechanism rather than
+/// the one the client uses, so a phase written that way tests a
 /// path nothing else takes, found nothing, and skipped — while the hours were
 /// reaching callers correctly all along by the path they actually use.
 ///

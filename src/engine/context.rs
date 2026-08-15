@@ -61,9 +61,9 @@ pub struct Context {
     next_order_id: OrderId,
     /// ClOrdID version counter per order for modify chaining (orderId.0 → .1 → .2).
     pub(crate) modify_versions: HashMap<OrderId, u32>,
-    /// Last ClOrdID the server reported (or we emitted) for each order, exactly as
+    /// Last ClOrdID the server reported, or this client emitted, for each order, as
     /// it appeared on the wire. Used as the OrigClOrdID on cancel/modify so that
-    /// legacy orders recorded without a `.{ver}` suffix still match — see ibx#179.
+    /// legacy orders recorded without a `.{ver}` suffix still match.
     pub(crate) last_clord: HashMap<OrderId, String>,
     /// What an order was submitted as. A replace restates an order in full, so
     /// everything the submit stated has to still be here to be restated —
@@ -824,7 +824,7 @@ impl Context {
     /// Submit an adjustable stop order. Adjusts to a different order type when trigger is hit.
     /// Takes `tif` and `attrs` like the other extended submitters: an adjustable
     /// stop is a normal bracket child, so it needs its parent link and OCA group
-    /// (ibx#240). `tif`: b'0' = DAY, b'1' = GTC, b'6' = GTD.
+ ///. `tif`: b'0' = DAY, b'1' = GTC, b'6' = GTD.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_adjustable_stop(
         &mut self,
@@ -865,7 +865,7 @@ impl Context {
     }
 
     /// `outside_rth` is asserted on the replace: the tracked record has no
-    /// field for it, so it has to come from the caller (ibx#247). Use
+    /// field for it, so it has to come from the caller. Use
     /// `modify_ex` to also restate the order type, the time-in-force or the
     /// trigger.
     pub fn modify(&mut self, order_id: OrderId, price: Price, qty: u32, outside_rth: bool) -> OrderId {
@@ -877,7 +877,7 @@ impl Context {
     /// Replace a working order, stating what the replace should carry.
     ///
     /// A zero `ord_type`, `tif` or `stop_price` states nothing and leaves what
-    /// the resting order holds in force (ibx#349, ibx#372).
+    /// the resting order holds in force.
     pub fn modify_ex(
         &mut self,
         order_id: OrderId,
@@ -990,7 +990,7 @@ impl Context {
     }
 
     /// Apply a server-reported status. Returns true when the stored status
-    /// actually changed. Guarded (ibx#212): a stale or reordered frame must
+    /// actually changed. Guarded: a stale or reordered frame must
     /// not regress the lifecycle — terminal states are absorbing, and a
     /// lower-rank status never overwrites a higher one. Deliberate
     /// regressions go through `set_order_status_forced`.
@@ -1002,7 +1002,7 @@ impl Context {
             }
             if prev.is_terminal() || status.rank() < prev.rank() {
                 log::debug!(
-                    "Order {order_id} status guard: keeping {prev:?}, dropping stale {status:?} (ibx#212)",
+                    "Order {order_id} status guard: keeping {prev:?}, dropping stale {status:?}",
                 );
                 return false;
             }
@@ -1053,7 +1053,7 @@ impl Context {
     ///
     /// The engine stops believing these statuses at this point and the API
     /// layer went on reporting them, so `req_open_orders` kept asserting a
-    /// status the engine no longer had (ibx#251). Pair with `uncertain_orders`
+    /// status the engine no longer had. Pair with `uncertain_orders`
     /// to tell the application.
     pub fn mark_orders_uncertain(&mut self) {
         for order in self.open_orders.values_mut() {
@@ -1303,7 +1303,7 @@ mod tests {
         assert!(ctx.open_orders_for(0).is_empty());
     }
 
-    // ── ibx#212: monotonic status guard ──
+    // ── monotonic status guard ──
 
     fn submitted_order(ctx: &mut Context, oid: u64) {
         ctx.insert_order(Order {
@@ -1359,7 +1359,7 @@ mod tests {
         let mut ctx = Context::new();
         submitted_order(&mut ctx, 1);
         assert!(ctx.update_order_status(1, OrderStatus::PendingCancel));
-        // The ibx#212 guard blocks the ordinary path...
+        // The guard blocks the ordinary path,
         assert!(!ctx.update_order_status(1, OrderStatus::Submitted));
         // ...but a cancel reject restores the working status deliberately.
         ctx.set_order_status_forced(1, OrderStatus::Submitted);
@@ -1680,7 +1680,7 @@ mod tests {
         assert_eq!(open.len(), 2);
     }
 
-    
+
     #[test]
     fn submit_limit_auc_drains_correctly() {
         let mut ctx = Context::new();

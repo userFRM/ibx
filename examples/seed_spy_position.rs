@@ -1,9 +1,9 @@
 //! Seed a held SPY position on the paper account so Phase 132 of the compat
-//! suite has something to enrich. Places 1 share BUY at LMT $1000 GTC
+//! Suite has something to enrich. Places 1 share BUY at LMT $1000 GTC
 //! (marketable — far above market for a buy), outside-RTH so it can fill
-//! pre-market. Waits up to 60s for Filled status, then disconnects leaving
-//! the position held. Safe to no-op-rerun: if already holding SPY, the new
-//! fill just adds 1 more share.
+//! Pre-market. Waits up to 60s for Filled status, then disconnects leaving
+//! The position held. Safe to no-op-rerun: if already holding SPY, the new
+//! Fill just adds 1 more share.
 //!
 //! Usage: IB_USERNAME=... IB_PASSWORD=... cargo run --example seed_spy_position
 

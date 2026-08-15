@@ -833,7 +833,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
     conns2
 }
 
-// ─── Phase 110: High-frequency tick stress test (issue #95) ───
+// ─── Phase 110: High-frequency tick stress test ───
 
 pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
     println!("--- Phase 110: High-Frequency Tick Stress Test (SPY+AAPL+MSFT, 30s) ---");
@@ -1205,7 +1205,7 @@ pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
             total_ticks += 1;
             *per_instrument.entry(instrument).or_insert(0u64) += 1;
         }
-        // Stop early if we have ticks from at least 5 instruments
+        // Stop early once ticks have arrived from at least 5 instruments
         if per_instrument.len() >= 5 && total_ticks >= 50 {
             break;
         }

@@ -60,7 +60,7 @@ impl<'a> BitReader<'a> {
         let bit_offset = self.bit_pos & 7;
         self.bit_pos += n;
 
-        // Total bits we need from the byte stream: bit_offset + n.
+        // Total bits taken from the byte stream: bit_offset + n.
         // If <= 64, one u64 load suffices. If > 64 (cross-word), load two words.
         let needed = bit_offset + n;
 
@@ -115,20 +115,20 @@ pub const O_BID_SIZE: u64 = 4;
 pub const O_ASK_SIZE: u64 = 5;
 /// Size of the trade this record reports, not the day's volume. Measured on a
 /// live front-month future: 120 samples, values 1..6, decreasing 60 times in
-/// 119 transitions — a running total cannot decrease (ibx#303).
+/// 119 transitions — a running total cannot decrease.
 pub const O_LAST_SIZE: u64 = 6;
 /// Session high — 28177.25 on the wire against a daily-bar high of exactly
-/// 28177.25 for the same contract and session (ibx#303).
+/// 28177.25 for the same contract and session.
 pub const O_HIGH_PRICE: u64 = 8;
 /// Tick type 9 on the wire: the low price.
 pub const O_LOW_PRICE: u64 = 9;
 /// Cumulative session volume. Measured: 228 samples, zero decreases across 227
 /// transitions, increments of 1..6 matching the per-trade sizes on type 6
-/// (ibx#303). Previously read as a timestamp.
+///. Previously read as a timestamp.
 pub const O_VOLUME: u64 = 10;
 /// Trade timestamp, in two parts: 20 carries a Unix-seconds base (measured
 /// 1785325554) and 21 an offset advancing by exactly 1 per wall-clock second
-/// across 164 samples (ibx#303). Neither was decoded before.
+/// across 164 samples. Neither was decoded before.
 pub const O_TS_BASE: u64 = 20;
 /// Tick type 21 on the wire: the ts offset.
 pub const O_TS_OFFSET: u64 = 21;
@@ -157,10 +157,10 @@ pub const O_UNVERIFIED_18: u64 = 18;
 /// Previous session's close. Settled against the authoritative daily bars for
 /// the same contract: the wire carried 27922.00 while the current session's
 /// bar closed at 27913.75 and the prior session's closed at exactly 27922.00
-/// (ibx#303).
+///.
 pub const O_CLOSE_PRICE: u64 = 3;
 /// Current session's open — 27962.25 on the wire against a daily-bar open of
-/// exactly 27962.25 (ibx#303).
+/// exactly 27962.25.
 pub const O_OPEN_PRICE: u64 = 22;
 /// Type 23 was read as the last-trade timestamp and no longer is: the
 /// timestamp arrives on 20, and captures show 23 carrying something else on
@@ -257,7 +257,7 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
             // An extended entry states its width in a full byte, so it can name
             // a value wider than this decoder reads. That entry is lost either
             // way; abandoning the message threw away every tick after it as
-            // well, including the other server tags in the same 35=P (ibx#302).
+            // well, including the other server tags in the same 35=P.
             // Stepping over it keeps the rest.
             if total_value_bits > 64 {
                 log::debug!("35=P: skipping a {byte_width}-byte tick value");
@@ -317,7 +317,7 @@ pub fn read_vlq(data: &[u8], pos: usize) -> (u64, usize) {
 
 /// Convert VLQ value to signed (upper half of range = negative).
 pub fn vlq_signed(val: u64, num_bytes: usize) -> i64 {
-    // Two overflow traps, both reachable from the wire (ibx#272).
+    // Two overflow traps, both reachable from the wire.
     //
     // read_vlq walks to the end of the buffer when no byte terminates the run,
     // so `7 * num_bytes` can exceed the width of the shift below. Nine groups
@@ -708,11 +708,11 @@ mod tests {
         assert_eq!(reader.remaining(), 0);
     }
 
-    /// ibx#302: an extended entry states its width in a full byte, so it can
-    /// name a value wider than this decoder reads. That entry is lost either
-    /// way — but abandoning the message threw away every tick after it too,
-    /// including the other server tags in the same 35=P. A quote update sitting
-    /// behind one simply never arrived.
+    /// An extended entry states its width in a full byte, so it can name a
+    /// value wider than this decoder reads. That entry is lost either way;
+    /// abandoning the message would also discard every tick after it, including
+    /// the other server tags in the same 35=P, so a quote update sitting behind
+    /// one would never arrive.
     #[test]
     fn a_tick_too_wide_to_read_does_not_discard_the_rest_of_the_message() {
         let mut b = PayloadBuilder::new();
@@ -1038,7 +1038,7 @@ mod tests {
         if val == 0 {
             return vec![0x80];
         }
-        // Find how many 7-bit groups we need
+        // How many 7-bit groups the value spans
         let mut v = val;
         let mut groups = Vec::new();
         while v > 0 {
@@ -1182,7 +1182,7 @@ mod wire_identity_tests {
 
     /// The `35=P` field identities were wrong for five fields and no test
     /// noticed, because nothing pinned a wire number to a meaning. These are
-    /// the numbers measured on a live front-month future (ibx#303); they are
+    /// the numbers measured on a live front-month future; they are
     /// asserted directly so a remap has to change a test that says why.
     #[test]
     fn wire_tick_identities_match_what_the_feed_sends() {
@@ -1230,12 +1230,13 @@ mod overflow_tests {
     use super::*;
     use super::tests::PayloadBuilder;
 
-    /// ibx#272: read_vlq walks to the end of the buffer when nothing terminates
-    /// the run, so vlq_signed received a byte count whose 7-bit width overflowed
-    /// the shift — a panic in debug, a masked shift and a garbage delta in
-    /// release, which is what ships.
-    /// The nine-byte negative boundary: `bits == 63`, where the sign correction
-    /// subtracted `1i64 << 63` from a positive value and left i64.
+    /// `read_vlq` walks to the end of the buffer when nothing terminates the
+    /// run, so `vlq_signed` can receive a byte count whose 7-bit width exceeds
+    /// the shift: a panic in debug, a masked shift and a garbage delta in
+    /// release.
+    ///
+    /// Also covers the nine-byte negative boundary, `bits == 63`, where a sign
+    /// correction subtracting `1i64 << 63` from a positive value leaves i64.
     #[test]
     fn nine_byte_negative_boundary_does_not_overflow_the_subtraction() {
         let body = [0x40u8, 0, 0, 0, 0, 0, 0, 0, 0x80];

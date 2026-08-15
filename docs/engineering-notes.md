@@ -223,7 +223,7 @@ vanish.
 | `6040` 109 | An advisor's allocation groups and profiles | Needs an advisor account |
 | `6040` 141, 154, 175 | Combination position state and leg definitions | Not sent to this account |
 | `6040` 145 | A session-level control message, sibling of the error channel | Not sent to this account |
-| `6040` 18 | The venue's own clock, for drift against ours | Not sent to this account |
+| `6040` 18 | The venue's own clock, for drift against the local one | Not sent to this account |
 | `6040` 188 | A newly added or linked account, and what it may do | The one of these with a consequence: a client managing linked accounts that ignores it does not learn of a new one until it reconnects. This session holds a single account and is sent none |
 | `6040` 119 | Model allocation figures, per account | Answers a request for them, which this client does not send |
 | `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |
@@ -290,7 +290,7 @@ Every type here was compared against it.
 A bond now states its terms — what it pays, how, when it can be called or put,
 whether it converts, what it is rated — and a fund states what it charges, what
 it is closed to and where it may be sold. Those two blocks are most of what a
-bond and a fund are, and a caller asking about either used to receive a symbol.
+bond and a fund are; without them a caller asking about either receives a symbol.
 
 Sixteen remain. Six are precision and sizing figures the counterpart computes
 rather than reads, so they are not a tag to copy. One, a contract's CUSIP, has

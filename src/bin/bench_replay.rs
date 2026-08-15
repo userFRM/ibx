@@ -68,7 +68,7 @@ fn main() {
     let fix_tick_msg = build_fix_tick_message(&tick_payload);
     let fix_tick_heavy = build_fix_tick_message(&tick_payload_heavy);
 
-    // Sign them (so we can benchmark unsign)
+    // Signed, so unsign can be measured
     let (signed_msg, _iv_after) = fix_sign(&fix_tick_msg, &MAC_KEY, &INIT_IV);
     let (signed_heavy, _) = fix_sign(&fix_tick_heavy, &MAC_KEY, &INIT_IV);
 

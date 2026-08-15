@@ -34,7 +34,7 @@ pub enum BarDataType {
 impl BarDataType {
     /// Parse the official API what_to_show string. Unknown values were
     /// previously coerced to TRADES silently, so a misspelled "BID" quietly
-    /// returned trade bars (ibx#232). An empty string is the documented
+    /// returned trade bars. An empty string is the documented
     /// TRADES default; anything else must match exactly (case-insensitive).
     pub fn from_api_str(s: &str) -> Result<BarDataType, String> {
         Ok(match s.to_uppercase().as_str() {
@@ -128,7 +128,7 @@ impl BarSize {
     /// Parse the official API bar-size string. THE single table for every
     /// request path — two divergent copies previously fell back to Min5
     /// silently, so a typo or an unsupported size returned plausible,
-    /// complete, WRONG candles (ibx#232). Case-sensitive on purpose: the
+    /// complete, WRONG candles. Case-sensitive on purpose: the
     /// official API strings are exact.
     pub fn from_api_str(s: &str) -> Result<BarSize, String> {
         Ok(match s {
@@ -167,7 +167,7 @@ impl BarSize {
 
     /// Bar sizes the keepUpToDate streaming path supports. The rest are
     /// accepted on the batch path only; sending them with
-    /// keep_up_to_date=true previously downgraded to Min5 silently (ibx#232).
+    /// keep_up_to_date=true previously downgraded to Min5 silently.
     pub fn supports_keep_up_to_date(&self) -> bool {
         matches!(self, Self::Sec1 | Self::Sec5 | Self::Min5 | Self::Hour1 | Self::Day1)
     }
@@ -242,7 +242,7 @@ pub struct HistoricalRequest {
     /// Wire security type and exchange for the contract being requested.
     /// Owned rather than static: they come from the caller's `Contract`, and
     /// hardcoding them described a different contract than was asked for
-    /// (ibx#305).
+ ///.
     pub sec_type: String,
     /// Which venue to answer for.
     pub exchange: String,
@@ -587,7 +587,7 @@ pub fn build_head_timestamp_xml(req: &HeadTimestampRequest) -> String {
 ///
 /// A name this does not know is refused rather than turned into trades. The
 /// bar path stopped doing that when a misspelled `BID` quietly returned trade
-/// bars (ibx#232); this path went on doing it, so a caller asking for anything
+/// bars; this path went on doing it, so a caller asking for anything
 /// else was answered with trades and told nothing — which is exactly how a
 /// request for the venue's own interest-rate series came back as a list of
 /// option prints.
@@ -986,7 +986,7 @@ mod tests {
         assert_eq!(BarSize::Day1.as_str(), "1 day");
     }
 
-    // ── ibx#232: single parse table, rejection instead of Min5/TRADES ──
+    // ── single parse table, rejection instead of Min5/TRADES ──
 
     #[test]
     fn bar_size_from_api_str_accepts_all_official_strings() {
@@ -1027,7 +1027,7 @@ mod tests {
         assert_eq!(BarDataType::from_api_str("trades").unwrap(), BarDataType::Trades);
         assert_eq!(BarDataType::from_api_str("").unwrap(), BarDataType::Trades);
         assert_eq!(BarDataType::from_api_str("BID_ASK").unwrap(), BarDataType::BidAsk);
-        // A misspelled value used to quietly return trade bars.
+        // A misspelled value is refused rather than answered with trade bars.
         assert!(BarDataType::from_api_str("TRADE").is_err());
         assert!(BarDataType::from_api_str("BIDD").is_err());
     }
@@ -1201,7 +1201,7 @@ mod tests {
 
     /// The contract's own security type and exchange have to reach the query.
     /// Hardcoding them described a stock on SMART whatever was asked for, and
-    /// the gateway rejected anything venue-specific with error 162 (ibx#305).
+    /// the gateway rejected anything venue-specific with error 162.
     #[test]
     fn a_futures_query_carries_its_own_sec_type_and_exchange() {
         let req = HistoricalRequest {

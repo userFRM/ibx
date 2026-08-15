@@ -5,7 +5,7 @@
 //! from ibx import EClient, EWrapper, Contract, Order
 //! class App(EWrapper):
 //!     def next_valid_id(self, order_id):
-//!         ...
+//!         ..
 //! app = App()
 //! client = EClient(app)
 //! client.connect(username="user", password="pass", paper=True)

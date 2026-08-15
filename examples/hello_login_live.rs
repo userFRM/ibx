@@ -1,8 +1,8 @@
 //! Live-account login recipe: connect with `paper: false`, request next_valid_id,
-//! disconnect. Read-only — no orders, no market data.
+//! Disconnect. Read-only — no orders, no market data.
 //!
 //! When the live login triggers a second-factor push, approve it on your mobile
-//! authenticator. The connect call blocks until the gate clears.
+//! Authenticator. The connect call blocks until the gate clears.
 //!
 //! Usage: IB_LIVE_USERNAME=... IB_LIVE_PASSWORD=... cargo run --example hello_login_live
 

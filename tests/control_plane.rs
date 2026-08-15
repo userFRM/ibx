@@ -1,7 +1,7 @@
 //! Compatibility tests for the control plane modules.
 //!
 //! Tests cross-module interactions: contracts ↔ FIX protocol, historical ↔ FIX protocol,
-//! account parsing, and full workflows that span multiple control plane components.
+//! Account parsing, and full workflows that span multiple control plane components.
 
 use ibx::control::account::*;
 use ibx::control::contracts::*;

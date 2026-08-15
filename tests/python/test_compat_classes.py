@@ -120,8 +120,8 @@ def test_contract_details_defaults():
 
 
 def test_contract_details_contract_is_mutable_in_place():
-    # ibx#230: the getter used to hand back a CLONE, so this mutation was a
-    # silent no-op and `cd.contract is cd.contract` was False.
+    # A getter handing back a clone makes this mutation a silent no-op, and
+    # `cd.contract is cd.contract` False.
     cd = ContractDetails()
     cd.contract.con_id = 265598
     assert cd.contract.con_id == 265598
@@ -235,7 +235,7 @@ def test_execution_condition_defaults():
 # ── EWrapper subclassing ──
 
 def test_ewrapper_subclass_with_args():
-    """Issue #105: subclassing EWrapper with constructor arguments."""
+    """Subclassing EWrapper with constructor arguments."""
     class MyWrapper(EWrapper):
         def __init__(self, some_arg):
             super().__init__()

@@ -60,7 +60,7 @@ pub(super) fn phase_ib_error_handling(conns: Conns) -> Conns {
     conns
 }
 
-// ─── Phase 114: Pacing violation recovery — rapid historical requests (issue #94) ───
+// ─── Phase 114: Pacing violation recovery — rapid historical requests ───
 
 pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
     println!("--- Phase 114: Pacing Violation Recovery (10 rapid historical requests) ---");

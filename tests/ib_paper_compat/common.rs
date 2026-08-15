@@ -145,7 +145,7 @@ pub(super) fn shutdown_and_reclaim(
     let hmds = hl.hmds_conn.take();
 
     // Keep auth connection alive between phases — drain pending data and send heartbeat.
-    // Without this, IB kills the auth connection if we're idle for >10s during
+    // Without this, the venue kills the auth connection after >10s idle during
     // phase transitions (e.g., reconnection in historical phases).
     ccp_keepalive(&mut ccp);
 
@@ -163,7 +163,7 @@ pub(super) fn ccp_keepalive(ccp: &mut Connection) {
     for frame in frames {
         let raw = match &frame {
             Frame::Fix(r) | Frame::FixComp(r) | Frame::Binary(r) => r,
-            // Control-state frames are not consumed downstream (ibx#185).
+            // Control-state frames are not consumed downstream.
             Frame::Control(_) => continue,
         };
         let Some(unsigned) = ccp.unsign(raw) else { continue };
@@ -189,7 +189,7 @@ pub(super) fn ccp_keepalive(ccp: &mut Connection) {
         }
     }
 
-    // Send our own heartbeat
+    // Send a heartbeat
     let ts = gateway::chrono_free_timestamp();
     let _ = ccp.send_fix(&[
         (fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT),
@@ -823,7 +823,7 @@ pub(super) fn run_submit_cancel_phase(
                 // the auction and never reaches Submitted (39=0) intraday, so it
                 // must count as the ack and fire the cancel, or the order rests
                 // forever and the phase reports "never acknowledged" while the
-                // acks were in fact arriving (ib-agent#164 timed them at ~120ms).
+                // acks were in fact arriving.
                 // PendingSubmit is the local pre-ack state, kept for order types
                 // that surface it.
                 OrderStatus::PendingSubmit

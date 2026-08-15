@@ -1,12 +1,12 @@
 //! Recipe: resolve the same kind of instrument on venues around the world.
 //!
 //! Every other recipe here trades a US contract quoted in dollars. This one
-//! asks the venue to define a share on eight exchanges across seven
-//! currencies, and prints what came back for each.
+//! Asks the venue to define a share on eight exchanges across seven
+//! Currencies, and prints what came back for each.
 //!
 //! Contract definitions are reference data: the venue answers for Tokyo at
-//! midnight in Tokyo, so this runs at any hour and does not need the markets
-//! it names to be trading.
+//! Midnight in Tokyo, so this runs at any hour and does not need the markets
+//! It names to be trading.
 //!
 //! Usage: IB_USERNAME=... IB_PASSWORD=... cargo run --example global_venues
 

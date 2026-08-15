@@ -214,7 +214,7 @@ impl EClient {
     /// callbacks and surfaced in account tools. Useful for cancelling an order
     /// placed in a prior session, where the local `order_id` is not retained.
     ///
-    /// Per ib-agent#154 the CCP cancel frame is orderId-only, so ibx looks up
+    /// the CCP cancel frame is orderId-only, so ibx looks up
     /// the local `order_id` from `permId` in the open-order cache (populated by
     /// `place_order` callbacks or by the CCP session-recovery push hydrated in
     /// `handle_exec_report`). Fails if `perm_id` is not currently tracked.
@@ -336,7 +336,7 @@ impl EClient {
         // Snapshot first: a callback may re-enter a path that locks
         // `executions`, and the dispatch thread pushes fills through the same
         // mutex — holding it across user code deadlocks one and stalls the
-        // other (ibx#265).
+        // other.
         for se in self.core.snapshot_executions(filter) {
             wrapper.exec_details(req_id, &se.contract, &se.execution);
             wrapper.commission_and_fees_report(&se.commission_and_fees);
@@ -349,10 +349,9 @@ impl EClient {
 ///
 /// A key the caller never set defaults the way IB's own algos do (0.0,
 /// false, or the documented default enum value). A key the caller *did*
-/// set — even to an empty string — is refused if it doesn't parse, instead
-/// of silently taking that same default: a typo like `riskAversion="Aggresive"`
-/// used to submit a Neutral algo with no error, and `maxPctVol=""` used to
-/// submit 0.0. See ibx#263.
+/// set — even to an empty string — is refused if it does not parse, rather
+/// than taking that same default: `riskAversion="Aggresive"` would otherwise
+/// submit a Neutral algo with no error, and `maxPctVol=""` would submit 0.0.
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
     let get = |key: &str| -> Option<String> {
         params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
@@ -453,7 +452,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 /// Parse a `riskAversion` tag value (used by ArrivalPx and ClosePx). A
 /// missing tag defaults to Neutral, matching IB's own algo default; a
 /// present value — including an empty string — that isn't a recognized
-/// member is refused rather than silently defaulting to Neutral. See ibx#263.
+/// member is refused rather than silently defaulting to Neutral.
 fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, Refusal> {
     let raw = match raw {
         None => return Ok(RiskAversion::Neutral),

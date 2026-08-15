@@ -57,7 +57,7 @@ pub const QTY_SCALE: i64 = 100_000_000; // 10^8
 
 /// Convert a wire quantity into the `QTY_SCALE` fixed-point form the `Quote`
 /// fields hold. Every reader divides by `QTY_SCALE`, so a decode path that
-/// stores the magnitude raw delivers quantities 10_000x too small (ibx#287).
+/// stores the magnitude raw delivers quantities 10_000x too small.
 /// Saturating: the magnitude is server-supplied, and a clamped quantity is
 /// preferable to a wrapped one.
 #[inline(always)]
@@ -88,7 +88,7 @@ pub fn qty_from_counted(counted: i64, size_tick: f64) -> Qty {
 /// Snap a fixed-point price to the nearest multiple of `tick` (ties round
 /// away from zero). A non-positive tick means the grid is unknown and the
 /// price is returned unchanged. Pure integer math — exact on the fixed-point
-/// representation. See ibx#216.
+/// representation.
 pub fn snap_to_tick(price: Price, tick: i64) -> Price {
     if tick <= 0 {
         return price;
@@ -147,7 +147,7 @@ pub enum OrderStatus {
 }
 
 impl OrderStatus {
-    /// Lifecycle progress rank for the monotonic status guard (ibx#212).
+    /// Lifecycle progress rank for the monotonic status guard.
     /// A stale or reordered frame must not move an order's reported status
     /// backwards (e.g. a late PreSubmitted after Submitted, or a mass-status
     /// snapshot after a fill). Same-rank transitions are free — the tiers
@@ -205,7 +205,6 @@ pub struct Quote {
     /// When this quote was read, in nanoseconds since the epoch.
     pub timestamp_ns: u64,
     /// Bid-exchange bitmask. Each set bit indexes into smart_components by bit_number.
-    /// Hypothesis pending wire-format confirmation; see deepentropy/ib-agent#120.
     pub bid_exch_mask: i64,
     /// Which venues are at the ask, as a mask over the contract's own
     /// list.
@@ -371,7 +370,7 @@ pub const ORD_PEG_BENCH: u8 = 8;
 /// states none, and the order was not placed by this session, so there is
 /// nothing to recover it from. Distinct from every real code, so it reports as
 /// unstated rather than as an ordinary value, and a replace omits tag 59 rather
-/// than restating a guess as an instruction (ibx#307).
+/// than restating a guess as an instruction.
 pub const TIF_UNSTATED: u8 = 0;
 
 /// Not a real OrdType — marker for what-if orders
@@ -746,7 +745,7 @@ pub struct OrderAttrs {
     pub conditions_ignore_rth: bool,
     /// OCA cancellation semantics (IB tag 6209), 1..=4. 0 = not set, which
     /// emits the gateway default 3 (ReduceOnFillNonBlock). Only emitted when
-    /// an OCA group is present. See ibx#215.
+    /// an OCA group is present.
     pub oca_type: u8,
     /// Exercise or lapse the option this order names (tag 6809): 1 exercises,
     /// 2 lapses, 0 is an ordinary order. There is no message of its own for an
@@ -1041,7 +1040,7 @@ pub enum AlgoParams {
 /// order type and its price parameters. Used by `OrderRequest::SubmitEx`,
 /// which pairs any of these with a TIF and an `OrderAttrs` block, so every
 /// order type can carry extended attributes without a per-type `*Ex`
-/// variant (ibx#224).
+/// variant.
 #[derive(Debug, Clone)]
 pub enum OrderKind {
     /// Fill at whatever the market is.
@@ -1354,7 +1353,7 @@ pub enum OrderRequest {
     /// Extended submission for any order type: `kind` selects the order type
     /// and its prices, paired with a TIF and the full `OrderAttrs` block.
     /// This is how non-LMT types carry parent_id/oca_group/outside_rth/tif
-    /// (ibx#224).
+ ///.
     SubmitEx {
         /// The caller's number for the order.
         order_id: OrderId,
@@ -1407,7 +1406,7 @@ pub enum OrderRequest {
     ///
     /// Carries what the replace message states rather than restating the
     /// tracked original, so a caller changing the order type, the time-in-force
-    /// or the trigger has the change reach the gateway (ibx#349, ibx#372).
+    /// or the trigger has the change reach the gateway.
     /// A zero `tif` states none and leaves the resting value in force.
     Modify {
         /// The number the replaced order takes.
@@ -1420,7 +1419,7 @@ pub enum OrderRequest {
         qty: u32,
         /// Outside-RTH flag from the order the caller resubmitted. The replace
         /// asserts tag 6433 from this rather than from the tracked record,
-        /// which has no field for it (ibx#247).
+        /// which has no field for it.
         outside_rth: bool,
         /// Order type and time-in-force the replacement carries, as
         /// `Order::ord_type` and `Order::tif`. A replace that restated neither
@@ -1462,7 +1461,7 @@ impl OrderRequest {
     }
 
     /// Snap every outbound price-like field to the instrument's tick grid
-    /// (ibx#216). `tick` is the fixed-point tick from
+ ///. `tick` is the fixed-point tick from
     /// `MarketState::min_tick_scaled`; 0 (unknown — no market-data
     /// subscription seen yet) leaves prices unchanged. Percent-based fields
     /// (trailing percent) and non-price fields (quantities, cash amounts)
@@ -1550,8 +1549,8 @@ impl OrderBuffer {
 
     /// Put requests back at the head, ahead of anything queued since.
     ///
-    /// Used where a batch was taken and part of it turned out not to have been
-    /// sent, so it waits for the transport rather than being reported.
+    /// Used where a batch was taken and part of it was not sent, so it waits
+    /// for the transport rather than being reported.
     pub fn requeue_front(&mut self, reqs: Vec<OrderRequest>) {
         if reqs.is_empty() { return; }
         debug_assert!(self.buf.len() + reqs.len() <= MAX_PENDING_ORDERS, "order buffer overflow");
@@ -1714,10 +1713,10 @@ pub struct DepthMktDataDescription {
 }
 /// The single character the server gives a venue, where it has given one.
 ///
-/// This client used to answer with a table of eight venues written here,
-/// which named nothing for every other venue — most of the United States, and
-/// all of everywhere else — and could not be checked against what the server
-/// assigns. A venue is named by the name the server states it under.
+/// A table written here would name nothing for every venue absent from it —
+/// most of the United States, and all of everywhere else — and could not be
+/// checked against what the server assigns. A venue is named by the name the
+/// server states it under.
 pub fn exchange_letter(_exchange: &str) -> &'static str {
     ""
 }
@@ -1892,7 +1891,7 @@ pub struct CompletedOrder {
 }
 
 /// Optional request-side filters for a by-symbol contract-details lookup.
-/// Empty/zero fields are omitted from the request (ib-agent#171, ibx#229).
+/// Empty/zero fields are omitted from the request.
 #[derive(Debug, Clone, Default)]
 pub struct SecDefFilters {
     /// Where the contract is listed.
@@ -1910,7 +1909,7 @@ pub struct SecDefFilters {
     /// Which class of the chain.
     pub trading_class: String,
     /// Identifier lookup (e.g. ISIN): raw identifier and its type. When set, the
-    /// lookup rides the identifier instead of the symbol (ib-agent#174).
+    /// lookup rides the identifier instead of the symbol.
     pub sec_id: String,
     /// Which identifier `sec_id` is: ISIN or CUSIP.
     pub sec_id_type: String,
@@ -2072,7 +2071,7 @@ pub enum ControlCommand {
         symbol: String,
         /// Security type and exchange from the caller's contract. Hardcoding
         /// these described a stock on SMART regardless of what was asked for,
-        /// so anything venue-specific was rejected (ibx#305).
+        /// so anything venue-specific was rejected.
         sec_type: String,
         /// Where the request is directed, or the contract is listed.
         exchange: String,
@@ -2094,7 +2093,7 @@ pub enum ControlCommand {
         /// lookup that names this one when the caller passed no id.
         filters: SecDefFilters,
     },
-    /// Measure auth-connection round-trip time (ibx#158): sends a
+    /// Measure auth-connection round-trip time: sends a
     /// test request immediately; the sample lands in
     /// `SharedState::last_ccp_rtt` when the reply arrives.
     Ping,
@@ -2475,7 +2474,7 @@ pub struct PositionInfo {
     pub currency: String,
     /// How many units one contract is worth.
     pub multiplier: String,
-    // Per-position marks from the account-updates snapshot (ib-agent#172).
+    // Per-position marks from the account-updates snapshot.
     // Set only by the portfolio-value message, not the lean position feed.
     /// What it is worth now, each.
     pub market_price: Price,     // per-share mark * PRICE_SCALE
@@ -2495,7 +2494,7 @@ pub struct MidnightSeed {
     pub con_id: i64,
     /// Position held at midnight. `None` when the row arrived without a
     /// parseable quantity: the position exists but its overnight size is
-    /// unknown, which is not the same as having opened it today (ibx#296).
+    /// unknown, which is not the same as having opened it today.
     pub qty_midnight: Option<i64>,
     /// What the venue states the position was worth at midnight. `None` where
     /// the row did not state it, which is when the day's change has to be
@@ -2796,7 +2795,7 @@ mod tests {
 
     // --- All OrderRequest variants ---
 
-    // ── ibx#216: snap-to-tick ──
+    // ── snap-to-tick ──
 
     const TICK_CENT: i64 = PRICE_SCALE / 100; // 0.01
 

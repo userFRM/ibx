@@ -43,9 +43,9 @@ impl EClient {
         *self.account_id.lock().unwrap() = Some(account_id);
         // Store event_tx so _test_push_disconnect_event can use it.
         *self._test_event_tx.lock().unwrap() = Some(event_tx);
-        // Kept alive: the receiving end used to drop here, which closed the
-        // channel and made every request that sends one fail on a client that
-        // reported itself connected.
+        // Kept alive: dropping the receiving end closes the channel, and every
+        // request that sends one then fails on a client reporting itself
+        // connected.
         *self._test_control_rx.lock().unwrap() = Some(rx);
         self.next_order_id.store(1000, Ordering::Relaxed);
         self.connected.store(true, Ordering::Release);

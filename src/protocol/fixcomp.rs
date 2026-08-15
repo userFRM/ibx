@@ -76,11 +76,9 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
     let mut decoder = ZlibDecoder::new(raw);
     let mut decompressed = Vec::new();
     if let Err(e) = decoder.read_to_end(&mut decompressed) {
-        // ibx#182 root-cause tee: on inflate failure, dump the raw zlib
-        // payload + the full enclosing frame as hex so we can tell
-        // whether the slicing is off, the deflate stream is mid-message,
-        // or the gateway sent genuinely corrupt bytes. Remove once the
-        // upstream cause is identified.
+        // On inflate failure, dump the raw zlib payload and the full
+        // enclosing frame as hex: that is what separates a slicing error, a
+        // deflate stream cut mid-message, and genuinely corrupt bytes.
         let raw_hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
         let unsigned_hex: String = data.iter().map(|b| format!("{b:02x}")).collect();
         log::warn!(
@@ -317,7 +315,7 @@ mod tests {
     fn decompress_corrupt_deflate_returns_err() {
         // Build a valid FIXCOMP frame, then trash the compressed payload so
         // ZlibDecoder fails. The function must return Err rather than panic
-        // (regression for ibx#182).
+        //
         let inner = fix_build(&[(35, "0")], 1);
         let mut comp = fixcomp_build(&inner);
         let tag96 = comp.windows(3).position(|w| w == b"96=").unwrap();

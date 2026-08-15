@@ -94,7 +94,7 @@ pub const MSG_MARKET_DATA_REQ: &str = "V";
 
 /// Render a FIX byte buffer with SOH (0x01) shown as `|` and any other
 /// non-printable bytes escaped as `\xNN`. For trace-level wire diagnostics
-/// (ibx#179 capture); not used on hot paths.
+/// ( capture); not used on hot paths.
 pub fn fmt_pipe(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() + 8);
     for &b in bytes {
@@ -389,7 +389,7 @@ pub fn fix_unsign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>, b
     // Find the 8349 signature field. Matched with its leading delimiter: a
     // bare `8349=` search also matches the same text inside a field *value* —
     // a reject reason quoting it, say — and then the body boundary lands in the
-    // middle of the message and a legitimate frame reports invalid (ibx#275).
+    // middle of the message and a legitimate frame reports invalid.
     let sig_needle = b"\x018349=";
     let t8349 = match msg_bytes
         .windows(sig_needle.len())
@@ -455,7 +455,7 @@ pub fn fix_read<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
 /// Identical to [`fix_read`] on the happy path, but a `WouldBlock`/`TimedOut`
 /// read (a poll-timeout expiry on a slow, high-latency gateway) is retried
 /// until `deadline` instead of being treated as fatal. The reader's socket
-/// should carry a short read timeout so the poll stays responsive (ibx#237).
+/// should carry a short read timeout so the poll stays responsive.
 pub fn fix_read_deadline<R: Read>(reader: &mut R, deadline: std::time::Instant) -> io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(4096);
     let mut tmp = [0u8; 4096];
@@ -494,7 +494,7 @@ mod tests {
     use super::*;
 
     // A reader that returns WouldBlock a fixed number of times before yielding
-    // its bytes — models a slow socket with a short read timeout (ibx#237).
+    // its bytes — models a slow socket with a short read timeout.
     struct SlowReader { blocks_left: u32, data: std::io::Cursor<Vec<u8>> }
     impl Read for SlowReader {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {

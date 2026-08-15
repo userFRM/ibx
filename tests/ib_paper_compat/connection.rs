@@ -73,9 +73,9 @@ pub(super) fn phase_extra_farms(
     //
     // Not a list written here. The venue answers the routing request with the
     // farms it serves and the server each is on, so a list of names in this
-    // file would be a guess at something already stated — and it was: six of
-    // the eight names it used to carry were asked for on the session's own
-    // host and closed without a word, because they live elsewhere.
+    // file would be a guess at something already stated: names asked for on
+    // the session's own host are closed without a word, because they live
+    // elsewhere.
     // One farm per server, not all of them.
     //
     // What this phase proves is that a farm is reached where the venue says it
@@ -218,7 +218,7 @@ pub(super) fn phase_graceful_shutdown(conns: Conns) -> Conns {
 pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &GatewayConfig) -> Conns {
     println!("--- Phase 96: Connection Recovery (simulated farm drop) ---");
 
-    // We use a dummy TCP listener as a fake farm connection that we can close
+    // A dummy TCP listener stands in for the farm connection and can be closed
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind local listener");
     let local_addr = listener.local_addr().unwrap();
 
@@ -283,7 +283,7 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
 pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _config: &GatewayConfig) -> Conns {
     println!("--- Phase 105: Reconnection with State Recovery ---");
 
-    // Step 1: Subscribe to market data, verify we get ticks
+    // Step 1: subscribe to market data and confirm ticks arrive
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);

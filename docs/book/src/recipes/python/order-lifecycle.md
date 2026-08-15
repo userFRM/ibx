@@ -15,7 +15,7 @@ End-to-end recipe: full order state machine on SPY — place, modify, cancel, pa
 ## Run it
 
 ```bash
-IB_USERNAME=... IB_PASSWORD=... python examples/ex96_order_lifecycle.py
+IB_USERNAME=... IB_PASSWORD=... python examples/order_lifecycle.py
 ```
 
 > Use the paper account. Never run order examples against a live account.
@@ -23,5 +23,5 @@ IB_USERNAME=... IB_PASSWORD=... python examples/ex96_order_lifecycle.py
 ## Source
 
 ```python
-{{#include ../../../../../examples/ex96_order_lifecycle.py}}
+{{#include ../../../../../examples/order_lifecycle.py}}
 ```

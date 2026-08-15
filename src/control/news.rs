@@ -107,10 +107,9 @@ pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
 
     // The identity fields are an authorisation pair the news service issues,
     // not something a client invents. The counterpart sends empty strings where
-    // it holds none, and the same slot is what carries a refusal back. This
-    // used to send the literal "dummy" for each — accepted, because the venue
-    // is not validating them for what is asked here, but not what the
-    // counterpart sends.
+    // it holds none, and the same slot carries a refusal back. A literal stands
+    // in for neither, whether or not the venue validates it for what is asked
+    // here.
     let query_raw = format!(
         "conid_count=\"{count}\";\
          total_count=\"{count}\";\
@@ -272,7 +271,7 @@ pub fn parse_news_payload(raw: &[u8]) -> (Vec<NewsHeadline>, bool) {
             let key = &unescaped[..eq_pos];
             if key.starts_with("h:") && key[2..].parse::<u32>().is_ok() {
                 let value = &unescaped[eq_pos + 1..];
-                // Parse pipe-delimited: headline|time|articleId|status|hasContent|providerCode|conIds...
+                // Parse pipe-delimited: headline|time|articleId|status|hasContent|providerCode|conIds..
                 let parts: Vec<&str> = value.split('|').collect();
                 if parts.len() >= 6 {
                     let raw = parts[0];

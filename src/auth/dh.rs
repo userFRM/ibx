@@ -104,7 +104,7 @@ impl SecureChannel {
         };
         // Every field below was indexed directly and decoded with `unwrap`, so a
         // short or non-base64 hello aborted the process on the ordinary connect
-        // path rather than failing the connection (ibx#276).
+        // path rather than failing the connection.
         let [server_random_b64, server_pub_b64, ..] = fields else {
             return Err(invalid(&format!("expected at least 2 fields, got {}", fields.len())));
         };
@@ -444,9 +444,9 @@ mod tests {
         // However, the key_block derivation uses each channel's own client_random as seed,
         // so two independent SecureChannels won't derive identical key_blocks.
         //
-        // What we CAN verify: after exchanging keys, both sides computed the same
-        // DH shared secret (pre-master). We test this by verifying that both channels
-        // have valid 104-byte key_blocks and that encrypt_fresh produces parseable output.
+        // What is checkable: after the key exchange both sides hold the same
+        // DH shared secret, shown by both channels holding valid 104-byte
+        // key_blocks and encrypt_fresh producing parseable output.
         let mut channel_a = SecureChannel::new();
         let mut channel_b = SecureChannel::new();
 
@@ -480,10 +480,9 @@ mod tests {
         assert!(fresh_b.len() >= 36);
     }
 
-    /// ibx#276: the server's public value was used without any range check. 0
-    /// and 1 pin the pre-master secret to a known constant, and every key
-    /// derived from it follows — including the one the channel's own MAC would
-    /// then be verifying against.
+    /// The server's public value is range-checked. 0 and 1 pin the pre-master
+    /// secret to a known constant, and every key derived from it follows,
+    /// including the one the channel's own MAC verifies against.
     #[test]
     fn a_degenerate_public_value_is_refused() {
         let n = dh_n();
@@ -508,9 +507,8 @@ mod tests {
         assert!(channel.process_server_hello(&[&random, &ok]).is_ok());
     }
 
-    /// The half that needs no adversary: a short or non-base64 hello used to
-    /// abort the process on the ordinary connect path, through direct indexing
-    /// and two `unwrap`s.
+    /// The half that needs no adversary: a short or non-base64 hello arrives
+    /// on the ordinary connect path and is refused rather than indexed into.
     #[test]
     fn a_malformed_hello_is_an_error_not_a_panic() {
         let random = B64.encode([0u8; 32]);

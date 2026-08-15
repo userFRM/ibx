@@ -1,13 +1,13 @@
 //! Two-phase premarket order lifecycle test (5-order sample).
 //!
 //! Phase 1 — `send`: connect, place 5 distinct order types on SPY (all GTC +
-//! outside_rth so they survive premarket and the process exit), persist each
+//! Outside_rth so they survive premarket and the process exit), persist each
 //! (orderId, permId) to `.tmp/premarket_orders.json`, then disconnect.
 //!
 //! Phase 2 — `cancel`: relaunch a fresh process, let the session-recovery push
-//! hydrate the open-order cache, then cancel every saved order by permId (the
-//! stable cross-session handle). Resumable: each cancelled order is flushed to
-//! the state file immediately, so a re-run only retries what is still open.
+//! Hydrate the open-order cache, then cancel every saved order by permId (the
+//! Stable cross-session handle). Resumable: each cancelled order is flushed to
+//! The state file immediately, so a re-run only retries what is still open.
 //!
 //! Usage:
 //!   IB_USERNAME=... IB_PASSWORD=... cargo run --example premarket_lifecycle send

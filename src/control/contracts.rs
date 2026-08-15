@@ -174,7 +174,7 @@ impl SecurityType {
     /// Official API string ("STK", "OPT", ...). THE single mapping for
     /// everything user-visible — the callbacks previously reported a Debug
     /// derive ("Stock"), which no request path accepts, so a returned
-    /// Contract could not be fed back into another call (ibx#230).
+    /// Contract could not be fed back into another call.
     /// `Other` maps to "" on purpose: an instrument the engine could not
     /// classify must not masquerade as a stock — the order path is
     /// STK-only and that one wrong guess would not be caught downstream.
@@ -234,7 +234,7 @@ impl SecurityType {
             Self::IcsContract => "ICS",
             Self::PhysicalSettlement => "PHYSS",
             // An unrecognized security type must not be sent as a stock —
-            // that misroutes the request silently (ibx#223). Empty draws a
+            // that misroutes the request silently. Empty draws a
             // visible gateway error instead, matching its own
             // unknown-to-none handling.
             Self::Other => "",
@@ -468,7 +468,7 @@ pub struct ContractDefinition {
     pub liquid_hours: Option<String>,
     /// IANA timezone for session times (e.g. "US/Eastern").
     pub time_zone_id: Option<String>,
-    /// Exchange-path join key (tag 6256) used to pair secdef ↔ schedule replies.
+    /// Exchange-path join key (tag 6256) pairing secdef and schedule replies.
     /// Internal — not exposed on the public API surface.
     pub join_key: String,
 }
@@ -735,7 +735,7 @@ fn is_session_field(tag: u32) -> bool {
 /// Every tag this parser reads from a definition.
 ///
 /// Written out rather than derived, and checked against the parser by a test,
-/// so that asking "what arrived that we did not read" has an answer that cannot
+/// so that asking what arrived and went unread has an answer that cannot
 /// quietly drift as fields are added.
 pub fn tags_read_from_a_definition() -> Vec<u32> {
     let source = include_str!("contracts.rs");
@@ -772,7 +772,7 @@ fn named_tag(name: &str) -> Option<u32> {
 ///
 /// The point of asking a venue for a contract is to be told about it, and a
 /// field that arrives and is dropped is a fact about the contract nobody can
-/// see. This names them so the gap is measurable rather than suspected.
+///  This names them so the gap is measurable rather than suspected.
 pub fn unread_definition_tags(data: &[u8]) -> Vec<u32> {
     let read = tags_read_from_a_definition();
     let mut unread: Vec<u32> = fix::fix_parse(data)
@@ -994,9 +994,7 @@ pub fn parse_secdef_response(
     // The smallest order the venue will take, stated only where a contract can
     // be dealt in fractions and gated by the flag that says so.
     //
-    // This used to read 8598, which is the precision a price is stated to, not
-    // a size at all: a share came back claiming its smallest order was a
-    // millionth of a share.
+    // Not 8598, which states the precision of a price rather than a size.
     if tags.get(&TAG_FRACTIONABLE).map(|v| v.as_str()) == Some("1")
         && let Some(v) = tags.get(&TAG_MIN_SIZE)
     {
@@ -1198,9 +1196,8 @@ pub fn parse_market_rules(data: &[u8]) -> Vec<MarketRule> {
                 filling = Table::Price;
                 pending_low_edge = None;
             }
-            // Opens the size table. This used to end the rule, so everything
-            // stated after it — the sizes a contract may be dealt in — was
-            // never read.
+            // Opens the size table rather than ending the rule: the sizes a
+            // contract may be dealt in are stated after this count.
             TAG_SIZE_INCREMENT_COUNT => {
                 filling = Table::Size;
                 pending_low_edge = None;
@@ -1377,9 +1374,9 @@ pub fn parse_schedule_response(data: &[u8]) -> Option<ContractSchedule> {
 }
 
 /// Append a parsed session to the hour lists. A session with NEITHER flag
-/// set is a closed day; it used to be dropped, leaving "market closed"
-/// indistinguishable from "data missing" (ibx#223). It is kept as a
-/// zero-length session in both lists, which renders as `<date>:CLOSED`.
+/// set is a closed day. It is kept as a zero-length session in both lists,
+/// rendering as `<date>:CLOSED`, so a closed market is distinguishable from
+/// absent data.
 fn flush_session(
     trading_hours: &mut Vec<ScheduleSession>,
     liquid_hours: &mut Vec<ScheduleSession>,
@@ -1410,7 +1407,7 @@ fn flush_session(
 /// Times are in UTC as received from the upstream wire — consumers should
 /// convert to local time using the paired timezone identifier when displaying.
 /// A zero-length session is a closed day and renders as `<date>:CLOSED`,
-/// the official-API convention (ibx#223).
+/// the official-API convention.
 /// Returns an empty string if `sessions` is empty.
 pub fn format_sessions_string(sessions: &[ScheduleSession]) -> String {
     let mut out = String::with_capacity(sessions.len() * 32);
@@ -1422,7 +1419,7 @@ pub fn format_sessions_string(sessions: &[ScheduleSession]) -> String {
             // becomes a three-byte replacement character and a cut that was
             // ASCII in the intended payload lands mid-character. Slicing a
             // `&str` off a character boundary is a panic, and this runs on the
-            // hot loop (ibx#258).
+            // hot loop.
             //
             // What replaces the panic is a degraded field, not a correct one:
             // a reply this malformed has no recoverable date in it. The point
@@ -1448,7 +1445,7 @@ fn trim_session_endpoint(s: &str) -> String {
     // The format is ASCII by definition, and requiring that outright is what
     // makes the byte positions below sound rather than incidentally correct:
     // the guard establishes what is at bytes 8 and 11 and says nothing about
-    // 12 to 14, where a multi-byte character would panic the slice (ibx#258).
+    // 12 to 14, where a multi-byte character would panic the slice.
     if s.is_ascii() && bytes.len() >= 14 && bytes[8] == b'-' && bytes[11] == b':' {
         let mut out = String::with_capacity(13);
         out.push_str(&s[..8]);
@@ -1464,12 +1461,12 @@ fn trim_session_endpoint(s: &str) -> String {
 mod hot_loop_panic_tests {
     use super::*;
 
-    /// ibx#258: frame bodies are decoded with from_utf8_lossy, so one invalid
-    /// byte becomes a three-byte U+FFFD that can straddle a byte-indexed slice
-    /// boundary. These must return a value, not abort the hot loop.
+    /// Frame bodies are decoded with `from_utf8_lossy`, so one invalid byte
+    /// becomes a three-byte U+FFFD that can straddle a byte-indexed slice
+    /// boundary. These return a value rather than aborting the hot loop.
     #[test]
     fn session_endpoint_survives_a_lossily_decoded_field() {
-        // U+FFFD at bytes 12..15 — the old &s[12..14] cut inside it.
+        // U+FFFD at bytes 12..15: a byte-indexed cut at 12..14 lands inside it.
         let lossy = format!("20260728-09:{}0", '\u{FFFD}');
         assert!(!lossy.is_ascii());
         let _ = trim_session_endpoint(&lossy);
@@ -1858,10 +1855,9 @@ mod tests {
         assert!(super::parse_secdef_response(&msg, true).is_none());
     }
 
-    // Regression for ibx#197: a US equity secdef carries an inline price-
-    // increment block whose start sentinel is `6019=1`. Tag 6019 must NOT be
-    // read as min_tick (it would yield 1.0) — min_tick is the smallest parsed
-    // increment.
+    // A US equity secdef carries an inline price-increment block whose start
+    // sentinel is `6019=1`. Tag 6019 is not min_tick — reading it as one
+    // yields 1.0; min_tick is the smallest increment the block states.
     #[test]
     fn secdef_min_tick_from_price_increments_not_rule_sentinel() {
         let msg = fix::fix_build(
@@ -1888,9 +1884,9 @@ mod tests {
     }
 
     /// A definition stating no rule block states no smallest increment, and
-    /// none is invented for it. A penny used to stand in, which prices most
-    /// futures on a grid they are not traded on and says so as confidently as
-    /// a figure the venue gave.
+    /// none is invented for it. A penny would price most futures on a grid
+    /// they are not traded on, and state it as confidently as a figure the
+    /// venue gave.
     #[test]
     fn a_definition_stating_no_rule_states_no_increment() {
         let msg = fix::fix_build(
@@ -2296,7 +2292,7 @@ mod tests {
         assert!(parse_option_chain_response(&msg).is_none());
     }
 
-    // ibx#223: a closed day (neither hours flag set) must be represented,
+    // A closed day (neither hours flag set) must be represented,
     // not dropped — "market closed" and "data missing" were previously
     // indistinguishable.
     #[test]
@@ -2327,14 +2323,14 @@ mod tests {
         assert_eq!(rendered, "20260718:CLOSED;20260720:1330-20260720:2000");
     }
 
-    // ibx#223: an unrecognized security type must not be encoded as a stock.
+    // An unrecognized security type must not be encoded as a stock.
     #[test]
     fn to_fix_other_is_not_stock() {
         assert_eq!(SecurityType::Other.to_fix(), "");
         assert_eq!(SecurityType::from_fix(""), SecurityType::Other);
     }
 
-    // ibx#230: user-visible sec_type must be the official API string, and
+    // User-visible sec_type must be the official API string, and
     // an unclassifiable instrument must not masquerade as a stock.
     #[test]
     fn sec_type_to_api_str_round_trips_and_other_is_empty() {
@@ -2490,12 +2486,12 @@ mod tests {
     /// The character `from_utf8_lossy` substitutes for an invalid byte.
     const REPLACEMENT: &str = "\u{FFFD}";
 
-    /// ibx#258: schedule strings come off the wire and are decoded with
+    /// Schedule strings come off the wire and are decoded with
     /// `from_utf8_lossy`, so one invalid byte becomes a three-byte replacement
-    /// character and every byte position after it shifts. The parser validated
-    /// byte positions and then sliced the `&str`, which panics off a character
-    /// boundary — and this runs on the hot loop, so it is an engine-down on
-    /// malformed input rather than a dropped message.
+    /// character and every byte position after it shifts. Validating byte
+    /// positions and then slicing the `&str` panics off a character boundary,
+    /// and this runs on the hot loop, so that is an engine-down on malformed
+    /// input rather than a dropped message.
     #[test]
     fn a_schedule_that_is_not_ascii_does_not_panic() {
         // The shapes a lossy decode produces: a replacement character sitting
@@ -2837,9 +2833,9 @@ mod smart_venue_tests {
     /// A venue's letter is the server's to state, and nothing is stated for
     /// one it has not named.
     ///
-    /// This client used to answer from a table of eight venues written into
-    /// its own source. That table named nothing for every other venue — most
-    /// of the United States, and all of everywhere else — and nothing checked
+    /// A table of venues written into this client's own source would name
+    /// nothing for every venue absent from it — most of the United States, and
+    /// all of everywhere else — with nothing to check
     /// it against what the server assigns. The counterpart carries no such
     /// table either: it reads the map off the wire.
     #[test]
@@ -2959,7 +2955,7 @@ mod record_boundary_tests {
         assert_eq!(defs[0].con_id, 111);
         assert_eq!(defs[1].con_id, 222);
         // The field stated after the first contract's identifier block belongs
-        // to that contract, and used to be dropped.
+        // to that contract.
         assert_eq!(defs[0].issue_date, "20260101");
         assert_eq!(defs[1].issue_date, "20270202");
     }
@@ -2981,9 +2977,9 @@ mod size_and_precision_tests {
     use super::*;
 
     /// The smallest order a venue will take is stated only where a contract can
-    /// be dealt in fractions, and gated by the flag that says so. This used to
-    /// be read from the field stating how many places a price is quoted to, so
-    /// a share came back claiming its smallest order was a millionth of a share.
+    /// be dealt in fractions, and gated by the flag that says so. Read from
+    /// the field stating a size, not the one stating how many places a price is
+    /// quoted to.
     #[test]
     fn the_smallest_order_is_read_from_the_size_field_not_a_price_precision() {
         let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01\
@@ -3018,9 +3014,9 @@ mod size_table_tests {
     use super::*;
 
     /// A rule states two tables under the same tags: price bands first, then
-    /// size bands after a second count. That count used to end the rule, so
-    /// everything after it — the sizes a contract may be dealt in — was never
-    /// read, and the last price band was silently the last thing seen.
+    /// size bands after a second count. The count opens the second table
+    /// rather than ending the rule, so the sizes a contract may be dealt in
+    /// are read.
     #[test]
     fn a_rules_size_table_is_read_as_well_as_its_price_table() {
         let data = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01\
@@ -3097,8 +3093,8 @@ mod delivered_name_tests {
     }
 
     /// A session that wants the venue's own name says so, and says it for
-    /// itself: this used to be read from the process, so one session saying it
-    /// said it for every other session running beside it.
+    /// itself, rather than from the process, so one session stating it does
+    /// not state it for every other session running beside it.
     #[test]
     fn the_venues_own_name_can_be_asked_for() {
         assert_eq!(delivered_exchange("NASDAQ", "STK", "USD", false), "NASDAQ");

@@ -1,17 +1,17 @@
 //! Place a marketable premarket BUY limit on AXTI that fills immediately.
 //!
 //! A limit order only fills in premarket if (a) `outside_rth` is set so it is
-//! eligible outside regular hours, and (b) the limit price crosses the book —
-//! for a BUY that means the limit sits at or above the current ask. This
-//! example resolves AXTI, reads its live quote, then prices a BUY limit a few
-//! percent above the ask so it is marketable the instant it reaches the book.
+//! Eligible outside regular hours, and (b) the limit price crosses the book —
+//! For a BUY that means the limit sits at or above the current ask. This
+//! Example resolves AXTI, reads its live quote, then prices a BUY limit a few
+//! Percent above the ask so it is marketable the instant it reaches the book.
 //!
 //! Usage:
 //!   IB_USERNAME=... IB_PASSWORD=... cargo run --example premarket_marketable_axti [buy|sell]
 //!
 //! `buy` (default) opens a 1-share long above the ask; `sell` closes it below
-//! the bid. Sends a single 1-share order against the paper account. Run only
-//! during the premarket session — outside it the order rests until it opens.
+//! The bid. Sends a single 1-share order against the paper account. Run only
+//! During the premarket session — outside it the order rests until it opens.
 
 use std::env;
 use std::sync::{Arc, Mutex};
