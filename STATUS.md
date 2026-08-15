@@ -195,10 +195,11 @@ call with a return value.
 
 ## Planned work
 
-[docs/api-alignment-plan.md](docs/api-alignment-plan.md) lists two open items:
-settings decided by configuration where the server states a grant for them, and
-whether the surfaces over this engine are three products or one product and two
-adapters.
+[docs/api-alignment-plan.md](docs/api-alignment-plan.md) lists one open item: settings decided by configuration where the server states a grant for them.
+
+The surface question is settled. `EClient`/`EWrapper` is the product; the ib_async shape and the Rust shape are adapters over it, and the rust-ibapi shape is not written.
+
+The one capability a gateway has and this does not is [#2](https://github.com/userFRM/ibx/issues/2): several programs sharing one logon. A gateway rents its single session out over a local socket, and this client, having no socket, cannot. One process holds one session.
 
 ## Release criteria
 
