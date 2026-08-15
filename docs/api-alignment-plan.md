@@ -59,7 +59,7 @@ here, then from a global exchange directory read as though its sections were
 aggregation groups, and now from the contract's own definition, which names the
 venues SMART routes it to.
 
-## 4. Product surface, or adapter — needs a decision
+## 4. Product surface, or adapter — decided: one product, two adapters
 
 Three caller-facing surfaces over one engine:
 
@@ -76,13 +76,21 @@ objects nor its async variants, so `ib.pendingTickersEvent += handler` and
 
 The reference client ships one API surface and no convenience layer.
 
-**The decision.** Either each surface is a product — parity-gated, versioned,
-documented equally, and for `ibx.IB` that means building the event system and
-the async variants — or `EClient`/`EWrapper` is the product and the rest are
-adapters: shipped for migration, best-effort, and stating what they do not
-carry. This decides whether items 1 and 2 apply to one surface or three, and
-whether the rust-ibapi shape gets written at all.
+**Decided: one product, two adapters.** `EClient`/`EWrapper` is the product.
+The ib_async shape and the Rust shape are adapters over it — shipped for
+migration, thin enough that a defect in either is a defect in the adapter, and
+stating what they do not carry. Anything reachable that the reference client
+does not have belongs on the engine and is documented as not portable.
+
+What settled it: every defect found against one surface was a defect in the
+engine underneath both, and the seam between them was charging rent. The
+contract types now convert, so the lookup cache is written once and both
+surfaces key it the same way. A surface-shaped fix would have been written
+twice.
+
+The rust-ibapi shape is not written. A third adapter earns nothing that the
+two do not already carry.
 
 ---
 
-Order: 2, then 3. Item 4 before either, if the answer is "three products".
+Order: 2, then 3.
