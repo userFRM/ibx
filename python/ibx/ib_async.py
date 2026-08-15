@@ -347,6 +347,17 @@ _THEIR_TYPE_NAME = {
 }
 
 
+def _is_named_tuple(t):
+    """Whether a type is one of their record tuples.
+
+    Their historical ticks are `NamedTuple`s rather than dataclasses, so a
+    conversion that only knows dataclasses hands those straight through — and
+    a caller reading `tick.priceBid` off an ibx record finds a field spelled
+    the other way.
+    """
+    return isinstance(t, type) and issubclass(t, tuple) and hasattr(t, "_fields")
+
+
 def _their_type(name):
     """The type of theirs that goes by this name, if there is one."""
     import dataclasses
@@ -358,9 +369,35 @@ def _their_type(name):
     name = _THEIR_TYPE_NAME.get(name, name)
     for module in (contract_types, objects, order_types):
         found = getattr(module, name, None)
-        if found is not None and dataclasses.is_dataclass(found):
+        if found is not None and (dataclasses.is_dataclass(found) or _is_named_tuple(found)):
             return found
     return None
+
+
+def zone_of(value):
+    """The time zone a record states for itself, where it states one."""
+    return getattr(value, "timezone", "")
+
+
+def _field_of(value, name, zone):
+    """One field of an ibx record, under whichever name it goes by.
+
+    A moment is handed over as their own, because their records declare it as
+    a datetime and a number read as one is an instant in 1970.
+    """
+    got = getattr(value, name, None)
+    if got is None:
+        got = getattr(value, _OUR_NAME.get(name, name), None)
+    if got is None or name not in ("time", "date"):
+        return got
+    if isinstance(got, int) and not isinstance(got, bool):
+        # Seconds since the epoch, which their records declare as a datetime.
+        # Read by their own parser rather than by one written here, so the
+        # instant is the one their code would have made of it.
+        from ib_async.util import parseIBDatetime
+
+        return parseIBDatetime(str(got))
+    return _as_their_moment(got, zone)
 
 
 def _as_theirs(value):
@@ -383,6 +420,14 @@ def _as_theirs(value):
     theirs = _their_type(type(value).__name__)
     if theirs is None or dataclasses.is_dataclass(value):
         return value
+
+    # A record tuple is built in one go: its fields are positional and it has
+    # no setters, so the field-by-field walk below cannot be used on one.
+    if _is_named_tuple(theirs):
+        return theirs(*[
+            _as_theirs(_field_of(value, name, zone_of(value)))
+            for name in theirs._fields
+        ])
 
     made = theirs()
     zone = getattr(value, "timezone", "")
