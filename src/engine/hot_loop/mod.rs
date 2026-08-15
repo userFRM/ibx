@@ -377,6 +377,9 @@ impl HotLoop {
         sec_type: &str,
         exchange: &str,
         option_key: &str,
+        // Answered without blocking: this runs on the thread driving all
+        // three transports, and a caller's channel is the caller's to drain.
+        // A reply that cannot be delivered is a caller that stopped listening.
         reply_tx: &Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
     ) -> Option<InstrumentId> {
         // Whether this call is what created the slot. Registration is also how
@@ -402,13 +405,13 @@ impl HotLoop {
                         self.shared.portfolio.set_position(id, held.position);
                     }
                 self.shared.market.set_instrument_count(self.context.market.count());
-                if let Some(tx) = reply_tx { let _ = tx.send(Ok(id)); }
+                if let Some(tx) = reply_tx { let _ = tx.try_send(Ok(id)); }
                 Some(id)
             }
             None => {
                 log::error!("Instrument table full: rejecting registration for con_id={con_id}");
                 if let Some(tx) = reply_tx {
-                    let _ = tx.send(Err(format!(
+                    let _ = tx.try_send(Err(format!(
                         "instrument table full: {} contracts are live concurrently; \
                          cancel unused market-data subscriptions to free slots",
                         crate::types::MAX_INSTRUMENTS
@@ -601,6 +604,9 @@ impl HotLoop {
             // 5b. Poll pending reconnects and schedule the next attempts
             // (jittered backoff instead of immediate re-dials)
             self.poll_farm_reconnect();
+            // What a reconnect has still to put back. Paced, and paced on the
+            // passes the loop is already making rather than by holding it.
+            self.drive_replay();
             self.poll_ccp_reconnect();
             self.poll_hmds_reconnect();
             self.poll_secdef_reconnect();
@@ -691,7 +697,7 @@ impl HotLoop {
                     match self.register_or_reject(con_id, symbol.clone(), &sec_type, &exchange, &option_key, &None) {
                         None => {
                             if let Some(tx) = &reply_tx {
-                                let _ = tx.send(Err(format!(
+                                let _ = tx.try_send(Err(format!(
                                     "instrument table full: cannot subscribe to {symbol}"
                                 )));
                             }
@@ -702,12 +708,12 @@ impl HotLoop {
                         // two parts of one program may watch one contract.
                         Some(id) if self.farm.holds_market_data(id) => {
                             if let Some(tx) = &reply_tx {
-                                let _ = tx.send(Ok(id));
+                                let _ = tx.try_send(Ok(id));
                             }
                         }
                         Some(id) => {
                             if let Some(tx) = &reply_tx {
-                                let _ = tx.send(Ok(id));
+                                let _ = tx.try_send(Ok(id));
                             }
                             if con_id == 0 {
                                 // The venue answers a subscription only when it
@@ -776,7 +782,7 @@ impl HotLoop {
                         log::error!("{reason}");
                         push_hmds_error(&self.shared, req_id.max(0) as u32, reason.clone(), false);
                         if let Some(tx) = reply_tx.as_ref() {
-                            let _ = tx.send(Err(reason));
+                            let _ = tx.try_send(Err(reason));
                         }
                         continue;
                     }
@@ -1258,6 +1264,15 @@ impl HotLoop {
         self.ccp.disconnected
     }
 
+    /// Put back as much of a reconnect's subscription book as the pacing allows.
+    fn drive_replay(&mut self) {
+        let replay = ReplayPacing {
+            burst: self.reconnect_cfg.replay_burst,
+            pace: self.reconnect_cfg.replay_pace,
+        };
+        self.farm.drive_replay(replay, &mut self.farm_conn, &mut self.hb);
+    }
+
     /// Replace the farm connection (after reconnection) and re-subscribe to all instruments.
     pub fn reconnect_farm(&mut self, conn: Connection) {
         let replay = ReplayPacing {
@@ -1294,9 +1309,12 @@ impl HotLoop {
         // connection's logon and belong to this connection: kept from the one
         // that went, a session would be held to an interval nobody agreed and
         // a takeover would be reported once and never again.
-        if conn.competing.is_some() {
-            self.shared.reference.set_competing_session(conn.competing.clone());
-        }
+        // Set from this connection whether or not it names anybody. A logon
+        // that names no other session is the venue saying the account is this
+        // client's alone, and keeping the previous answer reports a holder
+        // who has since gone — with their address and the time they took it —
+        // for as long as the process runs.
+        self.shared.reference.set_competing_session(conn.competing.clone());
         // What this connection stated, or what its own logon proposed where it
         // stated nothing — an ack that echoes no interval has accepted the one
         // it was offered. Either way it is this connection's, and leaving the
@@ -1347,6 +1365,15 @@ impl HotLoop {
         {
             log::error!("HMDS transport can no longer be written to — giving it up");
             self.hmds.disconnect(&mut self.hmds_conn);
+        }
+        // The calendar's connection, on the same terms as the other three. Its
+        // read path gives it up when the socket goes, but a write that fails
+        // without a read error after it leaves the connection installed — and
+        // the reconnect declines to build another while one is, so the calendar
+        // stays on a socket nothing can be sent through.
+        if self.secdef_conn.as_ref().is_some_and(|c| c.write_failed()) {
+            log::error!("Security-definition transport can no longer be written to — giving it up");
+            self.secdef.give_up(&mut self.secdef_conn, &self.shared);
         }
     }
 
@@ -2340,6 +2367,28 @@ mod tests {
         // every pass of the loop.
         assert_eq!(super::half_of(1), 1);
         assert_eq!(super::half_of(0), 1);
+    }
+
+    /// A reconnect that names nobody says the account is this client's alone.
+    ///
+    /// Keeping the previous connection's answer reports a holder who has since
+    /// gone — their address and the time they took it — for the life of the
+    /// process, and a caller reading it gives up an account nobody is holding.
+    #[test]
+    fn a_reconnect_that_names_nobody_clears_the_one_that_did() {
+        let shared = SharedState::new();
+        shared.reference.set_competing_session(Some((
+            "10.0.0.7".to_string(), "20260815-09:30:00".to_string(), false,
+        )));
+        assert!(shared.reference.competing_session().is_some());
+
+        // What `reconnect_ccp` does with a connection naming no other session.
+        shared.reference.set_competing_session(None);
+
+        assert!(
+            shared.reference.competing_session().is_none(),
+            "the account is this client's, and stays that way until told otherwise",
+        );
     }
 
     /// A farm states its own cadence, and it is not the auth connection's.
