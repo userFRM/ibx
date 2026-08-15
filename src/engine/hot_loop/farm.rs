@@ -74,6 +74,17 @@ type MdResubInfo = (InstrumentId, String, String, String, String, f64, String, S
 type MdResubTarget = (InstrumentId, i64, String, String, String, String, f64, String, String, i32);
 
 pub(crate) struct FarmState {
+    /// Subscriptions a reconnect has still to put back, and the earliest the
+    /// next burst may go out.
+    ///
+    /// A server that has just come back up is the least able to take a whole
+    /// book at once, so the replay is paced. Sleeping for that pace would stop
+    /// the one thread driving every transport, the heartbeats, the reconnects
+    /// and shutdown, so the queue is drained a burst at a time on the passes
+    /// the loop is already making.
+    pub(crate) replay_queue: std::collections::VecDeque<MdResubTarget>,
+    /// When the next burst may go out. `None` means there is nothing waiting.
+    pub(crate) replay_not_before: Option<Instant>,
     /// The next id this client asks the venue under.
     ///
     /// Every subscription is asked for under one of these and mapped back to
@@ -467,6 +478,8 @@ impl FarmState {
 
     pub(crate) fn new() -> Self {
         Self {
+            replay_queue: Default::default(),
+            replay_not_before: None,
             next_md_req_id: 1,
             md_req_to_instrument: Vec::new(),
             instrument_md_reqs: Vec::new(),
@@ -1886,17 +1899,12 @@ impl FarmState {
         let active = self.take_resub_targets(&context.market);
         self.md_req_to_instrument.clear();
         self.instrument_md_reqs.clear();
-        // Paced. A server that has just come back up is the least able to take
-        // a whole book of subscriptions at once, and the client that hands it
-        // one is the client it throttles.
-        for (i, (instrument, con_id, sym, exch, st, ltd, strike, right, mult, mode)) in
-            active.into_iter().enumerate()
-        {
-            if i > 0 && replay.burst > 0 && i.is_multiple_of(replay.burst) {
-                std::thread::sleep(replay.pace);
-            }
-            self.send_mktdata_subscribe(con_id, &sym, &exch, &st, &ltd, strike, &right, &mult, instrument, mode, farm_conn, hb);
-        }
+        // Queued rather than sent here. The first burst goes out on this pass
+        // and the rest on the passes that follow, so the pacing costs the
+        // venue nothing and the engine nothing.
+        self.replay_queue = active.into_iter().collect();
+        self.replay_not_before = None;
+        self.drive_replay(replay, farm_conn, hb);
 
         // Re-subscribe depth subscriptions (depth_resub_info survived disconnect)
         let depth_params: Vec<_> = self.depth_resub_info.drain(..).collect();
@@ -1910,7 +1918,46 @@ impl FarmState {
             );
         }
 
-        log::info!("Farm reconnected, re-subscribed {} instruments + {} depth", self.instrument_md_reqs.len(), depth_count);
+        log::info!(
+            "Farm reconnected, re-subscribing {} instruments + {} depth",
+            self.instrument_md_reqs.len() + self.replay_queue.len(), depth_count,
+        );
+    }
+
+    /// Put back as much of the reconnect's book as the pacing allows.
+    ///
+    /// Called on every pass of the loop. Returns immediately when there is
+    /// nothing waiting or the pace has not elapsed, so the cost of an idle
+    /// engine is one comparison.
+    pub(crate) fn drive_replay(
+        &mut self,
+        replay: crate::engine::hot_loop::ReplayPacing,
+        farm_conn: &mut Option<Connection>,
+        hb: &mut crate::engine::hot_loop::HeartbeatState,
+    ) {
+        if self.replay_queue.is_empty() || self.disconnected {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(not_before) = self.replay_not_before
+            && now < not_before
+        {
+            return;
+        }
+        let burst = if replay.burst == 0 { self.replay_queue.len() } else { replay.burst };
+        for _ in 0..burst {
+            let Some((instrument, con_id, sym, exch, st, ltd, strike, right, mult, mode)) =
+                self.replay_queue.pop_front()
+            else {
+                break;
+            };
+            self.send_mktdata_subscribe(
+                con_id, &sym, &exch, &st, &ltd, strike, &right, &mult, instrument, mode,
+                farm_conn, hb,
+            );
+        }
+        self.replay_not_before =
+            (!self.replay_queue.is_empty()).then(|| now + replay.pace);
     }
 
     fn handle_generic_tick(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
@@ -2497,6 +2544,74 @@ mod resub_tests {
                 "unsubscribed (farm down: {down}): the slot must be releasable",
             );
         }
+    }
+
+    /// A reconnect's replay is paced, and the pace must not be taken out of
+    /// the engine.
+    ///
+    /// One thread drives every transport, the heartbeats, the reconnects and
+    /// shutdown. Sleeping between bursts stops all of it for as long as the
+    /// caller's pacing says, so the book is put back across the passes the
+    /// loop is already making instead.
+    #[test]
+    fn a_paced_replay_does_not_hold_the_engine() {
+        use crate::engine::hot_loop::{HeartbeatState, ReplayPacing};
+
+        let mut farm = FarmState::new();
+        let mut market = MarketState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+
+        for con_id in 0..5i64 {
+            let instrument = market.register(700000 + con_id);
+            farm.md_resub_info.push((
+                instrument, "SPY".into(), "SMART".into(), "STK".into(), String::new(),
+                0.0, String::new(), String::new(), 0,
+            ));
+        }
+        context.market = market;
+
+        // A pace no engine could afford to wait out, and one at a time.
+        let replay = ReplayPacing { burst: 1, pace: std::time::Duration::from_secs(30) };
+
+        let (sock, _peer) = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let s = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
+            let (p, _) = l.accept().unwrap();
+            (s, p)
+        };
+        let mut conn = Some(Connection::new_raw(sock).unwrap());
+
+        let started = Instant::now();
+        farm.replay_queue = farm.take_resub_targets(&context.market).into_iter().collect();
+        farm.replay_not_before = None;
+        farm.drive_replay(replay, &mut conn, &mut hb);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "the replay returned rather than waiting out its own pacing",
+        );
+
+        assert_eq!(farm.replay_queue.len(), 4, "one burst went out, the rest are waiting");
+        assert!(farm.replay_not_before.is_some(), "and the next burst has a time");
+
+        // Before the pace elapses, nothing more goes out.
+        farm.drive_replay(replay, &mut conn, &mut hb);
+        assert_eq!(farm.replay_queue.len(), 4, "the pacing is still honoured");
+
+        // With the pace elapsed, the next burst goes.
+        farm.replay_not_before = Some(Instant::now());
+        farm.drive_replay(replay, &mut conn, &mut hb);
+        assert_eq!(farm.replay_queue.len(), 3);
+
+        // And a book that empties stops asking for time.
+        while !farm.replay_queue.is_empty() {
+            farm.replay_not_before = Some(Instant::now());
+            farm.drive_replay(replay, &mut conn, &mut hb);
+        }
+        assert!(farm.replay_queue.is_empty(), "every subscription was put back");
+        assert!(farm.replay_not_before.is_none(), "nothing left to wait for");
+        let _ = shared;
     }
 
     /// A slot reclaimed while the farm was down has no con_id to subscribe.

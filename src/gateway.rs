@@ -1166,6 +1166,13 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
     let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH))?;
+    // Bounded from the moment it is open, as the farm connection is. A peer
+    // that accepts the socket and then says nothing would otherwise hold the
+    // key exchange below for as long as it stays open — and on the reconnect
+    // path that worker is what the scheduler waits on, so one silent endpoint
+    // stops every later attempt for the life of the process.
+    tcp.set_read_timeout(Some(Duration::from_secs(TIMEOUT_SSL_AUTH)))?;
+    tcp.set_write_timeout(Some(Duration::from_secs(TIMEOUT_SSL_AUTH)))?;
     let connector = TlsConnector::builder()
         .build()
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -1951,6 +1958,12 @@ impl Gateway {
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
         let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH))?;
+        // Bounded from the moment it is open, as the farm connection is. A
+        // peer that accepts the socket and then says nothing would otherwise
+        // hold the key exchange below for as long as it stays open, and the
+        // caller's connect with it.
+        tcp.set_read_timeout(Some(Duration::from_secs(TIMEOUT_SSL_AUTH)))?;
+        tcp.set_write_timeout(Some(Duration::from_secs(TIMEOUT_SSL_AUTH)))?;
 
         let connector = TlsConnector::builder()
             .danger_accept_invalid_certs(config.accept_invalid_certs)
@@ -3395,6 +3408,40 @@ mod tests {
     }
 
     /// A route that states no port leaves the choice to the configured one.
+
+    /// A peer that accepts the socket and then says nothing must not hold the
+    /// reconnect open.
+    ///
+    /// The scheduler waits on this worker and refuses to start another while
+    /// one is outstanding, so a handshake with no deadline is not a slow
+    /// reconnect — it is every later reconnect, for the life of the process.
+    /// Bounded here rather than after the key exchange, which is where the
+    /// silence lands.
+    #[test]
+    fn a_silent_peer_does_not_hold_the_reconnect_open() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accepts and then says nothing, holding the connection open.
+        let held = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            drop(sock);
+        });
+
+        let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH)).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+
+        let started = std::time::Instant::now();
+        let mut buf = [0u8; 64];
+        let read = std::io::Read::read(&mut &tcp, &mut buf);
+        assert!(read.is_err(), "a silent peer returns an error, not bytes");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the read gave up on its own rather than waiting on the peer",
+        );
+        let _ = held.join();
+    }
+
     #[test]
     fn parse_farm_route_two_segments() {
         let parsed = parse_farm_route("zdc1.ibllc.com/eufarm").unwrap();

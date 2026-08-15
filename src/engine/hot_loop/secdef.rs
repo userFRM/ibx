@@ -155,21 +155,31 @@ impl SecDefState {
         hb: &mut HeartbeatState,
     ) {
         if let Err(lost) = self.read(conn, shared, event_tx, hb) {
-            // A connection that has gone is put down rather than kept and
-            // written to. Kept, every later request was sent into a socket
-            // that would never answer and waited out its own timeout; put
-            // down, a caller is told at once that this session has no
-            // connection for the calendar.
-            *conn = None;
-            for (_, req_id, ..) in self.pending.drain(..) {
-                shared.reference.push_historical_error(
-                    req_id,
-                    504,
-                    format!("the connection carrying the calendar went: {lost}"),
-                );
-            }
-            self.meta_asked = false;
+            self.give_up_with(conn, shared, &lost.to_string());
         }
+    }
+
+    /// Put the connection down and tell everyone waiting on it.
+    ///
+    /// Kept, every later request is sent into a socket that will never answer
+    /// and waits out its own timeout; put down, a caller is told at once that
+    /// this session has no connection for the calendar — and the reconnect,
+    /// which declines to build one while a connection is installed, is free to
+    /// build another.
+    pub(crate) fn give_up(&mut self, conn: &mut Option<Connection>, shared: &SharedState) {
+        self.give_up_with(conn, shared, "it can no longer be written to");
+    }
+
+    fn give_up_with(&mut self, conn: &mut Option<Connection>, shared: &SharedState, why: &str) {
+        *conn = None;
+        for (_, req_id, ..) in self.pending.drain(..) {
+            shared.reference.push_historical_error(
+                req_id,
+                504,
+                format!("the connection carrying the calendar went: {why}"),
+            );
+        }
+        self.meta_asked = false;
     }
 
     fn read(
@@ -476,4 +486,34 @@ mod tests {
         assert_eq!(told.len(), 1, "the caller was left waiting");
         assert!(state.pending.is_empty());
     }
+
+    /// A write that fails leaves the socket installed unless something gives
+    /// it up. The read path does that when the connection goes, but a write
+    /// can fail with no read error behind it — and the reconnect declines to
+    /// build another while one is installed, so the calendar would stay on a
+    /// socket nothing can be sent through for the life of the process.
+    #[test]
+    fn a_connection_that_cannot_be_written_to_is_given_up() {
+        let shared = SharedState::new();
+        let mut state = SecDefState::new();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        let mut conn = Some(Connection::new_raw(sock).unwrap());
+
+        state.pending.push((String::new(), 77, false, Instant::now()));
+        state.meta_asked = true;
+
+        state.give_up(&mut conn, &shared);
+
+        assert!(conn.is_none(), "the connection is put down, so another can be built");
+        assert!(state.pending.is_empty(), "and nothing is left waiting on it");
+        assert!(!state.meta_asked, "the next connection asks for the calendar again");
+        assert!(
+            !shared.reference.drain_historical_errors().is_empty(),
+            "the caller is told rather than left to time out",
+        );
+    }
+
 }
