@@ -136,7 +136,6 @@ impl EClient {
             // submit path.
             let stop_price = (api_order.aux_price * crate::api::types::PRICE_SCALE_F) as i64;
             ControlCommand::Order(OrderRequest::Modify {
-                new_order_id: oid,
                 order_id: oid,
                 price,
                 qty,

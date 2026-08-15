@@ -189,7 +189,11 @@ impl EClient {
     fn cancel_tick_by_tick_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         // Only what this request took out. Removing the contract's quote
         // mapping here took the quotes away from whoever was watching them.
-        if let Some(instrument) = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id) {
+        // Removed before the send, not across it: the send is bounded and runs
+        // detached from Python, so a guard spanning it blocks another thread
+        // cancelling a different subscription.
+        let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
+        if let Some(instrument) = instrument {
             let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
             Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         }

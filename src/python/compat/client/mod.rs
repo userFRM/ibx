@@ -80,15 +80,20 @@ pub struct EClient {
 
 impl Drop for EClient {
     fn drop(&mut self) {
-        if let Some(tx) = self.control_tx.lock().unwrap().as_ref() {
+        // Both taken out of their locks first. A guard built in the scrutinee
+        // is held for the whole body, and these bodies block: the sends are
+        // bounded, and the join waits on the engine thread.
+        let tx = self.control_tx.lock().unwrap().clone();
+        if let Some(tx) = tx {
             // Dropping the client ends the session, so the venue is told.
             let _ = tx.send(ControlCommand::Logout);
             let _ = tx.send(ControlCommand::Shutdown);
         }
-        if let Some(h) = self._thread.lock().unwrap().take() {
+        let thread = self._thread.lock().unwrap().take();
+        if let Some(h) = thread {
             // A wedged engine never returns from join. Detach so
             // that stall parks this thread, not the whole interpreter
- //. try_attach, not attach: dealloc also runs during
+            // try_attach, not attach: dealloc also runs during
             // interpreter shutdown (and `wrapper` commonly points back at
             // the object embedding this EClient, so the cyclic GC — not
             // just refcounting — can be the one calling drop), and attach
@@ -378,12 +383,17 @@ impl EClient {
 
     /// Disconnect from IB.
     fn disconnect(&self, py: Python<'_>) -> PyResult<()> {
-        if let Some(tx) = self.control_tx.lock().unwrap().as_ref() {
+        // Taken out of their locks first, as in `Drop`: the sends are bounded
+        // and the join waits on the engine, so a guard spanning either blocks
+        // every other thread that needs the same lock.
+        let tx = self.control_tx.lock().unwrap().clone();
+        if let Some(tx) = tx {
             // The session is ending, so the venue is told before the engine stops.
             let _ = tx.send(ControlCommand::Logout);
             let _ = tx.send(ControlCommand::Shutdown);
         }
-        if let Some(h) = self._thread.lock().unwrap().take() {
+        let thread = self._thread.lock().unwrap().take();
+        if let Some(h) = thread {
             // Same wedged-engine hazard as Drop: release the GIL
             // for the join so a stuck engine thread stalls only this call.
             py.detach(|| { let _ = h.join(); });
@@ -567,7 +577,11 @@ impl EClient {
     /// Raising instead made a caller written against that client take a
     /// different path here than it takes there.
     pub(crate) fn tx_or_report(&self, req_id: i64) -> Option<SyncSender<ControlCommand>> {
-        match self.control_tx.lock().unwrap().clone() {
+        // Taken before the arms run. The `None` arm calls user code, and a
+        // handler that disconnects or issues another request would wait on
+        // this same lock while holding the GIL.
+        let tx = self.control_tx.lock().unwrap().clone();
+        match tx {
             Some(tx) => Some(tx),
             None => {
                 Python::attach(|py| {

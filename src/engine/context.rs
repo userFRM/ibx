@@ -888,10 +888,7 @@ impl Context {
         tif: u8,
         stop_price: Price,
     ) -> OrderId {
-        let new_id = self.next_order_id;
-        self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::Modify {
-            new_order_id: new_id,
             order_id,
             price,
             stop_price,
@@ -900,7 +897,7 @@ impl Context {
             ord_type,
             tif,
         });
-        new_id
+        order_id
     }
 
     // ── Timing ──

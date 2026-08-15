@@ -97,10 +97,8 @@ fn main() {
             101 * (PRICE_SCALE / 100) // $1.01
         };
 
-        let new_order_id = current_order_id + 1;
         let modify_time = Instant::now();
         session.send_order(OrderRequest::Modify {
-            new_order_id,
             order_id: current_order_id,
             price: new_price,
             qty: 1,
@@ -111,7 +109,7 @@ fn main() {
             stop_price: 0,
         });
 
-        // Wait for ack on new_order_id
+        // Wait for the ack, which comes back under the order's own id.
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut acked = false;
         loop {
@@ -120,7 +118,7 @@ fn main() {
                 break;
             }
             match session.event_rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(Event::OrderUpdate(update)) if update.order_id == new_order_id => {
+                Ok(Event::OrderUpdate(update)) if update.order_id == current_order_id => {
                     if matches!(update.status, OrderStatus::Submitted | OrderStatus::PendingSubmit) {
                         let ns = (Instant::now() - modify_time).as_nanos() as u64;
                         modify_stats.push(ns);
@@ -146,7 +144,7 @@ fn main() {
         }
 
         if acked {
-            current_order_id = new_order_id;
+            current_order_id = current_order_id;
         }
 
         // Brief pause

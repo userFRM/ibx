@@ -222,7 +222,6 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
     // `order_id`. A distinct id here only books a local record the gateway will
     // never mention, and the cancel that follows would address nothing. The
     // client passes the same id for exactly this reason.
-    let new_order_id = order_id;
 
     while Instant::now() < deadline {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -230,11 +229,11 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
                 OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                     if modify_sent && !modify_acked {
                         modify_acked = true;
-                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                     } else if !order_acked {
                         order_acked = true;
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                            order_id, new_order_id, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            order_id, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -458,7 +457,6 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
     // `order_id`. A distinct id here only books a local record the gateway will
     // never mention, and the cancel that follows would address nothing. The
     // client passes the same id for exactly this reason.
-    let new_order_id = order_id;
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
@@ -476,11 +474,11 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
                 OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                     if modify_sent && !modify_acked_local {
                         modify_acked_local = true;
-                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                     } else if !order_acked {
                         order_acked = true;
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                            order_id, new_order_id, price: 1_00_000_000, qty: 2, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            order_id, price: 1_00_000_000, qty: 2, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -1758,7 +1756,6 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
     // `order_id`. A distinct id here only books a local record the gateway will
     // never mention, and the cancel that follows would address nothing. The
     // client passes the same id for exactly this reason.
-    let new_order_id = order_id;
     // Submit limit buy at $1, qty=1
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
     control_tx.send(ControlCommand::Subscribe { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None }).unwrap();
@@ -1777,12 +1774,12 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
                 OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                     if modify_sent && !modify_acked {
                         modify_acked = true;
-                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                     } else if !order_acked {
                         order_acked = true;
                         // Modify BOTH price ($1→$2) and qty (1→3) in a single Modify
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                            order_id, new_order_id, price: 2_00_000_000, qty: 3, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            order_id, price: 2_00_000_000, qty: 3, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -1824,8 +1821,8 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
 
     let order_id = next_order_id();
-    let modify_id_1 = order_id + 1;
-    let modify_id_2 = order_id + 2;
+    // A replace restates the order the caller already holds, so a second one
+    // names the same id as the first — which is what an ibapi caller does.
 
     // Submit limit buy at $1
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
@@ -1845,20 +1842,20 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
                         0 => {
                             // Original order acked → modify to $2
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id, new_order_id: modify_id_1, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                order_id, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                             })).unwrap();
                             phase = 1;
                         }
                         1 => {
                             // First modify acked → modify again to $3
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id: modify_id_1, new_order_id: modify_id_2, price: 3_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                order_id, price: 3_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                             })).unwrap();
                             phase = 2;
                         }
                         2 => {
                             // Second modify acked → cancel
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: modify_id_2 })).unwrap();
+                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                             phase = 3;
                         }
                         _ => {}
@@ -1904,7 +1901,6 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
     // `order_id`. A distinct id here only books a local record the gateway will
     // never mention, and the cancel that follows would address nothing. The
     // client passes the same id for exactly this reason.
-    let new_order_id = order_id;
 
     // Submit limit buy at $1
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
@@ -1926,10 +1922,10 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
                             order_acked = true;
                             // Send modify AND cancel back-to-back — no waiting
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id, new_order_id, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                order_id, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                             })).unwrap();
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: new_order_id })).unwrap();
+                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                             race_sent = true;
                         }
                     }

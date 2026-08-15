@@ -148,7 +148,6 @@ impl EClient {
             // itself to a limit price of zero.
             let stop_price = (order.aux_price * PRICE_SCALE_F) as i64;
             ControlCommand::Order(OrderRequest::Modify {
-                new_order_id: oid,
                 order_id: oid,
                 price,
                 qty,

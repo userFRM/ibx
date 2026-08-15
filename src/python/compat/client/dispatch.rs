@@ -228,7 +228,13 @@ impl EClient {
             // pair — and a program that waits for the order to confirm what it
             // asked for waited on a callback that only arrived if it asked for
             // its open orders.
-            if let Some(tracked) = self.core.open_orders.lock().unwrap().get(&update.order_id).cloned() {
+            // Copied out before the callback rather than read across it: a
+            // guard built in the scrutinee is held for the whole body, and the
+            // body calls user code. A wrapper that reaches the order cache from
+            // that callback would wait on a lock its own caller holds, with the
+            // GIL held behind it.
+            let tracked = self.core.open_orders.lock().unwrap().get(&update.order_id).cloned();
+            if let Some(tracked) = tracked {
                 let contract_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
                 let order_py = Py::new(py, Order {
                     order_id: tracked.order.order_id,

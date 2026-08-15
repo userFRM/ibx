@@ -1409,8 +1409,6 @@ pub enum OrderRequest {
     /// or the trigger has the change reach the gateway.
     /// A zero `tif` states none and leaves the resting value in force.
     Modify {
-        /// The number the replaced order takes.
-        new_order_id: OrderId,
         /// The caller's number for the order.
         order_id: OrderId,
         /// The price, scaled by `PRICE_SCALE`.
@@ -1444,6 +1442,21 @@ impl OrderRequest {
             | Self::SubmitLimitFractional { order_id, .. }
             | Self::SubmitEx { order_id, .. } => *order_id,
             Self::SubmitBracket { parent_id, .. } => *parent_id,
+        }
+    }
+
+    /// Every order this request puts on the wire.
+    ///
+    /// A bracket is three messages under one request, and all three are sent
+    /// whatever any one of them returns. A failure reported against the first
+    /// id alone leaves the other two carrying a status the wire never
+    /// confirmed, so recovery walks this rather than [`Self::order_id`].
+    pub fn order_ids(&self) -> Vec<OrderId> {
+        match self {
+            Self::SubmitBracket { parent_id, tp_id, sl_id, .. } => {
+                vec![*parent_id, *tp_id, *sl_id]
+            }
+            other => vec![other.order_id()],
         }
     }
 
@@ -2495,7 +2508,7 @@ pub struct MidnightSeed {
     /// Position held at midnight. `None` when the row arrived without a
     /// parseable quantity: the position exists but its overnight size is
     /// unknown, which is not the same as having opened it today.
-    pub qty_midnight: Option<i64>,
+    pub qty_midnight: Option<f64>,
     /// What the venue states the position was worth at midnight. `None` where
     /// the row did not state it, which is when the day's change has to be
     /// sized against a previous close the client finds for itself.
@@ -2651,7 +2664,6 @@ mod tests {
     #[test]
     fn order_request_is_copy() {
         let req = OrderRequest::Modify {
-            new_order_id: 2,
             order_id: 1,
             price: 100 * PRICE_SCALE,
             qty: 200,
@@ -2895,14 +2907,14 @@ mod tests {
         assert_eq!(req.instrument(), Some(7));
         assert_eq!(OrderRequest::Cancel { order_id: 1 }.instrument(), None);
         assert_eq!(
-            OrderRequest::Modify { new_order_id: 2, order_id: 1, price: 0, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 }.instrument(),
+            OrderRequest::Modify { order_id: 1, price: 0, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 }.instrument(),
             None
         );
     }
 
     #[test]
     fn order_request_modify_fields() {
-        let req = OrderRequest::Modify { new_order_id: 100, order_id: 99, price: 200 * PRICE_SCALE, qty: 10, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 };
+        let req = OrderRequest::Modify { order_id: 99, price: 200 * PRICE_SCALE, qty: 10, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 };
         match req {
             OrderRequest::Modify { order_id, price, qty, .. } => {
                 assert_eq!(order_id, 99);

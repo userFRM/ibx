@@ -3471,7 +3471,7 @@ fn handle_pnl_response(msg: &[u8], shared: &SharedState) {
                 // row is still kept — dropping it says the same thing, because a
                 // position with no seed row *is* the intraday case, and it would
                 // discard the cash and realized figures the row does carry.
-                seed.qty_midnight = v.parse::<f64>().ok().filter(|q| q.is_finite()).map(|q| q as i64);
+                seed.qty_midnight = v.parse::<f64>().ok().filter(|q| q.is_finite());
             } else if let Some(v) = part.strip_prefix("8223=") {
                 seed.qty_traded = v.parse::<f64>().ok().filter(|q| q.is_finite());
             } else if let Some(v) = part.strip_prefix("8233=") {
@@ -4290,13 +4290,28 @@ mod tests {
         assert_eq!(seeds.len(), 2, "both entries are seeded");
 
         let stated = seeds.iter().find(|s| s.con_id == 756733).expect("stated entry");
-        assert_eq!(stated.qty_midnight, Some(100));
+        assert_eq!(stated.qty_midnight, Some(100.0));
 
         let silent = seeds.iter().find(|s| s.con_id == 265598).expect("silent entry");
         assert_eq!(silent.qty_midnight, None, "absent is unknown, not flat");
         assert_eq!(silent.money_traded, -10.0, "the figures it did state survive");
         assert_eq!(silent.realized_pnl, 2.5);
     }
+
+    /// A fractional overnight position is a position. Narrowing the midnight
+    /// quantity to a whole number reads half a share as flat, and the day's
+    /// baseline is then sized against nothing.
+    #[test]
+    fn a_fractional_midnight_quantity_survives_the_wire() {
+        let shared = SharedState::new();
+        let body = ["6008=756733", "6064=0.5", "6822=-1.0"].join("\x01");
+        handle_pnl_response(body.as_bytes(), &shared);
+
+        let seeds = shared.portfolio.midnight_seeds();
+        let seed = seeds.iter().find(|s| s.con_id == 756733).expect("the row");
+        assert_eq!(seed.qty_midnight, Some(0.5), "half a share is not flat");
+    }
+
 
     /// The venue states what each position was worth at midnight and what has
     /// been traded against it since. Those are the figures the day's change is
@@ -4321,14 +4336,14 @@ mod tests {
         assert_eq!(seeds.len(), 2, "the combo bucket is not a contract");
 
         let long = seeds.iter().find(|s| s.con_id == 756733).expect("first contract");
-        assert_eq!(long.qty_midnight, Some(100));
+        assert_eq!(long.qty_midnight, Some(100.0));
         assert_eq!(long.qty_traded, Some(25.0));
         assert_eq!(long.cost_midnight, Some(44000.5), "taken as sent, unscaled");
         assert_eq!(long.money_traded, -1250.0);
         assert_eq!(long.realized_pnl, 7.5);
 
         let short = seeds.iter().find(|s| s.con_id == 265598).expect("second contract");
-        assert_eq!(short.qty_midnight, Some(-3));
+        assert_eq!(short.qty_midnight, Some(-3.0));
         assert_eq!(short.cost_midnight, Some(-1200.0), "a short is worth a negative amount");
         assert_eq!(
             short.realized_pnl, 0.0,
@@ -6462,6 +6477,24 @@ mod tests {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         ccp.handle_exec_report(&untracked_fill(&[(97, "N")]), b"", &mut context, &shared, &None, "");
         assert_eq!(shared.orders.drain_fills().len(), 1);
+    }
+
+    /// A completed order's replay carries a cumulative quantity and no local
+    /// record to reconcile against. The marker is what stops it, and it must
+    /// stop it before the cumulative figure is read.
+    #[test]
+    fn a_replay_with_a_cumulative_quantity_is_still_not_booked() {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+
+        ccp.handle_exec_report(
+            &untracked_fill(&[(97, "Y"), (14, "100"), (32, "100")]),
+            b"", &mut context, &shared, &None, "",
+        );
+
+        assert!(
+            shared.orders.drain_fills().is_empty(),
+            "a replayed history for an order this session never saw is not a fill",
+        );
     }
 
     /// An execution that could not be booked must stay replayable. Consuming

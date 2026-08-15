@@ -123,7 +123,13 @@ class IbxClient:
             a for a in self._client.get_account_id().split(",") if a
         ]
         self.wrapper.managedAccounts(",".join(self._accounts))
-        self.wrapper.nextValidId(self._client.next_order_id())
+        # Their wrapper's `nextValidId` does nothing; their client seeds the
+        # counter itself when it sees one on the wire. `placeOrder` takes its
+        # id from that counter, so an id announced and not seeded is an order
+        # numbered from one on an account that has already traded.
+        next_valid = self._client.next_order_id()
+        self.updateReqId(next_valid)
+        self.wrapper.nextValidId(next_valid)
 
         self._start_pump()
         self.apiStart.emit()
@@ -187,8 +193,12 @@ class IbxClient:
         return list(self._accounts)
 
     def getReqId(self):
+        # Hands out the current value and then advances, as their own client
+        # does, so an id seeded by `updateReqId` is the next one issued rather
+        # than the one after it.
+        new_id = self._reqIdSeq
         self._reqIdSeq += 1
-        return self._reqIdSeq
+        return new_id
 
     def updateReqId(self, minReqId):
         self._reqIdSeq = max(self._reqIdSeq, minReqId)
