@@ -115,7 +115,7 @@ pub const FLAG_TWSRO_TOKEN: u32 = 1024;
 pub fn get_session_id() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap();
+        .unwrap_or_default();
     let millis = now.as_millis() as u64;
     let secs = millis / 1000;
     let ms = millis % 1000;

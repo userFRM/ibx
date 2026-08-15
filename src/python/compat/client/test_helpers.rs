@@ -26,6 +26,24 @@ fn a_recent_second() -> u64 {
 
 #[pymethods]
 impl EClient {
+    /// Seed the venue's own model for a contract, as a market-data
+    /// subscription does when it publishes tick 13.
+    #[doc(hidden)]
+    fn _test_push_option_model(
+        &self, instrument: u32, implied_vol: f64, opt_price: f64, und_price: f64,
+    ) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.market.push_option_computation(crate::types::OptionComputation {
+            answers: None,
+            instrument,
+            implied_vol,
+            opt_price,
+            und_price,
+            ..Default::default()
+        });
+        Ok(())
+    }
+
     /// Name the client this session connected under, as `connect` does.
     #[doc(hidden)]
     fn _test_set_client_id(&self, client_id: i32) {

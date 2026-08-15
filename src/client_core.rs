@@ -635,6 +635,42 @@ impl Default for ClientCore {
     }
 }
 
+/// Why neither question can be answered without the venue having spoken.
+const OPTION_MODEL_UNSTATED: &str =
+    "the venue has not stated its own model for this contract on this session. Ask for the \
+     option's model first — a market-data subscription on the option carries it — and both \
+     questions can then be answered against what it said";
+
+/// Years between now and a stated expiry, as `yyyymmdd`.
+pub(crate) fn years_to_expiry(expiry: &str) -> Option<f64> {
+    let digits: String = expiry.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
+    if digits.len() != 8 {
+        return None;
+    }
+    let year: i64 = digits[0..4].parse().ok()?;
+    let month: i64 = digits[4..6].parse().ok()?;
+    let day: i64 = digits[6..8].parse().ok()?;
+    let expiry_day = days_from_civil(year, month, day);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let today = now / 86_400;
+    let days = expiry_day - today;
+    (days > 0).then(|| days as f64 / 365.0)
+}
+
+/// Days since the epoch for a civil date. Written out rather than pulled in:
+/// one date, once, and a dependency for it would be a dependency for good.
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 impl ClientCore {
     /// An empty one.
     pub fn new() -> Self {
@@ -2935,6 +2971,60 @@ impl ClientCore {
 
         Ok(ControlCommand::Order(req))
     }
+    /// The contract's terms and the venue's own model for it, or why neither
+    /// question can be answered.
+    pub(crate) fn solve_option(
+        &self,
+        shared: &SharedState,
+        contract: &crate::api::types::Contract,
+        solve: impl Fn(
+            crate::control::option_model::OptionTerms,
+            crate::control::option_model::VenueModel,
+        ) -> Option<f64>,
+    ) -> Result<f64, crate::api::error_codes::Refusal> {
+        let instrument = self
+            .con_id_to_instrument.lock().unwrap().get(&contract.con_id).copied()
+            .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
+        let stated = shared
+            .market
+            .option_model(instrument)
+            .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
+        let years = years_to_expiry(&contract.last_trade_date_or_contract_month)
+            .ok_or_else(|| "the contract states no expiry to measure from".to_string())?;
+        let terms = crate::control::option_model::OptionTerms {
+            strike: contract.strike,
+            years_to_expiry: years,
+            is_call: contract.right.eq_ignore_ascii_case("C")
+                || contract.right.eq_ignore_ascii_case("CALL"),
+        };
+        // What the venue did not state is not a number. It writes the largest
+        // double where it has nothing to say, which this client passes on
+        // as-is because the reference client does — so it has to be read back
+        // as silence here rather than taken for a value. Taken for one, a
+        // contract with no dividend had the largest double in the world
+        // subtracted from its underlying.
+        let stated_or_none = |v: f64| (v.is_finite() && v != f64::MAX).then_some(v);
+        let model = crate::control::option_model::VenueModel {
+            volatility: stated_or_none(stated.implied_vol)
+                .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,
+            option_price: stated_or_none(stated.opt_price)
+                .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,
+            underlying_price: stated_or_none(stated.und_price)
+                .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,
+            // No dividend stated is no dividend, which is what it means.
+            present_value_of_dividends: stated_or_none(stated.pv_dividend).unwrap_or(0.0),
+        };
+        solve(terms, model).ok_or_else(|| {
+            crate::api::error_codes::Refusal::validation(
+            "this contract cannot be solved under the venue's own model for it. The model is \
+             anchored to the price the venue published, so a figure no rate reproduces leaves \
+             nothing to solve against — and an option far enough into the money is worth its \
+             intrinsic value and little else, its price hardly moving with volatility at all, \
+             so no one volatility is implied either. Naming a number for either would be \
+             picking one rather than solving for it")
+        })
+    }
+
 }
 
 #[cfg(test)]
@@ -3799,6 +3889,7 @@ mod contract_gate_tests {
             assert!(ClientCore::validate_combo_legs(st, 2).is_ok(), "{st} with legs");
         }
     }
+
 }
 
 #[cfg(test)]

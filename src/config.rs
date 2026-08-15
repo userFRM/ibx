@@ -156,7 +156,7 @@ pub fn midnight_days_ago(days: u64) -> TimestampBuf {
     let mut stamp = chrono_free_timestamp();
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
     let (year, month, day) = days_to_ymd(secs / 86400 - days);
     write_u2(&mut stamp.buf[0..], (year / 100) as u8);

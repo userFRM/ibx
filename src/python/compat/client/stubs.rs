@@ -58,8 +58,20 @@ impl EClient {
         &self, req_id: i64, contract: &Contract, option_price: f64,
         under_price: f64, implied_vol_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
-        let _ = (req_id, contract, option_price, under_price, implied_vol_options);
-        report_reason(self, req_id, MODELLED_IN_PROCESS);
+        let _ = implied_vol_options;
+        if let Err(why) = self.answer_option_model(req_id, contract, |terms, model| {
+            crate::control::option_model::implied_volatility(
+                terms, model, option_price, under_price,
+            )
+        }, |volatility| crate::types::OptionComputation {
+            answers: Some(req_id),
+            implied_vol: volatility,
+            opt_price: option_price,
+            und_price: under_price,
+            ..Default::default()
+        }) {
+            report_reason(self, req_id, &why);
+        }
         Ok(())
     }
 
@@ -70,13 +82,25 @@ impl EClient {
         &self, req_id: i64, contract: &Contract, volatility: f64,
         under_price: f64, opt_prc_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
-        let _ = (req_id, contract, volatility, under_price, opt_prc_options);
-        report_reason(self, req_id, MODELLED_IN_PROCESS);
+        let _ = opt_prc_options;
+        if let Err(why) = self.answer_option_model(req_id, contract, |terms, model| {
+            crate::control::option_model::option_price(
+                terms, model, volatility, under_price,
+            )
+        }, |price| crate::types::OptionComputation {
+            answers: Some(req_id),
+            implied_vol: volatility,
+            opt_price: price,
+            und_price: under_price,
+            ..Default::default()
+        }) {
+            report_reason(self, req_id, &why);
+        }
         Ok(())
     }
 
-    // nothing to withdraw: the request it would withdraw is refused, so none
-    // is ever outstanding.
+    // Nothing to withdraw: the calculation is answered in this call, so none
+    // is ever outstanding by the time a cancel could name it.
     /// Stop waiting on an implied-volatility request.
     fn cancel_calculate_implied_volatility(&self, req_id: i64) -> PyResult<()> {
         let _ = req_id;
@@ -403,22 +427,33 @@ impl EClient {
     }
 }
 
-/// Why solving an option for its volatility, or for its price, is not served.
+/// Solve an option against the venue's own published model and answer on
+/// `tick_option_computation`, as the counterpart does.
 ///
-/// Not for want of finding it on the wire: there is nothing on the wire to
-/// find. The counterpart solves both in its own process, with a pricing model
-/// it carries, seeded by the caller's number and the market data it already
-/// holds. No request leaves the machine and no answer comes back, so serving
-/// these means shipping a pricing model and the curves it needs, which is a
-/// different undertaking from carrying a message.
-///
-/// What the venue will model, it models on its own terms, and this client
-/// already asks for it: the option model arrives as its own tick.
-const MODELLED_IN_PROCESS: &str = "solving an option for its volatility or its price is not a \
-     request this protocol carries: the counterpart computes both in its own process from a \
-     pricing model it ships. The venue's own model is available as a market-data subscription \
-     instead";
-
+/// The counterpart computes both of these in its own process — the wire
+/// carries no such request — and reports the answer on the same callback the
+/// venue's own model arrives under. Refusing them instead left this surface
+/// answering a question the other one answers.
+impl EClient {
+    fn answer_option_model(
+        &self,
+        req_id: i64,
+        contract: &Contract,
+        solve: impl Fn(
+            crate::control::option_model::OptionTerms,
+            crate::control::option_model::VenueModel,
+        ) -> Option<f64>,
+        into_computation: impl Fn(f64) -> crate::types::OptionComputation,
+    ) -> Result<(), String> {
+        let _ = req_id;
+        let shared = self.shared_state().map_err(|_| "not connected".to_string())?;
+        let answer = self.core
+            .solve_option(&shared, &contract.to_api(), solve)
+            .map_err(|why| why.message)?;
+        shared.market.push_option_computation(into_computation(answer));
+        Ok(())
+    }
+}
 
 /// Answer a request this client cannot serve the way the reference client
 /// does: on the error callback, returning normally.

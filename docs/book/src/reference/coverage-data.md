@@ -22,7 +22,7 @@ that did not run.
 
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
-| **EClient methods** | 77 | 69 impl, 8 stub | 69 impl, 8 stub |
+| **EClient methods** | 77 | 71 impl, 6 stub | 71 impl, 6 stub |
 | **EWrapper callbacks** | 81 | 74 impl, 7 stub | 74 impl, 7 stub |
 
 ## EClient Methods
@@ -89,9 +89,9 @@ that did not run.
 |  | `cancel_news_bulletins` | `cancelNewsBulletins` | Y | Y | Live session |
 | Fundamental | `req_fundamental_data` | `reqFundamentalData` | Y | Y | Live session |
 |  | `cancel_fundamental_data` | `cancelFundamentalData` | Y | Y | Live session |
-| Options | `calculate_implied_volatility` | `calculateImpliedVolatility` | STUB | STUB | States why it cannot be served |
+| Options | `calculate_implied_volatility` | `calculateImpliedVolatility` | Y | Y | Offline suites |
 |  | `cancel_calculate_implied_volatility` | `cancelCalculateImpliedVolatility` | STUB | STUB | States why it cannot be served |
-|  | `calculate_option_price` | `calculateOptionPrice` | STUB | STUB | States why it cannot be served |
+|  | `calculate_option_price` | `calculateOptionPrice` | Y | Y | Offline suites |
 |  | `cancel_calculate_option_price` | `cancelCalculateOptionPrice` | STUB | STUB | States why it cannot be served |
 |  | `exercise_options` | `exerciseOptions` | Y | Y | Offline suites |
 |  | `req_sec_def_opt_params` | `reqSecDefOptParams` | Y | Y | Live session |
