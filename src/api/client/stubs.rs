@@ -29,25 +29,40 @@ impl EClient {
 
     // ── Server Time ──
 
-    /// Request current server time. Matches `reqCurrentTime` in C++.
-    /// Returns local system time (no server round-trip).
+    /// The venue's own clock, as `reqCurrentTime` reports it.
+    ///
+    /// Every message the venue sends is stamped with the time it sent it, and
+    /// the last one is held. A caller asking for the server's time is asking
+    /// how far apart the two clocks are, which this machine's own clock cannot
+    /// answer. Where no message has been stamped yet — before the session is
+    /// up — there is nothing to report but the local clock.
     pub fn req_current_time(&self, wrapper: &mut impl Wrapper) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let stated = self.shared.market.venue_time()
+            .as_deref()
+            .and_then(crate::config::ib_datetime_to_unix);
+        let now = stated.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64
+        });
         wrapper.current_time(now);
     }
 
     // ── FA (Financial Advisor) ──
 
-    /// Request FA data. Not yet implemented.
     /// Ask the venue for a partition of the advisor's own configuration.
     ///
     /// The reference client names the partition by a number — its aliases, its
     /// groups, its allocation profiles — and the venue names it by a word, so
     /// the number is turned into the word it stands for. A number that stands
     /// for nothing is refused rather than sent as an empty partition.
+    ///
+    /// The request reaches the venue; its answer is not read back yet, so
+    /// [`Wrapper::receive_fa`] does not fire. What the venue replies with
+    /// lands among the messages this client records as unread. Reading it
+    /// needs an advisor account to state the reply's shape, and inventing one
+    /// would be a guess about a frame nobody here has seen.
     pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal> {
         let partition = advisor_partition(fa_data_type)
             .ok_or_else(|| format!("no advisor configuration is named by {fa_data_type}"))?;
@@ -60,6 +75,10 @@ impl EClient {
     }
 
     /// Replace a partition of the advisor's configuration with the one given.
+    ///
+    /// As with [`request_fa`](Self::request_fa), the replacement reaches the
+    /// venue and its answer is not read back, so [`Wrapper::replace_fa_end`]
+    /// does not fire.
     pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal> {
         let partition = advisor_partition(fa_data_type)
             .ok_or_else(|| format!("no advisor configuration is named by {fa_data_type}"))?;
@@ -99,7 +118,7 @@ impl EClient {
         }) {
             Ok(volatility) => self.shared.market.push_option_computation(
                 crate::types::OptionComputation {
-                    instrument: req_id.max(0) as u32,
+                    answers: Some(req_id),
                     implied_vol: volatility,
                     opt_price: option_price,
                     und_price: under_price,
@@ -120,7 +139,7 @@ impl EClient {
         }) {
             Ok(price) => self.shared.market.push_option_computation(
                 crate::types::OptionComputation {
-                    instrument: req_id.max(0) as u32,
+                    answers: Some(req_id),
                     implied_vol: volatility,
                     opt_price: price,
                     und_price: under_price,

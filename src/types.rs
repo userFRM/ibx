@@ -316,6 +316,12 @@ pub enum HeldElsewhere {
 pub struct OptionComputation {
     /// The option this models.
     pub instrument: InstrumentId,
+    /// The request this answers, where the computation was made here rather
+    /// than by the venue. The venue's own arrive against an instrument and are
+    /// reported under whichever request subscribed it; a local calculation
+    /// answers the call that asked for it and has no subscription behind it,
+    /// so it names that call rather than borrowing the instrument field.
+    pub answers: Option<i64>,
     /// What volatility the price implies.
     pub implied_vol: f64,
     /// How much the option moves with the underlying.

@@ -794,24 +794,38 @@ impl ClientCore {
         }
     }
 
-    /// `instrument_to_req` maps ONE req_id per instrument: a second live
+    /// Take the contract, or follow whoever already has it.
+    ///
+    /// `instrument_to_req` maps one request per instrument: a second live
     /// subscription would clobber the first's reverse mapping and orphan it
-    /// silently — no ticks, no error. Names the refusal, or None
-    /// when this request is free to take the slot.
-    fn follows_existing_subscription(&self, instrument: InstrumentId, req_id: i64) -> bool {
-        let held = self.instrument_to_req.lock().unwrap();
+    /// silently — no ticks, no error. Answers whether this request is a
+    /// follower; where it is not, it holds the contract by the time this
+    /// returns.
+    ///
+    /// Deciding and taking happen under one acquisition. Split, two threads
+    /// subscribing the same unwatched contract both read it as free, both take
+    /// it, and the one that writes second owns the mapping — the other gets no
+    /// ticks, and cancelling it removes the winner's mapping and unsubscribes
+    /// the feed they were sharing.
+    pub(crate) fn follows_existing_subscription(&self, instrument: InstrumentId, req_id: i64) -> bool {
+        let mut held = self.instrument_to_req.lock().unwrap();
         match held.get(&instrument) {
             Some(&existing) if existing != req_id => {
-                drop(held);
                 let mut following = self.instrument_followers.lock().unwrap();
                 let watchers = following.entry(instrument).or_default();
                 if !watchers.contains(&req_id) {
                     watchers.push(req_id);
                 }
+                drop(following);
+                drop(held);
                 self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
                 true
             }
-            _ => false,
+            Some(_) => false,
+            None => {
+                held.insert(instrument, req_id);
+                false
+            }
         }
     }
 

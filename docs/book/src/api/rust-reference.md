@@ -817,7 +817,7 @@ pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_tick_by_tick_data`
 
-Subscribe to every trade or every quote change on a contract. The feed rides the historical farm, registered there under the name `TickByTick` beside the five-second bars. No separate service is involved. A missing entitlement arrives as the venue's own refusal rather than as silence. What was actually wrong was reading what came back. The subscription was always right, which is why the venue acknowledged it and assigned a ticker id, and then nothing could be made of the frames that followed.
+Subscribe to every trade or every quote change on a contract. The feed rides the historical farm, registered there under the name `TickByTick` beside the five-second bars. No separate service is involved. A missing entitlement arrives as the venue's own refusal rather than as silence. `number_of_ticks` and `ignore_size` are refused rather than dropped. This protocol's subscription states the contract and the kind of stream and nothing else: there is no field for a prelude of past ticks, and none for suppressing size-only changes. A caller that set either and was answered anyway would be reading a stream it did not ask for, with nothing to say so. Their defaults — no prelude, sizes included — are what the venue does, so an ordinary call is unaffected.
 
 ```rust
 pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type: &str, number_of_ticks: i32, ignore_size: bool, ) -> Result<(), Refusal>
@@ -1487,7 +1487,7 @@ pub fn req_news_providers(&self, wrapper: &mut impl Wrapper)
 
 #### `req_current_time`
 
-Request current server time. Returns local system time (no server round-trip).
+The venue's own clock, as `reqCurrentTime` reports it. Every message the venue sends is stamped with the time it sent it, and the last one is held. A caller asking for the server's time is asking how far apart the two clocks are, which this machine's own clock cannot answer. Where no message has been stamped yet — before the session is up — there is nothing to report but the local clock.
 
 ```rust
 pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
@@ -1501,7 +1501,7 @@ pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
 
 #### `request_fa`
 
-Request FA data. Not yet implemented. Ask the venue for a partition of the advisor's own configuration. The reference client names the partition by a number — its aliases, its groups, its allocation profiles — and the venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition.
+Ask the venue for a partition of the advisor's own configuration. The reference client names the partition by a number — its aliases, its groups, its allocation profiles — and the venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition. The request reaches the venue; its answer is not read back yet, so [`Wrapper::receive_fa`] does not fire. What the venue replies with lands among the messages this client records as unread. Reading it needs an advisor account to state the reply's shape, and inventing one would be a guess about a frame nobody here has seen.
 
 ```rust
 pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal>
@@ -1517,7 +1517,7 @@ pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal>
 
 #### `replace_fa`
 
-Replace a partition of the advisor's configuration with the one given.
+Replace a partition of the advisor's configuration with the one given. As with [`request_fa`](Self::request_fa), the replacement reaches the venue and its answer is not read back, so [`Wrapper::replace_fa_end`] does not fire.
 
 ```rust
 pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal>

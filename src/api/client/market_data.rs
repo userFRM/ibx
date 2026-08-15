@@ -101,14 +101,32 @@ impl EClient {
     /// involved. A missing entitlement arrives as the venue's own refusal
     /// rather than as silence.
     ///
-    /// What was actually wrong was reading what came back. The subscription was
-    /// always right, which is why the venue acknowledged it and assigned a
-    /// ticker id, and then nothing could be made of the frames that followed.
+    /// `number_of_ticks` and `ignore_size` are refused rather than dropped.
+    /// This protocol's subscription states the contract and the kind of stream
+    /// and nothing else: there is no field for a prelude of past ticks, and
+    /// none for suppressing size-only changes. A caller that set either and
+    /// was answered anyway would be reading a stream it did not ask for,
+    /// with nothing to say so. Their defaults — no prelude, sizes included —
+    /// are what the venue does, so an ordinary call is unaffected.
     pub fn req_tick_by_tick_data(
         &self, req_id: i64, contract: &Contract, tick_type: &str,
         number_of_ticks: i32, ignore_size: bool,
     ) -> Result<(), Refusal> {
-        let _ = (number_of_ticks, ignore_size);
+        if number_of_ticks != 0 {
+            return Err(Refusal::validation(format!(
+                "number_of_ticks={number_of_ticks} is not carried by this protocol: a \
+                 tick-by-tick subscription states the contract and the kind of stream, \
+                 with no field for a prelude of past ticks. Ask for those with \
+                 req_historical_ticks",
+            )));
+        }
+        if ignore_size {
+            return Err(Refusal::validation(
+                "ignore_size is not carried by this protocol: a tick-by-tick \
+                 subscription has no field for suppressing size-only changes, so \
+                 every change the venue sends is delivered",
+            ));
+        }
         let kind = TbtType::named(tick_type)?;
 
         // A stream is asked for by the venue's own id for the contract. Sent
