@@ -131,7 +131,8 @@ in.
 | A reconnect follows the venue | ✅ Supported | It uses the hosts this session reached the venue through, on the port the venue named in its redirect, and stops walking hosts when one answers and refuses |
 | The first connect knocks on the next door when one does not answer | ✅ Supported | One host per region. A door that answers and refuses ends the walk, so a refused logon is not repeated at every door |
 | The last order id is kept between runs | ✅ Supported | An order id belongs to the account, not the process: an id it has already used is refused by name. The last one handed out is remembered per account, kind of session and client id, and the next run counts on from it |
-| A session can be offered back to the venue | 🔬 Implemented | Kept between runs, sealed with the account password and owner-only, and offered at connect. This venue declines it and the password does the work, which is the venue's answer rather than an assumption |
+| A session survives losing its connection | ✅ Supported | A dropped connection is rebuilt on the session already open, with no second factor: five forced drops recovered in 2-8s, and an eight hour session rode through its losses unattended |
+| A session does not survive its process | ✅ Documented | The venue holds a session for a socket, not for an account: killed without logging out, it was already gone forty seconds later, and a later start is answered with a handshake. The counterpart stores no session either — it stays connected rather than restarting. So a restart costs a second factor here exactly as it does there, and staying up costs none |
 | A session that has ended answers at once | ✅ Supported | Requests made after a terminal loss are refused with 504 immediately, rather than waiting out a timeout each. Every request already answered keeps the venue's own answer |
 
 One session, held open for 175 minutes across a market open: 106,053 quotes,
