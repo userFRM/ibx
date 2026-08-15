@@ -1836,6 +1836,21 @@ impl FarmState {
 
     pub(crate) fn handle_disconnect(&mut self, context: &mut Context, _event_tx: &Option<SyncSender<Event>>) {
         self.disconnected = true;
+        // Anything the replay had not reached goes back where the next
+        // reconnect looks for it. A subscription that was sent is recorded
+        // again as it goes out; one still waiting was never sent, so dropping
+        // the queue here loses it — and the reconnect that follows rebuilds
+        // the queue from the record, which would no longer name it.
+        for (instrument, _con_id, symbol, exchange, sec_type, ltd, strike, right, mult, mode)
+            in self.replay_queue.drain(..)
+        {
+            if self.md_resub_info.iter().all(|(id, ..)| *id != instrument) {
+                self.md_resub_info.push((
+                    instrument, symbol, exchange, sec_type, ltd, strike, right, mult, mode,
+                ));
+            }
+        }
+        self.replay_not_before = None;
         self.md_req_to_instrument.clear();
         self.instrument_md_reqs.clear();
         // Clear depth wire-state (server_tags become invalid after disconnect).
@@ -2614,6 +2629,56 @@ mod resub_tests {
         assert!(farm.replay_queue.is_empty(), "every subscription was put back");
         assert!(farm.replay_not_before.is_none(), "nothing left to wait for");
         let _ = shared;
+    }
+
+    /// A farm that drops again mid-replay must not lose what was still queued.
+    ///
+    /// A subscription that has been sent records itself again as it goes out,
+    /// so the next reconnect finds it. One still waiting was never sent, and
+    /// the reconnect rebuilds the queue from that record — so a queue dropped
+    /// on disconnect takes those subscriptions with it, and the market data
+    /// the caller asked for never comes back, with nothing to say why.
+    #[test]
+    fn a_second_drop_mid_replay_keeps_what_was_still_waiting() {
+        use crate::engine::hot_loop::{HeartbeatState, ReplayPacing};
+
+        let mut farm = FarmState::new();
+        let mut market = MarketState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+
+        for con_id in 0..4i64 {
+            let instrument = market.register(700000 + con_id);
+            farm.md_resub_info.push((
+                instrument, "SPY".into(), "SMART".into(), "STK".into(), String::new(),
+                0.0, String::new(), String::new(), 0,
+            ));
+        }
+        context.market = market;
+
+        let (sock, _peer) = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let s = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
+            let (p, _) = l.accept().unwrap();
+            (s, p)
+        };
+        let mut conn = Some(Connection::new_raw(sock).unwrap());
+
+        // One goes out; three are still waiting.
+        let replay = ReplayPacing { burst: 1, pace: std::time::Duration::from_secs(30) };
+        farm.replay_queue = farm.take_resub_targets(&context.market).into_iter().collect();
+        farm.drive_replay(replay, &mut conn, &mut hb);
+        assert_eq!(farm.replay_queue.len(), 3);
+
+        // And the farm goes before the rest of them do.
+        farm.handle_disconnect(&mut context, &None);
+
+        assert!(farm.replay_queue.is_empty(), "nothing is left holding them");
+        assert_eq!(
+            farm.md_resub_info.len(), 4,
+            "all four are recorded for the next reconnect: the one that was \
+             sent recorded itself, and the three that were not are put back",
+        );
     }
 
     /// A slot reclaimed while the farm was down has no con_id to subscribe.
