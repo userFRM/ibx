@@ -2451,8 +2451,9 @@ mod tests {
         hb.set_ccp_interval(30);
         assert_eq!(hb.ccp_send_every(), 15);
 
-        // What `reconnect_ccp` does with an ack carrying no tag 108.
-        hb.set_ccp_interval(None::<u64>.unwrap_or(crate::config::CCP_HEARTBEAT));
+        // An ack carrying no tag 108 leaves `reconnect_ccp` with the interval
+        // its own logon proposed, which is what it sets.
+        hb.set_ccp_interval(crate::config::CCP_HEARTBEAT);
         assert_eq!(
             hb.ccp_send_every(), crate::config::CCP_HEARTBEAT / 2,
             "the new connection's proposal, not the dead one's interval",

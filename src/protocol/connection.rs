@@ -321,8 +321,8 @@ impl Connection {
                     let dropped = self.buf.len() - keep;
                     if dropped > 0 {
                         log::warn!(
-                            "extract_frames: dropping {dropped}B (no header). first {}B ascii={:?} full_hex={}",
-                            head_n, head_ascii, full_hex,
+                            "extract_frames: dropping {dropped}B (no header). \
+                             first {head_n}B ascii={head_ascii:?} full_hex={full_hex}",
                         );
                     }
                     self.buf.drain(..dropped);

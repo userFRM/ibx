@@ -794,35 +794,55 @@ impl ClientCore {
         }
     }
 
-    /// Take the contract, or follow whoever already has it.
+    /// Whether somebody already holds this contract, in which case this
+    /// request watches theirs.
     ///
-    /// `instrument_to_req` maps one request per instrument: a second live
-    /// subscription would clobber the first's reverse mapping and orphan it
-    /// silently — no ticks, no error. Answers whether this request is a
-    /// follower; where it is not, it holds the contract by the time this
-    /// returns.
-    ///
-    /// Deciding and taking happen under one acquisition. Split, two threads
-    /// subscribing the same unwatched contract both read it as free, both take
-    /// it, and the one that writes second owns the mapping — the other gets no
-    /// ticks, and cancelling it removes the winner's mapping and unsubscribes
-    /// the feed they were sharing.
+    /// Asks only. A contract nobody holds is not taken here: this runs as a
+    /// question about a cached contract, and a subscription that goes on to
+    /// fail would leave a holder recorded for a request that never started —
+    /// which nothing then cancels. [`take_or_follow`](Self::take_or_follow) is
+    /// where it is taken.
     pub(crate) fn follows_existing_subscription(&self, instrument: InstrumentId, req_id: i64) -> bool {
+        let held = self.instrument_to_req.lock().unwrap();
+        match held.get(&instrument) {
+            Some(&existing) if existing != req_id => {
+                drop(held);
+                self.follow(instrument, req_id);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Watch a contract somebody else holds.
+    fn follow(&self, instrument: InstrumentId, req_id: i64) {
+        let mut following = self.instrument_followers.lock().unwrap();
+        let watchers = following.entry(instrument).or_default();
+        if !watchers.contains(&req_id) {
+            watchers.push(req_id);
+        }
+        drop(following);
+        self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
+    }
+
+    /// Hold this contract, or follow whoever took it first.
+    ///
+    /// `instrument_to_req` maps one request per instrument: a second holder
+    /// would clobber the first's reverse mapping and orphan it silently — no
+    /// ticks, no error. Deciding and taking happen under one acquisition, so
+    /// two callers subscribing the same unheld contract cannot both take it
+    /// and leave the loser cancelling the winner's feed.
+    ///
+    /// Answers whether this request ended up a follower.
+    pub(crate) fn take_or_follow(&self, instrument: InstrumentId, req_id: i64) -> bool {
         let mut held = self.instrument_to_req.lock().unwrap();
         match held.get(&instrument) {
             Some(&existing) if existing != req_id => {
-                let mut following = self.instrument_followers.lock().unwrap();
-                let watchers = following.entry(instrument).or_default();
-                if !watchers.contains(&req_id) {
-                    watchers.push(req_id);
-                }
-                drop(following);
                 drop(held);
-                self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
+                self.follow(instrument, req_id);
                 true
             }
-            Some(_) => false,
-            None => {
+            _ => {
                 held.insert(instrument, req_id);
                 false
             }
@@ -1007,6 +1027,9 @@ impl ClientCore {
             }
             return Ok(instrument_id);
         }
+        // Somebody may have taken this contract while this request was being
+        // registered, in which case this one watches theirs.
+        let _ = self.take_or_follow(instrument_id, req_id);
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
         // What this request asked for, so its own callback says so rather than
         // reporting the type set for everything else.
@@ -1019,7 +1042,6 @@ impl ClientCore {
                 _ => self.market_data_type.load(Ordering::Relaxed),
             },
         );
-        self.instrument_to_req.lock().unwrap().insert(instrument_id, req_id);
         if snapshot {
             self.snapshot_reqs.lock().unwrap().insert(req_id, None);
         }

@@ -3414,8 +3414,6 @@ mod tests {
         assert_ne!(token_short_hash(&t1), token_short_hash(&t2));
     }
 
-    /// A route that states no port leaves the choice to the configured one.
-
     /// A peer that accepts the socket and then says nothing must not hold the
     /// reconnect open.
     ///
@@ -3449,6 +3447,7 @@ mod tests {
         let _ = held.join();
     }
 
+    /// A route that states no port leaves the choice to the configured one.
     #[test]
     fn parse_farm_route_two_segments() {
         let parsed = parse_farm_route("zdc1.ibllc.com/eufarm").unwrap();

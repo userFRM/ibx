@@ -4559,9 +4559,9 @@ fn the_last_thing_the_connection_did_is_what_a_caller_is_told() {
 }
 
 /// Two callers subscribing one contract at once: one holds it, the other
-/// follows. Deciding and taking used to be two acquisitions, so both could
-/// read the contract as free and both take it — the second write won, and the
-/// first request went quiet with nothing to say why.
+/// follows. Deciding and taking are one acquisition, so they cannot both read
+/// the contract as free and both take it — which left the second write owning
+/// the mapping and the first request quiet, with nothing to say why.
 #[test]
 fn one_contract_has_one_owner_however_many_ask_at_once() {
     use std::sync::Arc;
@@ -4580,7 +4580,7 @@ fn one_contract_has_one_owner_however_many_ask_at_once() {
             let claimed = Arc::clone(&claimed);
             scope.spawn(move || {
                 barrier.wait();
-                if !core.core.follows_existing_subscription(instrument, req_id) {
+                if !core.core.take_or_follow(instrument, req_id) {
                     claimed.lock().unwrap().push(req_id);
                 }
             });
