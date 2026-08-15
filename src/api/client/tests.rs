@@ -4343,3 +4343,259 @@ mod answering_calls_receive_through_dispatch {
         assert_eq!(shared.reference.take_contract_details_for(ask_id).len(), 1);
     }
 }
+
+/// A keep-up-to-date request answers once with its history and then keeps
+/// speaking. The reference client separates the two, and this surface reported
+/// only the first: a caller that overrode the update callback heard nothing,
+/// and the continued bars arrived as real-time bars it never asked for.
+#[test]
+fn a_kept_up_to_date_request_reports_its_history_then_its_updates() {
+    #[derive(Default)]
+    struct Heard {
+        history: Vec<i64>,
+        ended: Vec<i64>,
+        updates: Vec<i64>,
+        real_time: Vec<i64>,
+    }
+    impl Wrapper for Heard {
+        fn historical_data(&mut self, req_id: i64, _bar: &crate::api::types::BarData) { self.history.push(req_id); }
+        fn historical_data_end(&mut self, req_id: i64, _s: &str, _e: &str) { self.ended.push(req_id); }
+        fn historical_data_update(&mut self, req_id: i64, _bar: &crate::api::types::BarData) { self.updates.push(req_id); }
+        fn real_time_bar(&mut self, req_id: i64, _t: i64, _o: f64, _h: f64, _l: f64,
+                         _c: f64, _v: f64, _w: f64, _n: i32) { self.real_time.push(req_id); }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let mut heard = Heard::default();
+
+    // The initial answer, complete.
+    shared.reference.push_historical_data(9, HistoricalResponse {
+        query_id: String::new(), timezone: String::new(),
+        bars: vec![HistoricalBar { time: "20260101".into(), open: 100.0, high: 105.0, low: 99.0, close: 103.0, volume: 1000, wap: 102.0, count: 50 }],
+        is_complete: true,
+    });
+    client.process_msgs(&mut heard);
+
+    assert_eq!(heard.history, vec![9], "the history is history");
+    assert_eq!(heard.ended, vec![9], "and it says when it has finished");
+    assert!(heard.updates.is_empty(), "nothing is an update yet");
+
+    // What the venue keeps sending afterwards, on both feeds it can arrive on.
+    shared.reference.push_historical_data(9, HistoricalResponse {
+        query_id: String::new(), timezone: String::new(),
+        bars: vec![HistoricalBar { time: "20260101".into(), open: 100.0, high: 105.0, low: 99.0, close: 103.0, volume: 1000, wap: 102.0, count: 50 }],
+        is_complete: false,
+    });
+    shared.market.push_real_time_bar(9, Default::default());
+    client.process_msgs(&mut heard);
+
+    assert_eq!(heard.updates, vec![9, 9], "both continued bars are updates");
+    assert_eq!(heard.history, vec![9], "and neither is more history");
+    assert_eq!(heard.ended, vec![9], "nor a second end");
+    assert!(
+        heard.real_time.is_empty(),
+        "a request nobody made is not answered with real-time bars",
+    );
+}
+
+/// The account subscription reports what the account holds as well as what it
+/// is worth. A caller watching its positions through it heard only the values.
+#[test]
+fn subscribing_to_account_updates_reports_the_portfolio() {
+    #[derive(Default)]
+    struct Heard {
+        values: Vec<String>,
+        positions: Vec<(i64, f64)>,
+    }
+    impl Wrapper for Heard {
+        fn update_account_value(&mut self, key: &str, _v: &str, _c: &str, _a: &str) {
+            self.values.push(key.to_string());
+        }
+        fn update_portfolio(&mut self, contract: &Contract, position: f64, _mp: f64, _mv: f64,
+                            _ac: f64, _up: f64, _rp: f64, _acct: &str) {
+            self.positions.push((contract.con_id, position));
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let mut heard = Heard::default();
+
+    client.req_account_updates(true, "DU123");
+    shared.portfolio.set_position_info(crate::types::PositionInfo {
+        con_id: 756733,
+        position: 100.0,
+        avg_cost: 490 * crate::types::PRICE_SCALE,
+        symbol: "SPY".into(),
+        sec_type: "STK".into(),
+        ..Default::default()
+    });
+    shared.portfolio.note_account_value("NetLiquidation", "100000.00", "USD");
+    client.process_msgs(&mut heard);
+
+    assert!(heard.values.contains(&"NetLiquidation".to_string()), "the values still arrive");
+    assert_eq!(
+        heard.positions, vec![(756733, 100.0)],
+        "and the holding they describe arrives with them",
+    );
+}
+
+/// A calculation this client makes answers the call that asked for it.
+///
+/// The caller's request id was stored in the field naming the option, and the
+/// dispatcher then read it as one and mapped it again — so the answer arrived
+/// under an unrelated subscription's id, or under none at all.
+#[test]
+fn a_local_option_calculation_answers_the_request_that_asked() {
+    #[derive(Default)]
+    struct Heard(Vec<i64>);
+    impl Wrapper for Heard {
+        fn tick_option_computation(&mut self, req_id: i64, _tick: i32, _attr: i32,
+                                   _iv: f64, _d: f64, _op: f64, _pv: f64, _g: f64,
+                                   _v: f64, _t: f64, _up: f64) {
+            self.0.push(req_id);
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let mut heard = Heard::default();
+
+    // An id far outside the instrument table, so reading it as one cannot
+    // accidentally land on the right answer.
+    let asked = 4242i64;
+    shared.market.push_option_computation(crate::types::OptionComputation {
+        answers: Some(asked),
+        implied_vol: 0.25,
+        ..Default::default()
+    });
+    client.process_msgs(&mut heard);
+
+    assert_eq!(heard.0, vec![asked], "the answer names the call that asked for it");
+}
+
+/// `reqCurrentTime` asks for the venue's clock, not this machine's.
+///
+/// A caller asks it to learn how far apart the two are, and the local clock is
+/// the one number that cannot tell them. The venue stamps every message it
+/// sends; the last stamp is the answer.
+#[test]
+fn the_current_time_is_the_venues_own() {
+    #[derive(Default)]
+    struct Heard(Vec<i64>);
+    impl Wrapper for Heard {
+        fn current_time(&mut self, t: i64) { self.0.push(t); }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let mut heard = Heard::default();
+
+    // Before the venue has said anything, there is nothing but this clock.
+    client.req_current_time(&mut heard);
+    let local = heard.0[0];
+    assert!(local > 1_700_000_000, "a plausible instant");
+
+    // Once it has, its own stamp is what a caller is told.
+    shared.market.note_venue_time("20260815-12:00:00");
+    client.req_current_time(&mut heard);
+    assert_eq!(
+        heard.0[1], 1_786_795_200,
+        "the venue's stamp, read back to seconds",
+    );
+    assert_ne!(heard.0[1], local, "and not this machine's clock");
+}
+
+/// Arguments this protocol cannot carry are refused rather than dropped.
+///
+/// A tick-by-tick subscription states the contract and the kind of stream and
+/// nothing else. A caller that asked for a prelude of past ticks, or for
+/// size-only changes to be suppressed, and was answered anyway would be
+/// reading a stream it did not ask for with nothing to say so.
+#[test]
+fn tick_by_tick_refuses_what_it_cannot_ask_for() {
+    let (client, _rx, _shared) = test_client();
+
+    let asked_for_history = client.req_tick_by_tick_data(1, &spy(), "Last", 100, false);
+    assert!(asked_for_history.is_err(), "a prelude of past ticks cannot be asked for here");
+
+    let asked_to_drop_sizes = client.req_tick_by_tick_data(2, &spy(), "Last", 0, true);
+    assert!(asked_to_drop_sizes.is_err(), "nor can size-only changes be suppressed");
+
+    // And the refusal names the argument rather than the request, so a caller
+    // can tell this from a contract or entitlement problem.
+    let why = asked_for_history.unwrap_err();
+    assert!(why.message.contains("number_of_ticks"), "{}", why.message);
+    assert!(asked_to_drop_sizes.unwrap_err().message.contains("ignore_size"));
+}
+
+/// A session that came back and went again is not a connected session.
+///
+/// Loss and recovery were two flags with no order between them. Both raised,
+/// the dispatcher applied recovery last whichever way the connection had
+/// actually gone — so a client reported itself connected to a socket that had
+/// dropped, and nothing was left pending to correct it.
+#[test]
+fn the_last_thing_the_connection_did_is_what_a_caller_is_told() {
+    let (client, _rx, shared) = test_client();
+    let mut w = RecordingWrapper::default();
+
+    // Lost, recovered, and lost again before anyone looked.
+    shared.set_connection_lost();
+    shared.set_connection_restored();
+    shared.set_connection_lost();
+    client.process_msgs(&mut w);
+
+    assert!(!client.is_connected(), "the connection went and did not come back");
+    assert!(
+        w.events.iter().any(|e| e == "connection_closed"),
+        "and the caller is told once",
+    );
+
+    // The other way round: a recovery after a loss stands.
+    let (client, _rx, shared) = test_client();
+    let mut w = RecordingWrapper::default();
+    shared.set_connection_lost();
+    shared.set_connection_restored();
+    client.process_msgs(&mut w);
+    assert!(client.is_connected(), "the connection came back");
+}
+
+/// Two callers subscribing one contract at once: one holds it, the other
+/// follows. Deciding and taking used to be two acquisitions, so both could
+/// read the contract as free and both take it — the second write won, and the
+/// first request went quiet with nothing to say why.
+#[test]
+fn one_contract_has_one_owner_however_many_ask_at_once() {
+    use std::sync::Arc;
+
+    let (client, _rx, _shared) = test_client();
+    let core = Arc::new(client);
+    let instrument = 0u32;
+
+    let barrier = Arc::new(std::sync::Barrier::new(8));
+    let claimed: Arc<std::sync::Mutex<Vec<i64>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    std::thread::scope(|scope| {
+        for req_id in 1..=8i64 {
+            let core = Arc::clone(&core);
+            let barrier = Arc::clone(&barrier);
+            let claimed = Arc::clone(&claimed);
+            scope.spawn(move || {
+                barrier.wait();
+                if !core.core.follows_existing_subscription(instrument, req_id) {
+                    claimed.lock().unwrap().push(req_id);
+                }
+            });
+        }
+    });
+
+    let owners = claimed.lock().unwrap();
+    assert_eq!(owners.len(), 1, "exactly one request holds the contract: {owners:?}");
+    assert_eq!(
+        core.core.instrument_to_req.lock().unwrap().get(&instrument),
+        Some(&owners[0]),
+        "and the mapping names that one",
+    );
+    assert_eq!(
+        core.core.followers_of(instrument).len(), 7,
+        "everybody else follows it rather than being dropped",
+    );
+}

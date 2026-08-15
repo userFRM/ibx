@@ -319,7 +319,8 @@ impl EClient {
         // the model computation, and the attribute says the model is the
         // venue's rather than a price-based reading.
         for comp in self.shared.market.drain_option_computations() {
-            let req_id = self.core.req_id_for_instrument(comp.instrument);
+            let req_id = comp.answers
+                .unwrap_or_else(|| self.core.req_id_for_instrument(comp.instrument));
             wrapper.tick_option_computation(
                 req_id, MODEL_OPTION_COMPUTATION, 0,
                 comp.implied_vol, comp.delta, comp.opt_price, comp.pv_dividend,
@@ -365,8 +366,13 @@ impl EClient {
             wrapper.error(req_id as i64, code as i64, &msg, "");
         }
 
-        // Historical data → historical_data + historical_data_end
+        // Historical data → historical_data + historical_data_end, and after
+        // that end, historical_data_update. A keep-up-to-date request answers
+        // once with the history and then keeps speaking; the reference client
+        // separates the two, and a caller that overrode only the update
+        // callback heard nothing from this surface.
         for (req_id, response) in self.shared.reference.drain_historical_data() {
+            let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
             for bar in &response.bars {
                 let bd = BarData {
                     date: bar.time.clone(),
@@ -379,9 +385,14 @@ impl EClient {
                     bar_count: bar.count as i32,
                     timezone: response.timezone.clone(),
                 };
-                wrapper.historical_data(req_id as i64, &bd);
+                if is_update {
+                    wrapper.historical_data_update(req_id as i64, &bd);
+                } else {
+                    wrapper.historical_data(req_id as i64, &bd);
+                }
             }
-            if response.is_complete {
+            if response.is_complete && !is_update {
+                self.core.hist_initial_complete.lock().unwrap().insert(req_id);
                 wrapper.historical_data_end(req_id as i64, "", "");
             }
         }
@@ -511,13 +522,34 @@ impl EClient {
             }
         }
 
-        // Real-time bars
+        // Real-time bars, and the continued half of a keep-up-to-date request.
+        // The two arrive on one feed and are told apart by whether the request
+        // has already answered with its history.
         for (req_id, bar) in self.shared.market.drain_real_time_bars() {
-            wrapper.real_time_bar(
-                req_id as i64, bar.timestamp as i64,
-                bar.open, bar.high, bar.low, bar.close,
-                bar.volume, bar.wap, bar.count,
-            );
+            if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
+                // A bar still forming is stamped where it opened, in seconds
+                // since the epoch. The initial answer's bars carry the venue's
+                // own stamp in the venue's own zone; naming a zone for this one
+                // would be a claim about a zone rather than a time.
+                let bd = BarData {
+                    date: bar.timestamp.to_string(),
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    volume: bar.volume as i64,
+                    wap: bar.wap,
+                    bar_count: bar.count,
+                    timezone: String::new(),
+                };
+                wrapper.historical_data_update(req_id as i64, &bd);
+            } else {
+                wrapper.real_time_bar(
+                    req_id as i64, bar.timestamp as i64,
+                    bar.open, bar.high, bar.low, bar.close,
+                    bar.volume, bar.wap, bar.count,
+                );
+            }
         }
 
         // Historical schedules
@@ -541,10 +573,26 @@ impl EClient {
             wrapper.pnl_single(update.req_id, update.pos, update.daily_pnl, update.unrealized_pnl, update.realized_pnl, update.value);
         }
 
-        // Account updates → update_account_value + account_download_end (via ClientCore)
+        // Account updates → update_account_value, update_portfolio and
+        // account_download_end (via ClientCore)
         if let Some(batch) = self.core.prepare_account_updates(&self.shared) {
             for field in &batch.fields {
                 wrapper.update_account_value(&field.key, &field.value, &field.currency, &self.account_id);
+            }
+            // What the account holds, beside what it is worth. The reference
+            // client reports both on this subscription, and a caller watching
+            // its positions through it heard only the values.
+            for entry in self.core.prepare_portfolio_updates(&self.shared) {
+                let contract = self.core
+                    .get_contract(entry.con_id, &self.shared)
+                    .unwrap_or_else(|| crate::api::types::Contract {
+                        con_id: entry.con_id,
+                        ..Default::default()
+                    });
+                wrapper.update_portfolio(
+                    &contract, entry.position, entry.market_price, entry.market_value,
+                    entry.avg_cost, entry.unrealized_pnl, entry.realized_pnl, &self.account_id,
+                );
             }
             if batch.finished {
                 wrapper.update_account_time("");

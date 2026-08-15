@@ -442,6 +442,8 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
     let _time_value = next(flags & TIME_VALUE != 0);
 
     Some(crate::types::OptionComputation {
+        // The venue's own, reported under whichever request subscribed it.
+        answers: None,
         instrument: 0,
         implied_vol,
         delta,

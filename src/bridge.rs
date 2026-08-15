@@ -1688,13 +1688,17 @@ impl PortfolioState {
     pub fn note_account_value(&self, key: &str, value: &str, currency: &str) {
         // A figure the venue stated is account data having arrived. Marked
         // only when the typed copy was built, a summary asked for in between
-        // was answered with nothing at all.
-        self.account_data_received.store(true, Ordering::Release);
-        let mut all = self.stated_account_values.lock().unwrap();
-        match all.iter_mut().find(|(k, _, c)| k == key && c == currency) {
-            Some(slot) => slot.1 = value.to_string(),
-            None => all.push((key.to_string(), value.to_string(), currency.to_string())),
+        // was answered with nothing at all — and marked before the figure is
+        // recorded, a summary asked for in between is answered with the same
+        // nothing. The flag goes up once what it announces is readable.
+        {
+            let mut all = self.stated_account_values.lock().unwrap();
+            match all.iter_mut().find(|(k, _, c)| k == key && c == currency) {
+                Some(slot) => slot.1 = value.to_string(),
+                None => all.push((key.to_string(), value.to_string(), currency.to_string())),
+            }
         }
+        self.account_data_received.store(true, Ordering::Release);
     }
 
     /// Every figure the venue has stated about the account, as it stated them.
@@ -1905,6 +1909,11 @@ impl SharedState {
     #[doc(hidden)]
     #[inline]
     pub fn set_connection_lost(&self) {
+        // The two flags are one fact between them: which way the connection
+        // last went. Both raised, the reader cannot tell which came first and
+        // applies them in its own order — so a session that came back and went
+        // again reads as connected, with nothing left to say it is not.
+        self.connection_restored.store(false, Ordering::Release);
         self.connection_lost.store(true, Ordering::Release);
         self.notify();
     }
@@ -1920,6 +1929,9 @@ impl SharedState {
     #[doc(hidden)]
     #[inline]
     pub fn set_connection_restored(&self) {
+        // The later transition is the one that stands, as in
+        // [`set_connection_lost`](Self::set_connection_lost).
+        self.connection_lost.store(false, Ordering::Release);
         self.connection_restored.store(true, Ordering::Release);
         self.notify();
     }
