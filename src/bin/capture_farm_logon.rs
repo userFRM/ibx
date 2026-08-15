@@ -157,6 +157,8 @@ fn main() {
             &gw.hw_info,
             &gw.encoded,
             kind,
+            // The capture names the port itself, so the route's is not consulted.
+            Some(farm_port),
         ) {
             Ok(_) => println!("answered in {:.3}s", started.elapsed().as_secs_f64()),
             Err(e) => println!("{e} after {:.3}s", started.elapsed().as_secs_f64()),

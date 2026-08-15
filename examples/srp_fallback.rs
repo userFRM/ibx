@@ -44,6 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut auth = ReconnectAuth {
+        trading_port: gw.trading_port,
+        hmds_port: gw.hmds_port,
+        secdef_port: gw.secdef_port,
         // Empty: this example has no earlier logon of its own to compare a
         // competing session against, and empty is the careful answer — every
         // session the venue names reads as another client, and the reconnect

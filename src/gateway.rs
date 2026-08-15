@@ -81,16 +81,21 @@ pub(crate) const DEFAULT_TRADING_FARM: &str = "usfarm";
 ///   `"<host>/<farm>"`            — tag 6145 (trading)
 ///   `"<host>/<farm>/<port>"`     — tags 6171 (mktdata) / 8008 (secdef)
 ///
-/// Port is informational only — ibx routes all farm channels to the same
-/// data-port discovered via `misc_port()`. Only (host, farm) is taken.
+/// The port is the venue's, where it states one. A route names the port to
+/// reach that farm on, and the counterpart takes it from there when no tag
+/// carries it separately — it treats a route with neither as an error rather
+/// than substituting a default. `None` here means the route stated no port,
+/// which is the only case the configured one applies to.
+///
 /// Returns `None` for empty or malformed input.
-pub fn parse_farm_route(route: &str) -> Option<(String, String)> {
+pub fn parse_farm_route(route: &str) -> Option<(String, String, Option<u16>)> {
     if route.is_empty() { return None; }
     let mut parts = route.splitn(3, '/');
     let host = parts.next()?.to_string();
     let farm = parts.next()?.to_string();
     if host.is_empty() || farm.is_empty() { return None; }
-    Some((host, farm))
+    let port = parts.next().and_then(|p| p.trim().parse::<u16>().ok());
+    Some((host, farm, port))
 }
 
 /// The trading route a reconnect should use.
@@ -589,7 +594,16 @@ pub struct ReconnectAuth {
     pub secdef_host: String,
     /// Which security-definition farm.
     pub secdef_farm: String,
+    /// The port the venue named for each farm, where it named one. A reconnect
+    /// that fell back to the configured port would dial somewhere the venue
+    /// never routed this session to.
+    pub trading_port: Option<u16>,
+    /// The port stated for the historical farm.
+    pub hmds_port: Option<u16>,
+    /// The port stated for the security-definition farm.
+    pub secdef_port: Option<u16>,
 }
+
 
 /// Keep the first value the venue sends for a field it sends once, and say so
 /// when it sends a second one that differs. Each of these carries its whole
@@ -804,6 +818,12 @@ pub struct Gateway {
     pub secdef_host: String,
     /// Which security-definition farm.
     pub secdef_farm: String,
+    /// The port the venue named for the trading farm, where it named one.
+    pub trading_port: Option<u16>,
+    /// The port stated for the historical farm.
+    pub hmds_port: Option<u16>,
+    /// The port stated for the security-definition farm.
+    pub secdef_port: Option<u16>,
 }
 
 /// Which farm a connection is to, which decides two separate numbers the
@@ -874,8 +894,11 @@ pub fn connect_farm(
     hw_info: &str,
     encoded: &str,
     farm: Farm,
+    stated_port: Option<u16>,
 ) -> io::Result<Connection> {
-    let port = settings.port;
+    // What the venue said to reach this farm on. The configured port applies
+    // only where it said nothing.
+    let port = stated_port.unwrap_or(settings.port);
     let farm_host = settings
         .market_data_host
         .clone()
@@ -2212,13 +2235,17 @@ impl Gateway {
         let mut raw_enabled_features = String::new();
         let mut white_branding_id = String::new();
         let mut raw_misc_urls = String::new();
-        // the auth-logon ACK tells us which farms this
-        // account is routed to. Hardcoding `usfarm`/`ushmds` only works for
-        // US accounts; EU accounts need eufarm/euhmds/secdefeu, etc.
-        // Format of 6145: "<host>/<farm>"; 6171/8008: "<host>/<farm>/<port>"
+        // The auth-logon ACK states which farms this account is routed to.
+        // `usfarm`/`ushmds` are US names; an EU account is routed to
+        // eufarm/euhmds/secdefeu, and so on for every other region.
+        // Each route reads "<host>/<farm>" or "<host>/<farm>/<port>".
         let mut trading_route = String::new();    // tag 6145
         let mut mktdata_route = String::new();    // tag 6171
         let mut secdef_route  = String::new();    // tag 8008
+        // The trading port, stated on its own tag. Where it is stated it wins
+        // over the one in the route, which is the order the counterpart reads
+        // them in.
+        let mut trading_port: Option<u16> = None;
 
         for _ in 0..5 {
             let raw_response = fix_read_deadline(&mut tls, ack_deadline)?;
@@ -2308,6 +2335,12 @@ impl Gateway {
                 && trading_route.is_empty() {
                     trading_route = v.clone();
                     log::info!("Auth: trading farm route = {trading_route}");
+                }
+            if let Some(v) = fields.get(&6146)
+                && trading_port.is_none()
+                && let Ok(p) = v.trim().parse::<u16>() {
+                    trading_port = Some(p);
+                    log::info!("Auth: trading farm port = {p}");
                 }
             if let Some(v) = fields.get(&6171)
                 && mktdata_route.is_empty() {
@@ -2658,11 +2691,14 @@ impl Gateway {
                  on {host} — a guess at both, and wrong for any account this \
                  venue does not serve from there",
             );
-            (host.to_string(), farm.to_string())
+            (host.to_string(), farm.to_string(), None)
         };
-        let (trading_host, trading_farm) = parsed_trading.clone()
+        let (trading_host, trading_farm, trading_route_port) = parsed_trading.clone()
             .unwrap_or_else(|| invented("trading", DEFAULT_TRADING_FARM));
-        let (mktdata_host, mktdata_farm) = parse_farm_route(&mktdata_route)
+        // Tag first, then the route, then the configured port — the order the
+        // counterpart resolves them in.
+        let trading_port = trading_port.or(trading_route_port);
+        let (mktdata_host, mktdata_farm, mktdata_port) = parse_farm_route(&mktdata_route)
             .unwrap_or_else(|| invented("market data", "ushmds"));
         // Contract definitions and the calendar that rides with them. Stated
         // by the venue at logon like the other two; where it states none, this
@@ -2674,7 +2710,7 @@ impl Gateway {
         // below are moved into the thread::scope closures.
         let hmds_host_for_gw = mktdata_host.clone();
         let hmds_farm_for_gw = mktdata_farm.clone();
-        let (trading_host_for_gw, trading_farm_for_gw) =
+        let (trading_host_for_gw, trading_farm_for_gw, _) =
             parsed_trading.unwrap_or_default();
 
         // Parallel farm logons: validated against paper and live (each farm
@@ -2692,16 +2728,16 @@ impl Gateway {
             let settings = config.settings.as_ref();
             let trading_handle = scope.spawn(move || {
                 connect_farm(settings, &trading_host, &trading_farm, username, password,
-                    paper, ssid, token, hw, enc, Farm::MarketData)
+                    paper, ssid, token, hw, enc, Farm::MarketData, trading_port)
             });
             let mktdata_handle = scope.spawn(move || {
                 connect_farm(settings, &mktdata_host, &mktdata_farm, username, password,
-                    paper, ssid, token, hw, enc, Farm::Historical)
+                    paper, ssid, token, hw, enc, Farm::Historical, mktdata_port)
             });
-            let secdef_handle = secdef.as_ref().map(|(secdef_host, secdef_farm)| {
+            let secdef_handle = secdef.as_ref().map(|(secdef_host, secdef_farm, secdef_port)| {
                 scope.spawn(move || {
                     connect_farm(settings, secdef_host, secdef_farm, username, password,
-                        paper, ssid, token, hw, enc, Farm::SecurityDefinition)
+                        paper, ssid, token, hw, enc, Farm::SecurityDefinition, *secdef_port)
                 })
             });
             let trading = trading_handle.join().expect("trading farm thread panicked");
@@ -2778,8 +2814,11 @@ impl Gateway {
             hmds_farm: hmds_farm_for_gw,
             trading_host: trading_host_for_gw,
             trading_farm: trading_farm_for_gw,
-            secdef_host: secdef.as_ref().map(|(h, _)| h.clone()).unwrap_or_default(),
-            secdef_farm: secdef.as_ref().map(|(_, f)| f.clone()).unwrap_or_default(),
+            secdef_host: secdef.as_ref().map(|(h, ..)| h.clone()).unwrap_or_default(),
+            secdef_farm: secdef.as_ref().map(|(_, f, _)| f.clone()).unwrap_or_default(),
+            trading_port,
+            hmds_port: mktdata_port,
+            secdef_port: secdef.as_ref().and_then(|&(_, _, p)| p),
         };
         Ok(Session {
             gateway: gw,
@@ -2979,6 +3018,9 @@ impl Gateway {
             hmds_farm: self.hmds_farm.clone(),
             trading_host: self.trading_host.clone(),
             trading_farm: self.trading_farm.clone(),
+            trading_port: self.trading_port,
+            hmds_port: self.hmds_port,
+            secdef_port: self.secdef_port,
         }
     }
 
@@ -3352,16 +3394,26 @@ mod tests {
         assert_ne!(token_short_hash(&t1), token_short_hash(&t2));
     }
 
+    /// A route that states no port leaves the choice to the configured one.
     #[test]
     fn parse_farm_route_two_segments() {
         let parsed = parse_farm_route("zdc1.ibllc.com/eufarm").unwrap();
-        assert_eq!(parsed, ("zdc1.ibllc.com".to_string(), "eufarm".to_string()));
+        assert_eq!(parsed, ("zdc1.ibllc.com".to_string(), "eufarm".to_string(), None));
     }
 
+    /// A route that states a port states where that farm answers. The
+    /// counterpart reads it from here when no tag carries it, and treats a
+    /// route with neither as an error rather than substituting a default —
+    /// so a stated port is not something to discard in favour of a constant.
     #[test]
-    fn parse_farm_route_three_segments_drops_port() {
-        let parsed = parse_farm_route("zdc1.ibllc.com/euhmds/4000").unwrap();
-        assert_eq!(parsed, ("zdc1.ibllc.com".to_string(), "euhmds".to_string()));
+    fn parse_farm_route_takes_the_port_the_venue_states() {
+        let parsed = parse_farm_route("zdc1.ibllc.com/euhmds/4002").unwrap();
+        assert_eq!(parsed, ("zdc1.ibllc.com".to_string(), "euhmds".to_string(), Some(4002)));
+
+        // A third segment that is not a port is not one. The route still
+        // names a host and a farm, which is what it is read for.
+        let odd = parse_farm_route("zdc1.ibllc.com/euhmds/notaport").unwrap();
+        assert_eq!(odd.2, None);
     }
 
     #[test]
@@ -3390,7 +3442,7 @@ mod tests {
     #[test]
     fn parse_farm_route_us_account() {
         let parsed = parse_farm_route("cdc1.ibllc.com/usfarm").unwrap();
-        assert_eq!(parsed, ("cdc1.ibllc.com".to_string(), "usfarm".to_string()));
+        assert_eq!(parsed, ("cdc1.ibllc.com".to_string(), "usfarm".to_string(), None));
     }
 
     #[test]
@@ -3685,6 +3737,9 @@ mod tests {
 
     fn auth_with(host: &str, trading_host: &str, trading_farm: &str) -> ReconnectAuth {
         ReconnectAuth {
+            trading_port: None,
+            hmds_port: None,
+            secdef_port: None,
             logged_in_at: String::new(),
             alternate_hosts: Vec::new(),
             settings: Default::default(),

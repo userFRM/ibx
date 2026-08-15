@@ -161,7 +161,7 @@ fn compat_suite() {
         match ibx::gateway::connect_farm(&Default::default(), 
             &config.host, "usfarm", &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        ibx::gateway::Farm::MarketData,
+        ibx::gateway::Farm::MarketData, None
         ) {
             Ok(c) => { conns.farm = c; println!("  farm reconnected"); }
             Err(e) => { println!("  farm reconnect failed (may already be fresh): {e}"); }
@@ -169,7 +169,7 @@ fn compat_suite() {
         match ibx::gateway::connect_farm(&Default::default(), 
             &config.host, "ushmds", &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        ibx::gateway::Farm::Historical,
+        ibx::gateway::Farm::Historical, None
         ) {
             Ok(c) => { conns.hmds = Some(c); println!("  hmds reconnected"); }
             Err(e) => { println!("  hmds reconnect failed (may already be fresh): {e}"); }
