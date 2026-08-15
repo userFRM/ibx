@@ -69,13 +69,16 @@ pub(crate) fn drain_and_send_orders(
             continue;
         }
         let oid = order_req.order_id();
+        // Every leg this request writes. A bracket sends three and reports one
+        // outcome, so a failure names the whole set rather than the first id.
+        let written = order_req.order_ids();
         // What the engine believed before this request touched anything. A
         // replace writes its attempt into the tracked state ahead of the write,
         // and a write that fails must not leave that attempt standing as though
         // the broker had accepted it.
         let before = context.order(oid).copied();
         let speculative = match order_req {
-            OrderRequest::Modify { new_order_id, .. } => Some(new_order_id),
+            OrderRequest::Modify { .. } => None,
             _ => None,
         };
         // Snap every price to the contract's tick grid before encoding
@@ -275,7 +278,6 @@ pub(crate) fn drain_and_send_orders(
                 last_result
             }
             OrderRequest::Modify {
-                new_order_id,
                 order_id,
                 price,
                 qty,
@@ -371,7 +373,7 @@ pub(crate) fn drain_and_send_orders(
                     // kept the old one would leave the next modify restating a
                     // price this one just moved.
                     context.insert_order(crate::types::Order::new(
-                        new_order_id,
+                        order_id,
                         orig.instrument,
                         orig.side,
                         qty,
@@ -397,27 +399,12 @@ pub(crate) fn drain_and_send_orders(
                 // subsequent cancel before the modify-ack still references the
                 // right version.
                 context.last_clord.insert(order_id, clord_str.clone());
-                // The replacement is tracked under its own id, and a caller
-                // that modifies it again names that one. The broker still knows
-                // the order by the ClOrdID just sent, so the chain has to be
-                // reachable from both: without this the next replace states an
-                // OrigClOrdID the broker has never seen and is refused, which
-                // is what a second modify in a row did.
-                if new_order_id != order_id {
-                    context.last_clord.insert(new_order_id, clord_str.clone());
-                    context.modify_versions.insert(new_order_id, new_ver);
-                    // The replacement is the order now, and the next replace
-                    // restates from it. Without this the second modify of an
-                    // order dropped everything the first one preserved.
-                    if let Some(spec) = spec.clone() {
-                        context.submitted.insert(new_order_id, spec);
-                        // The order answers to the new id from here. Left
-                        // behind, the old entry is retired by an id the caller
-                        // no longer uses, so it stays for the session.
-                        if new_order_id != order_id {
-                            context.submitted.remove(&order_id);
-                        }
-                    }
+                // The replacement restates the order the caller already
+                // holds, as the reference client's replace does: one id, one
+                // record, one entry in the open book. The next replace
+                // restates from it, so what this one preserved is still there.
+                if let Some(spec) = spec.clone() {
+                    context.submitted.insert(order_id, spec);
                 }
 
                 let qty_str = format_uint(qty as u64);
@@ -540,21 +527,31 @@ pub(crate) fn drain_and_send_orders(
                 // re-recorded from that echo. Where the recovery accounts for
                 // none of it, the sweep says so rather than this guessing.
                 log::error!("Failed to send order {oid}: {e} — its state is not known");
+                // Back to the last thing the broker was known to hold. The
+                // attempt is dropped: it was never accepted, and hydration
+                // would otherwise read it as the order's own truth for every
+                // field the recovery push does not state. Both belong to the
+                // replace path, which carries one id.
                 if oid != 0 {
-                    // Back to the last thing the broker was known to hold, and
-                    // marked as no longer known. The attempt is dropped: it was
-                    // never accepted, and hydration would otherwise read it as
-                    // the order's own truth for every field the recovery push
-                    // does not state.
                     if let Some(new_id) = speculative {
                         context.remove_order(new_id);
                     }
                     if let Some(prior) = before {
                         context.insert_order(prior);
                     }
-                    context.set_order_status_forced(oid, OrderStatus::Uncertain);
+                }
+                // Every leg is marked, not just the one the outcome was
+                // reported under. A bracket's children are sent whatever the
+                // parent returns, so leaving them working states something the
+                // wire never confirmed — an entry with exits that may not
+                // exist, which is worse than an entry known to be uncertain.
+                for id in written {
+                    if id == 0 {
+                        continue;
+                    }
+                    context.set_order_status_forced(id, OrderStatus::Uncertain);
                     let update = OrderUpdate {
-                        order_id: oid,
+                        order_id: id,
                         instrument: 0,
                         status: OrderStatus::Uncertain,
                         filled_qty: 0.0,
@@ -565,10 +562,8 @@ pub(crate) fn drain_and_send_orders(
                     };
                     shared.orders.push_order_update(update);
                     // An order whose state is no longer known is the one thing
-                    // a caller must not have to ask for. It was recorded and
-                    // not announced, so a caller reading the event channel —
-                    // told this is a second delivery of everything, not a
-                    // lesser one — was not told at all.
+                    // a caller must not have to ask for, so it is announced on
+                    // the event channel as well as recorded.
                     crate::engine::hot_loop::emit(
                         event_tx,
                         crate::bridge::Event::OrderUpdate(update),
@@ -2031,7 +2026,6 @@ mod tests {
         assert!(placed.contains("\u{1}18=G\u{1}"), "the order was placed all-or-none: {placed}");
 
         context.pending_orders.push(crate::types::OrderRequest::Modify {
-            new_order_id: 43,
             order_id: 42,
             price: 151 * crate::types::PRICE_SCALE,
             qty: 100,
@@ -2315,6 +2309,60 @@ mod tests {
         assert!(String::from_utf8_lossy(&buf[..n]).contains("35=F"), "and then it is sent",);
     }
 
+    /// A bracket is three messages and one outcome. All three are written
+    /// whatever any one of them returns, so a failure leaves every leg in a
+    /// state the wire never confirmed — and a child still reported as working
+    /// is an entry whose exits may not exist.
+    #[test]
+    fn a_bracket_whose_write_failed_leaves_no_leg_reported_as_working() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        context.pending_orders.push(crate::types::OrderRequest::SubmitBracket {
+            parent_id: 10,
+            tp_id: 11,
+            sl_id: 12,
+            instrument,
+            side: Side::Buy,
+            qty: 100,
+            entry_price: 150 * crate::types::PRICE_SCALE,
+            take_profit: 155 * crate::types::PRICE_SCALE,
+            stop_loss: 145 * crate::types::PRICE_SCALE,
+        });
+
+        let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+        let shared = std::sync::Arc::new(SharedState::new());
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
+        drain_and_send_orders(
+            &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &Some(tx),
+        );
+
+        for id in [10u64, 11, 12] {
+            assert_eq!(
+                context.order(id).map(|o| o.status),
+                Some(OrderStatus::Uncertain),
+                "leg {id} was written and its outcome is not known",
+            );
+        }
+
+        let announced: Vec<u64> = rx
+            .try_iter()
+            .filter_map(|e| match e {
+                crate::bridge::Event::OrderUpdate(u)
+                    if u.status == OrderStatus::Uncertain => Some(u.order_id),
+                _ => None,
+            })
+            .collect();
+        for id in [10u64, 11, 12] {
+            assert!(announced.contains(&id), "leg {id} was not announced");
+        }
+    }
+
     /// A write that fails has not established that the broker has nothing —
     /// the transport says as much of TLS. Calling it a rejection invited a
     /// resubmission of an order that may be working.
@@ -2342,7 +2390,6 @@ mod tests {
         ));
         context.last_clord.insert(42, "42.7".to_string());
         context.pending_orders.push(crate::types::OrderRequest::Modify {
-            new_order_id: 43,
             order_id: 42,
             price: 151 * crate::types::PRICE_SCALE,
             qty: 100,
@@ -2401,9 +2448,9 @@ mod tests {
         assert!(context.order(43).is_none(), "and the attempt itself is not tracked");
     }
 
-    /// A replace names the order the broker knows. Replacing a replacement
-    /// left the chain behind under the previous id, so the second one stated an
-    /// OrigClOrdID that had never existed and the broker refused it.
+    /// A replace names the order the broker knows, and a second replace names
+    /// what the first one left it under. Stating anything else is an
+    /// OrigClOrdID the broker has never seen, which it refuses.
     #[test]
     fn a_replacement_can_itself_be_replaced() {
         use std::io::Read;
@@ -2428,9 +2475,9 @@ mod tests {
         let shared = std::sync::Arc::new(SharedState::new());
         let mut buf = [0u8; 4096];
 
-        // 7 -> 8, then 8 -> 9, as a caller stepping an order up twice does.
+        // The same order stepped up twice, as an ibapi caller does it: one id
+        // throughout, and the version is what advances.
         context.pending_orders.push(crate::types::OrderRequest::Modify {
-            new_order_id: 8,
             order_id: 7,
             price: 2 * crate::types::PRICE_SCALE,
             qty: 1,
@@ -2454,8 +2501,7 @@ mod tests {
         assert!(first.contains("|41=7.0|"), "the first replace names the original: {first}");
 
         context.pending_orders.push(crate::types::OrderRequest::Modify {
-            new_order_id: 9,
-            order_id: 8,
+            order_id: 7,
             price: 3 * crate::types::PRICE_SCALE,
             qty: 1,
             outside_rth: false,
@@ -3348,7 +3394,6 @@ mod modify_wire_tests {
             0,
         ));
         context.pending_orders.push(crate::types::OrderRequest::Modify {
-            new_order_id: 8,
             order_id: 7,
             ord_type: b'4',
             tif: 0,
@@ -3394,7 +3439,6 @@ mod modify_wire_tests {
 
             // A trigger arrives on the request anyway.
             context.pending_orders.push(crate::types::OrderRequest::Modify {
-                new_order_id: 8,
                 order_id: 7,
                 ord_type: 0,
                 tif: 0,
@@ -3578,7 +3622,6 @@ mod modify_wire_tests {
             ));
 
             context.pending_orders.push(crate::types::OrderRequest::Modify {
-                new_order_id: 8,
                 order_id: 7,
                 ord_type: 0,
                 tif: 0,

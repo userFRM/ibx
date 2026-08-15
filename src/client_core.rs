@@ -1892,7 +1892,7 @@ impl ClientCore {
             // Likewise for the overnight leg: a seed row whose quantity did not
             // parse says the position is not intraday, only that its size is
             // unknown, so there is nothing to price it against.
-            let Some(qty_midnight) = seed.map_or(Some(0), |s| s.qty_midnight) else {
+            let Some(qty_midnight) = seed.map_or(Some(0.0), |s| s.qty_midnight) else {
                 unpriceable += 1;
                 continue;
             };
@@ -1907,7 +1907,7 @@ impl ClientCore {
             // leg is valued against; a locally derived previous close is used
             // only where the venue said nothing.
             let prev_close = Self::midnight_price(shared, con_id).unwrap_or(prev_close);
-            if seed.and_then(|s| s.cost_midnight).is_none() && prev_close == 0 && qty_midnight != 0 {
+            if seed.and_then(|s| s.cost_midnight).is_none() && prev_close == 0 && qty_midnight != 0.0 {
                 continue;
             }
 
@@ -1926,7 +1926,7 @@ impl ClientCore {
             // client has to find for itself, which it has for no contract it
             // never quoted.
             let mv_midnight = seed.and_then(|s| s.cost_midnight)
-                .unwrap_or_else(|| qty_midnight as f64 * prev_close as f64 / PRICE_SCALE_F);
+                .unwrap_or_else(|| qty_midnight * prev_close as f64 / PRICE_SCALE_F);
             // Daily P&L = value change since midnight plus today's net cash.
             total_daily += mv_now - mv_midnight + money_traded;
 
@@ -2005,7 +2005,7 @@ impl ClientCore {
             // unrealized and the realized are all still known, and suppressing
             // the callback would leave every one of them stale on the caller's
             // side rather than reporting one it cannot compute.
-            let qty_midnight = seed.map_or(Some(0), |s| s.qty_midnight);
+            let qty_midnight = seed.map_or(Some(0.0), |s| s.qty_midnight);
             // As in poll_pnl, the venue's own mark is what the overnight leg is
             // valued against, so the two callbacks value the same position from
             // the same figures.
@@ -2015,7 +2015,7 @@ impl ClientCore {
             // client otherwise has to size from the overnight quantity and a
             // previous close it may not hold.
             let stated_midnight = seed.and_then(|s| s.cost_midnight);
-            if stated_midnight.is_none() && prev_close == 0 && qty_midnight.unwrap_or(0) != 0 {
+            if stated_midnight.is_none() && prev_close == 0 && qty_midnight.unwrap_or(0.0) != 0.0 {
                 continue;
             }
 
@@ -2034,7 +2034,7 @@ impl ClientCore {
             // reports the whole holding as sold, and treating it as no seed at
             // all reports the day's move as the position's entire unrealized.
             let midnight_value = stated_midnight
-                .or_else(|| qty_midnight.map(|q| q as f64 * prev_close as f64 / PRICE_SCALE_F));
+                .or_else(|| qty_midnight.map(|q| q * prev_close as f64 / PRICE_SCALE_F));
             let daily = match midnight_value {
                 Some(mv_midnight) => mv_now - mv_midnight + money_traded,
                 None => last_cache.get(&req_id)
@@ -3152,7 +3152,7 @@ mod tests {
         };
         shared.market.push_quote(1, &q);
         shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
-            con_id: 2, qty_midnight: Some(10), cost_midnight: None, qty_traded: None,
+            con_id: 2, qty_midnight: Some(10.0), cost_midnight: None, qty_traded: None,
             money_traded: 0.0, realized_pnl: 0.0,
         }]);
         shared.portfolio.set_account(&AccountState {
@@ -3224,7 +3224,7 @@ mod tests {
         shared.market.push_quote(0, &q);
         shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
             con_id: 756733,
-            qty_midnight: Some(10),
+            qty_midnight: Some(10.0),
             cost_midnight: None,
             qty_traded: None,
             money_traded: 0.0,
@@ -3308,7 +3308,7 @@ mod tests {
         seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
         shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
             con_id: 756733,
-            qty_midnight: Some(10),
+            qty_midnight: Some(10.0),
             cost_midnight: None,
             qty_traded: None,
             money_traded: 0.0,
@@ -3336,7 +3336,7 @@ mod tests {
         seed_pnl_position(&core, &shared, 1, 0, 7.0, 100.00, 110.00, 100.00);
         shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
             con_id: 1,
-            qty_midnight: Some(10),
+            qty_midnight: Some(10.0),
             cost_midnight: None,
             qty_traded: None,
             money_traded: 330.0,   // +330 = sold 3 @ $110 (wire sign, SELL positive)
@@ -3416,7 +3416,7 @@ mod tests {
         seed_pnl_position(&core, &shared, 5001, 0, 10.0, 100.00, 101.25, 0.0);
         shared.portfolio.set_midnight_seeds("PLR.31".into(), vec![MidnightSeed {
             con_id: 5001,
-            qty_midnight: Some(10),
+            qty_midnight: Some(10.0),
             cost_midnight: None,
             qty_traded: Some(0.0),
             money_traded: 0.0,
@@ -3453,7 +3453,7 @@ mod tests {
         seed_pnl_position(&core, &shared, 7001, 0, 10.0, 100.00, 101.00, 90.00);
         shared.portfolio.set_midnight_seeds("PLR.32".into(), vec![MidnightSeed {
             con_id: 7001,
-            qty_midnight: Some(10),
+            qty_midnight: Some(10.0),
             cost_midnight: Some(1000.00),
             qty_traded: Some(0.0),
             money_traded: 0.0,
@@ -3479,15 +3479,15 @@ mod tests {
         }
         shared.portfolio.set_midnight_seeds("PLR.33".into(), vec![
             MidnightSeed {
-                con_id: 6001, qty_midnight: Some(1), cost_midnight: None,
+                con_id: 6001, qty_midnight: Some(1.0), cost_midnight: None,
                 qty_traded: Some(0.0), money_traded: 0.0, realized_pnl: 2.00,
             },
             MidnightSeed {
-                con_id: 6002, qty_midnight: Some(1), cost_midnight: None,
+                con_id: 6002, qty_midnight: Some(1.0), cost_midnight: None,
                 qty_traded: Some(0.0), money_traded: 0.0, realized_pnl: 3.00,
             },
             MidnightSeed {
-                con_id: 6003, qty_midnight: Some(1), cost_midnight: None,
+                con_id: 6003, qty_midnight: Some(1.0), cost_midnight: None,
                 qty_traded: Some(0.0), money_traded: 0.0, realized_pnl: 4.00,
             },
         ]);
@@ -3590,7 +3590,7 @@ mod tests {
         seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
         shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
             con_id: 756733,
-            qty_midnight: Some(10),
+            qty_midnight: Some(10.0),
             cost_midnight: None,
             qty_traded: None,
             money_traded: 0.0,

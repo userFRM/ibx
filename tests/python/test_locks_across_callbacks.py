@@ -135,3 +135,64 @@ def test_a_session_the_caller_ends_is_not_a_session_that_was_lost():
     c._test_push_stopped_event()
     c._test_dispatch_once()
     assert 1100 not in w.codes, w.codes
+
+
+def test_reading_open_orders_from_the_open_order_callback_does_not_deadlock():
+    """`open_order` is delivered from inside the order-cache lookup.
+
+    An ibapi wrapper re-requesting its open orders from that callback is
+    ordinary, and the order cache is the same lock the delivery walked.
+    """
+    class W(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.client = None
+            self.saw = 0
+
+        def open_order(self, order_id, contract, order, state):
+            self.saw += 1
+            # Re-enters the order cache the delivery is walking. Cancelling
+            # takes the same lock; re-requesting would recurse instead.
+            self.client.cancel_order(order_id)
+
+    w = W()
+    c = EClient(w)
+    w.client = c
+    c._test_connect("T")
+    c._test_track_order(11, 0, "SPY", "BUY", 100.0, 1.0, 0)
+    c._test_push_order_update(11, 0, "Submitted", 0.0, 100.0)
+
+    t = _watchdog()
+    t.start()
+    c._test_dispatch_once()
+    t.cancel()
+    assert w.saw == 1
+
+
+def test_a_request_before_connect_can_answer_from_its_own_error_handler():
+    """A request issued with no session reports on `error` and returns.
+
+    The control channel is read to decide that, and a handler answering it
+    with another request reads the same channel.
+    """
+    class W(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.client = None
+            self.codes = []
+
+        def error(self, req_id, code, msg, advanced=""):
+            self.codes.append(code)
+            if len(self.codes) == 1:
+                # Re-enters the control channel this call is deciding on.
+                self.client.req_pnl(2, "")
+
+    w = W()
+    c = EClient(w)
+    w.client = c
+
+    t = _watchdog()
+    t.start()
+    c.req_pnl(1, "")
+    t.cancel()
+    assert len(w.codes) == 2, "both the call and its handler were told"

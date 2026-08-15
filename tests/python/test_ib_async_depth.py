@@ -93,3 +93,25 @@ def test_a_commission_report_reaches_them_as_their_own_type():
     assert theirs.commission == 1.25
     assert theirs.realizedPNL == -2.0
     assert theirs.yield_ == 0.5
+
+
+def test_a_seeded_order_id_is_the_next_one_their_client_issues():
+    """The persisted counter has to reach the id `placeOrder` actually uses.
+
+    Their wrapper's `nextValidId` is a no-op; their client seeds its own
+    counter and `placeOrder` takes the id from there. A counter announced but
+    not seeded numbers the first order from one, which is the duplicate the
+    counter exists to prevent.
+    """
+    pytest.importorskip("ib_async")
+    import ibx.ib_async
+
+    client = ibx.ib_async.IbxClient.__new__(ibx.ib_async.IbxClient)
+    client._reqIdSeq = 1
+
+    client.updateReqId(1_700_000_000)
+    assert client.getReqId() == 1_700_000_000, "the seeded id is issued, not the one after it"
+    assert client.getReqId() == 1_700_000_001
+
+    client.updateReqId(5)
+    assert client.getReqId() == 1_700_000_002, "a lower seed does not move the counter back"
