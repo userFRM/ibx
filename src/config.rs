@@ -40,6 +40,14 @@ pub const CCP_HOSTS: &[&str] = &[
     "hdc1.ibllc.com",
 ];
 
+/// How long a caller waits for an answer before being told none came.
+///
+/// Every deadline the engine keeps for a request must be shorter than this, or
+/// the caller gives up first and is told nothing arrived — while the engine is
+/// still holding the reason the venue gave, which it then reports to nobody. A
+/// caller should hear why, not that it waited.
+pub const ANSWER_TIMEOUT_SECS: u64 = 15;
+
 /// The locale a session announces itself with, where it states none.
 pub const IB_LOCALE: &str = "en_US";
 

@@ -20,7 +20,8 @@ use crate::api::wrapper::Wrapper;
 use super::{Contract, EClient};
 
 /// How long a question waits for its answer.
-const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
+const ANSWER_TIMEOUT: Duration =
+    Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
 
 /// Ids for questions this layer asks on the caller's behalf. Far above what a
 /// caller is likely to use, so an answer to one of these is never mistaken for

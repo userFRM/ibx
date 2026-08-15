@@ -2421,11 +2421,21 @@ impl Gateway {
         send_init(&[(35, "U"), (52, &now), (6040, "72"), (6536, &window_start), (6537, &now), (6556, "today4")])?;
         send_init(&[(35, "U"), (52, &now), (6040, "74"), (1, ""), (6544, "2")])?;
         send_init(&[(35, "U"), (52, &now), (6040, "76"), (1, ""), (6565, "1")])?;
-        for _ in 0..92 {
+        // Ninety-two of these, which is what the counterpart sends and not a
+        // number the venue states anywhere. Transcribed from its own opening
+        // burst rather than derived, so it is a constant here for the same
+        // reason it is one there. What would settle it is a session opened
+        // with fewer and a comparison of what the venue sends back; until
+        // someone does that, sending what the counterpart sends is the answer
+        // with evidence behind it.
+        const PRIMING_MESSAGES: usize = 92;
+        for _ in 0..PRIMING_MESSAGES {
             send_init(&[(35, "U"), (52, &now), (6040, "80")])?;
         }
         tls.flush()?;
-        log::info!("Init sequence sent ({} messages, seq now {})", 99, ccp_seq);
+        // Counted, not stated: the burst above has been edited before, and a
+        // number typed beside it does not follow.
+        log::info!("Init sequence sent ({} messages, seq now {})", ccp_seq - 1, ccp_seq);
 
         // Drain init responses — extract account ID + farm routing tags.
         // Per ib-agent#134 read-throughput investigation (2026-05-05):

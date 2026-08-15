@@ -28,7 +28,8 @@ use super::EClient;
 use super::super::contract::{BarData, Contract, ContractDescription, ContractDetails};
 
 /// How long a question waits for its answer.
-const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
+const ANSWER_TIMEOUT: Duration =
+    Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
 
 /// How long to sleep between looks at the queue. Short enough that a fast
 /// answer is not made to wait on the poll, long enough not to spin a core.
