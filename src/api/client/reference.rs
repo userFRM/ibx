@@ -180,6 +180,10 @@ impl EClient {
     // ── News Bulletins ──
 
     /// Subscribe to news bulletins. Matches `reqNewsBulletins` in C++.
+    ///
+    /// `all_msgs` is taken and not applied. The subscription carries no field
+    /// asking for the bulletins that came before it, so what arrives is what is
+    /// published from here on.
     pub fn req_news_bulletins(&self, _all_msgs: bool) {
         self.core.subscribe_bulletins();
     }

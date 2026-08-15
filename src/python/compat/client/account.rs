@@ -28,6 +28,10 @@ impl EClient {
 #[pymethods]
 impl EClient {
     /// Request P&L updates for the account.
+    ///
+    /// `model_code` is taken and not applied. One session holds one account
+    /// here, and the venue states its figures for that account without being
+    /// asked which, so there is no second account or model portfolio to name.
     #[pyo3(signature = (req_id, account, model_code=""))]
     fn req_pnl(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str) -> PyResult<()> {
         self.core.subscribe_pnl(req_id);
@@ -47,6 +51,11 @@ impl EClient {
     }
 
     /// Request P&L for a single position.
+    ///
+    /// `account` and `model_code` are taken and not applied. One session holds
+    /// one account here, and the venue states its figures for that account
+    /// without being asked which, so there is no second account or model
+    /// portfolio to name.
     #[pyo3(signature = (req_id, account, model_code, con_id))]
     fn req_pnl_single(&self, req_id: i64, account: &str, model_code: &str, con_id: i64) -> PyResult<()> {
         self.core.subscribe_pnl_single(req_id, con_id);
@@ -61,6 +70,10 @@ impl EClient {
     }
 
     /// Request account summary.
+    ///
+    /// `group_name` is taken and not applied. One session holds one account
+    /// here, and the venue states its figures for that account without being
+    /// asked which, so there is no second account or model portfolio to name.
     #[pyo3(signature = (req_id, group_name, tags))]
     fn req_account_summary(&self, req_id: i64, group_name: &str, tags: &str) -> PyResult<()> {
         self.core.subscribe_account_summary(req_id, tags);
@@ -126,6 +139,10 @@ impl EClient {
     }
 
     /// Request account updates.
+    ///
+    /// `acct_code` is taken and not applied. One session holds one account
+    /// here, and the venue states its figures for that account without being
+    /// asked which, so there is no second account or model portfolio to name.
     #[pyo3(signature = (subscribe, _acct_code=""))]
     fn req_account_updates(&self, subscribe: bool, _acct_code: &str) -> PyResult<()> {
         self.core.subscribe_account_updates(subscribe);
@@ -140,6 +157,10 @@ impl EClient {
     }
 
     /// Request account updates for multiple accounts/models.
+    ///
+    /// `ledger_and_nlv` is taken and not applied. The account figures arrive as
+    /// the venue states them, and it states the ledger and the net liquidation
+    /// among them without being asked.
     #[pyo3(signature = (req_id, account, model_code, ledger_and_nlv=false))]
     fn req_account_updates_multi(
         &self, py: Python<'_>, req_id: i64, account: &str, model_code: &str, ledger_and_nlv: bool,

@@ -256,7 +256,7 @@ pub fn req_positions(&self, wrapper: &mut impl Wrapper)
 
 #### `req_pnl`
 
-Subscribe to account PnL updates.
+Subscribe to account PnL updates. `account` and `model_code` are taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
 
 ```rust
 pub fn req_pnl(&self, req_id: i64, _account: &str, _model_code: &str)
@@ -286,7 +286,7 @@ pub fn cancel_pnl(&self, req_id: i64)
 
 #### `req_pnl_single`
 
-Subscribe to single-position PnL updates.
+Subscribe to single-position PnL updates. `account` and `model_code` are taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
 
 ```rust
 pub fn req_pnl_single(&self, req_id: i64, _account: &str, _model_code: &str, con_id: i64)
@@ -317,7 +317,7 @@ pub fn cancel_pnl_single(&self, req_id: i64)
 
 #### `req_account_summary`
 
-Request account summary.
+Request account summary. `group` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
 
 ```rust
 pub fn req_account_summary(&self, req_id: i64, _group: &str, tags: &str)
@@ -347,7 +347,7 @@ pub fn cancel_account_summary(&self, req_id: i64)
 
 #### `req_account_updates`
 
-Subscribe to account updates.
+Subscribe to account updates. `acct_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
 
 ```rust
 pub fn req_account_updates(&self, subscribe: bool, _acct_code: &str)
@@ -386,7 +386,7 @@ pub fn req_managed_accts(&self, wrapper: &mut impl Wrapper)
 
 #### `req_account_updates_multi`
 
-Request account updates for multiple accounts/models. Account values for one account or model, answered on `account_update_multi`. The reference client answers this request on its own callbacks, not on the ones `req_account_updates` uses, and a caller written against it implements those and hears nothing otherwise.
+Request account updates for multiple accounts/models. Account values for one account or model, answered on `account_update_multi`. The reference client answers this request on its own callbacks, not on the ones `req_account_updates` uses, and a caller written against it implements those and hears nothing otherwise. `ledger_and_nlv` is taken and not applied. The account figures arrive as the venue states them, and it states the ledger and the net liquidation among them without being asked.
 
 ```rust
 pub fn req_account_updates_multi( &self, req_id: i64, account: &str, model_code: &str, _ledger_and_nlv: bool, wrapper: &mut impl Wrapper, )
@@ -598,7 +598,7 @@ pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_actio
 
 #### `cancel_order`
 
-Cancel an order.
+Cancel an order. `manual_order_cancel_time` is taken and not applied. A cancel names five fields on this wire and no time among them, as the counterpart's own cancel does.
 
 ```rust
 pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal>
@@ -712,7 +712,7 @@ pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper)
 
 #### `req_auto_open_orders`
 
-Automatically bind future orders to this client. Bind orders entered elsewhere to this client. Nothing goes to the venue: the counterpart answers this itself, setting a property of its own and refusing it for any client but the one those orders bind to. What that property gates does not arise here — this session is told about every order on the account, whether it placed them or not — and this surface names no client, so there is nothing to refuse and nothing left to do.
+Automatically bind future orders to this client. Bind orders entered elsewhere to this client. Nothing goes to the venue: the counterpart answers this itself, setting a property of its own and refusing it for any client but the one those orders bind to. What that property gates does not arise here — this session is told about every order on the account, whether it placed them or not — and this surface names no client, so there is nothing to refuse and nothing left to do. `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
 
 ```rust
 pub fn req_auto_open_orders(&self, _b_auto_bind: bool)
@@ -781,7 +781,7 @@ pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list:
 
 #### `req_mkt_data_ex`
 
-Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`.
+Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`. `regulatory_snapshot` is taken and not applied. A regulatory snapshot is a separate, chargeable request this protocol does not carry, so asking for one here would be answered with an ordinary subscription and a charge nobody agreed to.
 
 ```rust
 pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool, mode_9887: i32, ) -> Result<(), Refusal>
@@ -889,7 +889,7 @@ pub fn cancel_mkt_depth(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_real_time_bars`
 
-Subscribe to real-time 5-second bars.
+Subscribe to real-time 5-second bars. `bar_size` is taken and not applied. The venue's real-time bar is five seconds and there is no field asking for another; the reference client takes the number and sends none either.
 
 ```rust
 pub fn req_real_time_bars( &self, req_id: i64, contract: &Contract, _bar_size: i32, what_to_show: &str, use_rth: bool, ) -> Result<(), Refusal>
@@ -1233,7 +1233,7 @@ pub fn req_market_rule(&self, market_rule_id: i32, wrapper: &mut impl crate::api
 
 #### `req_news_bulletins`
 
-Subscribe to news bulletins.
+Subscribe to news bulletins. `all_msgs` is taken and not applied. The subscription carries no field asking for the bulletins that came before it, so what arrives is what is published from here on.
 
 ```rust
 pub fn req_news_bulletins(&self, _all_msgs: bool)
@@ -1458,7 +1458,7 @@ pub fn req_historical_schedule( &self, req_id: i64, contract: &Contract, end_dat
 
 #### `req_smart_components`
 
-Request smart routing components for a BBO exchange. Gateway-local — returns component exchanges from init data.
+Request smart routing components for a BBO exchange. Gateway-local — returns component exchanges from init data. `bbo_exchange` is taken and not applied. The venue states one table of routing components at logon, for this session rather than per exchange, and that whole table is what comes back.
 
 ```rust
 pub fn req_smart_components(&self, req_id: i64, _bbo_exchange: &str, wrapper: &mut impl Wrapper)

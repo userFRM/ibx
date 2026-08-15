@@ -62,6 +62,11 @@ impl EClient {
     // ── PnL ──
 
     /// Subscribe to account PnL updates. Matches `reqPnL` in C++.
+    ///
+    /// `account` and `model_code` are taken and not applied. One session holds
+    /// one account here, and the venue states its figures for that account
+    /// without being asked which, so there is no second account or model
+    /// portfolio to name.
     pub fn req_pnl(&self, req_id: i64, _account: &str, _model_code: &str) {
         self.core.subscribe_pnl(req_id);
     }
@@ -72,6 +77,11 @@ impl EClient {
     }
 
     /// Subscribe to single-position PnL updates. Matches `reqPnLSingle` in C++.
+    ///
+    /// `account` and `model_code` are taken and not applied. One session holds
+    /// one account here, and the venue states its figures for that account
+    /// without being asked which, so there is no second account or model
+    /// portfolio to name.
     pub fn req_pnl_single(&self, req_id: i64, _account: &str, _model_code: &str, con_id: i64) {
         self.core.subscribe_pnl_single(req_id, con_id);
     }
@@ -84,6 +94,10 @@ impl EClient {
     // ── Account Summary ──
 
     /// Request account summary. Matches `reqAccountSummary` in C++.
+    ///
+    /// `group` is taken and not applied. One session holds one account here,
+    /// and the venue states its figures for that account without being asked
+    /// which, so there is no second account or model portfolio to name.
     pub fn req_account_summary(&self, req_id: i64, _group: &str, tags: &str) {
         self.core.subscribe_account_summary(req_id, tags);
     }
@@ -96,6 +110,10 @@ impl EClient {
     // ── Account Updates ──
 
     /// Subscribe to account updates. Matches `reqAccountUpdates` in C++.
+    ///
+    /// `acct_code` is taken and not applied. One session holds one account
+    /// here, and the venue states its figures for that account without being
+    /// asked which, so there is no second account or model portfolio to name.
     pub fn req_account_updates(&self, subscribe: bool, _acct_code: &str) {
         self.core.subscribe_account_updates(subscribe);
     }
@@ -119,6 +137,10 @@ impl EClient {
     /// `account_update_multi`. The reference client answers this request on
     /// its own callbacks, not on the ones `req_account_updates` uses, and a
     /// caller written against it implements those and hears nothing otherwise.
+    ///
+    /// `ledger_and_nlv` is taken and not applied. The account figures arrive as
+    /// the venue states them, and it states the ledger and the net liquidation
+    /// among them without being asked.
     pub fn req_account_updates_multi(
         &self, req_id: i64, account: &str, model_code: &str, _ledger_and_nlv: bool,
         wrapper: &mut impl Wrapper,
