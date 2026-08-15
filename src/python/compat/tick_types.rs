@@ -139,6 +139,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TickAttrib>()?;
     m.add_class::<TickAttribLast>()?;
     m.add_class::<TickAttribBidAsk>()?;
+    m.add_class::<HistoricalTick>()?;
+    m.add_class::<HistoricalTickLast>()?;
+    m.add_class::<HistoricalTickBidAsk>()?;
     Ok(())
 }
 
@@ -183,5 +186,136 @@ mod tests {
         let ta = TickAttribBidAsk::default();
         assert!(!ta.bid_past_low);
         assert!(!ta.ask_past_high);
+    }
+}
+
+/// One historical tick, as the reference client hands it over.
+///
+/// A tuple carries the same numbers and answers to none of the names, so a
+/// program reading `tick.price` off what it was given finds nothing there.
+/// `size` is stated where the venue states one; a midpoint has none.
+#[pyclass(from_py_object)]
+#[derive(Clone, Default)]
+pub struct HistoricalTick {
+    #[pyo3(get, set)]
+    pub time: i64,
+    #[pyo3(get, set)]
+    pub price: f64,
+    #[pyo3(get, set)]
+    pub size: f64,
+}
+
+#[pymethods]
+impl HistoricalTick {
+    #[new]
+    #[pyo3(signature = (time=0, price=0.0, size=0.0))]
+    fn new(time: i64, price: f64, size: f64) -> Self {
+        Self { time, price, size }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("HistoricalTick(time={}, price={}, size={})", self.time, self.price, self.size)
+    }
+}
+
+/// One historical trade, with what the venue said about it.
+#[pyclass(from_py_object)]
+#[derive(Clone, Default)]
+pub struct HistoricalTickLast {
+    #[pyo3(get, set)]
+    pub time: i64,
+    #[pyo3(get, set)]
+    pub tick_attrib_last: TickAttribLast,
+    #[pyo3(get, set)]
+    pub price: f64,
+    #[pyo3(get, set)]
+    pub size: f64,
+    #[pyo3(get, set)]
+    pub exchange: String,
+    #[pyo3(get, set)]
+    pub special_conditions: String,
+}
+
+#[pymethods]
+impl HistoricalTickLast {
+    #[new]
+    #[pyo3(signature = (time=0, tick_attrib_last=TickAttribLast::default(), price=0.0,
+                        size=0.0, exchange=String::new(), special_conditions=String::new()))]
+    fn new(
+        time: i64, tick_attrib_last: TickAttribLast, price: f64, size: f64,
+        exchange: String, special_conditions: String,
+    ) -> Self {
+        Self { time, tick_attrib_last, price, size, exchange, special_conditions }
+    }
+
+    #[getter(tickAttribLast)]
+    fn get_tick_attrib_last(&self) -> TickAttribLast { self.tick_attrib_last.clone() }
+    #[setter(tickAttribLast)]
+    fn set_tick_attrib_last(&mut self, v: TickAttribLast) { self.tick_attrib_last = v; }
+    #[getter(specialConditions)]
+    fn get_special_conditions(&self) -> String { self.special_conditions.clone() }
+    #[setter(specialConditions)]
+    fn set_special_conditions(&mut self, v: String) { self.special_conditions = v; }
+
+    fn __repr__(&self) -> String {
+        format!("HistoricalTickLast(time={}, price={}, size={}, exchange={})",
+            self.time, self.price, self.size, self.exchange)
+    }
+}
+
+/// One historical quote, both sides of it.
+#[pyclass(from_py_object)]
+#[derive(Clone, Default)]
+pub struct HistoricalTickBidAsk {
+    #[pyo3(get, set)]
+    pub time: i64,
+    #[pyo3(get, set)]
+    pub tick_attrib_bid_ask: TickAttribBidAsk,
+    #[pyo3(get, set)]
+    pub price_bid: f64,
+    #[pyo3(get, set)]
+    pub price_ask: f64,
+    #[pyo3(get, set)]
+    pub size_bid: f64,
+    #[pyo3(get, set)]
+    pub size_ask: f64,
+}
+
+#[pymethods]
+impl HistoricalTickBidAsk {
+    #[new]
+    #[pyo3(signature = (time=0, tick_attrib_bid_ask=TickAttribBidAsk::default(),
+                        price_bid=0.0, price_ask=0.0, size_bid=0.0, size_ask=0.0))]
+    fn new(
+        time: i64, tick_attrib_bid_ask: TickAttribBidAsk,
+        price_bid: f64, price_ask: f64, size_bid: f64, size_ask: f64,
+    ) -> Self {
+        Self { time, tick_attrib_bid_ask, price_bid, price_ask, size_bid, size_ask }
+    }
+
+    #[getter(tickAttribBidAsk)]
+    fn get_tick_attrib_bid_ask(&self) -> TickAttribBidAsk { self.tick_attrib_bid_ask.clone() }
+    #[setter(tickAttribBidAsk)]
+    fn set_tick_attrib_bid_ask(&mut self, v: TickAttribBidAsk) { self.tick_attrib_bid_ask = v; }
+    #[getter(priceBid)]
+    fn get_price_bid(&self) -> f64 { self.price_bid }
+    #[setter(priceBid)]
+    fn set_price_bid(&mut self, v: f64) { self.price_bid = v; }
+    #[getter(priceAsk)]
+    fn get_price_ask(&self) -> f64 { self.price_ask }
+    #[setter(priceAsk)]
+    fn set_price_ask(&mut self, v: f64) { self.price_ask = v; }
+    #[getter(sizeBid)]
+    fn get_size_bid(&self) -> f64 { self.size_bid }
+    #[setter(sizeBid)]
+    fn set_size_bid(&mut self, v: f64) { self.size_bid = v; }
+    #[getter(sizeAsk)]
+    fn get_size_ask(&self) -> f64 { self.size_ask }
+    #[setter(sizeAsk)]
+    fn set_size_ask(&mut self, v: f64) { self.size_ask = v; }
+
+    fn __repr__(&self) -> String {
+        format!("HistoricalTickBidAsk(time={}, bid={}, ask={})",
+            self.time, self.price_bid, self.price_ask)
     }
 }

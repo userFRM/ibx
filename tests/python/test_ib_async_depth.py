@@ -115,3 +115,37 @@ def test_a_seeded_order_id_is_the_next_one_their_client_issues():
 
     client.updateReqId(5)
     assert client.getReqId() == 1_700_000_002, "a lower seed does not move the counter back"
+
+
+def test_a_historical_tick_is_handed_over_as_their_own_record():
+    """Their historical ticks are record tuples, not dataclasses.
+
+    A conversion that only knew dataclasses handed ours straight through, so a
+    caller reading `tick.priceBid` off what it was given found a field spelled
+    the other way — and `tick.time` was a number where their record declares a
+    datetime.
+    """
+    pytest.importorskip("ib_async")
+    from ib_async.objects import HistoricalTickBidAsk, HistoricalTickLast
+
+    import ibx
+    import ibx.ib_async
+
+    quote = ibx.HistoricalTickBidAsk(
+        time=1_786_795_200, price_bid=1.5, price_ask=1.6, size_bid=10.0, size_ask=20.0,
+    )
+    theirs = ibx.ib_async._as_theirs(quote)
+    assert isinstance(theirs, HistoricalTickBidAsk), "their own record"
+    assert theirs.priceBid == 1.5
+    assert theirs.priceAsk == 1.6
+    assert theirs.sizeAsk == 20.0
+    assert theirs.time.year == 2026, "and a moment, not a number"
+    assert theirs.time.tzinfo is not None, "aware, which their frame conversion needs"
+
+    trade = ibx.HistoricalTickLast(
+        time=1_786_795_200, price=2.5, size=3.0, exchange="ARCA",
+    )
+    theirs = ibx.ib_async._as_theirs(trade)
+    assert isinstance(theirs, HistoricalTickLast)
+    assert theirs.price == 2.5
+    assert theirs.exchange == "ARCA"

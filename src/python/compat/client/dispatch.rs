@@ -662,41 +662,48 @@ impl EClient {
         }
 
         // Drain historical ticks
+        // Each tick as the reference client hands it over: a record with names
+        // on it. Handed over as a tuple it carries the same numbers and answers
+        // to none of the names, so a program reading `tick.price` off what it
+        // was given finds nothing there.
         let hist_ticks = shared.reference.drain_historical_ticks();
         for (req_id, data, _what, done) in hist_ticks {
+            // The venue states the moment as it spells it; the reference client
+            // states it in seconds. One that cannot be read back is handed over
+            // as nothing rather than as an instant in 1970.
+            let at = |stated: &str| crate::config::ib_datetime_to_unix(stated).unwrap_or(0);
             match data {
                 crate::types::HistoricalTickData::Midpoint(ticks) => {
-                    let py_ticks: Vec<Bound<'_, pyo3::types::PyTuple>> = ticks.iter().map(|t| {
-                        pyo3::types::PyTuple::new(py, &[
-                            t.time.as_str().into_pyobject(py).unwrap().into_any(),
-                            t.price.into_pyobject(py).unwrap().into_any(),
-                        ]).unwrap()
+                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTick> = ticks.iter().map(|t| crate::python::compat::tick_types::HistoricalTick {
+                        time: at(&t.time),
+                        price: t.price,
+                        // A midpoint has no size, and the reference client
+                        // states zero for it.
+                        size: 0.0,
                     }).collect();
                     let list = pyo3::types::PyList::new(py, py_ticks)?;
                     call_wrapper!(self.wrapper, py, "historical_ticks", (req_id as i64, list, done));
                 }
                 crate::types::HistoricalTickData::Last(ticks) => {
-                    let py_ticks: Vec<Bound<'_, pyo3::types::PyTuple>> = ticks.iter().map(|t| {
-                        pyo3::types::PyTuple::new(py, &[
-                            t.time.as_str().into_pyobject(py).unwrap().into_any(),
-                            t.price.into_pyobject(py).unwrap().into_any(),
-                            t.size.into_pyobject(py).unwrap().into_any(),
-                            t.exchange.as_str().into_pyobject(py).unwrap().into_any(),
-                            t.special_conditions.as_str().into_pyobject(py).unwrap().into_any(),
-                        ]).unwrap()
+                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTickLast> = ticks.iter().map(|t| crate::python::compat::tick_types::HistoricalTickLast {
+                        time: at(&t.time),
+                        tick_attrib_last: Default::default(),
+                        price: t.price,
+                        size: t.size as f64,
+                        exchange: t.exchange.clone(),
+                        special_conditions: t.special_conditions.clone(),
                     }).collect();
                     let list = pyo3::types::PyList::new(py, py_ticks)?;
                     call_wrapper!(self.wrapper, py, "historical_ticks_last", (req_id as i64, list, done));
                 }
                 crate::types::HistoricalTickData::BidAsk(ticks) => {
-                    let py_ticks: Vec<Bound<'_, pyo3::types::PyTuple>> = ticks.iter().map(|t| {
-                        pyo3::types::PyTuple::new(py, &[
-                            t.time.as_str().into_pyobject(py).unwrap().into_any(),
-                            t.bid_price.into_pyobject(py).unwrap().into_any(),
-                            t.ask_price.into_pyobject(py).unwrap().into_any(),
-                            t.bid_size.into_pyobject(py).unwrap().into_any(),
-                            t.ask_size.into_pyobject(py).unwrap().into_any(),
-                        ]).unwrap()
+                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTickBidAsk> = ticks.iter().map(|t| crate::python::compat::tick_types::HistoricalTickBidAsk {
+                        time: at(&t.time),
+                        tick_attrib_bid_ask: Default::default(),
+                        price_bid: t.bid_price,
+                        price_ask: t.ask_price,
+                        size_bid: t.bid_size as f64,
+                        size_ask: t.ask_size as f64,
                     }).collect();
                     let list = pyo3::types::PyList::new(py, py_ticks)?;
                     call_wrapper!(self.wrapper, py, "historical_ticks_bid_ask", (req_id as i64, list, done));
