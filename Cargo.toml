@@ -11,6 +11,21 @@ categories = ["api-bindings", "finance", "network-programming"]
 # developing this library rather than for using it, and a caller who installs
 # the crate should not be handed 30 of them.
 autobins = false
+# What a caller installing this crate needs, and nothing else. The published
+# package was 355 files and nine megabytes: notebooks, capture tools, the CI
+# gates, the live suites and the engineering notes, none of which a dependency
+# has any use for.
+exclude = [
+    ".gates/",
+    ".github/",
+    "assets/",
+    "bench/",
+    "docs/",
+    "notebooks/",
+    "scripts/",
+    "tests/",
+    "python/ibx/*.so",
+]
 
 [lib]
 name = "ibx"

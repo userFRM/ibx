@@ -127,6 +127,20 @@ def published() -> dict[str, int]:
     return out
 
 
+def capabilities() -> tuple[int, int]:
+    """How many capabilities the matrix lists, and how many are verified."""
+    text = (ROOT / "STATUS.md").read_text()
+    # From the first capability section, so the table defining the marks is
+    # not counted as capabilities carrying them.
+    rows = text[text.index("## Client surfaces"):].splitlines()
+    verified = sum(1 for l in rows if l.startswith("| ") and "| \u2705 Supported |" in l)
+    other = sum(
+        1 for l in rows
+        if l.startswith("| ") and ("| \U0001f52c Implemented |" in l or "| \u26d4" in l)
+    )
+    return verified, verified + other
+
+
 def readme_says() -> tuple[int, int] | None:
     """What the README's own test row states, offline and live.
 
@@ -149,6 +163,16 @@ def main() -> int:
     # The README states the same thing in a sentence.
     offline = have["rust"] + have["python"]
     live = have["python_live"] + have["paper"]
+    verified, total = capabilities()
+    readme_text = README.read_text()
+    if f"{verified} of the {total} capabilities" not in readme_text:
+        wrong.append(
+            f"README.md does not say {verified} of {total} capabilities, which "
+            f"is what STATUS.md lists"
+        )
+    else:
+        print(f"capabilities: {verified} of {total} verified")
+
     stated = readme_says()
     if stated is None:
         wrong.append("README.md states no test counts")

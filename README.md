@@ -35,16 +35,16 @@ Python, additionally with [ib_async](https://github.com/ib-api-reloaded/ib_async
 ## Status
 
 [STATUS.md](STATUS.md) holds the capability matrix. Status is assigned from a
-named artifact — a test, a script, or a recorded server response. 29 of 30
-capabilities are verified against IBKR production servers; the remaining one
-requires an advisor account.
+named artifact — a test, a script, or a recorded server response. 45 of the 46 capabilities are verified against IBKR production servers; the
+remaining one, advisor configuration, reaches the server and needs an advisor
+account to see what it answers.
 
 | | |
 | --- | --- |
 | Requests | 76. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
 | Order fields | 154. 124 are sent; the other 30 have no field in the protocol to carry them, and the call says so rather than dropping them |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 1,968 offline, 157 against production servers |
+| Tests | 1,969 offline, 157 against production servers |
 
 Every figure above is measured on each commit, and the build fails if one moves.
 
@@ -243,7 +243,7 @@ and `bench_decode`,
 1,000,000 iterations after 100,000 warm-up, no network I/O, on an Intel
 i7-10700K with rustc 1.97:
 
-| Path | Median |
+| Path | Mean |
 | --- | ---: |
 | Inbound: verify → decode → state update (5-tick message) | 214 ns |
 | Inbound: same, plus seqlock publish and channel send | 252 ns |

@@ -143,10 +143,12 @@ pub struct Order {
     pub hidden: bool,
     /// Not active until this moment, `YYYYMMDD HH:MM:SS` with a zone.
     /// When the order should become active. **Not carried by this protocol.**
-    /// The counterpart's tag table names no field for it, and no capture of
-    /// this session has ever carried one, so there is no format to write that
-    /// would be found rather than invented. Taken here and kept, so an order
-    /// built against another client reads back what it set.
+    /// No capture of a session has carried the field, so the format to write
+    /// is not established, and a delayed order sent under a guessed one would
+    /// go live at a time nobody chose. Taken here and kept, so an order built
+    /// against another client reads back what it set — and refused rather than
+    /// sent, so a caller asking for a delay is told it cannot be had instead
+    /// of getting an order that works immediately.
     pub good_after_time: String,
     /// When a `GTD` order expires, in the same form.
     pub good_till_date: String,

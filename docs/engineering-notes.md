@@ -53,9 +53,9 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | P&L, account level subscription | Verified | Live session, reporting a daily figure for a held account rather than falling back to zero | Available |
 | Option exercise and lapse | Verified | Live session: one call exercised, filled at the strike, and the holding it delivered observed. A lapse before the last trading day is refused by the venue | Available |
 | Option analytics, implied volatility and greeks | Verified | Live session: the venue's own model arrives on an option subscription. A volatility inverted from a caller's price cannot be served; this protocol carries no request for it | Available |
-| Wall Street Horizon event data | Accepted, not served | Has a path to the venue; a separately subscribed data product, and this session holds no subscription | W3 |
+| Wall Street Horizon event data | Implemented | The calendar states what it carries and answers a query with a well-formed result. The events are a separate subscription this account does not hold, so every query answers empty | Available |
 | Financial advisor allocation | Accepted, not served | The venue carries the request; exercising it needs an advisor account | W3 |
-| Tick by tick data | Blocked | The feed rides a service of its own. This session is sent no list of the services it may reach and a request for that list is refused | W2 |
+| Tick by tick data | Verified | Trades and quotes both stream, as distinct subscriptions, each record carrying the request it belongs to. A crypto is acknowledged and produces nothing, which is the venue's silence | Available |
 
 ## API surface
 
@@ -458,7 +458,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,587 | No |
+| Rust unit and integration | 1,588 | No |
 | Python | 381 | No |
 | Python, live | 131 | Yes |
 | Paper compatibility suite (136 phases) | 26 tests | Yes |

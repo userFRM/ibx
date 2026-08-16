@@ -2407,6 +2407,51 @@ impl ClientCore {
             );
         }
 
+        // A time in force this client does not know becomes DAY, and a DAY
+        // order dies at the close. A caller who wrote "gtc" and meant GTC gets
+        // an order that quietly stops existing, so the spelling is checked
+        // rather than fallen back on.
+        const TIME_IN_FORCE: [&str; 8] =
+            ["DAY", "GTC", "IOC", "FOK", "OPG", "GTD", "DTC", "AUC"];
+        if !order.tif.is_empty() && !TIME_IN_FORCE.contains(&order.tif.as_str()) {
+            return Err(format!(
+                "tif '{}' is not one this venue carries. It is one of {}, \
+                 spelled exactly — an unrecognised value would otherwise be \
+                 sent as DAY and expire at the close.",
+                order.tif,
+                TIME_IN_FORCE.join(", "),
+            ));
+        }
+
+        // An expiry this client cannot read used to be logged and dropped, and
+        // the order then went out with no expiry at all — which for a GTC-until
+        // order is a different order from the one asked for.
+        if !order.good_till_date.is_empty()
+            && let Err(e) = crate::protocol::datetime::parse_ib_expiry(&order.good_till_date)
+        {
+            return Err(format!(
+                "good_till_date '{}' cannot be read: {e}. State it as \
+                 `yyyyMMdd HH:mm:ss` with an optional zone, or `yyyyMMdd` for \
+                 a date — sent unread, the order would carry no expiry.",
+                order.good_till_date,
+            ));
+        }
+
+        // `good_after_time` asks the venue to hold the order until a stated
+        // time. The field the venue reads it under is not established, so an
+        // order carrying it would be sent under a guessed encoding or — as it
+        // was — sent without the delay and filled at once. Neither is what the
+        // caller asked for, and one of them trades.
+        if !order.good_after_time.is_empty() {
+            return Err(
+                "good_after_time is not supported: the field this venue reads \
+                 a delayed activation under is not established, so the order \
+                 would be placed immediately rather than held. Submit the \
+                 order when you want it live."
+                    .into(),
+            );
+        }
+
         // Financial-advisor allocation is not wire-encoded, so an accepted
         // fa_group would put the whole size on the connected account rather
         // than spread it across the group, with nothing to show for it.
