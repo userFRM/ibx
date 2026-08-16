@@ -86,7 +86,7 @@ fn main() {
     match client.qualify_contract(&apple) {
         Ok(resolved) => {
             println!("  asking for events on conId={}", resolved.con_id);
-            let query = ibx::control::calendar::CalendarQuery {
+            let query = ibx::types::CalendarQuery {
                 con_id: Some(resolved.con_id),
                 total_limit: Some(20),
                 ..Default::default()

@@ -1168,13 +1168,13 @@ pub fn cancel_wsh_event_data(&self, req_id: i64) -> Result<(), Refusal>
 Ask the corporate-events calendar for events. A caller either names a contract or writes its own filter. The filter goes to the venue as written: the venue validates it, and rewriting it here would change what was asked.
 
 ```rust
-pub fn req_wsh_event_data( &self, req_id: i64, query: crate::control::calendar::CalendarQuery, ) -> Result<(), Refusal>
+pub fn req_wsh_event_data( &self, req_id: i64, query: crate::types::CalendarQuery, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
-| `query` | `crate::control::calendar::CalendarQuery` |  |
+| `query` | `crate::types::CalendarQuery` |  |
 
 **Returns:** `Result<(), Refusal>`
 

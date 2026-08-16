@@ -111,7 +111,7 @@ impl EClient {
     pub fn req_wsh_event_data(
         &self,
         req_id: i64,
-        query: crate::control::calendar::CalendarQuery,
+        query: crate::types::CalendarQuery,
     ) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchCalendarEvents {
             req_id: wire_req_id(req_id)?,

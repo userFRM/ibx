@@ -36,7 +36,7 @@ BUILDERS = [
     # Where a caller's order becomes the engine's, which is as much a part of
     # reaching the venue as the encoder is: a field the conversion drops never
     # gets as far as a tag. Leaving this out counted a carried field as lost.
-    *module_files("src/api/types"),
+    *module_files("src/types/model"),
     *module_files("src/engine/hot_loop/order_builder"),
     *module_files("src/engine/hot_loop/ccp"),
     *module_files("src/engine/hot_loop/mod"),
@@ -46,7 +46,7 @@ BUILDERS = [
 
 
 def order_fields() -> list[str]:
-    text = module("src/api/types").read_text()
+    text = module("src/types/model").read_text()
     at = text.index("pub struct Order ")
     end = text.index("\n}", at)
     return re.findall(r"^\s*pub (\w+):", text[at:end], re.M)
@@ -58,7 +58,7 @@ def refused() -> dict[str, str]:
     Written on the field rather than kept in a list here, so that the reason
     sits where someone reading the field will find it.
     """
-    text = module("src/api/types").read_text()
+    text = module("src/types/model").read_text()
     at = text.index("pub struct Order ")
     end = text.index("\n}", at)
     out = {}
@@ -73,7 +73,7 @@ def refused() -> dict[str, str]:
 def where_fields_are_read() -> str:
     """Everything that reads an order, with the order's own definition removed.
 
-    `src/api/types.rs` both declares the fields and converts them for the
+    `src/types/model.rs` both declares the fields and converts them for the
     engine. Searching it whole matches every field against its own
     declaration and reports that all of them are carried, which is the same
     blindness in the other direction; searching without it reports a field the

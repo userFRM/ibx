@@ -14,6 +14,8 @@
 //! and will not build an event request without it, so a request sent anyway
 //! would be one the venue was never asked in the counterpart's own operation.
 
+use crate::types::CalendarQuery;
+
 /// The sub-protocol both requests and both answers travel under.
 pub const CALENDAR_SUB_PROTOCOL: u32 = 155;
 
@@ -54,29 +56,6 @@ pub fn meta_data_request() -> String {
     format!(
         r#"{{"T":{CALENDAR_META_DATA},"V":1,"P":{{"calendar_request":{{"client_capability":"{CLIENT_CAPABILITY}"}}}}}}"#
     )
-}
-
-/// What a caller asked for of the calendar.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CalendarQuery {
-    /// The contract to fetch events for, where the caller named one rather
-    /// than writing its own filter.
-    pub con_id: Option<i64>,
-    /// The caller's own filter document, passed to the venue as written.
-    pub filter: String,
-    /// The window, stated as the venue states dates.
-    pub start_date: String,
-    /// Its end.
-    pub end_date: String,
-    /// How many events at most. Stated as text, which is how the venue takes
-    /// it, and left out entirely when the caller set no limit.
-    pub total_limit: Option<i64>,
-    /// Whether to fill from the watchlist, the portfolio, and competitors.
-    pub fill_watchlist: bool,
-    /// Whether to include what the account holds.
-    pub fill_portfolio: bool,
-    /// Whether to include the issuer's competitors.
-    pub fill_competitors: bool,
 }
 
 /// The JSON asking for events.

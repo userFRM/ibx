@@ -241,6 +241,131 @@ pub struct PortfolioUpdateEntry {
     pub realized_pnl: f64,
 }
 
+/// Parse a `riskAversion` tag value (used by ArrivalPx and ClosePx). A
+/// missing tag defaults to Neutral, matching IB's own algo default; a
+/// present value — including an empty string — that isn't a recognized
+/// member is refused rather than silently defaulting to Neutral.
+fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, Refusal> {
+    let raw = match raw {
+        None => return Ok(RiskAversion::Neutral),
+        Some(raw) => raw,
+    };
+    match raw.to_lowercase().as_str() {
+        "neutral" => Ok(RiskAversion::Neutral),
+        "get_done" | "getdone" => Ok(RiskAversion::GetDone),
+        "aggressive" => Ok(RiskAversion::Aggressive),
+        "passive" => Ok(RiskAversion::Passive),
+        _ => Err(Refusal::validation(
+            "Unknown riskAversion '{raw}': expected Get_Done, Aggressive, Neutral or Passive"
+                .replace("{raw}", raw),
+        )),
+    }
+}
+
+/// Parse algo strategy and TagValue params into internal AlgoParams.
+///
+/// A key the caller never set defaults the way IB's own algos do (0.0,
+/// false, or the documented default enum value). A key the caller *did*
+/// set — even to an empty string — is refused if it does not parse, rather
+/// than taking that same default: `riskAversion="Aggresive"` would otherwise
+/// submit a Neutral algo with no error, and `maxPctVol=""` would submit 0.0.
+pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
+    let get = |key: &str| -> Option<String> {
+        params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
+    };
+    let get_str = |key: &str| -> String { get(key).unwrap_or_default() };
+    let get_f64 = |key: &str| -> Result<f64, Refusal> {
+        let raw = match get(key) {
+            None => return Ok(0.0),
+            Some(raw) => raw,
+        };
+        let v: f64 = raw.parse()
+            .map_err(|_| Refusal::validation(format!("Invalid {key} '{raw}': expected a number")))?;
+        if !v.is_finite() {
+            return Err(Refusal::validation(
+                format!("Invalid {key} '{raw}': must be a finite number"),
+            ));
+        }
+        Ok(v)
+    };
+    let get_bool = |key: &str| -> Result<bool, Refusal> {
+        let raw = match get(key) {
+            None => return Ok(false),
+            Some(raw) => raw,
+        };
+        match raw.to_lowercase().as_str() {
+            "0" | "false" => Ok(false),
+            "1" | "true" => Ok(true),
+            _ => Err(Refusal::validation(
+                format!("Invalid {key} '{raw}': expected true/false or 1/0"),
+            )),
+        }
+    };
+
+    match strategy.to_lowercase().as_str() {
+        "vwap" => Ok(AlgoParams::Vwap {
+            max_pct_vol: get_f64("maxPctVol")?,
+            no_take_liq: get_bool("noTakeLiq")?,
+            allow_past_end_time: get_bool("allowPastEndTime")?,
+            start_time: get_str("startTime"),
+            end_time: get_str("endTime"),
+        }),
+        "twap" => Ok(AlgoParams::Twap {
+            allow_past_end_time: get_bool("allowPastEndTime")?,
+            start_time: get_str("startTime"),
+            end_time: get_str("endTime"),
+        }),
+        "arrivalpx" | "arrival_price" => Ok(AlgoParams::ArrivalPx {
+            max_pct_vol: get_f64("maxPctVol")?,
+            risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
+            allow_past_end_time: get_bool("allowPastEndTime")?,
+            force_completion: get_bool("forceCompletion")?,
+            start_time: get_str("startTime"),
+            end_time: get_str("endTime"),
+        }),
+        "closepx" | "close_price" => Ok(AlgoParams::ClosePx {
+            max_pct_vol: get_f64("maxPctVol")?,
+            risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
+            force_completion: get_bool("forceCompletion")?,
+            start_time: get_str("startTime"),
+        }),
+        "darkice" | "dark_ice" => {
+            let display_size = match get("displaySize") {
+                None => 100,
+                Some(raw) => raw.parse().map_err(|_| format!("Invalid displaySize '{raw}': expected a non-negative integer"))?,
+            };
+            Ok(AlgoParams::DarkIce {
+                allow_past_end_time: get_bool("allowPastEndTime")?,
+                display_size,
+                start_time: get_str("startTime"),
+                end_time: get_str("endTime"),
+            })
+        }
+        "pctvol" | "pct_vol" => Ok(AlgoParams::PctVol {
+            pct_vol: get_f64("pctVol")?,
+            no_take_liq: get_bool("noTakeLiq")?,
+            start_time: get_str("startTime"),
+            end_time: get_str("endTime"),
+        }),
+        // Anything else goes as the caller wrote it.
+        //
+        // Refused here instead, a caller could use only the algorithms this
+        // match happens to name — five of the thirteen an ordinary session is
+        // offered. Which ones an account may use is the venue's answer, stated
+        // at logon and enforced by it, and the reference client does not
+        // interpret these either.
+        // The caller's own spelling, not the one folded for matching: the
+        // venue is handed this name and does not know a lower-cased one.
+        _ => Ok(AlgoParams::Named {
+            strategy: strategy.to_string(),
+            params: params
+                .iter()
+                .flat_map(|tv| [tv.tag.clone(), tv.value.clone()])
+                .collect(),
+        }),
+    }
+}
+
 // ── Order field validation ──
 
 /// Reject a price/amount field that a saturating float-to-int cast would
@@ -787,24 +912,6 @@ impl ClientCore {
             .unwrap_or_default()
     }
 
-    /// What separates two contracts that share a symbol: expiry, strike, right
-    /// and multiplier. Empty for anything those do not distinguish, which is
-    /// every stock and every currency pair.
-    pub fn contract_identity(
-        last_trade_date: &str, strike: f64, right: &str, multiplier: &str, currency: &str,
-    ) -> String {
-        let named_by_symbol = last_trade_date.is_empty() && strike <= 0.0 && right.is_empty();
-        // A holding priced in the account's own currency is named completely by
-        // its symbol. One priced in another is not: an order that says nothing
-        // about the currency is taken as an order in the default one, which is a
-        // different contract, and the venue answers it with nothing at all.
-        let stated_currency = !currency.is_empty() && !currency.eq_ignore_ascii_case("USD");
-        if named_by_symbol && !stated_currency {
-            return String::new();
-        }
-        format!("{last_trade_date}|{strike}|{right}|{multiplier}|||{currency}")
-    }
-
     /// Find instrument ID for a contract, registering if needed.
     /// Returns `Err` if the control channel is closed.
     pub fn find_or_register_instrument(
@@ -1040,7 +1147,7 @@ impl ClientCore {
     pub fn description_key(c: &ApiContract) -> String {
         Self::description_key_of(
             &c.symbol, &c.sec_type, &c.exchange,
-            &Self::contract_identity(
+            &crate::types::model::contract_identity(
                 &c.last_trade_date_or_contract_month, c.strike, &c.right,
                 &c.multiplier, &c.currency,
             ),
@@ -2341,7 +2448,7 @@ impl ClientCore {
             return Ok(());
         }
         if !order.algo_strategy.is_empty() {
-            crate::api::client::parse_algo_params(&order.algo_strategy, &order.algo_params)?;
+            crate::client_core::parse_algo_params(&order.algo_strategy, &order.algo_params)?;
             return Ok(());
         }
         if order.what_if {
@@ -2732,7 +2839,7 @@ impl ClientCore {
 
         // Algo orders
         if !order.algo_strategy.is_empty() {
-            let algo = crate::api::client::parse_algo_params(&order.algo_strategy, &order.algo_params)?;
+            let algo = crate::client_core::parse_algo_params(&order.algo_strategy, &order.algo_params)?;
             let price = (order.lmt_price * PRICE_SCALE_F) as i64;
             return Ok(ControlCommand::Order(ex(OrderKind::Algo { price, algo })));
         }

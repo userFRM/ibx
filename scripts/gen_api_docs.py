@@ -779,6 +779,7 @@ def generate_rust_md(ver: str) -> str:
         if section is None:
             continue
         methods = parse_rust_methods(fname)
+        methods += reexported_into(stem)
         if not methods:
             continue
         out.append(f"## {section}")
@@ -1030,12 +1031,53 @@ IBAPI_EWRAPPER: list[tuple[str, str]] = [
 ]
 
 
+#: Where a re-exported call is documented, since a `pub use` says nothing
+#: about which part of the surface a reader will look for it under.
+REEXPORT_SECTION = {"parse_algo_params": "orders"}
+
+
+def reexported_into(stem: str) -> list[dict]:
+    """Calls this section publishes that are declared somewhere else.
+
+    A module publishes what it declares and what it re-exports, and a reader
+    of the API cannot tell the two apart. Documenting only what a directory
+    declares drops a call the day it moves, while it stays callable.
+    """
+    out = []
+    for f in rust_client_files():
+        if f.parent == RUST_CLIENT:
+            continue
+        for m in parse_rust_methods(f):
+            if REEXPORT_SECTION.get(m["name"]) == stem:
+                out.append(m)
+    return out
+
+
+def rust_client_files() -> list[pathlib.Path]:
+    """Every file the Rust client's surface is written across.
+
+    A module publishes what it declares and what it re-exports, and a reader
+    of the API cannot tell the two apart. So the `pub use` lines are followed:
+    a call documented only because it was declared in this directory stops
+    being documented the day it moves, while still being callable.
+    """
+    files = [f for f in RUST_CLIENT.glob("*.rs") if f.stem not in ("dispatch", "tests")]
+    for line in (RUST_CLIENT / "mod.rs").read_text().splitlines():
+        m = re.match(r"pub use crate::([\w:]+)::\w+;", line.strip())
+        if not m:
+            continue
+        path = m.group(1).replace("::", "/")
+        for cand in (ROOT / "src" / f"{path}.rs", ROOT / "src" / path / "mod.rs"):
+            if cand.exists() and cand not in files:
+                files.append(cand)
+                break
+    return files
+
+
 def _collect_rust_methods() -> set[str]:
     """Collect all pub fn names from Rust EClient."""
     names = set()
-    for f in RUST_CLIENT.glob("*.rs"):
-        if f.stem in ("dispatch", "tests"):
-            continue
+    for f in rust_client_files():
         for m in parse_rust_methods(f):
             names.add(m["name"])
     return names

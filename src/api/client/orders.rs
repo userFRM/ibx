@@ -8,7 +8,7 @@ use crate::api::wrapper::Wrapper;
 use crate::client_core::ClientCore;
 use crate::types::*;
 
-use super::{Contract, Order, TagValue, EClient};
+use super::{Contract, Order, EClient};
 
 impl EClient {
     // ── Orders ──
@@ -91,7 +91,7 @@ impl EClient {
         ClientCore::validate_order_contract(
             contract.con_id,
             &contract.sec_type,
-            &ClientCore::contract_identity(
+            &crate::types::model::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
                 &contract.right, &contract.multiplier, &contract.currency,
             ),
@@ -128,7 +128,7 @@ impl EClient {
         let instrument = self.core.find_or_register_instrument(
             &self.control_tx,
             contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
-            &ClientCore::contract_identity(
+            &crate::types::model::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
                 &contract.right, &contract.multiplier, &contract.currency,
             ),
@@ -181,7 +181,7 @@ impl EClient {
         let (action, qty) = ClientCore::validate_exercise(
             exercise_action, exercise_quantity, account, &self.account_id,
         )?;
-        let identity = ClientCore::contract_identity(
+        let identity = crate::types::model::contract_identity(
             &contract.last_trade_date_or_contract_month, contract.strike,
             &contract.right, &contract.multiplier, &contract.currency,
         );
@@ -367,130 +367,5 @@ impl EClient {
             wrapper.commission_and_fees_report(&se.commission_and_fees);
         }
         wrapper.exec_details_end(req_id);
-    }
-}
-
-/// Parse algo strategy and TagValue params into internal AlgoParams.
-///
-/// A key the caller never set defaults the way IB's own algos do (0.0,
-/// false, or the documented default enum value). A key the caller *did*
-/// set — even to an empty string — is refused if it does not parse, rather
-/// than taking that same default: `riskAversion="Aggresive"` would otherwise
-/// submit a Neutral algo with no error, and `maxPctVol=""` would submit 0.0.
-pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
-    let get = |key: &str| -> Option<String> {
-        params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
-    };
-    let get_str = |key: &str| -> String { get(key).unwrap_or_default() };
-    let get_f64 = |key: &str| -> Result<f64, Refusal> {
-        let raw = match get(key) {
-            None => return Ok(0.0),
-            Some(raw) => raw,
-        };
-        let v: f64 = raw.parse()
-            .map_err(|_| Refusal::validation(format!("Invalid {key} '{raw}': expected a number")))?;
-        if !v.is_finite() {
-            return Err(Refusal::validation(
-                format!("Invalid {key} '{raw}': must be a finite number"),
-            ));
-        }
-        Ok(v)
-    };
-    let get_bool = |key: &str| -> Result<bool, Refusal> {
-        let raw = match get(key) {
-            None => return Ok(false),
-            Some(raw) => raw,
-        };
-        match raw.to_lowercase().as_str() {
-            "0" | "false" => Ok(false),
-            "1" | "true" => Ok(true),
-            _ => Err(Refusal::validation(
-                format!("Invalid {key} '{raw}': expected true/false or 1/0"),
-            )),
-        }
-    };
-
-    match strategy.to_lowercase().as_str() {
-        "vwap" => Ok(AlgoParams::Vwap {
-            max_pct_vol: get_f64("maxPctVol")?,
-            no_take_liq: get_bool("noTakeLiq")?,
-            allow_past_end_time: get_bool("allowPastEndTime")?,
-            start_time: get_str("startTime"),
-            end_time: get_str("endTime"),
-        }),
-        "twap" => Ok(AlgoParams::Twap {
-            allow_past_end_time: get_bool("allowPastEndTime")?,
-            start_time: get_str("startTime"),
-            end_time: get_str("endTime"),
-        }),
-        "arrivalpx" | "arrival_price" => Ok(AlgoParams::ArrivalPx {
-            max_pct_vol: get_f64("maxPctVol")?,
-            risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
-            allow_past_end_time: get_bool("allowPastEndTime")?,
-            force_completion: get_bool("forceCompletion")?,
-            start_time: get_str("startTime"),
-            end_time: get_str("endTime"),
-        }),
-        "closepx" | "close_price" => Ok(AlgoParams::ClosePx {
-            max_pct_vol: get_f64("maxPctVol")?,
-            risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
-            force_completion: get_bool("forceCompletion")?,
-            start_time: get_str("startTime"),
-        }),
-        "darkice" | "dark_ice" => {
-            let display_size = match get("displaySize") {
-                None => 100,
-                Some(raw) => raw.parse().map_err(|_| format!("Invalid displaySize '{raw}': expected a non-negative integer"))?,
-            };
-            Ok(AlgoParams::DarkIce {
-                allow_past_end_time: get_bool("allowPastEndTime")?,
-                display_size,
-                start_time: get_str("startTime"),
-                end_time: get_str("endTime"),
-            })
-        }
-        "pctvol" | "pct_vol" => Ok(AlgoParams::PctVol {
-            pct_vol: get_f64("pctVol")?,
-            no_take_liq: get_bool("noTakeLiq")?,
-            start_time: get_str("startTime"),
-            end_time: get_str("endTime"),
-        }),
-        // Anything else goes as the caller wrote it.
-        //
-        // Refused here instead, a caller could use only the algorithms this
-        // match happens to name — five of the thirteen an ordinary session is
-        // offered. Which ones an account may use is the venue's answer, stated
-        // at logon and enforced by it, and the reference client does not
-        // interpret these either.
-        // The caller's own spelling, not the one folded for matching: the
-        // venue is handed this name and does not know a lower-cased one.
-        _ => Ok(AlgoParams::Named {
-            strategy: strategy.to_string(),
-            params: params
-                .iter()
-                .flat_map(|tv| [tv.tag.clone(), tv.value.clone()])
-                .collect(),
-        }),
-    }
-}
-
-/// Parse a `riskAversion` tag value (used by ArrivalPx and ClosePx). A
-/// missing tag defaults to Neutral, matching IB's own algo default; a
-/// present value — including an empty string — that isn't a recognized
-/// member is refused rather than silently defaulting to Neutral.
-fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, Refusal> {
-    let raw = match raw {
-        None => return Ok(RiskAversion::Neutral),
-        Some(raw) => raw,
-    };
-    match raw.to_lowercase().as_str() {
-        "neutral" => Ok(RiskAversion::Neutral),
-        "get_done" | "getdone" => Ok(RiskAversion::GetDone),
-        "aggressive" => Ok(RiskAversion::Aggressive),
-        "passive" => Ok(RiskAversion::Passive),
-        _ => Err(Refusal::validation(
-            "Unknown riskAversion '{raw}': expected Get_Done, Aggressive, Neutral or Passive"
-                .replace("{raw}", raw),
-        )),
     }
 }

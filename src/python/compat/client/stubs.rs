@@ -404,7 +404,7 @@ impl EClient {
     /// a filter the caller writes, plus the window and what to fill from.
     #[pyo3(signature = (req_id, wsh_event_data=None))]
     fn req_wsh_event_data(&self, py: Python<'_>, req_id: i64, wsh_event_data: Option<Py<PyAny>>) -> PyResult<()> {
-        let mut query = crate::control::calendar::CalendarQuery::default();
+        let mut query = crate::types::CalendarQuery::default();
         if let Some(asked) = wsh_event_data.as_ref() {
             let asked = asked.bind(py);
             let text = |name: &str| -> String {

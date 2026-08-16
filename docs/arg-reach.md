@@ -8,7 +8,7 @@ for is gone — with nothing to say so.
 
 | Kind | Count | Meaning |
 | --- | ---: | --- |
-| read | 240 | the call reads it |
+| read | 237 | the call reads it |
 | stated | 47 | the call does not read it, and says so by name |
 | dropped | 0 | the call does not read it, and nothing says so |
 

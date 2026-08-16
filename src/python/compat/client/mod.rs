@@ -708,7 +708,7 @@ impl EClient {
         let symbol = contract.symbol.clone();
         let exchange = contract.exchange.clone();
         let sec_type = contract.sec_type.clone();
-        let identity = crate::client_core::ClientCore::contract_identity(
+        let identity = crate::types::model::contract_identity(
             &contract.last_trade_date_or_contract_month, contract.strike,
             &contract.right, &contract.multiplier, &contract.currency,
         );
