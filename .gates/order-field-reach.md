@@ -8,8 +8,8 @@ only sign is the venue doing something other than what was asked.
 
 | Kind | Count | Meaning |
 | --- | ---: | --- |
-| carried | 125 | goes out under a tag |
-| refused | 29 | this protocol does not carry it, and the field says so |
+| carried | 124 | goes out under a tag |
+| refused | 30 | this protocol does not carry it, and the field says so |
 | dropped | 0 | a caller can set it and nothing reads it |
 
 `dropped` is the order-field form of `silent`: the call returns, the
@@ -34,6 +34,7 @@ None.
 - `delta_neutral_short_sale` — Whether the hedging leg is a short sale.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `delta_neutral_short_sale_slot` — Which short-sale slot the hedging leg uses.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `dont_use_auto_price_for_hedge` — Whether the hedge is priced automatically.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
+- `good_after_time` — Not active until this moment, `YYYYMMDD HH:MM:SS` with a zone. When the order should become active. **Not carried by this protocol.** The counterpart's tag table names no field for it, and no capture of this session has ever carried one, so there is no format to write that would be found rather than invented. Taken here and kept, so an order built against another client reads back what it set.
 - `opt_out_smart_routing` — Whether smart routing is declined.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `order_misc_options` — Free-form options carried alongside an order.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.
 - `origin` — Who originated the order.  **Not carried by this protocol.** No field of the counterpart's declares a tag for it, among the three hundred and fifty-one that do. Its siblings are among them, which is what makes the absence a finding rather than a search that came up short. Taken here and kept, so an order built against another client reads back what it set.

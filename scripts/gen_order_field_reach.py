@@ -102,6 +102,33 @@ def where_fields_are_read() -> str:
     return "\n".join(out)
 
 
+#: Fields the order conversion fills with a literal on purpose, and why.
+#:
+#: Anything else filled with a literal is a caller's value being replaced by a
+#: constant. That is how `good_after_time` was lost: the caller set it, the
+#: conversion wrote a zero over it, the builder declined to send a zero, and
+#: the reach count called it carried because its name appeared in the builder.
+#: Every step read correctly on its own.
+STATED_CONSTANTS = {
+    "primary_exchange": "carried on the contract, not on the order",
+    "exercise_action": "set by the exercise call, not by an order",
+}
+
+
+def constants_in_the_conversion() -> list[str]:
+    """Fields the conversion fills with a literal rather than the caller's value."""
+    text = module("src/types/model").read_text()
+    at = text.index("fn attrs(")
+    end = text.index("\n    }", at)
+    return [
+        m.group(1)
+        for m in re.finditer(
+            r"^\s*(\w+): (\d+|false|true|String::new\(\)|Default::default\(\)),",
+            text[at:end], re.M,
+        )
+    ]
+
+
 def main() -> int:
     fields = order_fields()
     says_so = refused()
@@ -147,6 +174,15 @@ def main() -> int:
     lines.append("")
 
     OUT.write_text("\n".join(lines))
+    unstated = [f for f in constants_in_the_conversion() if f not in STATED_CONSTANTS]
+    if unstated:
+        print("the order conversion fills a field with a literal and nobody has")
+        print("said why. A caller's value replaced by a constant reaches the venue")
+        print("as though it were never set:")
+        for f in unstated:
+            print(f"  {f}")
+        return 1
+
     print(f"{len(fields)} order fields: carried={len(carried)} "
           f"refused={len(says_so)} dropped={len(dropped)}")
     return 0
