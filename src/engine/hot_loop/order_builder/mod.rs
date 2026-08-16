@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::bridge::SharedState;
-use crate::protocol::datetime::{chrono_free_timestamp, unix_to_ib_datetime, unix_to_ib_utc_dash};
+use crate::protocol::datetime::{chrono_free_timestamp, unix_to_ib_utc_dash};
 use crate::engine::context::Context;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
@@ -1179,9 +1179,6 @@ fn push_order_attrs(
     }
     if attrs.hidden {
         fields.push((6135, "1".to_string()));
-    }
-    if attrs.good_after > 0 {
-        fields.push((168, unix_to_ib_datetime(attrs.good_after)));
     }
     // GTD expiry: date-only -> tag 432; time-precise -> tag 126 (UTC).
     // Mutually exclusive — never both (gateway rejects both together).

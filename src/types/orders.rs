@@ -306,8 +306,6 @@ pub struct OrderAttrs {
     pub hidden: bool,
     /// Allow trading outside regular hours (IB tag 6433).
     pub outside_rth: bool,
-    /// Delay order activation until this time (FIX tag 168). 0 = not set. Unix seconds.
-    pub good_after: i64,
     /// Auto-expire order at this instant (FIX tag 126, time-precise GTD).
     /// 0 = not set. Unix seconds in UTC. Mutually exclusive with `good_till_date_ymd`.
     /// When set, TIF should be GTD (but IB infers it from the tag).
@@ -529,7 +527,6 @@ impl Default for OrderAttrs {
             min_qty: Default::default(),
             hidden: Default::default(),
             outside_rth: Default::default(),
-            good_after: Default::default(),
             good_till: Default::default(),
             good_till_date_ymd: Default::default(),
             oca_group: Default::default(),

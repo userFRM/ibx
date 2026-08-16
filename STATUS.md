@@ -19,7 +19,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Surface | Status | Verification |
 | --- | :---: | --- |
 | `EClient` / `EWrapper` (TWS API shape) | ✅ Supported | `tests/ib_paper_compat`, `tests/python/test_compat_tier1..3.py` |
-| `ib_async`, unmodified | ✅ Supported | Their `IB` on this engine via `ibx.ib_async.attach`; their events, async variants and types, with no gateway. All 67 transport calls their library makes are carried, measured against their own source and gated. Their own test suite runs against it: 2 of 3 pass, and `test_request_error_raised` cannot pass against any server, because 321 is in their `warningCodes` and a warning never ends the request it belongs to. `tests/python/test_ib_async_transport.py`, `tests/ib_async_upstream/conftest.py` |
+| `ib_async`, unmodified | ✅ Supported | Their `IB` on this engine via `ibx.ib_async.attach`; their events, async variants and types, with no gateway. All 67 transport calls their library makes are carried, measured against their own source and gated. Their own test suite runs against it, and all three behave as they do against a gateway. Two pass. The third asserts a `RequestError` carrying code 321, which their own wrapper cannot raise: it lists 321 among the codes it treats as warnings, and a warning never ends the request it belongs to. That test fails the same way against any server, this engine or a gateway, and their source carries an open note about the same code. `tests/python/test_ib_async_transport.py`, `tests/ib_async_upstream/conftest.py` |
 | `ibx.IB` (ib_async shape) | ✅ Supported | 90/90 methods present; `tests/python/test_ib_facade.py`, `scripts/sdk_sweep.py` |
 | `ibx::api::Client` (Rust) | ✅ Supported | 77/77 callable; 3 return an error naming a local-process facility this client does not have |
 | Gateway settings | ✅ Supported | 17 settings carried, 7 recorded as having no counterpart; `tests/python/test_gateway_settings.py`, `tests/python/test_settings_parity.py`; session opened under a stated build and time zone |
@@ -45,7 +45,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | 23 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat` |
-| Order fields | ✅ Supported | An order has 154 fields. 125 are sent. The other 29 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. A check on every commit fails if a field starts being dropped |
+| Order fields | ✅ Supported | An order has 154 fields. 124 are sent. The other 30 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. A check on every commit fails if a field starts being dropped |
 | Non-US markets | ✅ Supported | Previews accepted on DE, NL, GB, CH, AU, CA, US equities and FX; JP and HK rejected for lot size, which is the exchange rule and is surfaced to the caller |
 | Modify, cancel, global cancel | ✅ Supported | `scripts/sdk_lifecycle.py` (place → modify → cancel), `tests/ib_paper_compat` Phase 9 / 9b |
 | Brackets, OCA, combos | ✅ Supported | Per-leg pricing; leg order validated by server rejection of the inverted spread; `src/bin/capture_combo.rs` |

@@ -142,6 +142,11 @@ pub struct Order {
     /// Whether the order is kept off the book entirely.
     pub hidden: bool,
     /// Not active until this moment, `YYYYMMDD HH:MM:SS` with a zone.
+    /// When the order should become active. **Not carried by this protocol.**
+    /// The counterpart's tag table names no field for it, and no capture of
+    /// this session has ever carried one, so there is no format to write that
+    /// would be found rather than invented. Taken here and kept, so an order
+    /// built against another client reads back what it set.
     pub good_after_time: String,
     /// When a `GTD` order expires, in the same form.
     pub good_till_date: String,
@@ -867,9 +872,6 @@ impl Order {
             min_qty: self.min_qty.max(0) as u32,
             hidden: self.hidden,
             outside_rth: self.outside_rth,
-            // good_after_time (tag 168) wire format is not yet captured against
-            // the gateway; left unset until verified (see / ib-agent).
-            good_after: 0,
             good_till,
             good_till_date_ymd,
             oca_group: self.oca_group.parse().unwrap_or(0),
@@ -1920,9 +1922,9 @@ mod tests {
             ("min_qty", |o| o.min_qty = 50),
             ("hidden", |o| o.hidden = true),
             ("outside_rth", |o| o.outside_rth = true),
-            // Named by the predicate but deliberately not carried: `attrs()`
-            // hardcodes `good_after` to 0 pending a wire capture, so
-            // this entry pins the routing rather than an emitted tag.
+            // Named by the predicate and deliberately not carried: this
+            // protocol has no field for it, so the entry pins the routing
+            // rather than an emitted tag.
             ("good_after_time", |o| o.good_after_time = "20260311 09:30:00".into()),
             ("good_till_date", |o| o.good_till_date = "20260311 16:00:00".into()),
             ("oca_group", |o| o.oca_group = "G1".into()),
@@ -2003,7 +2005,7 @@ mod tests {
         // field to `OrderAttrs` stops compiling here until it is accounted for
         // both in the predicate and in the list above.
         let crate::types::OrderAttrs {
-            display_size: _, min_qty: _, hidden: _, outside_rth: _, good_after: _,
+            display_size: _, min_qty: _, hidden: _, outside_rth: _,
             good_till: _, good_till_date_ymd: _, oca_group: _, oca_group_str: _,
             oca_type: _, parent_id: _, discretionary_amt: _, sweep_to_fill: _,
             all_or_none: _, trigger_method: _, cash_qty: _, conditions: _,
