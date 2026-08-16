@@ -1,0 +1,2247 @@
+//! The tests for this module.
+//!
+//! One file per module, as `api/client` already does it. Each block below
+//! reaches the code it tests through `super::super`, which is the module this
+//! file belongs to.
+
+
+/// A stock is named by its symbol. Everything else names one contract by
+/// the venue's own identifier, which is what tells a member of a family
+/// from the family itself.
+#[test]
+fn only_a_stock_leaves_the_contract_unnamed() {
+    for (sec_type, key, wants_id) in [
+        // expiry|strike|right|multiplier|tradingClass|localSymbol
+        ("STK", "|0|||XCLASS|XLOCAL", false),
+        ("IND", "|0|||XCLASS|XLOCAL", true),
+        ("CFD", "|0|||XCLASS|XLOCAL", true),
+        ("CRYPTO", "|0|||XCLASS|XLOCAL", true),
+    ] {
+        let mut context = Context::new();
+        let instrument = context
+            .market
+            .try_register_contract(1, "X", sec_type, "SMART", key)
+            .expect("register a contract");
+        context.set_symbol(instrument, "X".to_string());
+        let mut fields: Vec<(u32, String)> = Vec::new();
+        push_contract_identity(&mut fields, &context, instrument);
+        let named = fields.iter().any(|(t, _)| *t == 48);
+        assert_eq!(named, wants_id, "{sec_type} names the contract: {fields:?}");
+        assert!(
+            !(wants_id && fields.iter().any(|(t, _)| *t == 6058)),
+            "{sec_type} states no trading class: {fields:?}",
+        );
+    }
+}
+
+/// A replace is a full statement of the order, so an attribute the submit
+/// made survives it. This one came back without its all-or-none instruction
+/// and was a different order to the one the caller had placed.
+#[test]
+fn a_replace_restates_the_attributes_the_order_was_placed_with() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    let attrs = crate::types::OrderAttrs { all_or_none: true, ..Default::default() };
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        order_id: 42,
+        instrument,
+        side: Side::Buy,
+        qty: 100,
+        kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
+        tif: b'0',
+        attrs,
+    });
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+    let mut buf = [0u8; 8192];
+    let n = peer.read(&mut buf).unwrap();
+    let placed = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(placed.contains("\u{1}18=G\u{1}"), "the order was placed all-or-none: {placed}");
+
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 42,
+        price: 151 * crate::types::PRICE_SCALE,
+        qty: 100,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+    assert_eq!(tag("6035=").as_deref(), Some("SPY"), "it names the contract: {msg}");
+    assert_eq!(tag("18=").as_deref(), Some("G"), "it is still all-or-none: {msg}");
+    assert_eq!(msg.matches("\u{1}38=").count(), 1, "the quantity is stated once: {msg}");
+}
+
+/// The five fields a cancel always names, and the one it never does. Two
+/// cancels of the same order must also name themselves differently, or the
+/// retry is a duplicate the server is free to drop.
+#[test]
+fn a_cancel_names_the_side_account_and_originator_but_no_transact_time() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.insert_order(crate::types::Order::new(
+        42,
+        instrument,
+        Side::Sell,
+        100,
+        150 * crate::types::PRICE_SCALE,
+        b'2',
+        b'0',
+        0,
+    ));
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    let mut names = Vec::new();
+    for _ in 0..2 {
+        context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 42 });
+        drain_and_send_orders(
+            &mut conn,
+            &mut context,
+            "DU1",
+            &mut hb,
+            false,
+            &shared,
+            false,
+            &None,
+        );
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+        let tag =
+            |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+        assert_eq!(tag("35=").as_deref(), Some("F"), "a cancel was sent: {msg}");
+        assert_eq!(tag("41=").as_deref(), Some("42.0"), "the order it cancels: {msg}");
+        assert_eq!(tag("54=").as_deref(), Some("2"), "the side it carries: {msg}");
+        assert_eq!(tag("1=").as_deref(), Some("DU1"), "the account: {msg}");
+        assert_eq!(tag("6088=").as_deref(), Some("Socket"), "the originator: {msg}");
+        assert_eq!(tag("38=").as_deref(), Some("100"), "what it cancels: {msg}");
+        assert_eq!(tag("6008=").as_deref(), Some("756733"), "the contract it cancels: {msg}");
+        assert_eq!(tag("60="), None, "no transact time is written in the order path: {msg}");
+        names.push(tag("11=").expect("a cancel names itself"));
+    }
+    assert_ne!(names[0], names[1], "a retried cancel needs its own name: {names:?}");
+}
+
+ ///,: the replace restated the tracked order's type,
+/// time-in-force and trigger, so a caller changing any of them had the
+/// change accepted, acknowledged and dropped. Asserted on the bytes,
+/// because the request-level tests passed throughout.
+#[test]
+fn a_modify_states_the_type_tif_and_trigger_it_carries() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    // Resting: a DAY limit with no trigger.
+    context.insert_order(crate::types::Order::new(
+        42,
+        instrument,
+        Side::Buy,
+        100,
+        150 * crate::types::PRICE_SCALE,
+        b'2',
+        b'0',
+        0,
+    ));
+
+    // Modified to a GTC stop at 149.
+    context.modify_ex(
+        42,
+        150 * crate::types::PRICE_SCALE,
+        100,
+        false,
+        b'3',
+        b'1',
+        149 * crate::types::PRICE_SCALE,
+    );
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+    assert_eq!(tag("40=").as_deref(), Some("3"), "the type the caller stated: {msg}");
+    assert_eq!(tag("59=").as_deref(), Some("1"), "the tif the caller stated: {msg}");
+    assert_eq!(
+        tag("99="),
+        Some(format_price(149 * crate::types::PRICE_SCALE).to_string()),
+        "the trigger the caller stated: {msg}"
+    );
+    // Where the resting order is working. Left off, the venue compares the
+    // replace against the order it holds and refuses it as a mismatch on
+    // this field, naming a tag number the caller has never heard of; the
+    // order then sits inactive and the caller's own cancel finds nothing.
+    assert_eq!(tag("100=").as_deref(), Some("BEST"), "the destination: {msg}");
+    assert_eq!(tag("6210=").as_deref(), Some("BEST"), "and its second statement: {msg}");
+}
+
+/// The trigger is a price and lands on the instrument's grid like any
+/// other. `Modify` carries no instrument, so the generic snapping cannot
+/// reach it and both fields are snapped against the tracked order instead.
+#[test]
+fn a_moved_trigger_is_snapped_to_the_tick_grid() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.market.set_min_tick(instrument, 0.05);
+    context.insert_order(crate::types::Order::new(
+        42,
+        instrument,
+        Side::Sell,
+        100,
+        150 * crate::types::PRICE_SCALE,
+        b'3',
+        b'0',
+        149 * crate::types::PRICE_SCALE,
+    ));
+
+    // 149.03 is off a five-cent grid.
+    let off_grid = 149 * crate::types::PRICE_SCALE + 3 * crate::types::PRICE_SCALE / 100;
+    context.modify_ex(42, 150 * crate::types::PRICE_SCALE, 100, false, b'3', b'0', off_grid);
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(
+        tag("99="),
+        Some(
+            format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100)
+                .to_string()
+        ),
+        "the trigger must be on the grid: {msg}",
+    );
+}
+
+/// A cancel names a version of an order the recovery may be about to
+/// correct. Sent against a reconnect that has not finished accounting for
+/// what the broker holds, it states a version that may not exist there and
+/// is refused, leaving the order live.
+#[test]
+fn a_cancel_waits_for_the_recovery_to_say_what_the_broker_holds() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.insert_order(crate::types::Order::new(
+        42,
+        instrument,
+        Side::Buy,
+        100,
+        150 * crate::types::PRICE_SCALE,
+        b'2',
+        b'1',
+        0,
+    ));
+    // This is the order in doubt: a write for it failed, so what the broker
+    // holds for it is exactly what the recovery is about to say.
+    context.set_order_status_forced(42, crate::types::OrderStatus::Uncertain);
+    context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 42 });
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true, &None);
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(50))).unwrap();
+    let mut buf = [0u8; 512];
+    assert!(
+        std::io::Read::read(&mut peer, &mut buf).unwrap_or(0) == 0,
+        "nothing goes out while the recovery is still settling",
+    );
+
+    // An order placed since the reconnect is in no doubt, so its own cancel
+    // is not made to wait on a recovery that has nothing to do with it.
+    context.insert_order(crate::types::Order::new(
+        43,
+        instrument,
+        Side::Buy,
+        1,
+        150 * crate::types::PRICE_SCALE,
+        b'2',
+        b'1',
+        0,
+    ));
+    context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 43 });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, true, &None);
+    let n = std::io::Read::read(&mut peer, &mut buf).unwrap_or(0);
+    assert!(
+        String::from_utf8_lossy(&buf[..n]).contains("35=F"),
+        "the cancel for the order that is not in doubt goes now",
+    );
+
+    // Once it has settled, the held one goes too.
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+    let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("35=F"), "and then it is sent",);
+}
+
+/// A bracket is three messages and one outcome. All three are written
+/// whatever any one of them returns, so a failure leaves every leg in a
+/// state the wire never confirmed — and a child still reported as working
+/// is an entry whose exits may not exist.
+#[test]
+fn a_bracket_whose_write_failed_leaves_no_leg_reported_as_working() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.pending_orders.push(crate::types::OrderRequest::SubmitBracket {
+        parent_id: 10,
+        tp_id: 11,
+        sl_id: 12,
+        instrument,
+        side: Side::Buy,
+        qty: 100,
+        entry_price: 150 * crate::types::PRICE_SCALE,
+        take_profit: 155 * crate::types::PRICE_SCALE,
+        stop_loss: 145 * crate::types::PRICE_SCALE,
+    });
+
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (tx, rx) = std::sync::mpsc::sync_channel(4096);
+    drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &Some(tx),
+    );
+
+    for id in [10u64, 11, 12] {
+        assert_eq!(
+            context.order(id).map(|o| o.status),
+            Some(OrderStatus::Uncertain),
+            "leg {id} was written and its outcome is not known",
+        );
+    }
+
+    let announced: Vec<u64> = rx
+        .try_iter()
+        .filter_map(|e| match e {
+            crate::bridge::Event::OrderUpdate(u)
+                if u.status == OrderStatus::Uncertain => Some(u.order_id),
+            _ => None,
+        })
+        .collect();
+    for id in [10u64, 11, 12] {
+        assert!(announced.contains(&id), "leg {id} was not announced");
+    }
+}
+
+/// A write that fails has not established that the broker has nothing —
+/// the transport says as much of TLS. Calling it a rejection invited a
+/// resubmission of an order that may be working.
+#[test]
+fn an_order_whose_write_failed_is_unknown_rather_than_rejected() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    // Closing this side's write half makes the send fail on the call
+    // rather than after a buffer fills.
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.insert_order(crate::types::Order::new(
+        42,
+        instrument,
+        Side::Buy,
+        100,
+        150 * crate::types::PRICE_SCALE,
+        b'2',
+        b'1',
+        0,
+    ));
+    context.last_clord.insert(42, "42.7".to_string());
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 42,
+        price: 151 * crate::types::PRICE_SCALE,
+        qty: 100,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (tx, rx) = std::sync::mpsc::sync_channel(4096);
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &Some(tx),
+    );
+
+    // Both deliveries, because the event channel is documented as a second
+    // delivery of everything rather than a lesser one — and an order whose
+    // state is no longer known is the last thing to deliver only once.
+    let events: Vec<_> = rx.try_iter().collect();
+    assert!(
+        events.iter().any(|e| matches!(e, crate::bridge::Event::OrderUpdate(u)
+            if u.order_id == 42 && u.status == crate::types::OrderStatus::Uncertain)),
+        "a caller reading events is told too: {events:?}",
+    );
+
+    let updates = shared.orders.drain_order_updates();
+    assert!(
+        updates
+            .iter()
+            .any(|u| u.order_id == 42 && u.status == crate::types::OrderStatus::Uncertain),
+        "the caller is told, and told it is unknown: {updates:?}",
+    );
+    assert!(
+        !updates.iter().any(|u| u.status == crate::types::OrderStatus::Rejected),
+        "not that the broker refused it: {updates:?}",
+    );
+    assert!(
+        context.order(42).is_some(),
+        "and it stays tracked, for the recovery to account for",
+        );
+    let kept = context.order(42).unwrap();
+    assert_eq!(
+        kept.tif, b'1',
+        "holding what the broker was last known to hold, not what the \
+         replace tried to make it: the attempt was never accepted",
+    );
+    assert_eq!(kept.price, 150 * crate::types::PRICE_SCALE, "nor its price");
+    assert!(context.order(43).is_none(), "and the attempt itself is not tracked");
+}
+
+/// A replace names the order the broker knows, and a second replace names
+/// what the first one left it under. Stating anything else is an
+/// OrigClOrdID the broker has never seen, which it refuses.
+#[test]
+fn a_replacement_can_itself_be_replaced() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.insert_order(crate::types::Order::new(
+        7,
+        instrument,
+        Side::Buy,
+        1,
+        crate::types::PRICE_SCALE,
+        b'2',
+        b'0',
+        0,
+    ));
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let mut buf = [0u8; 4096];
+
+    // The same order stepped up twice, as an ibapi caller does it: one id
+    // throughout, and the version is what advances.
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 7,
+        price: 2 * crate::types::PRICE_SCALE,
+        qty: 1,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let first = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(first.contains("|41=7.0|"), "the first replace names the original: {first}");
+
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 7,
+        price: 3 * crate::types::PRICE_SCALE,
+        qty: 1,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let second = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(
+        second.contains("|41=7.1|"),
+        "the second names what the broker last acknowledged, not an id it never saw: {second}",
+    );
+}
+
+/// What a pegged order actually puts on the wire.
+#[test]
+fn a_pegged_order_states_its_offset_and_no_limit_price() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        order_id: 1,
+        instrument,
+        side: Side::Buy,
+        qty: 1,
+        kind: crate::types::OrderKind::PegMkt { offset: 0, price_cap: 0 },
+        tif: b'0',
+        attrs: Default::default(),
+    });
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    println!("PEGMKT WIRE: {msg}");
+    assert!(msg.contains("|211=0|"), "the offset is stated: {msg}");
+}
+
+/// A replace may now change the order type, and a stop that becomes a
+/// limit has no trigger to state. Carrying the resting one anyway put a
+/// tag 99 on a limit order.
+#[test]
+fn a_replace_that_drops_the_trigger_does_not_carry_it() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    // A resting stop with a trigger at 149.
+    context.insert_order(crate::types::Order::new(
+        42,
+        instrument,
+        Side::Sell,
+        100,
+        150 * crate::types::PRICE_SCALE,
+        b'3',
+        b'1',
+        149 * crate::types::PRICE_SCALE,
+    ));
+
+    // Replaced as a plain limit at 151.
+    context.modify_ex(42, 151 * crate::types::PRICE_SCALE, 100, false, b'2', 0, 0);
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("40=").as_deref(), Some("2"), "the stated type: {msg}");
+    assert_eq!(
+        tag("44=").as_deref(),
+        Some(&*format_price(151 * crate::types::PRICE_SCALE)),
+        "the limit price: {msg}"
+    );
+    assert_eq!(tag("99="), None, "and no trigger from the order it replaced: {msg}");
+}
+
+/// A modify that states none of them leaves what the resting order holds in
+/// force, which is every caller that only moves a price or a quantity.
+#[test]
+fn a_modify_that_states_nothing_keeps_the_resting_values() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.insert_order(crate::types::Order::new(
+        42,
+        instrument,
+        Side::Sell,
+        100,
+        150 * crate::types::PRICE_SCALE,
+        b'3',
+        b'1',
+        149 * crate::types::PRICE_SCALE,
+    ));
+
+    context.modify(42, 151 * crate::types::PRICE_SCALE, 100, false);
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(
+        &mut conn,
+        &mut context,
+        "DU1",
+        &mut hb,
+        false,
+        &shared,
+        false,
+        &None,
+    );
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("40=").as_deref(), Some("3"), "the resting type: {msg}");
+    assert_eq!(tag("59=").as_deref(), Some("1"), "the resting tif: {msg}");
+    // A stop has one price and it is the trigger, so the single price the
+    // caller passed can only have meant that. Leaving 149 in place would
+    // put 151 on no tag at all and move nothing.
+    assert_eq!(
+        tag("99="),
+        Some(format_price(151 * crate::types::PRICE_SCALE).to_string()),
+        "the moved trigger: {msg}"
+    );
+    assert!(!msg.contains("\u{1}44="), "a stop states no limit price: {msg}");
+}
+use super::*;
+use crate::types::Order;
+
+fn order(oid: u64, filled: u32, status: OrderStatus) -> Order {
+    Order {
+        order_id: oid,
+        instrument: 0,
+        side: Side::Buy,
+        price: 100,
+        qty: 10,
+        filled,
+        status,
+        ord_type: b'2',
+        tif: b'0',
+        stop_price: 0,
+    }
+}
+
+// An outbound cancel synthesizes the PendingCancel phase the
+// server never sends for a normal cancel.
+#[test]
+fn synthesize_pending_cancel_updates_and_notifies() {
+    let mut context = Context::new();
+    let shared = Arc::new(SharedState::new());
+    context.insert_order(order(7, 3, OrderStatus::PartiallyFilled));
+
+    synthesize_pending_cancel(&mut context, &shared, 7, &None);
+
+    assert_eq!(context.order(7).unwrap().status, OrderStatus::PendingCancel);
+    let updates = shared.orders.drain_order_updates();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].status, OrderStatus::PendingCancel);
+    assert_eq!(updates[0].filled_qty, 3.0);
+    assert_eq!(updates[0].remaining_qty, 7.0);
+}
+
+#[test]
+fn synthesize_pending_cancel_skips_terminal_and_unknown_orders() {
+    let mut context = Context::new();
+    let shared = Arc::new(SharedState::new());
+    // Late cancel racing a fill: the order is done, no phase to report.
+    context.insert_order(order(8, 10, OrderStatus::Filled));
+
+    synthesize_pending_cancel(&mut context, &shared, 8, &None);
+    synthesize_pending_cancel(&mut context, &shared, 999, &None);
+
+    assert_eq!(context.order(8).unwrap().status, OrderStatus::Filled);
+    assert!(shared.orders.drain_order_updates().is_empty());
+}
+
+/// Adaptive, algo and what-if orders reach their own encoders and still
+/// carry the attribute block: outside-RTH, the parent link, the OCA group
+/// and the caller's tif go on the wire rather than being accepted by the
+/// API and dropped. Asserted on the bytes, which is where an encoder that
+/// omits the block differs from one that does not.
+#[test]
+fn adaptive_wire_carries_the_attributes_and_keeps_its_algo_tags() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::Adaptive {
+            price: 100 * crate::types::PRICE_SCALE,
+            priority: crate::types::AdaptivePriority::Urgent,
+        },
+        b'1',
+        bracket_child_attrs(),
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {msg}");
+    assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
+    assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {msg}");
+    assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
+
+    // And everything the standalone encoder emitted is unchanged.
+    assert_eq!(tag("40=").as_deref(), Some("2"));
+    assert_eq!(tag("18=").as_deref(), Some("e"), "adaptive wrapper missing: {msg}");
+    assert_eq!(tag("847=").as_deref(), Some("Adaptive"));
+    assert_eq!(tag("5957=").as_deref(), Some("1"));
+    assert_eq!(tag("5958=").as_deref(), Some("adaptivePriority"));
+    assert_eq!(tag("5960=").as_deref(), Some("Urgent"));
+    assert!(
+        msg.find("15=").unwrap() < msg.find("847=").unwrap(),
+        "the strategy tags keep their position after the contract block: {msg}"
+    );
+}
+
+#[test]
+fn algo_wire_carries_the_attributes_and_keeps_its_algo_tags() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::Algo {
+            price: 100 * crate::types::PRICE_SCALE,
+            algo: AlgoParams::Vwap {
+                max_pct_vol: 0.25,
+                no_take_liq: true,
+                allow_past_end_time: false,
+                start_time: String::new(),
+                end_time: String::new(),
+            },
+        },
+        b'1',
+        bracket_child_attrs(),
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {msg}");
+    assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
+    assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {msg}");
+    assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
+
+    assert_eq!(tag("847=").as_deref(), Some("Vwap"));
+    assert_eq!(tag("849=").as_deref(), Some("0.25"), "maxPctVol missing: {msg}");
+    assert_eq!(tag("5957=").as_deref(), Some("4"), "param count: {msg}");
+    assert_eq!(tag("5958=").as_deref(), Some("noTakeLiq"));
+    assert_eq!(tag("5960=").as_deref(), Some("1"));
+}
+
+#[test]
+fn what_if_wire_carries_the_attributes_and_keeps_its_preview_flag() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::WhatIf { price: 100 * crate::types::PRICE_SCALE, ord_type: b'2' },
+        b'1',
+        bracket_child_attrs(),
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("6433=").as_deref(), Some("1"), "outside RTH missing: {msg}");
+    assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
+    assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
+    assert_eq!(tag("6091=").as_deref(), Some("1"), "what-if flag missing: {msg}");
+    assert!(
+        msg.find("15=").unwrap() < msg.find("6091=").unwrap(),
+        "the preview flag keeps its position after the contract block: {msg}"
+    );
+    assert_eq!(tag("40=").as_deref(), Some("2"), "a limit preview: {msg}");
+}
+
+/// A caller written against the reference client names the hedging
+/// contract on the contract and again on the order. Sent twice, the
+/// gateway reads the second as a correction of the first.
+#[test]
+fn the_hedging_contract_is_named_once() {
+    let attrs = crate::types::OrderAttrs {
+        delta_neutral_contract: Some(Box::new(crate::types::DeltaNeutralContractSpec {
+            con_id: 265598,
+            delta: 0.5,
+            price: 100.0,
+        })),
+        delta_neutral: Some(Box::new(crate::types::DeltaNeutralAttrs {
+            order_type: "MKT".into(),
+            aux_price: 0,
+            con_id: 265598,
+        })),
+        ..crate::types::OrderAttrs::default()
+    };
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+        b'1',
+        attrs,
+    );
+    let stated = msg.split('\u{1}').filter(|f| f.starts_with("6150=")).count();
+    assert_eq!(stated, 1, "the hedging contract is named once: {msg}");
+    assert!(msg.contains("6150=265598"), "{msg}");
+}
+
+#[test]
+fn a_market_preview_states_market_and_no_price() {
+    // Previewing every order as a limit is refused outright by a security
+    // that only trades at market.
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::WhatIf { price: 0, ord_type: b'1' },
+        b'1',
+        bracket_child_attrs(),
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("40=").as_deref(), Some("1"), "a market preview: {msg}");
+    assert_eq!(tag("44=").as_deref(), None, "a market order states no price: {msg}");
+    assert_eq!(tag("6091=").as_deref(), Some("1"), "still a preview: {msg}");
+}
+
+fn bracket_child_attrs() -> crate::types::OrderAttrs {
+    crate::types::OrderAttrs {
+        parent_id: 42,
+        oca_group_str: "bracket_1".to_string(),
+        oca_type: 1,
+        outside_rth: true,
+        ..Default::default()
+    }
+}
+
+/// Encode one kind and return the frame as text.
+fn send_kind_for_test(
+    kind: crate::types::OrderKind,
+    tif: u8,
+    attrs: crate::types::OrderAttrs,
+) -> String {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    send_order_ex(&mut conn, &mut context, "DU123456", 7, 0, Side::Buy, 1, kind, tif, &attrs)
+        .unwrap();
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    String::from_utf8_lossy(&buf[..n]).to_string()
+}
+
+/// A short sale states that side, distinctly from a plain sale.
+///
+/// The venue refuses it — "sell short variant is not supported" — so no
+/// live phase can show the side is written correctly, and a caller shorting
+/// through this client depends on it being right the day a venue takes it.
+#[test]
+fn a_short_sale_states_its_own_side() {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    send_order_ex(
+        &mut conn, &mut context, "DU123456", 7, 0, Side::ShortSell, 1,
+        crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+        b'1', &crate::types::OrderAttrs::default(),
+    ).unwrap();
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("54=").as_deref(), Some("5"), "a short sale, not a sale: {msg}");
+}
+
+/// What a volatility order does as the underlying moves.
+///
+/// A caller could state that the venue should keep re-pricing the order,
+/// which price to reference, and the band of underlying prices to stay
+/// inside — and the API accepted all four and sent none of them. An order
+/// asking to be managed arrived asking for nothing of the sort.
+#[test]
+fn a_volatility_order_carries_what_it_asked_to_be_managed_by() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+        b'0',
+        crate::types::OrderAttrs {
+            volatility: 0.25,
+            volatility_type: 2,
+            continuous_update: true,
+            reference_price_type: 2,
+            stock_range_lower: 100.0,
+            stock_range_upper: 200.0,
+            ..Default::default()
+        },
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("6280=").as_deref(), Some("2"), "the volatility kind: {msg}");
+    assert_eq!(tag("6275=").as_deref(), Some("1"), "kept re-priced: {msg}");
+    assert_eq!(tag("6279=").as_deref(), Some("2"), "the price it references: {msg}");
+    assert!(
+        tag("6152=").is_some_and(|v| v.starts_with("100.")),
+        "the band it stays above: {msg}",
+    );
+    assert!(
+        tag("6153=").is_some_and(|v| v.starts_with("200.")),
+        "the band it stays below: {msg}",
+    );
+}
+
+/// An order that asked the venue to manage its price, to run for a set
+/// time, and what to compete against.
+///
+/// All four are on the order this API takes and on the Python one, where a
+/// caller coming from the reference client puts them, and none of them
+/// reached the wire.
+#[test]
+fn an_order_carries_what_it_competes_against_and_how_long_it_runs() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+        b'0',
+        crate::types::OrderAttrs {
+            use_price_mgmt_algo: 1,
+            duration: 60,
+            min_compete_size: 100,
+            compete_against_best_offset: 0.02,
+            ..Default::default()
+        },
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("8339=").as_deref(), Some("1"), "price managed by the venue: {msg}");
+    assert_eq!(tag("8402=").as_deref(), Some("60"), "how long it runs: {msg}");
+    assert_eq!(tag("8411=").as_deref(), Some("100"), "the smallest size worth competing for: {msg}");
+    assert!(
+        tag("8412=").is_some_and(|v| v.starts_with("0.02")),
+        "how far past the best price: {msg}",
+    );
+}
+
+/// A default order states none of them, so an order that asked for nothing
+/// does not arrive asking for something.
+#[test]
+fn a_default_order_competes_for_nothing() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    for t in ["8339=", "8402=", "8411=", "8412="] {
+        assert!(!msg.contains(t), "{t} stated on an order that asked for nothing: {msg}");
+    }
+}
+
+/// A midpoint peg whose offset is stated as two parts is the other form of
+/// the order, and says so by its type rather than by an instruction.
+#[test]
+fn a_two_part_midpoint_offset_is_the_other_peg() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::PegMid { offset: crate::types::PRICE_SCALE / 100, price_cap: 0 },
+        b'0',
+        crate::types::OrderAttrs {
+            mid_offset_at_whole: 0.01,
+            mid_offset_at_half: 0.005,
+            ..Default::default()
+        },
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("40=").as_deref(), Some("PMID2"), "the two-part peg: {msg}");
+    assert!(tag("18=").is_none(), "the type carries it, not an instruction: {msg}");
+    assert!(tag("8403=").is_some_and(|v| v.starts_with("0.01")), "the whole part: {msg}");
+    assert!(tag("8404=").is_some_and(|v| v.starts_with("0.005")), "the half part: {msg}");
+}
+
+/// One part alone is not the two-part form, and the ordinary peg still
+/// states its instruction.
+#[test]
+fn one_part_alone_is_still_the_ordinary_midpoint_peg() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::PegMid { offset: crate::types::PRICE_SCALE / 100, price_cap: 0 },
+        b'0',
+        crate::types::OrderAttrs { mid_offset_at_whole: 0.01, ..Default::default() },
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("40=").as_deref(), Some("P"), "still the ordinary peg: {msg}");
+    assert_eq!(tag("18=").as_deref(), Some("M"), "which states its instruction: {msg}");
+}
+
+/// A fill-or-kill order states that time in force on the wire.
+///
+/// This venue refuses the order for the security types the live suite can
+/// reach — "the time-in-force FOK is invalid for this combination of
+/// exchange and security type", on the default destination and on ISLAND
+/// alike — so no live phase can show the encoding is right. What the venue
+/// accepts is its own; what this client writes is not, and it is checked
+/// here on the bytes.
+#[test]
+fn a_fill_or_kill_order_states_its_time_in_force() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+        b'4',
+        crate::types::OrderAttrs::default(),
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("59=").as_deref(), Some("4"), "fill or kill on the wire: {msg}");
+}
+
+/// An iceberg states how much of it is shown.
+///
+/// Refused live as well — "iceberg orders not supported for this
+/// combination of exchange and security type" — and refused for every
+/// displayed quantity tried, so the field never reaches a venue that would
+/// act on it. It is still this client's job to write it.
+#[test]
+fn an_iceberg_order_states_the_quantity_it_shows() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+        b'1',
+        crate::types::OrderAttrs { display_size: 100, ..Default::default() },
+    );
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("111=").as_deref(), Some("100"), "the displayed quantity: {msg}");
+}
+
+/// The tags a bracket child cannot ship without. Asserted on the bytes
+/// `send_order_ex` puts on the wire rather than on the request enum, which
+/// carries them whether or not the encoder emits them.
+#[test]
+fn adjustable_stop_wire_carries_parent_oca_and_tif() {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    let attrs = crate::types::OrderAttrs {
+        parent_id: 42,
+        oca_group_str: "bracket_1".to_string(),
+        oca_type: 1,
+        ..Default::default()
+    };
+    send_order_ex(
+        &mut conn,
+        &mut context,
+        "DU123456",
+        7,
+        0,
+        Side::Sell,
+        1,
+        crate::types::OrderKind::AdjustableStop {
+            stop_price: 11 * crate::types::PRICE_SCALE,
+            trigger_price: 12 * crate::types::PRICE_SCALE,
+            adjusted_order_type: crate::types::AdjustedOrderType::Stop,
+            adjusted_stop_price: 11 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2,
+            adjusted_stop_limit_price: 0,
+            adjusted_trailing_amount: 0,
+            adjustable_trailing_unit: 0,
+        },
+        b'1', // GTC
+        &attrs,
+    )
+    .unwrap();
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("6107=").as_deref(), Some("42.0"), "parent link missing: {msg}");
+    assert_eq!(tag("583=").as_deref(), Some("bracket_1"), "OCA group missing: {msg}");
+    assert_eq!(tag("59=").as_deref(), Some("1"), "tif must be GTC, not DAY: {msg}");
+    // The adjustable-specific tags keep both the values and the position the
+    // standalone arm gave them — after 204 and the attribute block — which
+    // the sibling test pins by asserting 204 precedes 6257.
+    assert_eq!(tag("40=").as_deref(), Some("3"));
+    assert_eq!(tag("99="), Some(format_price(11 * crate::types::PRICE_SCALE).to_string()));
+    assert_eq!(tag("6257=").as_deref(), Some("1"));
+    assert_eq!(tag("6261=").as_deref(), Some(crate::types::AdjustedOrderType::Stop.fix_code()));
+    assert_eq!(tag("6258="), Some(format_price(12 * crate::types::PRICE_SCALE).to_string()));
+    assert_eq!(
+        tag("6259="),
+        Some(
+            format_price(11 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2)
+                .to_string()
+        )
+    );
+}
+
+/// A contract is priced in what it is priced in. The field was a constant,
+/// which names the right currency for a US instrument and the wrong one for
+/// every other, and an order naming the wrong currency names a different
+/// contract. A caller that says nothing still gets the constant.
+#[test]
+fn an_order_states_the_currency_the_contract_is_priced_in() {
+    use std::io::Read;
+    let sent = |key: Option<&str>| {
+        let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        let id = context.market.try_register_contract(0, "BMW", "STK", "IBIS", "").unwrap();
+        context.set_symbol(id, "BMW".to_string());
+        if let Some(k) = key {
+            context.set_order_identity(id, k);
+        }
+        send_order_ex(
+            &mut conn,
+            &mut context,
+            "DU123456",
+            12,
+            id,
+            Side::Buy,
+            1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0',
+            &crate::types::OrderAttrs::default(),
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+        msg.split('\u{1}').find_map(|f| f.strip_prefix("15=").map(str::to_string)).unwrap()
+    };
+
+    assert_eq!(sent(Some("|0|||||EUR")), "EUR", "what the caller said");
+    assert_eq!(sent(None), "USD", "and the old constant when nobody said");
+}
+
+/// The trail percentage and the unit it is expressed in are different
+/// fields, and a one percent trail is a hundred basis points while the code
+/// for percent is also a hundred — so the two agree for exactly one
+/// percentage and disagree for every other. Checked at two and a half.
+#[test]
+fn a_percent_trail_states_the_percent_and_the_unit_separately() {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    send_order_ex(
+        &mut conn,
+        &mut context,
+        "DU123456",
+        9,
+        0,
+        Side::Sell,
+        1,
+        crate::types::OrderKind::TrailPct { trail_pct: 250, trail_stop_price: 0 },
+        b'0',
+        &crate::types::OrderAttrs::default(),
+    )
+    .unwrap();
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("99=").as_deref(), Some("2.50"), "the percent, in decimal");
+    assert_eq!(tag("211=").as_deref(), Some("2.50"), "and again where the peg carries it");
+    assert_eq!(tag("6268=").as_deref(), Some("100"), "the unit is percent, not the percentage");
+}
+
+/// The conditional adjustable tags: 6262 only with a stop-limit conversion,
+/// 6260/6269 only with a trailing one. Same rules as the standalone arm.
+#[test]
+fn adjustable_stop_wire_carries_trail_and_limit_tags() {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    send_order_ex(
+        &mut conn,
+        &mut context,
+        "DU123456",
+        8,
+        0,
+        Side::Sell,
+        1,
+        crate::types::OrderKind::AdjustableStop {
+            stop_price: 11 * crate::types::PRICE_SCALE,
+            trigger_price: 12 * crate::types::PRICE_SCALE,
+            adjusted_order_type: crate::types::AdjustedOrderType::TrailLimit,
+            adjusted_stop_price: 11 * crate::types::PRICE_SCALE,
+            adjusted_stop_limit_price: 10 * crate::types::PRICE_SCALE,
+            adjusted_trailing_amount: crate::types::PRICE_SCALE / 2,
+            adjustable_trailing_unit: 0,
+        },
+        b'0',
+        &crate::types::OrderAttrs::default(),
+    )
+    .unwrap();
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("6262="), Some(format_price(10 * crate::types::PRICE_SCALE).to_string()));
+    assert_eq!(tag("6260="), Some(format_price(crate::types::PRICE_SCALE / 2).to_string()));
+    assert_eq!(tag("6269=").as_deref(), Some("0"));
+    // No parent, no OCA set: those tags must be absent, not empty.
+    assert_eq!(tag("6107="), None);
+    assert_eq!(tag("583="), None);
+
+    // Order, not just presence: the adjustable tags sit after 204 and the
+    // base type tags before 59, exactly where the dedicated encoder this
+    // path replaced put them. Tag order is not supposed to carry meaning,
+    // but this path had a shipped layout and there is no reason to change
+    // it as a side effect.
+    let pos = |t: &str| msg.split('\u{1}').position(|f| f.starts_with(t));
+    assert!(pos("40=") < pos("59="), "base type tags precede tif: {msg}");
+    assert!(pos("99=") < pos("59="), "stop price precedes tif: {msg}");
+    assert!(pos("204=") < pos("6257="), "adjustable tags follow 204: {msg}");
+    assert!(pos("6257=") < pos("6261="), "adjustable tags keep their order: {msg}");
+    assert!(pos("6259=") < pos("6262="), "adjustable tags keep their order: {msg}");
+    assert!(pos("6262=") < pos("6260="), "adjustable tags keep their order: {msg}");
+}
+mod modify_wire_tests {
+    use super::super::*;
+    use crate::protocol::connection::Connection;
+    use std::io::Read;
+
+    /// Drive the order queue and read what actually reaches the socket.
+    fn drain(context: &mut Context) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut conn = Some(Connection::new_raw(client).unwrap());
+
+        let shared = std::sync::Arc::new(SharedState::new());
+        let mut hb = HeartbeatState::new();
+        drain_and_send_orders(
+            &mut conn, context, "DU111111", &mut hb, false, &shared, false, &None,
+        );
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|")
+    }
+
+    /// A plain limit modified with the flag in each polarity.
+    fn replace_bytes(outside_rth: bool) -> String {
+        let mut context = Context::new();
+        context.insert_order(crate::types::Order::new(
+            7,
+            0,
+            Side::Buy,
+            1,
+            100 * crate::types::PRICE_SCALE,
+            b'2',
+            b'0',
+            0,
+        ));
+        context.modify(7, 200 * crate::types::PRICE_SCALE, 50, outside_rth);
+        drain(&mut context)
+    }
+
+    /// The replace states 6433 as the caller set it, so an RTH-only order is
+    /// not opted into the extended session by its first modify. Pins the flag's
+    /// position — straight after 6122, ahead of where the order is working — in
+    /// both polarities.
+    #[test]
+    fn modify_emits_outside_rth_only_when_the_caller_set_it() {
+        let on = replace_bytes(true);
+        assert!(
+            on.contains("|6122=c|6433=1|100="),
+            "6433 must keep its captured position after 6122: {on}"
+        );
+
+        let off = replace_bytes(false);
+        assert!(!off.contains("|6433="), "an RTH-only order must not assert 6433: {off}");
+        assert!(off.contains("|6122=c|100="), "the rest of the message is unchanged: {off}");
+    }
+
+    /// A stop has no limit leg, so the price a caller supplies to a modify can
+    /// only mean the trigger. Writing it to tag 44 and restating the original
+    /// trigger in 99 leaves the stop where it was, and the venue rejects the
+    /// replace outright, so the order the caller meant to move ends Inactive.
+    #[test]
+    fn modifying_a_stop_moves_its_trigger() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.insert_order(crate::types::Order::new(
+            7,
+            instrument,
+            Side::Sell,
+            1,
+            600 * crate::types::PRICE_SCALE,
+            b'3',
+            b'0',
+            600 * crate::types::PRICE_SCALE,
+        ));
+
+        context.modify(7, 610 * crate::types::PRICE_SCALE, 1, false);
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|99=610|"), "the trigger moves to the new price: {sent}");
+        assert!(!sent.contains("|99=600|"), "and does not restate the old one: {sent}");
+        assert!(!sent.contains("|44="), "a stop has no limit leg to state: {sent}");
+    }
+
+    /// Every trigger-only type, not just the plain stop. Market-if-touched and
+    /// stop-with-protection have no limit leg either.
+    #[test]
+    fn every_trigger_only_type_moves_its_trigger() {
+        for (ord_type, name) in
+            [(b'3', "STP"), (b'J', "MIT"), (crate::types::ORD_STP_PRT, "STP PRT")]
+        {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.insert_order(crate::types::Order::new(
+                7,
+                instrument,
+                Side::Sell,
+                1,
+                600 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
+                600 * crate::types::PRICE_SCALE,
+            ));
+
+            context.modify(7, 610 * crate::types::PRICE_SCALE, 1, false);
+            let sent = drain(&mut context);
+
+            assert!(sent.contains("|99=610|"), "{name}: trigger moves: {sent}");
+            assert!(!sent.contains("|44="), "{name}: no limit leg to state: {sent}");
+        }
+
+        // The bucket is pinned from above as well: a type that is not
+        // trigger-only must keep its limit leg.
+        for ord_type in *b"U21" {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.insert_order(crate::types::Order::new(
+                7,
+                instrument,
+                Side::Sell,
+                1,
+                100 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
+                0,
+            ));
+            context.modify(7, 610 * crate::types::PRICE_SCALE, 1, false);
+            let sent = drain(&mut context);
+            assert!(
+                sent.contains("|44=610|"),
+                "{ord_type} is not trigger-only and keeps tag 44: {sent}",
+            );
+        }
+    }
+
+    /// The other side of the same rule: a replace that states both the type
+    /// and the trigger is stating a real one. Deciding from the resting order
+    /// alone sent a stop-limit with no tag 99, which is not a stop-limit.
+    #[test]
+    fn a_replace_into_a_stop_limit_states_the_trigger_it_was_given() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        // A plain limit, so there is no resting trigger to fall back on.
+        context.insert_order(crate::types::Order::new(
+            7,
+            instrument,
+            Side::Sell,
+            1,
+            100 * crate::types::PRICE_SCALE,
+            b'2',
+            b'0',
+            0,
+        ));
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7,
+            ord_type: b'4',
+            tif: 0,
+            price: 101 * crate::types::PRICE_SCALE,
+            qty: 1,
+            outside_rth: false,
+            stop_price: 99 * crate::types::PRICE_SCALE,
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|40=4|"), "it is a stop-limit now: {sent}");
+        assert!(sent.contains("|44=101|"), "with its limit leg: {sent}");
+        assert!(sent.contains("|99=99|"), "and the trigger it was given: {sent}");
+    }
+
+    /// A type that carries no trigger must not acquire one. The public client
+    /// fills the request's trigger from `aux_price`, which is meaningless on a
+    /// limit and is the offset on a pegged order — neither belongs in tag 99.
+    #[test]
+    fn a_type_without_a_trigger_never_gains_one() {
+        for (ord_type, name) in [
+            (b'2', "LMT"),
+            (b'1', "MKT"),
+            (b'P', "TRAIL"),
+            (b'K', "MTL"),
+            (crate::types::ORD_PEG_MID, "PEG MID"),
+        ] {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            // Tracked with no trigger. A pegged or relative order tracks its
+            // offset in this field, so this pins the request-supplied path
+            // rather than claiming those types never emit a 99.
+            context.insert_order(crate::types::Order::new(
+                7,
+                instrument,
+                Side::Sell,
+                1,
+                100 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
+                0,
+            ));
+
+            // A trigger arrives on the request anyway.
+            context.pending_orders.push(crate::types::OrderRequest::Modify {
+                order_id: 7,
+                ord_type: 0,
+                tif: 0,
+                price: 101 * crate::types::PRICE_SCALE,
+                qty: 1,
+                outside_rth: false,
+                stop_price: 610 * crate::types::PRICE_SCALE,
+            });
+            let sent = drain(&mut context);
+
+            assert!(!sent.contains("|99="), "{name} must not gain a trigger: {sent}");
+            assert!(sent.contains("|44=101|"), "{name} keeps its limit leg: {sent}");
+        }
+    }
+
+    /// A two-legged type can have its trigger moved when it has one.
+    /// Pegged-to-market and pegged-to-midpoint share OrdType "E" and are told
+    /// apart by ExecInst, exactly as `ORD_PEG_MKT` and `ORD_PEG_MID` document
+    /// in types.rs. Neither emitted tag 18, so the two went on the wire byte
+    /// for byte identical and neither said which peg it was — every other
+    /// shared-OrdType pair in this encoder does emit its disambiguator.
+    /// An option order that does not restate expiry, strike and right names no
+    /// particular contract: the symbol alone is the whole chain. That is why
+    /// non-stock orders were refused rather than sent, and carrying the identity
+    /// is what makes sending one safe.
+    #[test]
+    fn an_option_order_names_its_contract() {
+        let mut context = Context::new();
+        let instrument = context
+            .market
+            .try_register_contract(0, "AAPL", "OPT", "SMART", "20260619|230|C|100")
+            .expect("slot");
+        context.market.set_symbol(instrument, "AAPL".into());
+        context.market.set_routing(instrument, "OPT", "SMART");
+
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: 1,
+            kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|167=OPT|"), "the security type: {sent}");
+        assert!(sent.contains("|541=20260619|"), "a full date on the maturity-date tag: {sent}");
+        assert!(sent.contains("|202=230|"), "the strike: {sent}");
+        assert!(sent.contains("|201=1|"), "the right, as the wire code for a call: {sent}");
+        assert!(sent.contains("|231=100|"), "the multiplier: {sent}");
+    }
+
+    /// An exercise and a lapse are new orders carrying the action, and nothing
+    /// else tells them apart from each other or from an ordinary order. Read
+    /// off the socket, because the request that carries the action and the
+    /// message that states it are two different things.
+    #[test]
+    fn an_exercise_and_a_lapse_go_out_as_new_orders_carrying_the_action() {
+        for (action, stated) in [(1u8, "1"), (2, "2")] {
+            let mut context = Context::new();
+            let instrument = context
+                .market
+                .try_register_contract(0, "AAPL", "OPT", "SMART", "20260619|230|C|100")
+                .expect("slot");
+            context.market.set_symbol(instrument, "AAPL".into());
+            context.market.set_routing(instrument, "OPT", "SMART");
+
+            context.pending_orders.push(
+                crate::client_core::ClientCore::build_exercise_request(7, instrument, action, 3),
+            );
+            let sent = drain(&mut context);
+
+            assert!(sent.contains("|35=D|"), "an exercise is a new order: {sent}");
+            assert!(
+                sent.contains(&format!("|6809={stated}|")),
+                "carrying the action it was asked for: {sent}",
+            );
+            assert!(sent.contains("|38=3|"), "for the contracts named: {sent}");
+            assert!(sent.contains("|54=1|"), "on the buy side: {sent}");
+            assert!(sent.contains("|541=20260619|"), "and naming the option: {sent}");
+        }
+    }
+
+    /// A stock names itself with its symbol, so none of those tags belong on it.
+    /// A contract known by conId still has to restate its identity on the wire.
+    /// Recording it only on the conId-less path sent a future naming its
+    /// exchange and not its month, which the gateway parked.
+    #[test]
+    fn a_future_known_by_con_id_still_names_its_month() {
+        let mut context = Context::new();
+        let instrument = context
+            .market
+            .try_register_contract(793_356_217, "MES", "FUT", "CME", "202609|0||5")
+            .expect("slot");
+        context.market.set_symbol(instrument, "MES".into());
+        context.market.set_routing(instrument, "FUT", "CME");
+
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: 1,
+            kind: crate::types::OrderKind::Limit { price: 3827 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let sent = drain(&mut context);
+        assert!(sent.contains("|167=FUT|"), "the security type: {sent}");
+        assert!(sent.contains("|200=202609|"), "and the contract month: {sent}");
+        assert!(sent.contains("|231=5|"), "and the multiplier: {sent}");
+    }
+
+    #[test]
+    fn a_stock_order_carries_no_option_identity() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_symbol(instrument, "SPY".into());
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: 1,
+            kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let sent = drain(&mut context);
+        for tag in ["|200=", "|201=", "|202=", "|231="] {
+            assert!(!sent.contains(tag), "a stock carries no {tag}: {sent}");
+        }
+    }
+
+    #[test]
+    fn the_two_pegs_are_told_apart_on_the_wire() {
+        let mut sent = Vec::new();
+        for kind in [
+            crate::types::OrderKind::PegMkt { offset: 5 * crate::types::PRICE_SCALE, price_cap: 0 },
+            crate::types::OrderKind::PegMid { offset: 5 * crate::types::PRICE_SCALE, price_cap: 0 },
+        ] {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+                order_id: 7,
+                instrument,
+                side: Side::Buy,
+                qty: 1,
+                kind,
+                tif: b'0',
+                attrs: crate::types::OrderAttrs::default(),
+            });
+            sent.push(drain(&mut context));
+        }
+        // Asked live, the venue names these back as PegToMkt and PegToMid under
+        // "P". Sent as "E" it named them something else entirely and refused
+        // them under that other name, so a caller asking to peg had an order
+        // the venue read as a different type — which is worse than a refusal.
+        assert!(sent[0].contains("|40=P|"), "pegged to market is OrdType P: {}", sent[0]);
+        assert!(sent[1].contains("|40=P|"), "pegged to midpoint is OrdType P: {}", sent[1]);
+        assert!(sent[0].contains("|18=P|"), "pegged to market states its peg: {}", sent[0]);
+        assert!(sent[1].contains("|18=M|"), "pegged to midpoint states its peg: {}", sent[1]);
+        // The offset is stated once. Written twice the venue read the second.
+        assert_eq!(sent[0].matches("|211=").count(), 1, "one offset: {}", sent[0]);
+        assert_ne!(sent[0], sent[1], "the two pegs must not be the same message");
+    }
+
+    #[test]
+    fn a_supplied_trigger_moves_a_two_legged_order() {
+        for (ord_type, name) in [(b'4', "STP LMT"), (b'K', "LIT")] {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.insert_order(crate::types::Order::new(
+                7,
+                instrument,
+                Side::Sell,
+                1,
+                605 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
+                600 * crate::types::PRICE_SCALE,
+            ));
+
+            context.pending_orders.push(crate::types::OrderRequest::Modify {
+                order_id: 7,
+                ord_type: 0,
+                tif: 0,
+                price: 610 * crate::types::PRICE_SCALE,
+                qty: 1,
+                outside_rth: false,
+                stop_price: 590 * crate::types::PRICE_SCALE,
+            });
+            let sent = drain(&mut context);
+
+            assert!(sent.contains("|44=610|"), "{name}: the limit moves: {sent}");
+            assert!(sent.contains("|99=590|"), "{name}: and so does the trigger: {sent}");
+        }
+    }
+
+    /// The replacement carries the trigger forward, so a second modify still
+    /// has one to restate.
+    #[test]
+    fn the_replacement_keeps_the_trigger() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.insert_order(crate::types::Order::new(
+            7,
+            instrument,
+            Side::Sell,
+            1,
+            600 * crate::types::PRICE_SCALE,
+            b'3',
+            b'0',
+            600 * crate::types::PRICE_SCALE,
+        ));
+
+        let second = context.modify(7, 610 * crate::types::PRICE_SCALE, 1, false);
+        drain(&mut context);
+        assert_eq!(
+            context.order(second).expect("tracked").stop_price,
+            610 * crate::types::PRICE_SCALE,
+            "the replacement records the trigger it just asked for",
+        );
+
+        context.modify(second, 620 * crate::types::PRICE_SCALE, 1, false);
+        let sent = drain(&mut context);
+        assert!(sent.contains("|99=620|"), "and the next modify moves it again: {sent}");
+    }
+
+    /// A type with both legs keeps the limit on 44 and holds its trigger.
+    #[test]
+    fn modifying_a_stop_limit_moves_the_limit_and_keeps_the_trigger() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.insert_order(crate::types::Order::new(
+            7,
+            instrument,
+            Side::Sell,
+            1,
+            605 * crate::types::PRICE_SCALE,
+            b'4',
+            b'0',
+            600 * crate::types::PRICE_SCALE,
+        ));
+
+        context.modify(7, 610 * crate::types::PRICE_SCALE, 1, false);
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|44=610|"), "the limit moves: {sent}");
+        assert!(sent.contains("|99=600|"), "the trigger is restated unchanged: {sent}");
+    }
+
+    /// A cancel that has seen no echo yet computes `{id}.{ver}` for
+    /// OrigClOrdID, so a bracket leg must be submitted under that same form: a
+    /// bare ClOrdID names an id the venue is not holding once the leg is
+    /// cancelled before its first execution report. Tag 6107 must also agree
+    /// with the parent link `send_order_ex` puts on a child of the same order.
+    #[test]
+    fn a_bracket_leg_is_submitted_under_the_id_its_cancel_will_name() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        let (parent, tp, sl) = context.submit_bracket(
+            instrument,
+            Side::Buy,
+            1,
+            100 * crate::types::PRICE_SCALE,
+            110 * crate::types::PRICE_SCALE,
+            90 * crate::types::PRICE_SCALE,
+        );
+        let submitted = drain(&mut context);
+
+        for id in [parent, tp, sl] {
+            assert!(
+                submitted.contains(&format!("|11={id}.0|")),
+                "leg {id} is submitted versioned: {submitted}"
+            );
+        }
+        assert_eq!(
+            submitted.matches(&format!("|6107={parent}.0|")).count(),
+            2,
+            "both children link the parent by the id it was submitted under: {submitted}"
+        );
+
+        // Nothing has echoed, so the cancel computes the OrigClOrdID.
+        context.cancel(tp);
+        let cancelled = drain(&mut context);
+        assert!(
+            cancelled.contains(&format!("|41={tp}.0|")),
+            "the cancel names the submitted id: {cancelled}"
+        );
+    }
+}
+mod outside_rth_polarity_tests {
+    use super::super::*;
+    use crate::protocol::connection::Connection;
+    use std::io::Read;
+
+    /// Drive the queued orders and read what actually reaches the socket.
+    fn drain(context: &mut Context) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut conn = Some(Connection::new_raw(client).unwrap());
+
+        let shared = std::sync::Arc::new(SharedState::new());
+        let mut hb = HeartbeatState::new();
+        drain_and_send_orders(
+            &mut conn, context, "DU111111", &mut hb, false, &shared, false, &None,
+        );
+
+        let mut buf = vec![0u8; 8192];
+        let n = peer.read(&mut buf).unwrap();
+        String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|")
+    }
+
+    /// Every submit path guards tag 6433, and nothing asserted the guard: the
+    /// assertions checked that the flag is present when the caller asked for
+    /// it, never that it is absent when they did not. Making every encoder emit
+    /// it unconditionally therefore failed no test.
+    ///
+    /// That is the shape took on the replace path, where a hard-coded
+    /// 6433 opted every modified order into the extended session. An order
+    /// widened to outside regular hours fills at prices the caller never meant
+    /// to trade at, and no callback distinguishes it.
+    /// A named submit path, invoked as (context, instrument, outside_rth).
+    type SubmitCase = (&'static str, fn(&mut Context, u32, bool) -> crate::types::OrderId);
+
+    #[test]
+    fn every_submit_path_emits_outside_rth_only_when_it_was_asked_for() {
+        let cases: Vec<SubmitCase> = vec![
+            ("limit gtc", |c, i, o| {
+                c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)
+            }),
+            ("stop gtc", |c, i, o| {
+                c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)
+            }),
+            ("stop limit gtc", |c, i, o| {
+                c.submit_stop_limit_gtc(
+                    i,
+                    Side::Sell,
+                    1,
+                    89 * crate::types::PRICE_SCALE,
+                    90 * crate::types::PRICE_SCALE,
+                    o,
+                )
+            }),
+            ("extended encoder", |c, i, o| {
+                c.submit_limit_ex(
+                    i,
+                    Side::Buy,
+                    1,
+                    100 * crate::types::PRICE_SCALE,
+                    b'0',
+                    crate::types::OrderAttrs { outside_rth: o, ..Default::default() },
+                )
+            }),
+        ];
+
+        for (label, submit) in cases {
+            for asked in [true, false] {
+                let mut context = Context::new();
+                let instrument = context.register_instrument(756733);
+                submit(&mut context, instrument, asked);
+                let sent = drain(&mut context);
+
+                assert_eq!(
+                    sent.contains("|6433=1|"),
+                    asked,
+                    "{label}, outside_rth={asked}: {sent}",
+                );
+            }
+        }
+    }
+
+    /// A connection, a context and an instrument, for a combination order.
+    fn combo_test_state() -> (
+        crate::protocol::connection::Connection,
+        std::net::TcpStream,
+        Context,
+        crate::types::InstrumentId,
+    ) {
+        let (conn, peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        (conn, peer, context, instrument)
+    }
+
+    /// A combination names its legs on the order. There is no repeating group
+    /// for them: a count, then a contract, a ratio and a side per leg. The side
+    /// is a flag rather than the letter the order itself uses, and a leg that
+    /// routes with the combination states no venue of its own.
+    #[test]
+    fn a_combination_names_each_of_its_legs() {
+        use std::io::Read;
+        let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        let attrs = crate::types::OrderAttrs {
+            combo_legs: vec![
+                crate::types::ComboLegSpec {
+                    con_id: 265598,
+                    ratio: 1,
+                    is_sell: false,
+                    exchange: String::new(),
+                    open_close: 1,
+                    short_sale_slot: 0,
+                    designated_location: String::new(),
+                    exempt_code: -1,
+                    price: None,
+                },
+                crate::types::ComboLegSpec {
+                    con_id: 272093,
+                    ratio: 2,
+                    is_sell: true,
+                    exchange: "ARCA".into(),
+                    open_close: 0,
+                    short_sale_slot: 0,
+                    designated_location: String::new(),
+                    exempt_code: -1,
+                    price: None,
+                },
+            ],
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn,
+            &mut context,
+            "DU123456",
+            31,
+            instrument,
+            Side::Buy,
+            1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0',
+            &attrs,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6079=2"), "the leg count: {msg}");
+        assert!(f.contains(&"6080=265598") && f.contains(&"6080=272093"), "each contract: {msg}");
+        assert!(f.contains(&"6081=1") && f.contains(&"6081=2"), "each ratio: {msg}");
+        assert!(f.contains(&"6082=0") && f.contains(&"6082=1"), "each side, as a flag: {msg}");
+        // The buying leg comes first, and it is the one carrying 1.
+        let sides: Vec<&&str> = f.iter().filter(|t| t.starts_with("6082=")).collect();
+        assert_eq!(*sides[0], "6082=1", "a bought leg: {msg}");
+        assert_eq!(*sides[1], "6082=0", "a sold leg: {msg}");
+        assert!(
+            f.contains(&"616=") && f.contains(&"616=ARCA"),
+            "a venue only where the leg has its own: {msg}"
+        );
+        assert!(f.contains(&"654=1"), "the position effect where set: {msg}");
+    }
+
+    /// A ladder can start against a position already held and a first
+    /// component already partly filled. Left out, the venue starts from
+    /// nothing and works components the caller has already had.
+    #[test]
+    fn a_ladder_states_what_it_starts_from() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            scale: Some(Box::new(crate::types::ScaleAttrs {
+                init_level_size: 100,
+                subs_level_size: 50,
+                price_increment: crate::types::PRICE_SCALE / 100,
+                init_position: 250,
+                init_fill_qty: 40,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 41, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6485=250"), "the position it starts against: {msg}");
+        // Not sent: the venue answers "Can not contain field # 6486".
+        assert!(!msg.contains("6486="), "a field the venue will not take: {msg}");
+    }
+
+    /// Where an order's commission goes. Taken from a caller and dropped, the
+    /// commission went wherever the account's default sends it.
+    #[test]
+    fn an_order_states_its_soft_dollar_tier() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            soft_dollar_tier_name: "Tier A".to_string(),
+            soft_dollar_tier_val: "45.5".to_string(),
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 42, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6519=Tier A"), "the tier: {msg}");
+        assert!(f.contains(&"6520=45.5"), "what it is worth: {msg}");
+        // Not sent: the venue answers "Invalid value in field # 8016".
+        assert!(!msg.contains("8016="), "a field the venue will not take: {msg}");
+    }
+
+    /// A tier named with nothing against it is not an arrangement, and half of
+    /// one is worse than none.
+    #[test]
+    fn half_a_soft_dollar_arrangement_states_nothing() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            soft_dollar_tier_name: "Tier A".to_string(),
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 43, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        assert!(!String::from_utf8_lossy(&buf[..n]).contains("6519="), "half an arrangement");
+    }
+
+    /// Who settles an order, and whether discretion runs to the limit price.
+    /// Both were taken from a caller and dropped.
+    #[test]
+    fn an_order_states_who_settles_it_and_how_far_discretion_runs() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            settling_firm: "FIRM".to_string(),
+            discretionary_up_to_limit: true,
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 44, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6282=FIRM"), "who settles it: {msg}");
+        assert!(f.contains(&"8165=1"), "how far discretion runs: {msg}");
+    }
+
+    /// A caller can price the legs separately rather than pricing the
+    /// combination. Dropped, the combination is worked at whatever the venue
+    /// makes of it, which is not the order that was placed.
+    #[test]
+    fn legs_priced_separately_go_out_with_their_prices() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let leg = |con_id: i64, is_sell: bool, price: Option<crate::types::Price>| {
+            crate::types::ComboLegSpec {
+                con_id, ratio: 1, is_sell, exchange: String::new(),
+                open_close: 0, short_sale_slot: 0, designated_location: String::new(),
+                exempt_code: -1, price,
+            }
+        };
+        let attrs = crate::types::OrderAttrs {
+            combo_legs: vec![
+                leg(265598, false, Some(2 * crate::types::PRICE_SCALE)),
+                leg(272093, true, None),
+            ],
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 32, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        let priced: Vec<&&str> = f.iter().filter(|x| x.starts_with("6879=")).collect();
+        assert_eq!(priced.len(), 2, "one price a leg, in leg order: {msg}");
+        assert_eq!(*priced[0], "6879=2", "the leg the caller priced: {msg}");
+        assert_eq!(*priced[1], "6879=", "and the one it left alone: {msg}");
+    }
+
+    /// Nothing goes out where the caller priced the combination itself, which
+    /// is what most callers do.
+    #[test]
+    fn an_unpriced_combination_states_no_leg_prices() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            combo_legs: vec![crate::types::ComboLegSpec {
+                con_id: 265598, ratio: 1, is_sell: false, exchange: String::new(),
+                open_close: 0, short_sale_slot: 0, designated_location: String::new(),
+                exempt_code: -1, price: None,
+            }],
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, "DU123456", 33, instrument, Side::Buy, 1,
+            crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&buf[..n]).contains("6879="),
+            "a price nobody stated",
+        );
+    }
+
+    /// A ladder and a hedge each go out under the tags the vendor's own
+    /// attributes declare for them. Without them an order asking for either
+    /// would go out plain: one order for the whole size, or a position with
+    /// nothing against it.
+    #[test]
+    fn a_scale_and_a_hedge_go_out_under_their_own_tags() {
+        use std::io::Read;
+        let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        let attrs = crate::types::OrderAttrs {
+            scale: Some(Box::new(crate::types::ScaleAttrs {
+                init_level_size: 100,
+                subs_level_size: 50,
+                price_increment: crate::types::PRICE_SCALE / 20,
+                profit_offset: crate::types::PRICE_SCALE / 10,
+                price_adjust_interval: 60,
+                auto_reset: true,
+                random_percent: true,
+                ..Default::default()
+            })),
+            delta_neutral: Some(Box::new(crate::types::DeltaNeutralAttrs {
+                order_type: "MKT".into(),
+                aux_price: 0,
+                con_id: 265598,
+            })),
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn,
+            &mut context,
+            "DU123456",
+            21,
+            instrument,
+            Side::Buy,
+            100,
+            crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'0',
+            &attrs,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let has = |t: &str| msg.split('\u{1}').any(|f| f.starts_with(t));
+        for tag in [
+            "6403=100",
+            "6445=50",
+            "6405=0.05",
+            "6446=0.1",
+            "6526=60",
+            "6461=1",
+            "6795=1",
+            "6290=MKT",
+            "6150=265598",
+        ] {
+            assert!(has(tag), "{tag} is on the order: {msg}");
+        }
+    }
+
+    /// A contract that is not a stock is named by more than its symbol, and an
+    /// order that states only the symbol names a whole family — which the venue
+    /// answers as ambiguous, or as a contract it does not know. One submit path
+    /// restated the identity and the rest did not, so which of them an order
+    /// went through decided whether it could be placed at all.
+    #[test]
+    fn every_submit_path_names_the_contract_and_not_just_its_symbol() {
+        let cases: Vec<SubmitCase> = vec![
+            ("limit gtc", |c, i, o| {
+                c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)
+            }),
+            ("stop gtc", |c, i, o| {
+                c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)
+            }),
+            ("stop limit gtc", |c, i, o| {
+                c.submit_stop_limit_gtc(
+                    i,
+                    Side::Sell,
+                    1,
+                    89 * crate::types::PRICE_SCALE,
+                    90 * crate::types::PRICE_SCALE,
+                    o,
+                )
+            }),
+            ("limit ioc", |c, i, _| {
+                c.submit_limit_ioc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)
+            }),
+            ("limit fok", |c, i, _| {
+                c.submit_limit_fok(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)
+            }),
+        ];
+
+        for (label, submit) in cases {
+            let mut context = Context::new();
+            let instrument = context
+                .market
+                .try_register_contract(893091670, "MES", "FUT", "CME", "20270917|0||5|MES|MESU7")
+                .expect("register a future");
+            context.set_symbol(instrument, "MES".to_string());
+            submit(&mut context, instrument, false);
+            let sent = drain(&mut context);
+
+            // A future states its contract month. The order path carries no
+            // MaturityDate at all, and a full date on the month tag named a
+            // contract the venue could not settle on.
+            assert!(sent.contains("|200=202709|"), "{label} states the contract month: {sent}");
+            assert!(!sent.contains("|541="), "{label} states no maturity date: {sent}");
+            assert!(sent.contains("|231=5|"), "{label} states the multiplier: {sent}");
+            assert!(sent.contains("|167=FUT|"), "{label} states the security type: {sent}");
+            // The member, not the family: the local symbol under the source
+            // that says the identifier is the venue's own.
+            assert!(!sent.contains("|6058="), "{label} states no trading class: {sent}");
+            assert!(sent.contains("|48=MESU7|"), "{label} names the contract: {sent}");
+            assert!(sent.contains("|22=101|"), "{label} says what the identifier is: {sent}");
+            // An order that asked for neither states neither. A zero percent
+            // offset is a relative order and a zero exempt code is a short
+            // sale exemption, so a derived default put both on every order.
+            assert!(!sent.contains("|9822="), "{label} claims no percent offset: {sent}");
+            assert!(!sent.contains("|1688="), "{label} claims no exemption: {sent}");
+            assert!(!sent.contains("|21="), "{label} states no handling instruction: {sent}");
+            assert!(sent.contains("|204=0|"), "{label} says who the order is for: {sent}");
+        }
+    }
+}

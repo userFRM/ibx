@@ -1,0 +1,1552 @@
+//! Connection lifecycle: authentication and data connection management.
+
+use std::io::{self, Read, Write};
+use std::net::TcpStream;
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use num_bigint::BigUint;
+use rand::RngCore;
+
+use crate::auth::crypto::strip_leading_zeros;
+use crate::auth::dh::SecureChannel;
+use crate::auth::srp;
+use crate::config::*;
+use crate::protocol::ns::{self, *};
+use crate::protocol::xyz;
+
+/// Result of authentication.
+///
+/// `session_token` is the SRP-derived shared secret K as a `BigUint`. For wire-byte uses
+/// (e.g. SHA-1 challenge/response, token short hashes), prefer [`AuthResult::session_token_bytes`],
+/// which returns the canonical big-endian form with leading zeros stripped — matching the
+/// representation the server expects.
+///
+/// `token_type` is one of `"st"`, `"tst"`, or `"zenith"` and corresponds verbatim to the
+/// `stoken_type` value used by SSO authenticators in the upstream Java auth flow.
+pub struct AuthResult {
+    /// SRP shared secret K. Use [`session_token_bytes`](Self::session_token_bytes) for the
+    /// canonical big-endian wire form.
+    pub session_token: BigUint,
+    /// Token type discriminator: `"st"`, `"tst"`, or `"zenith"`. Matches the `stoken_type`
+    /// field expected by the SSO `Authenticate-TWS` body.
+    pub token_type: String,
+    /// The venue's own id for this session.
+    pub session_id: String,
+    /// Every capability it granted.
+    pub features: Vec<String>,
+    /// Whether the login succeeded.
+    pub authenticated: bool,
+}
+
+impl AuthResult {
+    /// Canonical big-endian byte form of [`Self::session_token`], with leading zeros
+    /// stripped (single `0x00` retained when the value is zero).
+    ///
+    /// This is the exact representation used as the second SHA-1 input for soft-token
+    /// challenge/response and SSO `Authenticate-TWS` bodies. Round-trips through
+    /// `BigUint::from_bytes_be`.
+    pub fn session_token_bytes(&self) -> Vec<u8> {
+        let raw = self.session_token.to_bytes_be();
+        crate::auth::crypto::strip_leading_zeros(&raw).to_vec()
+    }
+}
+
+/// Authenticated auth session.
+pub struct AuthSession {
+    /// The socket it runs on.
+    pub stream: TcpStream,
+    /// The cipher both ends agreed.
+    pub channel: SecureChannel,
+    /// What the login answered.
+    pub auth_result: AuthResult,
+    /// What this machine identified itself as.
+    pub hw_info: String,
+    /// What the client string encoded to.
+    pub encoded: String,
+}
+
+/// Authenticated farm session.
+pub struct FarmSession {
+    /// The socket it runs on.
+    pub stream: TcpStream,
+    /// The cipher both ends agreed.
+    pub channel: SecureChannel,
+    /// What the login answered.
+    pub auth_result: AuthResult,
+    /// What this machine identified itself as.
+    pub hw_info: String,
+    /// What the client string encoded to.
+    pub encoded: String,
+    /// Which farm this connection is to.
+    pub farm_name: String,
+    /// Which name-service version the venue speaks.
+    pub server_ns_version: u32,
+}
+
+// CONNECT_REQUEST flags
+/// Farm flag 1: ok to redirect.
+pub const FLAG_OK_TO_REDIRECT: u32 = 1;
+/// Farm flag 2: is farm.
+pub const FLAG_IS_FARM: u32 = 2;
+/// Farm flag 4: version.
+pub const FLAG_VERSION: u32 = 4;
+/// Farm flag 8: version present.
+pub const FLAG_VERSION_PRESENT: u32 = 8;
+/// Farm flag 16: soft token.
+pub const FLAG_SOFT_TOKEN: u32 = 16;
+/// Farm flag 32: device info.
+pub const FLAG_DEVICE_INFO: u32 = 32;
+/// Farm flag 64: permanent token.
+pub const FLAG_PERMANENT_TOKEN: u32 = 64;
+/// Farm flag 4096: not established.
+pub const FLAG_UNKNOWN_U: u32 = 4096;
+/// Farm flag 8192: paper connect.
+pub const FLAG_PAPER_CONNECT: u32 = 8192;
+/// Farm flag 131072: farm name.
+pub const FLAG_FARM_NAME: u32 = 131072;
+/// Farm flag 524288: not established.
+pub const FLAG_UNKNOWN_19: u32 = 524288;
+/// Farm flag 1048576: not established.
+pub const FLAG_UNKNOWN_20: u32 = 1048576;
+/// Farm flag 1024: twsro token.
+pub const FLAG_TWSRO_TOKEN: u32 = 1024;
+
+/// Generate a session ID: hex(epoch_secs).hex(millis%1000).
+pub fn get_session_id() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let millis = now.as_millis() as u64;
+    let secs = millis / 1000;
+    let ms = millis % 1000;
+    format!("{secs:x}.{ms:04x}")
+}
+
+/// Path of the persistent 8-hex machine_id file used in tag 6351.
+///
+/// the Java client reads/creates `%USERPROFILE%\hwid`
+/// on Windows or `$HOME/.hwid` elsewhere, persists 8 hex chars there, and
+/// reuses it across logons. IB binds that prefix to the IBKey enrollment
+/// at first-login time; live farms silent-drop logons whose prefix isn't
+/// in the registered set.
+///
+/// Override with the `IBX_HWID_PATH` env var to point elsewhere (containers,
+/// CI, sharing one cookie across multiple machines, etc.).
+fn hwid_path() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("IBX_HWID_PATH") {
+        return std::path::PathBuf::from(p);
+    }
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    if cfg!(windows) {
+        home.join("hwid")
+    } else {
+        home.join(".hwid")
+    }
+}
+
+/// Read the existing 8-hex machine_id, or generate+persist a fresh one.
+///
+/// `IBX_HWID` env var, if set to a hex string, short-circuits the file lookup
+/// and is used verbatim (left-padded to 8 chars). Useful for one-shot scripts
+/// or when injecting an already-enrolled cookie via secrets management.
+fn read_or_create_hwid() -> String {
+    if let Ok(v) = std::env::var("IBX_HWID") {
+        let v = v.trim();
+        if !v.is_empty() && v.chars().all(|c| c.is_ascii_hexdigit()) {
+            return format!("{v:0>8}");
+        }
+    }
+    let path = hwid_path();
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        let s = s.trim();
+        if !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            return format!("{s:0>8}");
+        }
+    }
+    let mut buf = [0u8; 4];
+    rand::rng().fill_bytes(&mut buf);
+    let new_hwid = format!("{:08x}", u32::from_be_bytes(buf));
+    let _ = std::fs::write(&path, &new_hwid);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444));
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("attrib")
+            .args(["+H", "+R"])
+            .arg(&path)
+            .status();
+    }
+    new_hwid
+}
+
+/// Generate hardware info string: `{machine_id}|{MAC}`.
+///
+/// Live data farms validate the MAC field; an all-zero MAC causes the FIX
+/// 35=A logon to be silently rejected (paper farms don't validate).
+/// `machine_id` is the persistent 8-hex value from `~/hwid` (see #132).
+pub fn get_hw_info(stated: Option<&str>) -> String {
+    let machine_id = match stated.map(str::trim).filter(|v| {
+        !v.is_empty() && v.chars().all(|c| c.is_ascii_hexdigit())
+    }) {
+        Some(stated) => format!("{stated:0>8}"),
+        None => read_or_create_hwid(),
+    };
+    let mac = first_real_mac().unwrap_or_else(|| "00:00:00:00:00:00".to_string());
+    format!("{machine_id}|{mac}")
+}
+
+/// Probe the OS for the first non-zero MAC address. Returns `None` if no NIC
+/// has a usable MAC (e.g. no networking, all interfaces virtual).
+fn first_real_mac() -> Option<String> {
+    let all = mac_address::MacAddressIterator::new().ok()?;
+    for mac in all {
+        let bytes = mac.bytes();
+        if bytes.iter().any(|&b| b != 0) {
+            return Some(format!(
+                "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+            ));
+        }
+    }
+    None
+}
+
+/// Discover the local LAN IP that would route to the public internet.
+/// Returns "127.0.0.1" if no external route is configured.
+///
+/// Uses the standard `UdpSocket::connect` trick: connecting a UDP socket to
+/// a public address doesn't send any packets, but lets the OS pick the
+/// outbound interface, exposed via `local_addr()`.
+pub fn get_lan_ip() -> String {
+    use std::net::UdpSocket;
+    let sock = match UdpSocket::bind("0.0.0.0:0") {
+        Ok(s) => s,
+        Err(_) => return "127.0.0.1".into(),
+    };
+    if sock.connect("8.8.8.8:80").is_err() {
+        return "127.0.0.1".into();
+    }
+    sock.local_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|_| "127.0.0.1".into())
+}
+
+/// Send an encrypted protocol message.
+pub fn send_secure<W: Write>(
+    stream: &mut W,
+    channel: &mut SecureChannel,
+    inner: &[u8],
+) -> io::Result<()> {
+    let ct = channel.encrypt(inner);
+    let ct_b64 = B64.encode(&ct);
+    let outer = format!("{NS_VERSION};{NS_SECURE_MESSAGE};{ct_b64};");
+    let payload = outer.as_bytes();
+    let mut msg = Vec::with_capacity(8 + payload.len());
+    msg.extend_from_slice(NS_MAGIC);
+    msg.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    msg.extend_from_slice(payload);
+    stream.write_all(&msg)?;
+    Ok(())
+}
+
+/// Receive an encrypted response and decrypt.
+pub fn recv_secure<R: Read>(
+    stream: &mut R,
+    channel: &mut SecureChannel,
+) -> io::Result<Vec<u8>> {
+    let (payload, _) = ns::ns_recv(stream)?;
+    let text = String::from_utf8_lossy(&payload);
+    let parts: Vec<&str> = text.split(';').collect();
+
+    if parts.len() < 2 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed NS response"));
+    }
+
+    let msg_type: u32 = parts[1]
+        .parse()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid msg type"))?;
+
+    if msg_type == NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
+        return Err(io::Error::other(
+            format!("Auth error: {}", parts[2..].join(";")),
+        ));
+    }
+    if msg_type == NS_REDIRECT {
+        let target = parts.get(2).unwrap_or(&"");
+        return Err(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            format!("REDIRECT:{target}"),
+        ));
+    }
+    if msg_type != NS_SECURE_MESSAGE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Expected 534, got {msg_type}: {text}"),
+        ));
+    }
+
+    // Read rather than indexed: the guard above establishes two fields, and a
+    // secure message states three. A frame with the type and nothing after it
+    // is malformed, which is a thing to report — indexing it takes the login
+    // thread down instead.
+    let body = parts.get(2).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "secure message carries no body")
+    })?;
+    let ct = B64
+        .decode(body)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    channel
+        .decrypt(&ct)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Receive a framed message and classify as text or binary.
+pub fn recv_msg<R: Read>(stream: &mut R) -> io::Result<RecvMsg> {
+    let (payload, _) = ns::ns_recv(stream)?;
+
+    // Try NS text first
+    if ns::is_ns_text(&payload)
+        && let Some((version, msg_type, fields)) = ns::ns_parse(&payload) {
+            return Ok(RecvMsg::Ns {
+                version,
+                msg_type,
+                fields,
+            });
+        }
+
+    // Try XYZ binary
+    if payload.len() >= 16
+        && let Some((msg_id, sub_id, state, fields)) = xyz::xyz_parse_response(&payload) {
+            return Ok(RecvMsg::Xyz {
+                msg_id,
+                sub_id,
+                state,
+                fields,
+            });
+        }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("Cannot parse message: {:?}", &payload[..payload.len().min(40)]),
+    ))
+}
+
+/// Classified received message.
+#[derive(Debug)]
+pub enum RecvMsg {
+    /// One of the venue's own name-service messages.
+    Ns {
+        /// Which version of that message this is.
+        version: u32,
+        /// Which message it is.
+        msg_type: u32,
+        /// Its fields, in the order they arrived.
+        fields: Vec<String>,
+    },
+    /// One of its binary session messages.
+    Xyz {
+        /// Which message this is.
+        msg_id: u32,
+        /// Which part of it.
+        sub_id: u32,
+        /// What state the venue reports.
+        state: u32,
+        /// Its fields, in the order they arrived.
+        fields: Vec<String>,
+    },
+}
+
+/// Extract non-empty data fields from SRP response, skipping username.
+fn extract_srp_data(fields: &[String], username: &str) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|f| !f.is_empty() && f.as_str() != username)
+        .cloned()
+        .collect()
+}
+
+/// The group a peer states, where it states one this arithmetic can use.
+///
+/// A modulus of zero makes `modpow` panic and a modulus of one makes every
+/// power zero; a generator outside `2..n` is not a generator. The defaults are
+/// what this client would have used anyway, so an unusable pair falls back to
+/// them rather than taking the login down or continuing on a group that proves
+/// nothing.
+fn stated_group(
+    stated: &[String],
+    default_n: BigUint,
+    default_g: BigUint,
+) -> (BigUint, BigUint) {
+    let parsed = stated.first().zip(stated.get(1)).and_then(|(n, g)| {
+        Some((
+            BigUint::parse_bytes(n.as_bytes(), 16)?,
+            BigUint::parse_bytes(g.as_bytes(), 16)?,
+        ))
+    });
+    match parsed {
+        Some((n, g)) if n > BigUint::from(1u32) && g > BigUint::from(1u32) && g < n => (n, g),
+        Some(_) => {
+            log::warn!("the venue stated an SRP group this client cannot use; keeping its own");
+            (default_n, default_g)
+        }
+        None => (default_n, default_g),
+    }
+}
+
+/// Execute authentication protocol.
+///
+/// Returns the session key K as BigUint.
+pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -> io::Result<BigUint> {
+    let n = srp::srp_n();
+    let g = BigUint::from(srp::SRP_G);
+
+    // State 1: Send AUTH_QUERY
+    let msg1 = xyz::xyz_build_srp_v20(1, &[]);
+    stream.write_all(&xyz::xyz_wrap(&msg1))?;
+
+    // State 2: Receive AUTH_PARAMS
+    let recv2 = recv_msg(stream)?;
+    let fields2 = match recv2 {
+        RecvMsg::Xyz { state, fields, .. } => {
+            if state != 2 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Expected SRP state 2, got {state}"),
+                ));
+            }
+            fields
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Expected XYZ response for SRP state 2",
+            ));
+        }
+    };
+
+    let data_fields = extract_srp_data(&fields2, username);
+    // The venue may state its own group; otherwise this client's applies.
+    let (n, g) = stated_group(&data_fields, n, g);
+
+    // Generate client keys: a (private), A = g^a mod N
+    let mut a_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut a_bytes);
+    let a_priv = BigUint::from_bytes_be(&a_bytes);
+    let a_pub = g.modpow(&a_priv, &n);
+
+    // State 3: Send client public key A
+    let a_hex = format!("{a_pub:x}");
+    let msg3 = xyz::xyz_build_srp_v20(3, &[("L", &a_hex)]);
+    stream.write_all(&xyz::xyz_wrap(&msg3))?;
+
+    // State 4: Receive SERVER_PARAMS (salt, B)
+    let recv4 = recv_msg(stream)?;
+    let (state4, fields4) = match recv4 {
+        RecvMsg::Xyz { state, fields, .. } => (state, fields),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Expected XYZ response for SRP state 4",
+            ));
+        }
+    };
+
+    if state4 == 7 {
+        let result = fields4.get(9).map(|s| s.as_str()).unwrap_or("FAILED");
+        return Err(io::Error::other(
+            format!("SRP early error (state 7): {result}"),
+        ));
+    }
+    if state4 != 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Expected SRP state 4, got {state4}"),
+        ));
+    }
+
+    let data_fields = extract_srp_data(&fields4, username);
+    if data_fields.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Missing salt/B in SRP state 4",
+        ));
+    }
+
+    let salt_hex = &data_fields[0];
+    let b_hex = &data_fields[1];
+    let salt_bytes = hex::decode(salt_hex)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let b_pub = BigUint::parse_bytes(b_hex.as_bytes(), 16).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "Invalid B hex")
+    })?;
+
+    // Compute SRP values
+    let x = srp::srp_compute_x(
+        strip_leading_zeros(&salt_bytes),
+        username,
+        password,
+    );
+    let u = srp::srp_compute_u(&a_pub, &b_pub);
+    let k_mult = BigUint::from(srp::SRP_K);
+    let s = srp::srp_compute_s(&b_pub, &a_priv, &u, &x, &n, &g, &k_mult);
+    let k = srp::srp_compute_k(&s);
+
+    // Compute client proof M1
+    let salt_int = BigUint::parse_bytes(salt_hex.as_bytes(), 16).unwrap_or_default();
+    let m1 = srp::srp_compute_m1(&n, &g, username, &salt_int, &a_pub, &b_pub, &k);
+
+    // State 5: Send client proof M1
+    let m1_hex = format!("{m1:x}");
+    let msg5 = xyz::xyz_build_srp_v20(5, &[("N", &m1_hex)]);
+    stream.write_all(&xyz::xyz_wrap(&msg5))?;
+
+    // State 6: Receive AUTH_RESULT
+    let recv6 = recv_msg(stream)?;
+    let (state6, fields6) = match recv6 {
+        RecvMsg::Xyz { state, fields, .. } => (state, fields),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Expected XYZ response for SRP state 6",
+            ));
+        }
+    };
+
+    let result = fields6
+        .get(9)
+        .filter(|s| !s.is_empty())
+        .or_else(|| fields6.iter().rev().find(|s| !s.is_empty()))
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    if state6 == 6 && result == "PASSED" {
+        Ok(k)
+    } else if result == "NEEDSSL" {
+        Err(io::Error::other(
+            "Server requires SSL upgrade (NEEDSSL)",
+        ))
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("SRP Authentication FAILED (state={state6}): {result}"),
+        ))
+    }
+}
+
+/// Execute token authentication for farm connections.
+fn wrap_xyz_fix(xyz_payload: &[u8]) -> Vec<u8> {
+    let tag35 = b"35=X\x01";
+    let body_len = tag35.len() + xyz_payload.len();
+    let header = format!("8=1\x019={body_len:04}\x01");
+    let mut msg = Vec::with_capacity(header.len() + tag35.len() + xyz_payload.len());
+    msg.extend_from_slice(header.as_bytes());
+    msg.extend_from_slice(tag35);
+    msg.extend_from_slice(xyz_payload);
+    msg
+}
+
+/// Maximum size for a farm auth message (prevents unbounded allocation).
+const MAX_FARM_MSG_SIZE: usize = 65536;
+
+/// Read one framed `8=1` message from a farm stream.
+///
+/// `carry` holds bytes across calls: a read can return more than one message's
+/// worth of data, and a high-latency regional gateway can coalesce the last
+/// auth response and the farm logon ACK that follows it into a single read.
+/// This returns exactly the framed message and leaves any surplus bytes in
+/// `carry` so the caller can hand them to the next reader. Discarding that tail
+/// dropped the logon ACK and stalled the exchange.
+fn recv_8eq1(stream: &mut TcpStream, carry: &mut Vec<u8>) -> io::Result<Vec<u8>> {
+    let mut tmp = [0u8; 4096];
+    // Tolerate transient WouldBlock/TimedOut (os error 35 on macOS) from the
+    // short poll timeout until an overall deadline; a slow segment from a
+    // high-latency regional gateway must not fail the auth exchange.
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
+    loop {
+        // A prior call may already have buffered a full message.
+        if let Some(total) = try_frame_8eq1(carry)? {
+            let msg = carry[..total].to_vec();
+            carry.drain(..total);
+            return Ok(msg);
+        }
+        let n = match stream.read(&mut tmp) {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock
+                || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                if std::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "farm auth timed out waiting for server response",
+                    ));
+                }
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "farm connection closed during auth",
+            ));
+        }
+        carry.extend_from_slice(&tmp[..n]);
+    }
+}
+
+/// Locate one complete `8=1`-framed message at the front of `buf`.
+///
+/// Returns the message's total byte length when a full message is present,
+/// `None` when more bytes are needed, or an error when the advertised body
+/// length is implausibly large.
+fn try_frame_8eq1(buf: &[u8]) -> io::Result<Option<usize>> {
+    // Needs "8=1\x01" and a body length "9=NNNN\x01".
+    if !buf.starts_with(b"8=1\x01") {
+        return Ok(None);
+    }
+    let Some(nine_pos) = buf.windows(2).position(|w| w == b"9=") else {
+        return Ok(None);
+    };
+    let val_start = nine_pos + 2;
+    let Some(soh_off) = buf[val_start..].iter().position(|&b| b == 0x01) else {
+        return Ok(None);
+    };
+    let body_len: usize = std::str::from_utf8(&buf[val_start..val_start + soh_off])
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    if body_len > MAX_FARM_MSG_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("farm message body too large: {body_len} bytes"),
+        ));
+    }
+    let total = val_start + soh_off + 1 + body_len;
+    if buf.len() < total {
+        return Ok(None);
+    }
+    Ok(Some(total))
+}
+
+/// Extract binary payload from a framed message.
+fn extract_xyz(msg: &[u8]) -> &[u8] {
+    let marker = b"35=X\x01";
+    if let Some(idx) = msg.windows(marker.len()).position(|w| w == marker) {
+        &msg[idx + marker.len()..]
+    } else {
+        msg
+    }
+}
+
+/// Outcome of the per-session second-factor approval gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IbKeyOutcome {
+    /// Server bypassed the second-factor gate (no second factor configured for
+    /// this account, or the server short-circuited to PASSED on its own).
+    Skipped,
+    /// User approved on their device.
+    Approved {
+        /// URL the IBKey app posts to when the user approves; useful for
+        /// "tap your phone (or open this URL)" prompts.
+        approval_url: String,
+        /// Per-session 6-digit identifier the user can verify visually.
+        session_id: String,
+        /// SOFT session token issued by `XYZ AUTH_FINISH(771) state=5 PASSED`,
+        /// hex-encoded. This is the token that downstream farm logons must
+        /// hash for tag 8483 (NOT the SRP-derived `session_key`). Empty if the
+        /// AUTH_FINISH body didn't carry an extractable token.
+        soft_token_hex: String,
+    },
+}
+
+/// Errors specific to the second-factor approval gate. Wrapped into
+/// `io::Error` so the call site can stay uniform.
+fn ib_key_err(kind: io::ErrorKind, msg: impl Into<String>) -> io::Error {
+    io::Error::new(kind, msg.into())
+}
+
+/// Which second factor the callback is being asked to answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SecondFactor {
+    /// IBKey Challenge/Response — answer with the 8-character code the app
+    /// shows for `display_id`.
+    #[default]
+    IbKeyChallengeResponse,
+    /// Authenticator code — answer with the account's current code, typically
+    /// 6 digits. `display_id` and `avth_url` are empty; there is nothing to show.
+    AuthenticatorCode,
+}
+
+/// Challenge details surfaced to a [`CodeProvider`] callback.
+///
+/// Populated from the server's `XYZ 775` state=2 reply: the per-session
+/// display id the user sees next to the 8-char code in the IBKey app, and
+/// the `clientam.com/ibkr/ibkey/seamless?S=…` URL also used by the web
+/// fallback. Either may be empty if the server omitted it in this run.
+#[derive(Debug, Clone, Default)]
+pub struct IbKeyChallenge {
+    /// Which factor is being asked for. The two want different codes, so
+    /// branch on this before validating what the operator typed.
+    pub factor: SecondFactor,
+    /// The code shown on the phone, which the person confirms.
+    pub display_id: String,
+    /// Where the approval is confirmed.
+    pub avth_url: String,
+}
+
+/// Second-factor code provider callback.
+///
+/// Invoked once per login, with [`IbKeyChallenge::factor`] naming what to
+/// return:
+///
+/// - [`SecondFactor::IbKeyChallengeResponse`] — the 8-character code shown for
+///   `display_id`, submitted as `XYZ 775` state=3. Supplying a provider selects
+///   this over waiting for a mobile push.
+/// - [`SecondFactor::AuthenticatorCode`] — the account's current authenticator
+///   code, submitted as `XYZ 774` code=1. Not optional: these accounts have no
+///   push to fall back to, so a missing provider fails the login.
+///
+/// Neither server retries. One wrong code ends the attempt and the socket is
+/// torn down, so pull the code from a deterministic source (stdin, secrets
+/// vault) or return an `io::Error` to abort.
+///
+/// Called on its own thread so the gate can keep answering the server's
+/// keepalives while it waits. It is not cancelled if the gate gives up first,
+/// so bound anything that can block indefinitely — a callback still parked on
+/// stdin outlives the login and competes with the next one for the terminal.
+pub type CodeProvider = std::sync::Arc<
+    dyn Fn(IbKeyChallenge) -> io::Result<String> + Send + Sync,
+>;
+
+/// How long the gate waits inline for a freshly started `code_provider` before
+/// falling back to polling it between inbound messages. Sized to cover a
+/// provider that reads from a vault, an env var or a file, and to stay far
+/// below the server's probe cadence so nothing is starved by the wait.
+const IB_KEY_PROVIDER_FAST_PATH_GRACE: std::time::Duration =
+    std::time::Duration::from_secs(1);
+
+/// Put the 8-character Challenge/Response code on the wire as `XYZ 775` state=3.
+fn submit_swcr_code<S: Write>(stream: &mut S, code: &str) -> io::Result<()> {
+    let framed = xyz::xyz_wrap(&xyz::xyz_build_swcr_token_code_submission(code));
+    stream.write_all(&framed)?;
+    log::info!(
+        "2FA gate: submitted SWCR_TOKEN state=3 code (len={}, {} bytes framed)",
+        code.len(), framed.len(),
+    );
+    Ok(())
+}
+
+/// The provider thread dropped its sender without sending: it panicked.
+fn provider_panicked() -> io::Error {
+    ib_key_err(
+        io::ErrorKind::Other,
+        "2FA gate: code_provider panicked without returning a code",
+    )
+}
+
+/// Compact hex dump for diagnostic logging.
+fn hex_dump(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+}
+
+/// Default deadline for the second-factor gate, matching the server-side
+/// timeout measured in capture run B (~18 min).
+pub const IB_KEY_DEFAULT_TIMEOUT_SECS: u64 = 1080;
+
+/// Default IBKey token sub-type used in the SWCR_TOKEN state=1 body. Matches
+/// the captured reference profile in. Some accounts/SWCR
+/// configurations require a different value — override via
+/// [`crate::gateway::GatewayConfig::ib_key_token_sub_type`].
+pub const IB_KEY_DEFAULT_TOKEN_SUB_TYPE: &str = "2a";
+
+/// Ceiling on a frame in the auth gate, where the traffic is 774/771 replies
+/// and keepalives — none of which reach a fraction of this.
+const MAX_GATE_FRAME: usize = 64 * 1024;
+
+/// Frame reader that survives a read timeout mid-message.
+///
+/// The gate polls the socket so a time-limited code is not left unsent while
+/// the loop blocks. `ns_recv` cannot be polled: it is two `read_exact` calls,
+/// and a timeout between them discards the bytes already consumed, leaving the
+/// next read starting mid-frame. This buffers instead, so a timeout is simply
+/// "no complete frame yet".
+#[derive(Default)]
+struct GateReader {
+    buf: Vec<u8>,
+    /// Whether the code was already on the wire when the frame currently being
+    /// assembled began arriving. A frame can span polls, so the loop's own view
+    /// of that is a poll too late.
+    sent_when_frame_began: bool,
+}
+
+impl GateReader {
+    /// One non-blocking-ish step: drain what is available, return a message
+    /// once a whole frame is buffered. `Ok(None)` means "nothing complete yet".
+    /// Returns the frame and whether the code had been sent when that frame's
+    /// first byte arrived.
+    fn poll<S: Read>(&mut self, stream: &mut S, sent: bool) -> io::Result<Option<(RecvMsg, bool)>> {
+        if let Some(msg) = self.take()? {
+            return Ok(Some((msg, self.sent_when_frame_began)));
+        }
+        // Only ever ask for what the frame in progress still needs. Reading
+        // further pulls in bytes belonging to the next frame, and this buffer
+        // is dropped when the gate returns — the caller carries on reading the
+        // raw stream, so an over-read either loses a whole frame or leaves the
+        // stream mid-frame. The gate therefore always exits with an empty
+        // buffer. `take` has already validated the magic and the length.
+        let needed = if self.buf.len() < 8 {
+            8 - self.buf.len()
+        } else {
+            let len = u32::from_be_bytes([self.buf[4], self.buf[5], self.buf[6], self.buf[7]]) as usize;
+            (8 + len) - self.buf.len()
+        };
+        let mut tmp = [0u8; 4096];
+        let want = needed.min(tmp.len());
+        match stream.read(&mut tmp[..want]) {
+            Ok(0) => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "server closed the socket")),
+            Ok(n) => {
+                if self.buf.is_empty() {
+                    self.sent_when_frame_began = sent;
+                }
+                self.buf.extend_from_slice(&tmp[..n]);
+                Ok(self.take()?.map(|m| (m, self.sent_when_frame_began)))
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock
+                || e.kind() == io::ErrorKind::TimedOut
+                // `read_exact` retries this for every other reader in this
+                // file; the raw read here is the only one that would die on a
+                // signal, taking the operator's code with it.
+                || e.kind() == io::ErrorKind::Interrupted => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Pull one complete `#%#%` frame out of the buffer, if there is one.
+    fn take(&mut self) -> io::Result<Option<RecvMsg>> {
+        if self.buf.len() < 8 {
+            return Ok(None);
+        }
+        if &self.buf[..4] != NS_MAGIC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "security-code gate: framing lost (no #%#% magic)",
+            ));
+        }
+        let len = u32::from_be_bytes([self.buf[4], self.buf[5], self.buf[6], self.buf[7]]) as usize;
+        // Auth frames are tens of bytes. A length this far out is a corrupt
+        // header, and believing it means buffering toward 4 GiB while waiting
+        // for a tail that is never coming.
+        if len > MAX_GATE_FRAME {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("security-code gate: frame claims {len} bytes"),
+            ));
+        }
+        if self.buf.len() < 8 + len {
+            return Ok(None);
+        }
+        let payload: Vec<u8> = self.buf[8..8 + len].to_vec();
+        self.buf.drain(..8 + len);
+
+        if ns::is_ns_text(&payload)
+            && let Some((version, msg_type, fields)) = ns::ns_parse(&payload) {
+                return Ok(Some(RecvMsg::Ns { version, msg_type, fields }));
+            }
+        if payload.len() >= 16
+            && let Some((msg_id, sub_id, state, fields)) = xyz::xyz_parse_response(&payload) {
+                return Ok(Some(RecvMsg::Xyz { msg_id, sub_id, state, fields }));
+            }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "security-code gate: unparseable frame",
+        ))
+    }
+}
+
+/// Second factor for accounts whose token is an authenticator code (msg 774).
+///
+/// `AUTH_START` names the token type; type 4 takes this path, type 5 the IBKey
+/// push in [`do_ib_key_2fa`]. One message goes on the wire: the code as 774
+/// message code 1, framed and written raw like the IBKey messages, straight
+/// after SRP passes. The server answers with code 2 carrying `PASSED` or
+/// `FAILED`. Nothing on the wire prompts for the code first, so a gate that
+/// waits to be asked waits forever.
+///
+/// The provider runs off this thread. It typically waits on a human, and the
+/// loop has to keep answering the server's keepalives meanwhile or the
+/// connection is dropped for going quiet.
+///
+/// `stream` must carry a read timeout. The loop only gets to check for the
+/// code between reads, so on a blocking stream a code that arrives mid-wait
+/// sits unsent until the server next says something — up to a keepalive
+/// interval, against a code that is good for about thirty seconds.
+pub fn do_security_code_2fa<S: Read + Write>(
+    stream: &mut S,
+    deadline: std::time::Instant,
+    code_provider: Option<&CodeProvider>,
+) -> io::Result<IbKeyOutcome> {
+    use std::time::Instant;
+
+    let Some(provider) = code_provider else {
+        return Err(ib_key_err(
+            io::ErrorKind::InvalidInput,
+            "this account's second factor is an authenticator code; \
+             set code_provider to supply it",
+        ));
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let provider = provider.clone();
+        std::thread::Builder::new()
+            .name("ib-security-code".into())
+            .spawn(move || {
+                let _ = tx.send(provider(IbKeyChallenge {
+                    factor: SecondFactor::AuthenticatorCode,
+                    ..Default::default()
+                }));
+            })?;
+    }
+    let mut sent = false;
+    let mut reader = GateReader::default();
+
+    loop {
+        if Instant::now() >= deadline {
+            return Err(ib_key_err(
+                io::ErrorKind::TimedOut,
+                "security-code gate timed out (client deadline)",
+            ));
+        }
+
+        // A verdict only means anything if the code was already on the wire
+        // when the server began sending it. The reader reports that, because a
+        // frame can span polls and the loop would otherwise judge a verdict by
+        // a send that landed between its header and its body.
+        let recv = match reader.poll(stream, sent) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof
+                || e.kind() == io::ErrorKind::ConnectionReset
+                || e.kind() == io::ErrorKind::ConnectionAborted =>
+            {
+                return Err(ib_key_err(
+                    io::ErrorKind::ConnectionAborted,
+                    if sent {
+                        "security-code gate: server closed the socket after the code was sent"
+                    } else {
+                        "security-code gate: server closed the socket before a code was sent"
+                    },
+                ));
+            }
+            Err(e) => return Err(e),
+        };
+
+        // The code may only go out while the socket is quiet: no frame came
+        // back and none is half-read. Anything the server had already sent is
+        // then still unread, and the reader would credit it to the code —
+        // sending on a frame boundary is what leaves a waiting verdict looking
+        // like an answer.
+        let quiet = recv.is_none() && reader.buf.is_empty();
+
+        if !sent && quiet {
+            match rx.try_recv() {
+                Ok(result) => {
+                    let code = result?;
+                    if code.trim().is_empty() {
+                        return Err(ib_key_err(
+                            io::ErrorKind::InvalidInput,
+                            "code_provider returned an empty code; the server has no retry loop, \
+                             so sending it would end the attempt",
+                        ));
+                    }
+                    // The read above can span the deadline. Sending after it
+                    // has passed puts a code on the wire for a login that is
+                    // about to be abandoned.
+                    if Instant::now() >= deadline {
+                        return Err(ib_key_err(
+                            io::ErrorKind::TimedOut,
+                            "security-code gate timed out (client deadline)",
+                        ));
+                    }
+                    // Trimmed on the way out, not just when checking for
+                    // empty: surrounding whitespace reaches the server as part
+                    // of the code and burns the one attempt.
+                    let code = code.trim();
+                    stream.write_all(&xyz::xyz_wrap(&xyz::xyz_build_security_code(code)))?;
+                    log::info!("security-code gate: sent code (len={})", code.len());
+                    sent = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return Err(ib_key_err(
+                        io::ErrorKind::Other,
+                        "security-code gate: code_provider panicked without returning a code",
+                    ));
+                }
+            }
+        }
+
+        let Some((recv, sent_before_read)) = recv else { continue };
+        match recv {
+            RecvMsg::Xyz { msg_id, state, fields, .. }
+                if msg_id == xyz::XYZ_MSG_SECURITY_CODE && state == xyz::SECURITY_CODE_RESULT =>
+            {
+                // Nothing concludes the exchange until the code is out — an
+                // approval with no code sent is the mute failure this gate
+                // exists to prevent.
+                if !sent_before_read {
+                    log::debug!("security-code gate: 774 result before a code was sent");
+                    continue;
+                }
+                let status = fields.iter().rev().find(|f| !f.is_empty()).cloned().unwrap_or_default();
+                if status.eq_ignore_ascii_case("PASSED") {
+                    log::info!("security-code gate: accepted");
+                    return Ok(IbKeyOutcome::Approved {
+                        approval_url: String::new(),
+                        session_id: String::new(),
+                        soft_token_hex: String::new(),
+                    });
+                }
+                // Only echo a status we recognise. The reply's fields are
+                // server-controlled and this one is adjacent to the slot the
+                // code was sent in — never interpolate it blind.
+                let reason = if status.eq_ignore_ascii_case("FAILED") { "FAILED" } else { "unrecognized status" };
+                return Err(ib_key_err(
+                    io::ErrorKind::PermissionDenied,
+                    format!("security code rejected ({reason})"),
+                ));
+            }
+            RecvMsg::Xyz { msg_id, state, fields, .. }
+                if msg_id == xyz::XYZ_MSG_TOKEN_AUTH && (state == 3 || state == 5) =>
+            {
+                // Nothing here concludes the exchange until the code is out —
+                // an unsolicited verdict is neither an approval nor a denial.
+                if !sent_before_read {
+                    log::debug!("security-code gate: AUTH_FINISH before a code was sent");
+                    continue;
+                }
+                if fields.iter().any(|f| f.eq_ignore_ascii_case("PASSED")) {
+                    log::info!("security-code gate: accepted via AUTH_FINISH");
+                    return Ok(IbKeyOutcome::Approved {
+                        approval_url: String::new(),
+                        session_id: String::new(),
+                        soft_token_hex: String::new(),
+                    });
+                }
+                // A rejection arriving this way is still a rejection. Falling
+                // through would spin until the client deadline and then report
+                // a timeout, which hides the reason.
+                return Err(ib_key_err(
+                    io::ErrorKind::PermissionDenied,
+                    "second factor rejected at AUTH_FINISH",
+                ));
+            }
+            RecvMsg::Xyz { msg_id, state, .. } if msg_id == xyz::XYZ_MSG_SECURITY_CODE => {
+                if !sent_before_read {
+                    log::debug!("security-code gate: 774 code {state} before a code was sent");
+                    continue;
+                }
+                return Err(ib_key_err(
+                    io::ErrorKind::PermissionDenied,
+                    format!("security-code gate: server returned code {state}"),
+                ));
+            }
+            RecvMsg::Ns { msg_type, .. } if msg_type == NS_ERROR_RESPONSE
+                || msg_type == NS_SECURE_ERROR =>
+            {
+                return Err(ib_key_err(
+                    io::ErrorKind::Other,
+                    format!("security-code gate: server error type={msg_type}"),
+                ));
+            }
+            RecvMsg::Ns { msg_type, fields, .. } if msg_type == NS_TEST_REQUEST => {
+                let ts = fields.iter().find(|f| !f.is_empty()).cloned().unwrap_or_default();
+                stream.write_all(&ns_build_heart_beat(NS_VERSION, &ts))?;
+            }
+            // Identifiers only. The derived `Debug` prints every field, and an
+            // echoed frame can carry the code itself.
+            RecvMsg::Ns { msg_type, .. } => log::debug!("security-code gate: ns type={msg_type}"),
+            RecvMsg::Xyz { msg_id, state, .. } => {
+                log::debug!("security-code gate: xyz id={msg_id} state={state}")
+            }
+        }
+    }
+}
+
+/// Execute the second-factor approval gate that follows SRP on a live login.
+///
+/// Sends `XYZ_MSG_SWCR_TOKEN` state=1 carrying the username, then loops over
+/// inbound messages until one of:
+///
+/// 1. `XYZ_MSG_TOKEN_AUTH` (771) state=5 with `PASSED` arrives → user approved
+/// 2. `XYZ_MSG_SWCR_TOKEN` (775) state=2 arrives → wait state, capture
+///    `approval_url` / `session_id`, keep looping
+/// 3. An `NS_TEST_REQUEST` (530) arrives → reply with `NS_HEART_BEAT` (531),
+///    keep looping
+/// 4. `deadline` expires → `TimedOut` error
+/// 5. Underlying socket close → `ConnectionAborted` error (server's deadline)
+/// 6. Any other `XYZ_MSG_SWCR_TOKEN` state → `PermissionDenied` error: the
+///    server refused in a shape this gate doesn't model
+///
+/// If the server jumps straight to a non-XYZ NS message (e.g. CONNECT_RESPONSE),
+/// returns `Skipped` and logs the path — the unread NS message is then handled
+/// by the post-auth loop. There is no `unread`, so this branch is reached only
+/// where the very first reply is XYZ AUTH_FINISH PASSED with no preceding
+/// state=2.
+pub fn do_ib_key_2fa<S: Read + Write>(
+    stream: &mut S,
+    token_sub_type: &str,
+    deadline: std::time::Instant,
+    code_provider: Option<&CodeProvider>,
+) -> io::Result<IbKeyOutcome> {
+    use std::time::Instant;
+
+    // Send SWCR_TOKEN state=1. The username slot is empty in state=1; the
+    // tokenSubType (account-specific, typically "2a") is the only non-empty
+    // body field. See for the canonical wire layout.
+    let init = xyz::xyz_build_swcr_token_init(token_sub_type);
+    let framed = xyz::xyz_wrap(&init);
+    stream.write_all(&framed)?;
+    log::info!(
+        "2FA gate: sent SWCR_TOKEN state=1 ({} bytes inner, {} bytes framed)",
+        init.len(), framed.len(),
+    );
+    log::debug!("2FA gate: SWCR_TOKEN bytes (framed) = {}", hex_dump(&framed));
+
+    let mut approval_url = String::new();
+    let mut session_id = String::new();
+    let mut announced_wait = false;
+    let mut saw_challenge = false;
+    let mut code_submitted = false;
+    let mut pending_code: Option<std::sync::mpsc::Receiver<io::Result<String>>> = None;
+
+    loop {
+        if Instant::now() >= deadline {
+            return Err(ib_key_err(
+                io::ErrorKind::TimedOut,
+                "2FA approval timed out (client deadline)",
+            ));
+        }
+
+        let recv = match recv_msg(stream) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof
+                || e.kind() == io::ErrorKind::ConnectionReset
+                || e.kind() == io::ErrorKind::ConnectionAborted =>
+            {
+                // Server closed the socket. Two distinct cases:
+                //   - No state=2 arrived: the server rejected the SWCR_TOKEN
+                //     init, the account doesn't have IBKey enabled, or the wire
+                //     format is wrong. Fast (seconds).
+                //   - state=2 arrived and then the socket closed: the ~18 min
+                // server-side approval deadline fired.
+                let msg = if saw_challenge {
+                    "2FA approval timed out (server closed socket; ~18 min server-side deadline)"
+                } else {
+                    "2FA gate: server closed socket before issuing a challenge — \
+                     likely the account doesn't have IBKey 2FA enabled, or the \
+                     server rejected the SWCR_TOKEN format. (Set RUST_LOG=info \
+                     for stage-by-stage logs.)"
+                };
+                return Err(ib_key_err(io::ErrorKind::ConnectionAborted, msg));
+            }
+            // Nothing has arrived yet. The approval is a person reaching for a
+            // phone, so silence is the ordinary case and the loop goes back to
+            // the deadline check at the top — which is the only thing that can
+            // end this wait. Treating it as a failure both ends the login while
+            // the operator is still deciding, and, without a timeout on the
+            // socket at all, leaves the deadline unreachable while a server
+            // that has stopped talking holds the wait open for ever.
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock
+                || e.kind() == io::ErrorKind::TimedOut
+                || e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+
+        match recv {
+            RecvMsg::Xyz { msg_id, state, fields, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN && state == 2 => {
+                saw_challenge = true;
+                let challenge = xyz::parse_swcr_token_challenge(&fields);
+                approval_url = challenge.approval_url;
+                session_id = challenge.session_id;
+                if !announced_wait {
+                    log::info!(
+                        "2FA gate: awaiting approval (session_id={}, approval_url={})",
+                        if session_id.is_empty() { "<unknown>" } else { &session_id },
+                        if approval_url.is_empty() { "<not-provided>" } else { &approval_url },
+                    );
+                    announced_wait = true;
+                }
+                // Challenge/Response branch: if a code_provider is configured,
+                // pull the 8-char code from the callback and submit state=3
+                // instead of waiting for a phone tap. The callback runs off
+                // this thread because it blocks for as long as the operator
+                // needs to read the code off the IBKey app — this loop must
+                // keep answering the server's NS_TEST_REQUEST probes (~20 s
+                // cadence) in the meantime or the socket is torn down before
+                // the code is ever submitted. Guarded so a repeated state=2
+                // (server retransmission) doesn't spawn a second provider.
+                if !code_submitted && pending_code.is_none()
+                    && let Some(provider) = code_provider {
+                        let provider = provider.clone();
+                        let challenge_info = IbKeyChallenge {
+                            factor: SecondFactor::IbKeyChallengeResponse,
+                            display_id: session_id.clone(),
+                            avth_url: approval_url.clone(),
+                        };
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        std::thread::Builder::new()
+                            .name("ibkey-code-provider".into())
+                            .spawn(move || {
+                                let _ = tx.send(provider(challenge_info));
+                            })?;
+                        // An unattended provider (vault, env, file) resolves at
+                        // once and shouldn't have to wait for the next probe to
+                        // get its code on the wire, so give it a brief inline
+                        // grace period first. Far below the probe cadence, so
+                        // nothing is starved; a provider waiting on a human
+                        // falls through to the probe-driven path below.
+                        match rx.recv_timeout(IB_KEY_PROVIDER_FAST_PATH_GRACE) {
+                            Ok(result) => {
+                                // Same rule as the polled path below: the grace
+                                // period can straddle the deadline, and a code
+                                // is single use — submitting one on a login the
+                                // next loop abandons spends it for nothing.
+                                if Instant::now() < deadline {
+                                    submit_swcr_code(stream, &result?)?;
+                                    code_submitted = true;
+                                }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                pending_code = Some(rx);
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                return Err(provider_panicked());
+                            }
+                        }
+                    }
+            }
+            RecvMsg::Xyz { msg_id, state, fields, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN && state == 4 => {
+                // Challenge/Response result. Server responds PASSED → falls
+                // through to AUTH_FINISH (state=3); FAILED → server skips
+                // AUTH_FINISH and tears the socket down (no retry loop —
+ //).
+                let result = fields.iter().rev().find(|s| !s.is_empty()).cloned().unwrap_or_default();
+                if result.eq_ignore_ascii_case("PASSED") {
+                    log::info!("2FA gate: C/R code accepted (state=4 PASSED)");
+                } else {
+                    // Only echo a status we recognise. The reply's fields are
+                    // server-controlled and this one is adjacent to the slot the
+                    // code was sent in — never interpolate it blind.
+                    let reason = if result.eq_ignore_ascii_case("FAILED") { "FAILED" } else { "unrecognized status" };
+                    return Err(ib_key_err(
+                        io::ErrorKind::PermissionDenied,
+                        format!("2FA gate: C/R code rejected (state=4 {reason})"),
+                    ));
+                }
+            }
+            RecvMsg::Xyz { msg_id, state, fields, .. } if msg_id == xyz::XYZ_MSG_TOKEN_AUTH && (state == 3 || state == 5) => {
+                // Look for "PASSED" sentinel and the SOFT token (long hex string).
+                let mut passed = false;
+                let mut soft_token_hex = String::new();
+                for f in &fields {
+                    if f.eq_ignore_ascii_case("PASSED") { passed = true; }
+                    else if f.len() >= 32 && f.chars().all(|c| c.is_ascii_hexdigit())
+                        && soft_token_hex.is_empty()
+                    {
+                        soft_token_hex = f.clone();
+                    }
+                }
+                if passed {
+                    log::info!("2FA gate: approved");
+                    // AUTH_FINISH carries no token — body is
+                    // just `["", "PASSED"]`. The SOFT token used for downstream
+                    // farm logons (tag 8483) is the SRP-derived K_soft, which
+                    // ibx already computes correctly via `srp_compute_k`
+                    // (= SHA1(strip_leading_zeros(S))). No extraction needed.
+                    if approval_url.is_empty() && session_id.is_empty()
+                        && soft_token_hex.is_empty()
+                    {
+                        return Ok(IbKeyOutcome::Skipped);
+                    }
+                    return Ok(IbKeyOutcome::Approved {
+                        approval_url, session_id, soft_token_hex,
+                    });
+                }
+                return Err(ib_key_err(
+                    io::ErrorKind::PermissionDenied,
+                    "2FA approval rejected at AUTH_FINISH",
+                ));
+            }
+            RecvMsg::Ns { msg_type, fields, .. } if msg_type == NS_TEST_REQUEST => {
+                let ts = fields.iter().find(|f| !f.is_empty()).cloned().unwrap_or_default();
+                let reply = ns_build_heart_beat(NS_VERSION, &ts);
+                stream.write_all(&reply)?;
+                log::debug!("2FA gate: heartbeat {ts} -> 531");
+            }
+            RecvMsg::Ns { msg_type, .. } if msg_type == NS_ERROR_RESPONSE
+                || msg_type == NS_SECURE_ERROR =>
+            {
+                return Err(ib_key_err(
+                    io::ErrorKind::Other,
+                    format!("2FA gate: server error type={msg_type}"),
+                ));
+            }
+            RecvMsg::Xyz { msg_id, state, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN => {
+                // An unmodelled state is the server refusing in an unrecognised
+                // shape. Looping answers it with keepalives until the
+                // client deadline and then reports a timeout, which hides the
+                // reason for the ~18 min the operator spends waiting.
+                return Err(ib_key_err(
+                    io::ErrorKind::PermissionDenied,
+                    format!("2FA gate: unexpected SWCR_TOKEN state {state}"),
+                ));
+            }
+            // Anything else is informational; keep looping. Identifiers only —
+            // the derived `Debug` prints every field, and an echoed frame can
+            // carry the code itself.
+            RecvMsg::Ns { msg_type, .. } => log::debug!("2FA gate: ns type={msg_type}"),
+            RecvMsg::Xyz { msg_id, state, .. } => {
+                log::debug!("2FA gate: xyz id={msg_id} state={state}")
+            }
+        }
+
+        // A provider that outlived the grace period yields here instead. Polling
+        // on inbound traffic keeps the socket single-threaded, at the cost of
+        // trailing the operator's entry by up to one probe interval (~20 s); if
+        // that ever matters, give the stream a read timeout and select on both.
+        if let Some(rx) = pending_code.as_ref() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    pending_code = None;
+                    // A single-use code is not spent on a login about to be
+                    // abandoned: the deadline check at the top of the loop would
+                    // fire before the server's answer could be read.
+                    if Instant::now() < deadline {
+                        submit_swcr_code(stream, &result?)?;
+                        code_submitted = true;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return Err(provider_panicked());
+                }
+            }
+        }
+    }
+}
+
+/// Result of soft token authentication attempt.
+pub enum SoftTokenOutcome {
+    /// Token accepted.
+    Passed,
+    /// Token not recognized (state 5 / "UNKNOWN") — SRP fallback needed.
+    Unknown,
+}
+
+/// Exchange the login for a token this session can resume with.
+pub fn do_soft_token(
+    stream: &mut TcpStream,
+    session_token: &BigUint,
+    carry: &mut Vec<u8>,
+) -> io::Result<SoftTokenOutcome> {
+    use sha1::{Digest, Sha1};
+
+    // State 1: Send empty init (FIX-framed for farm)
+    let msg1 = xyz::xyz_build_soft_token(1, "", "", "");
+    stream.write_all(&wrap_xyz_fix(&msg1))?;
+
+    // State 2: Receive challenge (FIX-framed)
+    let recv2 = recv_8eq1(stream, carry)?;
+    let xyz2 = extract_xyz(&recv2);
+    let (_, _, state2, fields2) = xyz::xyz_parse_response(xyz2)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "SOFT_TOKEN: invalid XYZ state 2"))?;
+
+    if state2 == 5 {
+        // Farm rejected soft token — SRP fallback needed.
+        log::warn!("SOFT_TOKEN: farm returned state 5 (UNKNOWN) — SRP fallback needed");
+        return Ok(SoftTokenOutcome::Unknown);
+    }
+    if state2 != 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("SOFT_TOKEN: expected state 2, got {state2}"),
+        ));
+    }
+
+    let challenge_hex = fields2
+        .get(1)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "SOFT_TOKEN: empty challenge"))?;
+
+    // SHA-1(strip_zeros(challenge_bytes) + strip_zeros(token_bytes))
+    let challenge_int = BigUint::parse_bytes(challenge_hex.as_bytes(), 16)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Invalid challenge hex"))?;
+    let challenge_be = challenge_int.to_bytes_be();
+    let challenge_bytes = strip_leading_zeros(&challenge_be);
+    let token_be = session_token.to_bytes_be();
+    let token_bytes = strip_leading_zeros(&token_be);
+
+    let mut hasher = Sha1::new();
+    hasher.update(challenge_bytes);
+    hasher.update(token_bytes);
+    let digest = hasher.finalize();
+    let response_int = BigUint::from_bytes_be(&digest);
+    let response_hex = format!("{response_int:x}");
+
+    // State 3: Send hash response (FIX-framed)
+    let msg3 = xyz::xyz_build_soft_token(3, "", &response_hex, "");
+    stream.write_all(&wrap_xyz_fix(&msg3))?;
+
+    // State 4: Receive result (FIX-framed)
+    let recv4 = recv_8eq1(stream, carry)?;
+    let xyz4 = extract_xyz(&recv4);
+    let (_, _, _, fields4) = xyz::xyz_parse_response(xyz4)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "SOFT_TOKEN: invalid XYZ state 4"))?;
+
+    let result = fields4
+        .get(3)
+        .filter(|s| !s.is_empty())
+        .or_else(|| fields4.iter().rev().find(|s| !s.is_empty()))
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    if result == "PASSED" {
+        Ok(SoftTokenOutcome::Passed)
+    } else if result == "UNKNOWN" {
+        log::warn!("SOFT_TOKEN: farm returned UNKNOWN — SRP fallback needed");
+        Ok(SoftTokenOutcome::Unknown)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("SOFT_TOKEN auth failed: {result}"),
+        ))
+    }
+}
+
+/// SRP-6 authentication for farm connections using FIX framing (8=1).
+/// Called as fallback when `do_soft_token` returns `SoftTokenOutcome::Unknown`.
+/// Same SRP math as `do_srp`, different wire framing.
+pub fn do_srp_farm(
+    stream: &mut TcpStream,
+    username: &str,
+    password: &str,
+    carry: &mut Vec<u8>,
+) -> io::Result<()> {
+    let n = srp::srp_n();
+    let g = BigUint::from(srp::SRP_G);
+
+    // State 1: Send AUTH_QUERY (FIX-framed)
+    let msg1 = xyz::xyz_build_srp_v20(1, &[]);
+    stream.write_all(&wrap_xyz_fix(&msg1))?;
+
+    // State 2: Receive AUTH_PARAMS (FIX-framed)
+    let recv2 = recv_8eq1(stream, carry)?;
+    let xyz2 = extract_xyz(&recv2);
+    let (_, _, state2, fields2) = xyz::xyz_parse_response(xyz2)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Farm SRP: invalid state 2"))?;
+
+    if state2 != 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Farm SRP: expected state 2, got {state2}"),
+        ));
+    }
+
+    let data_fields = extract_srp_data(&fields2, username);
+    // The venue may state its own group; otherwise this client's applies.
+    let (n, g) = stated_group(&data_fields, n, g);
+
+    // Generate client keys with 32-byte private key
+    let mut a_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut a_bytes);
+    let a_priv = BigUint::from_bytes_be(&a_bytes);
+    let a_pub = g.modpow(&a_priv, &n);
+
+    // State 3: Send client public key A (FIX-framed)
+    let a_hex = format!("{a_pub:x}");
+    let msg3 = xyz::xyz_build_srp_v20(3, &[("L", &a_hex)]);
+    stream.write_all(&wrap_xyz_fix(&msg3))?;
+
+    // State 4: Receive salt + B (FIX-framed)
+    let recv4 = recv_8eq1(stream, carry)?;
+    let xyz4 = extract_xyz(&recv4);
+    let (_, _, state4, fields4) = xyz::xyz_parse_response(xyz4)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Farm SRP: invalid state 4"))?;
+
+    if state4 == 7 {
+        let result = fields4.get(9).map(|s| s.as_str()).unwrap_or("FAILED");
+        return Err(io::Error::other(
+            format!("Farm SRP early error (state 7): {result}"),
+        ));
+    }
+    if state4 != 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Farm SRP: expected state 4, got {state4}"),
+        ));
+    }
+
+    let data_fields = extract_srp_data(&fields4, username);
+    if data_fields.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Farm SRP: missing salt/B in state 4",
+        ));
+    }
+
+    let salt_hex = &data_fields[0];
+    let b_hex = &data_fields[1];
+    let salt_bytes = hex::decode(salt_hex)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let b_pub = BigUint::parse_bytes(b_hex.as_bytes(), 16).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "Farm SRP: invalid B hex")
+    })?;
+
+    // Compute SRP values (same math as do_srp)
+    let x = srp::srp_compute_x(strip_leading_zeros(&salt_bytes), username, password);
+    let u = srp::srp_compute_u(&a_pub, &b_pub);
+    let k_mult = BigUint::from(srp::SRP_K);
+    let s = srp::srp_compute_s(&b_pub, &a_priv, &u, &x, &n, &g, &k_mult);
+    let k = srp::srp_compute_k(&s);
+
+    let salt_int = BigUint::parse_bytes(salt_hex.as_bytes(), 16).unwrap_or_default();
+    let m1 = srp::srp_compute_m1(&n, &g, username, &salt_int, &a_pub, &b_pub, &k);
+
+    // State 5: Send client proof M1 (FIX-framed)
+    let m1_hex = format!("{m1:x}");
+    let msg5 = xyz::xyz_build_srp_v20(5, &[("N", &m1_hex)]);
+    stream.write_all(&wrap_xyz_fix(&msg5))?;
+
+    // State 6: Receive AUTH_RESULT (FIX-framed)
+    let recv6 = recv_8eq1(stream, carry)?;
+    let xyz6 = extract_xyz(&recv6);
+    let (_, _, state6, fields6) = xyz::xyz_parse_response(xyz6)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Farm SRP: invalid state 6"))?;
+
+    let result = fields6
+        .get(9)
+        .filter(|s| !s.is_empty())
+        .or_else(|| fields6.iter().rev().find(|s| !s.is_empty()))
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    if state6 == 6 && result == "PASSED" {
+        log::info!("Farm SRP auth PASSED");
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("Farm SRP FAILED (state={state6}): {result}"),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests;
