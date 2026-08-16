@@ -322,26 +322,15 @@ impl EClient {
         let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = Gateway::connect(&gw_config)?;
         let account_id = gw.account_id.clone();
         let accounts = gw.accounts.clone();
-        let session_token_bytes = crate::auth::crypto::strip_leading_zeros(
-            &gw.session_token.to_bytes_be(),
-        ).to_vec();
         let token_type = String::new();
-
-        let session = crate::auth::resume::ResumableSession {
-            token: session_token_bytes.clone(),
-            server_session_id: gw.server_session_id.clone(),
-            hw_info: gw.hw_info.clone(),
-            encoded: gw.encoded.clone(),
-            username: config.username.clone(),
-            paper: config.paper,
-        };
-        // Only where the caller asked for a file. Best-effort even then: a
-        // session that cannot be written is a slower start next time, never a
-        // failed connect now.
-        if let Some(path) = config.session_file.as_ref()
-            && let Err(e) = crate::auth::resume::save(path, &config.password, &session) {
-                log::warn!("session not saved to {}: {e}", path.display());
-            }
+        let session = crate::client_core::remember_session(
+            config.session_file.as_deref(),
+            &config.password,
+            &gw,
+            &config.username,
+            config.paper,
+        );
+        let session_token_bytes = session.token.clone();
 
         let shared = Arc::new(SharedState::new());
         // Before the engine's threads exist, so nothing reads a setting that
@@ -373,16 +362,9 @@ impl EClient {
         // it. Otherwise the clock — seconds, not milliseconds: an id a
         // thousand times larger does not fit the width a request is carried
         // under, so every request built from one is refused before it leaves.
-        let order_id_store = config.order_id_file.as_ref().map(|path| {
-            (path.clone(), crate::order_ids::key(&config.username, config.paper, 0))
-        });
-        let start_id = match &order_id_store {
-            Some((path, key)) => crate::order_ids::next_after_last(path, key),
-            None => std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        };
+        let (start_id, order_id_store) = crate::client_core::order_ids_continue_from(
+            config.order_id_file.clone(), &config.username, config.paper, 0,
+        );
 
         let core = ClientCore::new();
         // Stated before the client is handed back, so a caller cannot place

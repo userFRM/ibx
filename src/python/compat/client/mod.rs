@@ -270,26 +270,13 @@ impl EClient {
         let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = result
             .map_err(|e| PyRuntimeError::new_err(format!("Connection failed: {e}")))?;
 
-        // Kept for the next start, where the caller asked for it. Best effort:
-        // a session that cannot be written is a slower start next time, never
-        // a failed connect now.
-        if let Some(path) = session_file.as_ref() {
-            let session = crate::auth::resume::ResumableSession {
-                token: crate::auth::crypto::strip_leading_zeros(
-                    &gw.session_token.to_bytes_be(),
-                ).to_vec(),
-                server_session_id: gw.server_session_id.clone(),
-                hw_info: gw.hw_info.clone(),
-                encoded: gw.encoded.clone(),
-                username: username_for_session,
-                paper,
-            };
-            if let Err(e) = crate::auth::resume::save(
-                std::path::Path::new(path), &password_for_resume, &session,
-            ) {
-                log::warn!("session not saved to {path}: {e}");
-            }
-        }
+        crate::client_core::remember_session(
+            session_file.as_deref().map(std::path::Path::new),
+            &password_for_resume,
+            &gw,
+            &username_for_session,
+            paper,
+        );
 
         *self.account_id.lock().unwrap() = Some(gw.account_id.clone());
         *self.accounts.lock().unwrap() = gw.accounts.clone();
@@ -323,15 +310,18 @@ impl EClient {
         // process: counting from one on every start collides with everything
         // placed yesterday, and the venue answers that with "Duplicate ID" and
         // places nothing.
-        let id_store = order_id_file
+        // This surface always keeps a file: where the caller named none, the
+        // one beside their session, and failing that the default path.
+        let id_file = order_id_file
             .map(std::path::PathBuf::from)
             .or_else(|| session_file.as_ref().and_then(|s| {
                 std::path::Path::new(s).parent().map(|d| d.join("order-ids"))
             }))
             .unwrap_or_else(crate::order_ids::default_path);
-        let id_key = crate::order_ids::key(&username_for_resume, paper, client_id);
-        let start_id = crate::order_ids::next_after_last(&id_store, &id_key);
-        *self.order_id_store.lock().unwrap() = Some((id_store, id_key));
+        let (start_id, store) = crate::client_core::order_ids_continue_from(
+            Some(id_file), &username_for_resume, paper, client_id,
+        );
+        *self.order_id_store.lock().unwrap() = store;
 
         let handle = thread::Builder::new()
             .name("ib-engine-hotloop".into())
