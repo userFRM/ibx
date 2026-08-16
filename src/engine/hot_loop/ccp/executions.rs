@@ -206,7 +206,381 @@ pub fn unnamed_execution_fields(data: &[u8]) -> Vec<(u32, String)> {
     out
 }
 
+/// Answer a preview, and say whether it was the whole of this report.
+///
+/// The venue prices an order it has not placed on the same message as one it
+/// has, and marks it with 6091. A preview it refuses carries no figures at all
+/// — it arrives shaped exactly like the not-ready acknowledgement, every field
+/// "n/a", and says why on 58 — so a refusal answers `false` and is reported
+/// like any other report rather than read as a preview with nothing in it.
+fn take_what_if(
+    parsed: &std::collections::HashMap<u32, String>,
+    clord_id: u64,
+    context: &mut Context,
+    shared: &SharedState,
+    event_tx: &Option<SyncSender<Event>>,
+) -> bool {
+        const MARGIN_TAGS: [u32; 6] = [6826, 6827, 6828, 6092, 6093, 6094];
+        let is_data_frame = MARGIN_TAGS.iter().any(|tag| {
+            parsed.get(tag)
+                .and_then(|s| s.parse::<f64>().ok())
+                .is_some_and(|f| f.is_finite())
+        });
+        if is_data_frame
+            && let Some(order) = context.order(clord_id).copied() {
+                let response = crate::types::WhatIfResponse {
+                    order_id: clord_id,
+                    instrument: order.instrument,
+                    init_margin_before: parse_price_tag(parsed.get(&6826)),
+                    maint_margin_before: parse_price_tag(parsed.get(&6827)),
+                    equity_with_loan_before: parse_price_tag(parsed.get(&6828)),
+                    init_margin_after: parse_price_tag(parsed.get(&6092)),
+                    maint_margin_after: parse_price_tag(parsed.get(&6093)),
+                    equity_with_loan_after: parse_price_tag(parsed.get(&6094)),
+                    commission: parse_price_tag(parsed.get(&6378)),
+                    min_commission: parse_price_tag(parsed.get(&6379)),
+                    max_commission: parse_price_tag(parsed.get(&6380)),
+                    commission_currency: parsed.get(&6381).cloned().unwrap_or_default(),
+                    // The venue's own warning, which rides its own tag and
+                    // not the order's text.
+                    warning_text: parsed.get(&6361).cloned().unwrap_or_default(),
+                };
+                log::info!("WhatIf response: clord={} initMargin={:.2}->{:.2} commission={:.2}",
+                    clord_id,
+                    response.init_margin_before as f64 / PRICE_SCALE as f64,
+                    response.init_margin_after as f64 / PRICE_SCALE as f64,
+                    response.commission as f64 / PRICE_SCALE as f64);
+                context.retire_order(clord_id);
+                shared.orders.push_what_if(response.clone());
+                emit(event_tx, Event::WhatIf(response));
+            }
+    parsed.get(&39).map(|s| s.as_str()) != Some("8")
+}
+
+/// What a report says the order's state now is.
+///
+/// The wire's own status is not always the one the counterpart reports: 39=0
+/// is New on the wire and PreSubmitted until an exchange has acknowledged the
+/// order, which shows up on the same report as a destination and an exec
+/// reference. Reading the wire value straight through told a caller an order
+/// was working while it was still being routed.
+fn status_of(
+    ord_status: &str,
+    clord_id: u64,
+    parsed: &std::collections::HashMap<u32, String>,
+) -> crate::types::OrderStatus {
+    match ord_status {
+        "0" => {
+            // 39=0 is New on the wire, but the gateway reports PreSubmitted
+            // until the order is actually routed to and acknowledged by an
+            // exchange (for example a limit order resting pre-market). Routing
+            // shows up on the same exec report as a non-empty ExDestination
+            // (tag 100) plus an exec ref (tag 198) other than "NONE"; before
+            // routing both are absent/"NONE". Captured in.
+            let routed = parsed.get(&100).is_some_and(|s| !s.is_empty())
+                || parsed.get(&198).is_some_and(|s| s != "NONE" && !s.is_empty());
+            if routed {
+                crate::types::OrderStatus::Submitted
+            } else {
+                crate::types::OrderStatus::PreSubmitted
+            }
+        }
+        "5" => crate::types::OrderStatus::Submitted,
+        "A" => crate::types::OrderStatus::PreSubmitted,
+        "E" => crate::types::OrderStatus::PendingReplace,
+        "6" => crate::types::OrderStatus::PendingCancel,
+        "1" => crate::types::OrderStatus::PartiallyFilled,
+        "2" => crate::types::OrderStatus::Filled,
+        "4" | "C" => crate::types::OrderStatus::Cancelled,
+        // Not cancelled. The terminal groups D with pending-cancel and its
+        // own "is this terminal" test names only 2, 4, C and 8 — reading it
+        // as cancelled retired an order that was still working.
+        "D" => crate::types::OrderStatus::PendingCancel,
+        "8" => crate::types::OrderStatus::Rejected,
+        "I" => crate::types::OrderStatus::Inactive,
+        other => {
+            // A status this does not know is not a reason to drop the
+            // report: it may carry a fill, and returning here threw the
+            // fill away with it. Say so and carry on to the execution.
+            log::warn!("Unknown order status 39={other} for order {clord_id} — \
+                        the report is still read for its execution");
+            crate::types::OrderStatus::Uncertain
+        }
+    }
+}
+
 impl CcpState {
+    /// Book what a report says was filled.
+    ///
+    /// A fill can arrive for an order this session does not track: one that
+    /// raced its own cancel-ack out of the book, one placed from another
+    /// client, one left from an earlier session. The report names the contract
+    /// and the side, so it is booked from those rather than dropped — a
+    /// position the account actually holds is not this client's to forget.
+    #[allow(clippy::too_many_arguments)]
+    fn book_fill(
+        &mut self,
+        parsed: &std::collections::HashMap<u32, String>,
+        clord_id: u64,
+        dedup_key: &str,
+        is_resend: bool,
+        last_px: f64,
+        last_shares: i64,
+        report_cum_qty: i64,
+        commission: f64,
+        leaves_qty: i64,
+        order_cum_qty: i64,
+        order_avg_px: f64,
+        context: &mut Context,
+        shared: &SharedState,
+        event_tx: &Option<SyncSender<Event>>,
+    ) {
+        // A fill can arrive for an order this session does not track: one
+        // that raced its own cancel-ack out of the book, one placed from
+        // another client, or one left from an earlier session. The report
+        // names the contract and the side, so book it from that rather
+        // than dropping a position the account actually holds. An untracked
+        // order has nothing filled yet, so the arithmetic below reconciles
+        // against zero.
+        let target = match context.order(clord_id).copied() {
+            Some(order) => Some((order.instrument, order.side, order.filled as i64)),
+            None => untracked_fill_target(context, parsed).map(|(i, s)| (i, s, 0i64)),
+        };
+        if let Some((instrument, side, already_filled)) = target {
+            let booked = if is_resend {
+                // Recorded even though the cumulative figure is what decides
+                // this copy: the same execution can arrive again without its
+                // marker, and the window is what catches that one. Recorded
+                // here rather than earlier so an execution that reaches this
+                // handler before its order does is not spent on a delivery
+                // that had nothing to book against.
+                self.record_exec_id(dedup_key);
+                if report_cum_qty <= 0 {
+                    // Nothing to reconcile against. Booking the increment
+                    // would double what the recovery record already seeded.
+                    log::debug!("Resent execution for order {clord_id} carries no CumQty — not booked");
+                    0
+                } else {
+                    let delta = (report_cum_qty - already_filled).max(0);
+                    if delta != last_shares && delta > 0 {
+                        // The report's own increment is not what this client
+                        // is missing, so the fill that follows carries a
+                        // reconciled quantity at this report's price rather
+                        // than one execution's own terms. The order's total
+                        // and the position are right; the execution record
+                        // is approximate, and says so here.
+                        log::warn!(
+                            "Resent execution for order {clord_id}: booking {delta} to reach CumQty {report_cum_qty} \
+                             (report states {last_shares}) — execution detail is reconciled, not exact",
+                        );
+                    }
+                    delta
+                }
+            } else if !self.record_exec_id(dedup_key) {
+                // A duplicate suppresses the fill and nothing else: the
+                // report still carries a status to apply and terminal
+                // bookkeeping to run, and returning here skipped both.
+                log::warn!("Duplicate execution key={dedup_key} — the fill is already booked");
+                0
+            } else {
+                last_shares
+            };
+            if booked > 0 {
+                context.update_order_filled(clord_id, booked as u32);
+                let fill = Fill {
+                    instrument,
+                    order_id: clord_id,
+                    side,
+                    price: (last_px * PRICE_SCALE as f64) as i64,
+                    qty: booked,
+                    remaining: leaves_qty,
+                    commission: (commission * PRICE_SCALE as f64) as i64,
+                    timestamp_ns: context.now_ns(),
+                    cum_qty: order_cum_qty,
+                    avg_price: (order_avg_px * PRICE_SCALE as f64) as i64,
+                };
+                let delta = match side {
+                    Side::Buy => booked,
+                    Side::Sell | Side::ShortSell => -booked,
+                };
+                context.update_position(instrument, delta as f64);
+                // notify_fill inlined
+                shared.orders.push_fill(fill);
+                shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
+                // The holding the caller reads is keyed by contract, and
+                // the broker restates that feed on its own schedule — never
+                // because an order filled. Left to that feed alone, a
+                // position read back after a fill is the one the session
+                // started with.
+                // The report names the contract it filled. An order placed
+                // by symbol registers an instrument that knows no contract
+                // id, so taking it from the instrument attributed nothing.
+                let filled_con_id = parsed.get(&6008)
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .filter(|id| *id != 0)
+                    .or_else(|| context.market.con_id(instrument));
+                if let Some(con_id) = filled_con_id {
+                    shared.portfolio.apply_fill(
+                        con_id, delta as f64, (last_px * PRICE_SCALE as f64) as Price,
+                    );
+                }
+                emit(event_tx, Event::Fill(fill));
+            }
+        }
+    }
+
+
+    /// Take an order this session never saw from the venue's own account of it.
+    ///
+    /// At session start the venue replays what it holds as ordinary
+    /// acknowledgements, and a fresh process has nothing to match them against.
+    /// The record built here is what every later report for that order is read
+    /// against, so a field guessed here is wrong for the order's whole life — the
+    /// side most of all, since a recovered buy recorded as a sell moves the
+    /// position the wrong way by twice the fill.
+    fn recover_order(
+        &mut self,
+        parsed: &std::collections::HashMap<u32, String>,
+        clord_id: u64,
+        prior: Option<crate::types::Order>,
+        context: &mut Context,
+        shared: &SharedState,
+    ) {
+        let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
+        // The side has to be stated. A guess does not stay in the recovered
+        // record: every later fill for the order books through the tracked
+        // path and takes its side from here, so a recovered buy recorded as
+        // a sell moves the position down by the filled quantity instead of
+        // up — wrong by twice the fill, and indistinguishable afterwards
+        // from a side the report actually carried.
+        let side = match parsed.get(&54).map(|s| s.as_str()) {
+            Some("1") => Some(Side::Buy),
+            Some("2") => Some(Side::Sell),
+            Some("5") => Some(Side::ShortSell),
+            other => {
+                // The sentinel that terminates a recovery burst, and the
+                // mass-status echo, both parse to id 0 and carry no side.
+                // Warning about those once per connect would cry wolf on
+                // the one signal that matters when a real record is
+                // refused.
+                if clord_id != 0 {
+                    log::warn!(
+                        "Recovery record for order {clord_id} has Side={other:?}; not tracking it",
+                    );
+                }
+                None
+            }
+        };
+        let qty: u32 = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).map(|q| q as u32)
+            .unwrap_or_else(|| prior.map_or(0, |o| o.qty));
+        let limit_price_i64: i64 = parsed.get(&44)
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|p| (p * PRICE_SCALE as f64) as i64)
+            .unwrap_or_else(|| prior.map_or(0, |o| o.price));
+        let stop_price_i64: i64 = parsed.get(&99)
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|p| (p * PRICE_SCALE as f64) as i64)
+            .unwrap_or_else(|| prior.map_or(0, |o| o.stop_price));
+        let ord_type_byte: u8 = parsed.get(&40).and_then(|s| s.bytes().next())
+            .unwrap_or_else(|| prior.map_or(b'2', |o| o.ord_type));
+        // A recovery record with no tag 59 states no time-in-force, and this
+        // order was not placed by this session, so there is nothing to
+        // recover it from. Recorded as unstated rather than guessed: either
+        // guess is restated as a real instruction on the next replace, and
+        // an invented DAY would expire a resting GTC order at the close.
+        let tif_byte: u8 = parsed.get(&59)
+            .and_then(|s| s.bytes().next())
+            .unwrap_or_else(|| prior.map_or(crate::types::TIF_UNSTATED, |o| o.tif));
+        if let (Some(side), true) = (side, con_id != 0 && qty > 0) {
+            // Recovery is fed by gateway frames, so a full instrument
+            // table must degrade to a missing order rather than take the
+            // engine down. The reconnect burst replays every
+            // resting order, which is exactly when the table fills.
+            // Skipping only the insert keeps the order in last_clord and
+            // the rich-order cache, so req_open_orders still shows it —
+            // but it is NOT in the engine book, so a later fill or
+            // terminal status for it is dropped and no OrderUpdate
+            // reaches the caller. A missing order beats taking
+            // the engine down; it is not a complete answer.
+            match context.try_register_instrument(con_id) {
+                None => log::warn!(
+                    "recovery: instrument table full, order clord={clord_id} con_id={con_id} not tracked in the engine book",
+                ),
+                Some(instrument) => {
+            if let Some(sym) = parsed.get(&55) {
+                context.set_symbol(instrument, sym.clone());
+            }
+            context.insert_order(crate::types::Order {
+                order_id: clord_id,
+                instrument,
+                side,
+                price: limit_price_i64,
+                qty,
+                // Seeded from the recovery push rather than assumed zero.
+                // Without it a fresh process believes nothing has filled,
+                // and the replayed executions behind this record all look
+                // like new quantity.
+                filled: parsed.get(&14)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|c| c as u32)
+                    .unwrap_or_else(|| prior.map_or(0, |o| o.filled)),
+                // An order this session never saw is working by the fact of
+                // being in the push. One whose state was not known stays
+                // not known here, so the status this very message carries
+                // moves it, and the caller who was told it was unknown is
+                // told what it is.
+                status: if prior.is_some() {
+                    crate::types::OrderStatus::Uncertain
+                } else {
+                    crate::types::OrderStatus::Submitted
+                },
+                ord_type: ord_type_byte,
+                tif: tif_byte,
+                stop_price: stop_price_i64,
+            });
+            self.hydrated_any = true;
+            log::info!("CCP recovery: inserted orderId={} sym={:?} side={:?} qty={} px={}",
+                clord_id, parsed.get(&55), side, qty,
+                limit_price_i64 as f64 / PRICE_SCALE as f64);
+            // Published, not just tracked. The engine knowing an order is
+            // working does the caller no good on its own: `req_open_orders`
+            // reads what has been published, so an order the server named
+            // at connect went unreported until some later message about it
+            // happened to arrive. A caller asking what it already has on,
+            // at the moment it starts, was told nothing.
+            let sec_type_str = context.market.order_routing(instrument).0;
+            shared.orders.push_order_info(clord_id, crate::bridge::RichOrderInfo {
+                contract: api::Contract {
+                    con_id,
+                    symbol: parsed.get(&55).cloned().unwrap_or_default(),
+                    sec_type: sec_type_str,
+                    currency: parsed.get(&15).cloned().unwrap_or_default(),
+                    ..Default::default()
+                },
+                order: api::Order {
+                    order_id: clord_id as i64,
+                    action: match side {
+                        Side::Buy => "BUY".to_string(),
+                        _ => "SELL".to_string(),
+                    },
+                    total_quantity: qty as f64,
+                    order_type: crate::types::ord_type_fix_str(ord_type_byte).to_string(),
+                    lmt_price: limit_price_i64 as f64 / PRICE_SCALE as f64,
+                    aux_price: stop_price_i64 as f64 / PRICE_SCALE as f64,
+                    account: parsed.get(&1).cloned().unwrap_or_default(),
+                    ..Default::default()
+                },
+                order_state: api::OrderState {
+                    status: "Submitted".to_string(),
+                    ..Default::default()
+                },
+                last_exec: Default::default(),
+            });
+                }
+            }
+        }
+    }
+
     pub(crate) fn poll_executions(
         &mut self,
         ccp_conn: &mut Option<Connection>,
@@ -361,139 +735,7 @@ impl CcpState {
         if is_new_ack && clord_id != 0 && !already_finished
             && (context.order(clord_id).is_none() || unknown)
         {
-            let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
-            // The side has to be stated. A guess does not stay in the recovered
-            // record: every later fill for the order books through the tracked
-            // path and takes its side from here, so a recovered buy recorded as
-            // a sell moves the position down by the filled quantity instead of
-            // up — wrong by twice the fill, and indistinguishable afterwards
-            // from a side the report actually carried.
-            let side = match parsed.get(&54).map(|s| s.as_str()) {
-                Some("1") => Some(Side::Buy),
-                Some("2") => Some(Side::Sell),
-                Some("5") => Some(Side::ShortSell),
-                other => {
-                    // The sentinel that terminates a recovery burst, and the
-                    // mass-status echo, both parse to id 0 and carry no side.
-                    // Warning about those once per connect would cry wolf on
-                    // the one signal that matters when a real record is
-                    // refused.
-                    if clord_id != 0 {
-                        log::warn!(
-                            "Recovery record for order {clord_id} has Side={other:?}; not tracking it",
-                        );
-                    }
-                    None
-                }
-            };
-            let qty: u32 = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).map(|q| q as u32)
-                .unwrap_or_else(|| prior.map_or(0, |o| o.qty));
-            let limit_price_i64: i64 = parsed.get(&44)
-                .and_then(|s| s.parse::<f64>().ok())
-                .map(|p| (p * PRICE_SCALE as f64) as i64)
-                .unwrap_or_else(|| prior.map_or(0, |o| o.price));
-            let stop_price_i64: i64 = parsed.get(&99)
-                .and_then(|s| s.parse::<f64>().ok())
-                .map(|p| (p * PRICE_SCALE as f64) as i64)
-                .unwrap_or_else(|| prior.map_or(0, |o| o.stop_price));
-            let ord_type_byte: u8 = parsed.get(&40).and_then(|s| s.bytes().next())
-                .unwrap_or_else(|| prior.map_or(b'2', |o| o.ord_type));
-            // A recovery record with no tag 59 states no time-in-force, and this
-            // order was not placed by this session, so there is nothing to
-            // recover it from. Recorded as unstated rather than guessed: either
-            // guess is restated as a real instruction on the next replace, and
-            // an invented DAY would expire a resting GTC order at the close.
-            let tif_byte: u8 = parsed.get(&59)
-                .and_then(|s| s.bytes().next())
-                .unwrap_or_else(|| prior.map_or(crate::types::TIF_UNSTATED, |o| o.tif));
-            if let (Some(side), true) = (side, con_id != 0 && qty > 0) {
-                // Recovery is fed by gateway frames, so a full instrument
-                // table must degrade to a missing order rather than take the
-                // engine down. The reconnect burst replays every
-                // resting order, which is exactly when the table fills.
-                // Skipping only the insert keeps the order in last_clord and
-                // the rich-order cache, so req_open_orders still shows it —
-                // but it is NOT in the engine book, so a later fill or
-                // terminal status for it is dropped and no OrderUpdate
-                // reaches the caller. A missing order beats taking
-                // the engine down; it is not a complete answer.
-                match context.try_register_instrument(con_id) {
-                    None => log::warn!(
-                        "recovery: instrument table full, order clord={clord_id} con_id={con_id} not tracked in the engine book",
-                    ),
-                    Some(instrument) => {
-                if let Some(sym) = parsed.get(&55) {
-                    context.set_symbol(instrument, sym.clone());
-                }
-                context.insert_order(crate::types::Order {
-                    order_id: clord_id,
-                    instrument,
-                    side,
-                    price: limit_price_i64,
-                    qty,
-                    // Seeded from the recovery push rather than assumed zero.
-                    // Without it a fresh process believes nothing has filled,
-                    // and the replayed executions behind this record all look
-                    // like new quantity.
-                    filled: parsed.get(&14)
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .map(|c| c as u32)
-                        .unwrap_or_else(|| prior.map_or(0, |o| o.filled)),
-                    // An order this session never saw is working by the fact of
-                    // being in the push. One whose state was not known stays
-                    // not known here, so the status this very message carries
-                    // moves it, and the caller who was told it was unknown is
-                    // told what it is.
-                    status: if prior.is_some() {
-                        crate::types::OrderStatus::Uncertain
-                    } else {
-                        crate::types::OrderStatus::Submitted
-                    },
-                    ord_type: ord_type_byte,
-                    tif: tif_byte,
-                    stop_price: stop_price_i64,
-                });
-                self.hydrated_any = true;
-                log::info!("CCP recovery: inserted orderId={} sym={:?} side={:?} qty={} px={}",
-                    clord_id, parsed.get(&55), side, qty,
-                    limit_price_i64 as f64 / PRICE_SCALE as f64);
-                // Published, not just tracked. The engine knowing an order is
-                // working does the caller no good on its own: `req_open_orders`
-                // reads what has been published, so an order the server named
-                // at connect went unreported until some later message about it
-                // happened to arrive. A caller asking what it already has on,
-                // at the moment it starts, was told nothing.
-                let sec_type_str = context.market.order_routing(instrument).0;
-                shared.orders.push_order_info(clord_id, crate::bridge::RichOrderInfo {
-                    contract: api::Contract {
-                        con_id,
-                        symbol: parsed.get(&55).cloned().unwrap_or_default(),
-                        sec_type: sec_type_str,
-                        currency: parsed.get(&15).cloned().unwrap_or_default(),
-                        ..Default::default()
-                    },
-                    order: api::Order {
-                        order_id: clord_id as i64,
-                        action: match side {
-                            Side::Buy => "BUY".to_string(),
-                            _ => "SELL".to_string(),
-                        },
-                        total_quantity: qty as f64,
-                        order_type: crate::types::ord_type_fix_str(ord_type_byte).to_string(),
-                        lmt_price: limit_price_i64 as f64 / PRICE_SCALE as f64,
-                        aux_price: stop_price_i64 as f64 / PRICE_SCALE as f64,
-                        account: parsed.get(&1).cloned().unwrap_or_default(),
-                        ..Default::default()
-                    },
-                    order_state: api::OrderState {
-                        status: "Submitted".to_string(),
-                        ..Default::default()
-                    },
-                    last_exec: Default::default(),
-                });
-                    }
-                }
-            }
+            self.recover_order(parsed, clord_id, prior, context, shared);
         }
 
         // Drop the sentinel/end-of-stream record (ClOrdID="*"/"0"/absent → parses
@@ -543,50 +785,10 @@ impl CcpState {
         // and the frame is real when any field is set. The
         // ack carries "n/a" in all six, so it never matches. Captured
         // byte-level in.
-        if parsed.get(&6091).map(|s| s.as_str()) == Some("1") {
-            const MARGIN_TAGS: [u32; 6] = [6826, 6827, 6828, 6092, 6093, 6094];
-            let is_data_frame = MARGIN_TAGS.iter().any(|tag| {
-                parsed.get(tag)
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .is_some_and(|f| f.is_finite())
-            });
-            if is_data_frame
-                && let Some(order) = context.order(clord_id).copied() {
-                    let response = crate::types::WhatIfResponse {
-                        order_id: clord_id,
-                        instrument: order.instrument,
-                        init_margin_before: parse_price_tag(parsed.get(&6826)),
-                        maint_margin_before: parse_price_tag(parsed.get(&6827)),
-                        equity_with_loan_before: parse_price_tag(parsed.get(&6828)),
-                        init_margin_after: parse_price_tag(parsed.get(&6092)),
-                        maint_margin_after: parse_price_tag(parsed.get(&6093)),
-                        equity_with_loan_after: parse_price_tag(parsed.get(&6094)),
-                        commission: parse_price_tag(parsed.get(&6378)),
-                        min_commission: parse_price_tag(parsed.get(&6379)),
-                        max_commission: parse_price_tag(parsed.get(&6380)),
-                        commission_currency: parsed.get(&6381).cloned().unwrap_or_default(),
-                        // The venue's own warning, which rides its own tag and
-                        // not the order's text.
-                        warning_text: parsed.get(&6361).cloned().unwrap_or_default(),
-                    };
-                    log::info!("WhatIf response: clord={} initMargin={:.2}->{:.2} commission={:.2}",
-                        clord_id,
-                        response.init_margin_before as f64 / PRICE_SCALE as f64,
-                        response.init_margin_after as f64 / PRICE_SCALE as f64,
-                        response.commission as f64 / PRICE_SCALE as f64);
-                    context.retire_order(clord_id);
-                    shared.orders.push_what_if(response.clone());
-                    emit(event_tx, Event::WhatIf(response));
-                }
-            // A preview the venue refuses has no margin figures to state, so it
-            // arrives shaped exactly like the not-ready ack — every field "n/a"
-            // — and says why on 58 instead. Returning here on that shape threw
-            // the reason away and left the caller waiting out a preview that
-            // was never coming. A refusal falls through and is reported like
-            // any other.
-            if parsed.get(&39).map(|s| s.as_str()) != Some("8") {
-                return;
-            }
+        if parsed.get(&6091).map(|s| s.as_str()) == Some("1")
+            && take_what_if(parsed, clord_id, context, shared, event_tx)
+        {
+            return;
         }
 
         let ord_status = parsed.get(&39).map(|s| s.as_str()).unwrap_or("");
@@ -641,44 +843,7 @@ impl CcpState {
                 parsed.get(&103).map(|s| s.as_str()).unwrap_or(""));
         }
 
-        let status = match ord_status {
-            "0" => {
-                // 39=0 is New on the wire, but the gateway reports PreSubmitted
-                // until the order is actually routed to and acknowledged by an
-                // exchange (for example a limit order resting pre-market). Routing
-                // shows up on the same exec report as a non-empty ExDestination
-                // (tag 100) plus an exec ref (tag 198) other than "NONE"; before
-                // routing both are absent/"NONE". Captured in.
-                let routed = parsed.get(&100).is_some_and(|s| !s.is_empty())
-                    || parsed.get(&198).is_some_and(|s| s != "NONE" && !s.is_empty());
-                if routed {
-                    crate::types::OrderStatus::Submitted
-                } else {
-                    crate::types::OrderStatus::PreSubmitted
-                }
-            }
-            "5" => crate::types::OrderStatus::Submitted,
-            "A" => crate::types::OrderStatus::PreSubmitted,
-            "E" => crate::types::OrderStatus::PendingReplace,
-            "6" => crate::types::OrderStatus::PendingCancel,
-            "1" => crate::types::OrderStatus::PartiallyFilled,
-            "2" => crate::types::OrderStatus::Filled,
-            "4" | "C" => crate::types::OrderStatus::Cancelled,
-            // Not cancelled. The terminal groups D with pending-cancel and its
-            // own "is this terminal" test names only 2, 4, C and 8 — reading it
-            // as cancelled retired an order that was still working.
-            "D" => crate::types::OrderStatus::PendingCancel,
-            "8" => crate::types::OrderStatus::Rejected,
-            "I" => crate::types::OrderStatus::Inactive,
-            other => {
-                // A status this does not know is not a reason to drop the
-                // report: it may carry a fill, and returning here threw the
-                // fill away with it. Say so and carry on to the execution.
-                log::warn!("Unknown order status 39={other} for order {clord_id} — \
-                            the report is still read for its execution");
-                crate::types::OrderStatus::Uncertain
-            }
-        };
+        let status = status_of(ord_status, clord_id, parsed);
 
 
         // A replace is acknowledged as 39=5, and the gateway reaches it through
@@ -773,98 +938,11 @@ impl CcpState {
         };
 
         if matches!(exec_type, "F" | "1" | "2") && last_shares > 0 {
-            // A fill can arrive for an order this session does not track: one
-            // that raced its own cancel-ack out of the book, one placed from
-            // another client, or one left from an earlier session. The report
-            // names the contract and the side, so book it from that rather
-            // than dropping a position the account actually holds. An untracked
-            // order has nothing filled yet, so the arithmetic below reconciles
-            // against zero.
-            let target = match context.order(clord_id).copied() {
-                Some(order) => Some((order.instrument, order.side, order.filled as i64)),
-                None => untracked_fill_target(context, parsed).map(|(i, s)| (i, s, 0i64)),
-            };
-            if let Some((instrument, side, already_filled)) = target {
-                let booked = if is_resend {
-                    // Recorded even though the cumulative figure is what decides
-                    // this copy: the same execution can arrive again without its
-                    // marker, and the window is what catches that one. Recorded
-                    // here rather than earlier so an execution that reaches this
-                    // handler before its order does is not spent on a delivery
-                    // that had nothing to book against.
-                    self.record_exec_id(&dedup_key);
-                    if report_cum_qty <= 0 {
-                        // Nothing to reconcile against. Booking the increment
-                        // would double what the recovery record already seeded.
-                        log::debug!("Resent execution for order {clord_id} carries no CumQty — not booked");
-                        0
-                    } else {
-                        let delta = (report_cum_qty - already_filled).max(0);
-                        if delta != last_shares && delta > 0 {
-                            // The report's own increment is not what this client
-                            // is missing, so the fill that follows carries a
-                            // reconciled quantity at this report's price rather
-                            // than one execution's own terms. The order's total
-                            // and the position are right; the execution record
-                            // is approximate, and says so here.
-                            log::warn!(
-                                "Resent execution for order {clord_id}: booking {delta} to reach CumQty {report_cum_qty} \
-                                 (report states {last_shares}) — execution detail is reconciled, not exact",
-                            );
-                        }
-                        delta
-                    }
-                } else if !self.record_exec_id(&dedup_key) {
-                    // A duplicate suppresses the fill and nothing else: the
-                    // report still carries a status to apply and terminal
-                    // bookkeeping to run, and returning here skipped both.
-                    log::warn!("Duplicate execution key={dedup_key} — the fill is already booked");
-                    0
-                } else {
-                    last_shares
-                };
-                if booked > 0 {
-                    context.update_order_filled(clord_id, booked as u32);
-                    let fill = Fill {
-                        instrument,
-                        order_id: clord_id,
-                        side,
-                        price: (last_px * PRICE_SCALE as f64) as i64,
-                        qty: booked,
-                        remaining: leaves_qty,
-                        commission: (commission * PRICE_SCALE as f64) as i64,
-                        timestamp_ns: context.now_ns(),
-                        cum_qty: order_cum_qty,
-                        avg_price: (order_avg_px * PRICE_SCALE as f64) as i64,
-                    };
-                    let delta = match side {
-                        Side::Buy => booked,
-                        Side::Sell | Side::ShortSell => -booked,
-                    };
-                    context.update_position(instrument, delta as f64);
-                    // notify_fill inlined
-                    shared.orders.push_fill(fill);
-                    shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
-                    // The holding the caller reads is keyed by contract, and
-                    // the broker restates that feed on its own schedule — never
-                    // because an order filled. Left to that feed alone, a
-                    // position read back after a fill is the one the session
-                    // started with.
-                    // The report names the contract it filled. An order placed
-                    // by symbol registers an instrument that knows no contract
-                    // id, so taking it from the instrument attributed nothing.
-                    let filled_con_id = parsed.get(&6008)
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .filter(|id| *id != 0)
-                        .or_else(|| context.market.con_id(instrument));
-                    if let Some(con_id) = filled_con_id {
-                        shared.portfolio.apply_fill(
-                            con_id, delta as f64, (last_px * PRICE_SCALE as f64) as Price,
-                        );
-                    }
-                    emit(event_tx, Event::Fill(fill));
-                }
-            }
+            self.book_fill(
+                parsed, clord_id, &dedup_key, is_resend, last_px,
+                last_shares, report_cum_qty, commission, leaves_qty, order_cum_qty,
+                order_avg_px, context, shared, event_tx,
+            );
         }
 
         // A report that fills an order states its new status on the same
