@@ -12,7 +12,7 @@ import ibx
 
 
 def _rust_settings() -> set[str]:
-    source = pathlib.Path(__file__).resolve().parents[2] / "src/api/settings.rs"
+    source = pathlib.Path(__file__).resolve().parents[2] / "src/settings.rs"
     text = source.read_text()
     at = text.index("pub struct GatewaySettings {")
     end = text.index("\n}", at)

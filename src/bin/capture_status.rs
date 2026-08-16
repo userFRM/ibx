@@ -7,7 +7,7 @@
 //!
 //! Reads only. It places nothing.
 //!
-//!     IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_status
+//!     IB_USERNAME=… IB_PASSWORD=… cargo run --features dev-tools --bin capture_status
 
 use std::time::{Duration, Instant};
 

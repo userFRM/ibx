@@ -44,7 +44,7 @@ requires an advisor account.
 | Caller-facing requests | 76, of which 0 return as though they acted when they did not | [`scripts/gen_wire_reach.py`](scripts/gen_wire_reach.py) (CI) |
 | Order fields | 154: 125 transmitted, 29 not carried by the protocol, 0 silently dropped | [`scripts/gen_order_field_reach.py`](scripts/gen_order_field_reach.py) (CI) |
 | Rust/Python equivalence | 4 static gates plus a 10-request live comparison | [`scripts/conformance.py`](scripts/conformance.py) |
-| Tests | 1,367 offline, 489 against production servers | `cargo test`, `pytest tests/python` |
+| Tests | 1,968 offline, 157 against production servers | `cargo test`, `pytest tests/python` |
 
 ## Python
 

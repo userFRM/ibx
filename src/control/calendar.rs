@@ -14,7 +14,10 @@
 //! and will not build an event request without it, so a request sent anyway
 //! would be one the venue was never asked in the counterpart's own operation.
 
-use crate::types::CalendarQuery;
+// The query a request is built from sits beside the command that carries
+// it. Reachable here because that is the path a program written against this
+// client already names.
+pub use crate::types::CalendarQuery;
 
 /// The sub-protocol both requests and both answers travel under.
 pub const CALENDAR_SUB_PROTOCOL: u32 = 155;

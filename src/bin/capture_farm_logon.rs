@@ -13,7 +13,7 @@
 //! branch for.
 //!
 //! ```text
-//! IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_farm_logon -- eufarm usopt
+//! IB_USERNAME=… IB_PASSWORD=… cargo run --features dev-tools --bin capture_farm_logon -- eufarm usopt
 //! ```
 //!
 //! Farms default to the set the compatibility suite tries. Reads only: it logs

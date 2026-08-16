@@ -7,7 +7,7 @@
 //! Percent above the ask so it is marketable the instant it reaches the book.
 //!
 //! Usage:
-//!   IB_USERNAME=... IB_PASSWORD=... cargo run --example premarket_marketable_axti [buy|sell]
+//!   IB_USERNAME=... IB_PASSWORD=... cargo run --features dev-tools --bin premarket_marketable_axti [buy|sell]
 //!
 //! `buy` (default) opens a 1-share long above the ask; `sell` closes it below
 //! The bid. Sends a single 1-share order against the paper account. Run only

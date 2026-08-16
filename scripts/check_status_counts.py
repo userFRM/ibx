@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the test counts STATUS.md publishes against the tests that exist.
+"""Check the test counts STATUS.md and the README publish against what exists.
 
 A number in a shipped document is a claim. Typed in once and left, it is a
 claim that goes quietly wrong: the suites grow, the figure does not, and a
@@ -19,6 +19,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 STATUS = ROOT / "STATUS.md"
+README = ROOT / "README.md"
 
 #: Row label in the table, and how to count what it describes.
 ROWS = {
@@ -99,9 +100,39 @@ def published() -> dict[str, int]:
     return out
 
 
+def readme_says() -> tuple[int, int] | None:
+    """What the README's own test row states, offline and live.
+
+    The row is prose rather than a table of counts, so it is read back out of
+    the sentence it is written in. A figure nobody re-derives is one that goes
+    stale quietly — this one was two hundred tests out before anything checked
+    it.
+    """
+    m = re.search(r"\| ([\d,]+) offline, ([\d,]+) against production servers \|",
+                  README.read_text())
+    if not m:
+        return None
+    return (int(m.group(1).replace(",", "")), int(m.group(2).replace(",", "")))
+
+
 def main() -> int:
     have, said = counted(), published()
     wrong = []
+
+    # The README states the same thing in a sentence.
+    offline = have["rust"] + have["python"]
+    live = have["python_live"] + have["paper"]
+    stated = readme_says()
+    if stated is None:
+        wrong.append("README.md states no test counts")
+    elif stated != (offline, live):
+        wrong.append(
+            f"README.md says {stated[0]:,} offline and {stated[1]:,} live, "
+            f"{offline:,} and {live:,} exist"
+        )
+    else:
+        print(f"readme: {offline:,} offline, {live:,} live")
+
     for key, n in have.items():
         if key not in said:
             wrong.append(f"{key}: nothing published, {n} exist")
@@ -110,7 +141,7 @@ def main() -> int:
         else:
             print(f"{key}: {n:,}")
     if wrong:
-        print("\nSTATUS.md publishes a count that is not what is there:")
+        print("\nA published count is not what is there:")
         for w in wrong:
             print(f"  {w}")
         return 1

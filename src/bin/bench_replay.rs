@@ -11,8 +11,8 @@
 //! real 35=P messages captured from the wire. Otherwise uses synthetic payloads.
 //!
 //! Usage:
-//!   cargo run --release --bin bench_replay
-//!   cargo run --release --bin bench_replay -- --fixture path/to/fix-agent-gw.jsonl
+//!   cargo run --release --features dev-tools --bin bench_replay
+//!   cargo run --release --features dev-tools --bin bench_replay -- --fixture path/to/fix-agent-gw.jsonl
 
 #[path = "support/payload.rs"]
 mod payload;

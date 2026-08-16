@@ -6,7 +6,7 @@
 //! takes the message: a tag it does not know, or one carrying the wrong kind
 //! of value, comes back as a refusal rather than a margin figure.
 //!
-//!     IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_whatif
+//!     IB_USERNAME=… IB_PASSWORD=… cargo run --features dev-tools --bin capture_whatif
 
 use std::time::{Duration, Instant};
 

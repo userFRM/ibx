@@ -5,7 +5,7 @@
 //! The position held. Safe to no-op-rerun: if already holding SPY, the new
 //! Fill just adds 1 more share.
 //!
-//! Usage: IB_USERNAME=... IB_PASSWORD=... cargo run --example seed_spy_position
+//! Usage: IB_USERNAME=... IB_PASSWORD=... cargo run --features dev-tools --bin seed_spy_position
 
 use std::env;
 use std::sync::{Arc, Mutex};

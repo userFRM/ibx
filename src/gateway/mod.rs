@@ -20,7 +20,6 @@ use crate::auth::crypto::strip_leading_zeros;
 use crate::auth::dh::SecureChannel;
 use crate::auth::session::{self, do_srp, do_soft_token};
 use crate::config::*;
-use crate::protocol::datetime::*;
 use crate::bridge::SharedState;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix::{self, fix_build, fix_parse, fix_read_deadline};
@@ -1869,6 +1868,29 @@ impl Gateway {
         }));
     }
 
+    /// Hand the open connections to the loop that will run them.
+    ///
+    /// The loop is built by the engine now, since a logon knows nothing about
+    /// one. Kept because it is the name a program written against this client
+    /// already calls.
+    #[allow(clippy::too_many_arguments)]
+    pub fn into_hot_loop(
+        self,
+        shared: std::sync::Arc<SharedState>,
+        event_tx: Option<std::sync::mpsc::SyncSender<crate::bridge::Event>>,
+        farm_conn: Connection,
+        ccp_conn: Connection,
+        hmds_conn: Option<Connection>,
+        secdef_conn: Option<Connection>,
+        core_id: Option<usize>,
+        caller: CallerAuth,
+    ) -> (crate::engine::hot_loop::HotLoop, std::sync::mpsc::SyncSender<crate::types::ControlCommand>) {
+        crate::engine::hot_loop::HotLoop::for_session(
+            self, shared, event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn,
+            core_id, caller,
+        )
+    }
+
     /// The credentials and session a reconnect needs, from this gateway plus
     /// what the caller supplied.
     ///
@@ -1912,6 +1934,11 @@ impl Gateway {
 
 }
 
-/// Format timestamp as YYYYMMDD-HH:MM:SS (no chrono dependency).
+// Where a market-data subscription is composed, and the clock a request is
+// stamped with. Both moved to the wire module; reachable here because that is
+// the path a program written against this client already names.
+pub use crate::protocol::datetime::{chrono_free_timestamp, days_to_ymd};
+pub use crate::protocol::market_data::{build_mktdata_subscribe, build_mktdata_unsubscribe};
+
 #[cfg(test)]
 mod tests;

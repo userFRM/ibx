@@ -8,7 +8,7 @@
 //! Reads only, apart from order previews, which the venue prices and does not
 //! place.
 //!
-//!     IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_global
+//!     IB_USERNAME=… IB_PASSWORD=… cargo run --features dev-tools --bin capture_global
 
 use std::time::{Duration, Instant};
 

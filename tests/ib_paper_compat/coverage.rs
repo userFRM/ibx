@@ -141,11 +141,11 @@ pub(super) fn phase_endpoint_coverage(conns: Conns) -> Conns {
 }
 
 fn enum_variants_from_types(enum_name: &str) -> Vec<String> {
-    let src = include_str!("../../src/types/mod.rs");
+    let src = include_str!("../../src/types/commands.rs");
     let marker = format!("pub enum {enum_name} {{");
     let start = src
         .find(&marker)
-        .expect("enum declaration not found in src/types.rs");
+        .expect("enum declaration not found in src/types/commands.rs");
     let body = &src[start + marker.len()..];
 
     let mut variants = Vec::new();

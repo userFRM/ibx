@@ -7,10 +7,10 @@
 //!
 //! Phase A:
 //!   $env:RUST_LOG="trace"; $env:IB_USERNAME="..."; $env:IB_PASSWORD="..."
-//!   cargo run --release --example wire_repro -- place 2> .tmp/wire_repro_place.log
+//!   cargo run --release --features dev-tools --bin wire_repro -- place 2> .tmp/wire_repro_place.log
 //!
 //! Phase B (fresh process):
-//!   cargo run --release --example wire_repro -- cancel 2> .tmp/wire_repro_cancel.log
+//!   cargo run --release --features dev-tools --bin wire_repro -- cancel 2> .tmp/wire_repro_cancel.log
 //!
 //! State file: .tmp/wire_repro_state.txt (order_id=, perm_id=, status=).
 

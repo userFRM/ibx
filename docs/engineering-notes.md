@@ -265,6 +265,9 @@ they carried, and the capture binaries ask for the traffic worth keeping:
 | `capture_status` | The venues that state a trading status |
 | `capture_global` | Contracts and bars across nine markets |
 
+They are development tools rather than part of the library, so they are built
+only when asked for: `cargo run --features dev-tools --bin capture_depth`.
+
 The book capture is what settled where a section names its subscription: the
 tag sits three bytes into the frame, after two bytes and a marker. Read a byte
 earlier — which is what this client did — a section matched no subscription and

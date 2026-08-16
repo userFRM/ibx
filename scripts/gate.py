@@ -67,6 +67,21 @@ def steps(suites):
         # waits the full timeout, which is minutes across these.
         (["cargo", "test", *sum([["--test", s] for s in suites], [])],
          {"IBX_REGISTRATION_TIMEOUT_MS": "20"}),
+        # The workflow builds the documentation and fails on a warning. Run
+        # locally only as clippy was: a broken doc link is invisible to every
+        # step above it, and three of them reached main because this line was
+        # not here.
+        (["cargo", "doc", "--no-deps", "--lib"], {"RUSTDOCFLAGS": "-D warnings"}),
+        # And the Python suite, which reads the Rust source in two places. Both
+        # went stale in a refactor that every Rust suite passed.
+        ([".venv/bin/python", "-m", "pytest", "tests/python", "-q"], {}),
+        # The paper suite's offline half — the manifests that check this client
+        # against the reference client's surface. Its live phases refuse to run
+        # without credentials, which is deliberate, so they are told to skip.
+        # A manifest here read a file that moved and could not pass at all,
+        # and no other step in this list builds the target.
+        (["cargo", "test", "--test", "ib_paper_compat"],
+         {"IBX_ALLOW_SKIP_NO_CREDS": "1"}),
     ]
 
 
@@ -95,7 +110,9 @@ def main():
         printable = " ".join(command)
         print(f"\n=== {printable}", flush=True)
         env = {**os.environ, **extra_env}
-        done = subprocess.run([*toolchain(), *command], env=env)
+        # The toolchain pin is for cargo. Everything else runs as it is.
+        prefix = toolchain() if command[0] == "cargo" else []
+        done = subprocess.run([*prefix, *command], env=env)
         if done.returncode != 0:
             print(f"\nFAILED: {printable}")
             return done.returncode

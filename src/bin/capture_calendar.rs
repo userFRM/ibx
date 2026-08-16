@@ -3,7 +3,7 @@
 //!
 //! Reads only. It places nothing.
 //!
-//!     IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_calendar
+//!     IB_USERNAME=… IB_PASSWORD=… cargo run --features dev-tools --bin capture_calendar
 
 use std::time::{Duration, Instant};
 

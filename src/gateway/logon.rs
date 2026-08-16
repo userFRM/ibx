@@ -1192,7 +1192,10 @@ mod tests {
         .unwrap();
 
         let msgs = sent(&wire);
-        assert_eq!(msgs.len(), 7 + PRIMING_MESSAGES);
+        // Ninety-nine, written out rather than derived from the constant the
+        // burst is built from: a length checked against its own input agrees
+        // with any value that input takes.
+        assert_eq!(msgs.len(), 99);
         assert_eq!(end, 1 + msgs.len() as u32);
 
         let comm_type = |m: &HashMap<u32, String>| m[&6040].clone();
