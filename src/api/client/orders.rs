@@ -309,7 +309,7 @@ impl EClient {
     pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper) {
         let _ = api_only;
         for order in self.shared.orders.drain_completed_orders() {
-            let status_str = crate::client_core::order_status_str(order.status);
+            let status_str = crate::types::order_status::order_status_str(order.status);
             if let Some(info) = self.shared.orders.get_order_info(order.order_id) {
                 let mut state = info.order_state;
                 state.status = status_str.into();

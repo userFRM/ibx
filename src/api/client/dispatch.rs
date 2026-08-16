@@ -5,7 +5,7 @@ use crate::types::model::{
     Order as ApiOrder, OrderState, TickAttribLast, TickAttribBidAsk, PRICE_SCALE_F,
 };
 use crate::api::wrapper::Wrapper;
-use crate::client_core::order_status_str;
+use crate::types::order_status::order_status_str;
 const QTY_SCALE_F: f64 = crate::types::QTY_SCALE as f64;
 
 use crate::types::*;

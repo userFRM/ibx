@@ -10,7 +10,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     println!("--- Phase 98: Forex Order Lifecycle (EUR.USD) ---");
 
     // First, look up EUR.USD contract
-    let now = ibx::gateway::chrono_free_timestamp();
+    let now = ibx::config::chrono_free_timestamp();
     let mut ccp = conns.ccp;
     ccp.send_fix(&[
         (fix::TAG_MSG_TYPE, "c"),
@@ -121,7 +121,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     println!("--- Phase 99: Futures Order (MES) ---");
 
     // Look up MES (Micro E-mini S&P 500)
-    let now = ibx::gateway::chrono_free_timestamp();
+    let now = ibx::config::chrono_free_timestamp();
     let mut ccp = conns.ccp;
     ccp.send_fix(&[
         (fix::TAG_MSG_TYPE, "c"),
@@ -256,7 +256,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     println!("--- Phase 100: Options Contract Details + Order (SPY options) ---");
 
     // Look up SPY options
-    let now = ibx::gateway::chrono_free_timestamp();
+    let now = ibx::config::chrono_free_timestamp();
     let mut ccp = conns.ccp;
     ccp.send_fix(&[
         (fix::TAG_MSG_TYPE, "c"),
@@ -492,7 +492,7 @@ pub(super) fn phase_global_venues(conns: Conns) -> Conns {
 
     let Conns { farm, mut ccp, hmds, account_id } = conns;
 
-    let now = ibx::gateway::chrono_free_timestamp();
+    let now = ibx::config::chrono_free_timestamp();
     for (i, (symbol, currency, _)) in VENUES.iter().enumerate() {
         let req_id = format!("GV{i}");
         ccp.send_fix(&[
@@ -623,7 +623,7 @@ pub(super) fn phase_global_venues(conns: Conns) -> Conns {
 pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
     println!("--- Non-dollar order (VOD, London, sterling) ---");
 
-    let now = ibx::gateway::chrono_free_timestamp();
+    let now = ibx::config::chrono_free_timestamp();
     let mut ccp = conns.ccp;
     ccp.send_fix(&[
         (fix::TAG_MSG_TYPE, "c"),

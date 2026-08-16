@@ -3,7 +3,6 @@
 use super::common::*;
 use ibx::api::types as api;
 use ibx::api::wrapper::Wrapper;
-use ibx::gateway;
 use ibx::protocol::fix;
 
 pub(super) fn phase_account_data(conns: Conns) -> Conns {
@@ -12,7 +11,7 @@ pub(super) fn phase_account_data(conns: Conns) -> Conns {
     let account_id = conns.account_id;
 
     let mut ccp = conns.ccp;
-    let ts = gateway::chrono_free_timestamp();
+    let ts = ibx::config::chrono_free_timestamp();
     let _ = ccp.send_fix(&[
         (fix::TAG_MSG_TYPE, "U"),
         (fix::TAG_SENDING_TIME, &ts),

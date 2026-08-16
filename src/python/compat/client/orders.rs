@@ -461,7 +461,7 @@ impl EClient {
         if let Some(shared) = shared {
             let completed = shared.orders.drain_completed_orders();
             for co in &completed {
-                let status_str = crate::client_core::order_status_str(co.status);
+                let status_str = crate::types::order_status::order_status_str(co.status);
                 let rich_info = shared.orders.get_order_info(co.order_id);
 
                 // The state the venue stated where it stated one, under the

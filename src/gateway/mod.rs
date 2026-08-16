@@ -2897,7 +2897,6 @@ pub fn build_mktdata_unsubscribe(md_req_id: &str, seq: u32) -> Vec<u8> {
 
 /// Format timestamp as YYYYMMDD-HH:MM:SS (no chrono dependency).
 /// Re-exports for backward compatibility.
-pub use crate::config::{chrono_free_timestamp, days_to_ymd};
 
 #[cfg(test)]
 mod tests;

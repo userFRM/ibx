@@ -179,7 +179,7 @@ pub(super) fn ccp_keepalive(ccp: &mut Connection) {
             if parsed.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some(fix::MSG_TEST_REQUEST) {
                 // Respond to TestRequest with Heartbeat containing the test ID
                 let test_id = parsed.get(&fix::TAG_TEST_REQ_ID).cloned().unwrap_or_default();
-                let ts = gateway::chrono_free_timestamp();
+                let ts = ibx::config::chrono_free_timestamp();
                 let _ = ccp.send_fix(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT),
                     (fix::TAG_SENDING_TIME, &ts),
@@ -190,7 +190,7 @@ pub(super) fn ccp_keepalive(ccp: &mut Connection) {
     }
 
     // Send a heartbeat
-    let ts = gateway::chrono_free_timestamp();
+    let ts = ibx::config::chrono_free_timestamp();
     let _ = ccp.send_fix(&[
         (fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT),
         (fix::TAG_SENDING_TIME, &ts),
