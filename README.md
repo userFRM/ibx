@@ -147,7 +147,9 @@ ibx = { git = "https://github.com/userFRM/ibx", features = ["async"] }
 let ib = AsyncClient::connect(config).await?;
 let spy = ib.qualify(Contract::stock("SPY")).await?;
 
-// Neither holds the runtime while the venue thinks about it.
+// Neither holds a runtime thread while the venue thinks about it. They are
+// answered one after the other: a question drives the message pump, and two
+// pumping at once would read each other's replies.
 let (bars, summary) = tokio::join!(ib.bars(&spy, "2 D", "1 hour"), ib.summary());
 ```
 

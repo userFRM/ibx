@@ -19,8 +19,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let spy = ib.qualify(Contract::stock("SPY")).await?;
 
-    // Two questions at once. Each waits on a thread of its own, so neither
-    // holds the runtime while the venue thinks about it.
+    // Both asked without holding a runtime thread: each waits on a thread
+    // from the blocking pool. They are answered one after the other, because a
+    // question drives the message pump and two pumping at once would read each
+    // other's replies — what this buys is a runtime free to do other work
+    // while they run, not two questions on the wire together.
     let (bars, summary) = tokio::join!(ib.bars(&spy, "2 D", "1 hour"), ib.summary());
     println!("{} bars", bars?.len());
     for value in summary? {

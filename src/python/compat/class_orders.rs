@@ -1285,6 +1285,41 @@ impl Order {
         }).collect()
     }
 
+    /// The price stated for each leg of a combination.
+    ///
+    /// A leg is a Python object, so reading one needs the interpreter, which
+    /// the conversion does not hold. Dropped, every leg of a combination
+    /// priced by the caller went out at whatever the venue struck it at.
+    pub fn convert_order_combo_legs(&self, py: Python<'_>) -> Vec<f64> {
+        self.order_combo_legs
+            .iter()
+            .map(|leg| {
+                leg.bind(py)
+                    .getattr("price")
+                    .and_then(|v| v.extract::<f64>())
+                    .unwrap_or(f64::MAX)
+            })
+            .collect()
+    }
+
+    /// The caller's own tags on an order.
+    ///
+    /// This protocol carries no field for them, so an order stating any is
+    /// refused rather than sent without them — which is what the refusal needs
+    /// them read for.
+    pub fn convert_misc_options(&self, py: Python<'_>) -> Vec<crate::types::model::TagValue> {
+        self.order_misc_options
+            .iter()
+            .filter_map(|obj| {
+                let any = obj.bind(py);
+                Some(crate::types::model::TagValue {
+                    tag: any.getattr("tag").ok()?.extract().ok()?,
+                    value: any.getattr("value").ok()?.extract().ok()?,
+                })
+            })
+            .collect()
+    }
+
     /// Convert to Rust API Order.
     pub fn to_api(&self) -> crate::types::model::Order {
         crate::types::model::Order {
@@ -1294,11 +1329,6 @@ impl Order {
             order_type: self.order_type.clone(),
             lmt_price: self.lmt_price,
             aux_price: self.aux_price,
-            // Unset is f64::MAX on both sides, so leaving it to Default made a
-            // caller's offset indistinguishable from absent and the wire fell
-            // back to lmt_price: a TRAIL LIMIT could not set its offset from
-            // Python at all.
-            lmt_price_offset: self.lmt_price_offset,
             tif: self.tif.clone(),
             outside_rth: self.outside_rth,
             display_size: self.display_size,
@@ -1307,8 +1337,6 @@ impl Order {
             good_after_time: self.good_after_time.clone(),
             good_till_date: self.good_till_date.clone(),
             oca_group: self.oca_group.clone(),
-            oca_type: self.oca_type,
-            trail_stop_price: self.trail_stop_price,
             trailing_percent: self.trailing_percent,
             algo_strategy: self.algo_strategy.clone(),
             algo_params: self.algo_params.iter().map(|tv| crate::types::model::TagValue {
@@ -1336,13 +1364,141 @@ impl Order {
             active_stop_time: self.active_stop_time.clone(),
             adjustable_trailing_unit: self.adjustable_trailing_unit,
             adjusted_trailing_amount: self.adjusted_trailing_amount,
+            advanced_error_override: self.advanced_error_override.clone(),
             algo_id: self.algo_id.clone(),
-            perm_id: self.perm_id,
+            allow_pre_open: self.allow_pre_open,
+            auction_strategy: self.auction_strategy,
+            auto_cancel_date: self.auto_cancel_date.clone(),
+            auto_cancel_parent: self.auto_cancel_parent,
+            basis_points: self.basis_points,
+            basis_points_type: self.basis_points_type,
+            block_order: self.block_order,
+            bond_accrued_interest: self.bond_accrued_interest.clone(),
+            clearing_account: self.clearing_account.clone(),
+            clearing_intent: self.clearing_intent.clone(),
             client_id: self.client_id,
+            compete_against_best_offset: self.compete_against_best_offset,
+            continuous_update: self.continuous_update,
+            customer_account: self.customer_account.clone(),
+            deactivate: self.deactivate,
+            deactivate_on_disconnect: self.deactivate_on_disconnect,
+            delta: self.delta,
+            delta_neutral_aux_price: self.delta_neutral_aux_price,
+            delta_neutral_clearing_account: self.delta_neutral_clearing_account.clone(),
+            delta_neutral_clearing_intent: self.delta_neutral_clearing_intent.clone(),
+            delta_neutral_con_id: self.delta_neutral_con_id,
+            delta_neutral_designated_location: self.delta_neutral_designated_location.clone(),
+            delta_neutral_open_close: self.delta_neutral_open_close.clone(),
+            delta_neutral_order_type: self.delta_neutral_order_type.clone(),
+            delta_neutral_settling_firm: self.delta_neutral_settling_firm.clone(),
+            delta_neutral_short_sale: self.delta_neutral_short_sale,
+            delta_neutral_short_sale_slot: self.delta_neutral_short_sale_slot,
+            designated_location: self.designated_location.clone(),
+            discretionary_up_to_limit_price: self.discretionary_up_to_limit_price,
+            dont_use_auto_price_for_hedge: self.dont_use_auto_price_for_hedge,
+            duration: self.duration,
+            exempt_code: self.exempt_code,
+            ext_operator: self.ext_operator.clone(),
+            fa_group: self.fa_group.clone(),
+            fa_method: self.fa_method.clone(),
+            fa_percentage: self.fa_percentage.clone(),
+            filled_quantity: self.filled_quantity,
+            hedge_param: self.hedge_param.clone(),
+            hedge_type: self.hedge_type.clone(),
+            ignore_open_auction: self.ignore_open_auction,
+            imbalance_only: self.imbalance_only,
+            include_overnight: self.include_overnight,
+            is_oms_container: self.is_oms_container,
+            is_pegged_change_amount_decrease: self.is_pegged_change_amount_decrease,
+            // Unset is f64::MAX on both sides, so leaving it to Default made a
+            // caller's offset indistinguishable from absent and the wire fell
+            // back to lmt_price: a TRAIL LIMIT could not set its offset from
+            // Python at all.
+            lmt_price_offset: self.lmt_price_offset,
+            manual_order_indicator: self.manual_order_indicator,
+            manual_order_time: self.manual_order_time.clone(),
+            mid_offset_at_half: self.mid_offset_at_half,
+            mid_offset_at_whole: self.mid_offset_at_whole,
+            mifid2_decision_algo: self.mifid2_decision_algo.clone(),
+            mifid2_decision_maker: self.mifid2_decision_maker.clone(),
+            mifid2_execution_algo: self.mifid2_execution_algo.clone(),
+            mifid2_execution_trader: self.mifid2_execution_trader.clone(),
+            min_compete_size: self.min_compete_size,
+            min_trade_qty: self.min_trade_qty,
+            model_code: self.model_code.clone(),
+            not_held: self.not_held,
+            oca_type: self.oca_type,
+            open_close: self.open_close.clone(),
+            opt_out_smart_routing: self.opt_out_smart_routing,
+            // Python objects, so reading them needs the interpreter this does
+            // not hold. Filled at the call site from `convert_order_combo_legs`
+            // and `convert_misc_options`, beside the conditions, and a test
+            // holds every field to being filled in one place or the other.
+            order_combo_legs: Vec::new(),
+            order_misc_options: Vec::new(),
             order_ref: self.order_ref.clone(),
-            ..Default::default()
+            origin: self.origin,
+            override_percentage_constraints: self.override_percentage_constraints,
+            parent_perm_id: self.parent_perm_id,
+            pegged_change_amount: self.pegged_change_amount,
+            percent_offset: self.percent_offset,
+            perm_id: self.perm_id,
+            post_only: self.post_only,
+            post_to_ats: self.post_to_ats,
+            professional_customer: self.professional_customer,
+            pt_order_id: self.pt_order_id,
+            pt_order_type: self.pt_order_type.clone(),
+            randomize_price: self.randomize_price,
+            randomize_size: self.randomize_size,
+            ref_futures_con_id: self.ref_futures_con_id,
+            reference_change_amount: self.reference_change_amount,
+            reference_contract_id: self.reference_contract_id,
+            reference_exchange_id: self.reference_exchange_id.clone(),
+            reference_price_type: self.reference_price_type,
+            route_marketable_to_bbo: self.route_marketable_to_bbo,
+            rule80a: self.rule80a.clone(),
+            scale_auto_reset: self.scale_auto_reset,
+            scale_init_fill_qty: self.scale_init_fill_qty,
+            scale_init_level_size: self.scale_init_level_size,
+            scale_init_position: self.scale_init_position,
+            scale_price_adjust_interval: self.scale_price_adjust_interval,
+            scale_price_adjust_value: self.scale_price_adjust_value,
+            scale_price_increment: self.scale_price_increment,
+            scale_profit_offset: self.scale_profit_offset,
+            scale_random_percent: self.scale_random_percent,
+            scale_subs_level_size: self.scale_subs_level_size,
+            scale_table: self.scale_table.clone(),
+            seek_price_improvement: self.seek_price_improvement,
+            settling_firm: self.settling_firm.clone(),
+            shareholder: self.shareholder.clone(),
+            short_sale_slot: self.short_sale_slot,
+            sl_order_id: self.sl_order_id,
+            sl_order_type: self.sl_order_type.clone(),
+            smart_combo_routing_params: self
+                .smart_combo_routing_params
+                .iter()
+                .map(|tv| crate::types::model::TagValue {
+                    tag: tv.tag.clone(),
+                    value: tv.value.clone(),
+                })
+                .collect(),
+            soft_dollar_tier_name: self.soft_dollar_tier_name.clone(),
+            soft_dollar_tier_val: self.soft_dollar_tier_val.clone(),
+            soft_dollar_tier_display_name: self.soft_dollar_tier_display_name.clone(),
+            solicited: self.solicited,
+            starting_price: self.starting_price,
+            stock_range_lower: self.stock_range_lower,
+            stock_range_upper: self.stock_range_upper,
+            stock_ref_price: self.stock_ref_price,
+            submitter: self.submitter.clone(),
+            trail_stop_price: self.trail_stop_price,
+            use_price_mgmt_algo: self.use_price_mgmt_algo,
+            volatility: self.volatility,
+            volatility_type: self.volatility_type,
+            what_if_type: self.what_if_type,
         }
     }
+
 }
 
 /// ibapi-compatible OrderAllocation class.

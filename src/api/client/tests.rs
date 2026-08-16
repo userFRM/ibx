@@ -4818,11 +4818,19 @@ fn the_shorthand_names_the_contract_a_request_carries() {
     assert_eq!(call.sec_type, "OPT");
     assert_eq!((call.right.as_str(), call.strike), ("C", 150.0));
     assert_eq!(call.last_trade_date_or_contract_month, "20261218");
-    assert_eq!(call.multiplier, "100", "an equity option is a hundred shares");
+    assert!(
+        call.multiplier.is_empty(),
+        "an option's multiplier identifies the listing and is left to the venue",
+    );
     assert_eq!(Contract::put("AAPL", 150.0, "20261218").right, "P");
 
     let es = Contract::future("ES", "202612", "CME");
     assert_eq!((es.sec_type.as_str(), es.exchange.as_str()), ("FUT", "CME"));
+    // A future is quoted in whatever its venue quotes in, so nothing here
+    // assumes dollars — assumed, a Eurex contract would be asked about in a
+    // currency it is not listed in.
+    assert!(es.currency.is_empty(), "a future's currency is the venue's");
+    assert!(Contract::index("SPX", "CBOE").currency.is_empty());
 
     let eurusd = Contract::forex("EUR", "USD");
     assert_eq!((eurusd.sec_type.as_str(), eurusd.symbol.as_str(),
@@ -4837,4 +4845,69 @@ fn the_shorthand_names_the_contract_a_request_carries() {
 
     let toyota = Contract::stock("7203").on_exchange("TSEJ").in_currency("JPY");
     assert_eq!((toyota.exchange.as_str(), toyota.currency.as_str()), ("TSEJ", "JPY"));
+}
+
+/// A field left alone is not a field asked for. Several of the twenty-nine
+/// carry a non-zero default — `what_if_type` is `i32::MAX`, `exempt_code` is
+/// `-1` — so a refusal written against emptiness rather than against the
+/// default would reject every order anyone ever placed.
+#[test]
+fn an_order_nobody_touched_is_not_refused_for_what_it_does_not_carry() {
+    let (client, _rx, _shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    client.place_order(9501, &spy(), &order).expect("a plain order is placed");
+
+    // And the same order built by the shorthand, which fills no more than it
+    // names.
+    let (client, _rx, _shared) = test_client();
+    client
+        .place_order(9502, &spy(), &Order::limit("BUY", 1.0, 100.0))
+        .expect("the shorthand's order is placed");
+}
+
+/// Two questions asked at once each get their own answer.
+///
+/// A question drives the message pump itself, and the pump hands everything it
+/// drains to whichever collector is running — which keeps what carries its own
+/// request id and discards the rest. Asked concurrently, the first question
+/// read the second's answer, threw it away, and the second waited out its
+/// timeout for a reply that had already arrived. With no engine to answer,
+/// what this holds is the ordering: neither question is on the wire while the
+/// other is listening, so neither can be handed the other's messages.
+#[test]
+fn two_questions_asked_at_once_do_not_consume_each_other() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let (client, _rx, _shared) = test_client();
+    let client = Arc::new(client);
+    let overlapping = Arc::new(AtomicUsize::new(0));
+    let inside = Arc::new(AtomicUsize::new(0));
+
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            let (client, overlapping, inside) = (
+                Arc::clone(&client), Arc::clone(&overlapping), Arc::clone(&inside),
+            );
+            std::thread::spawn(move || {
+                let _turn = client.asking.lock().unwrap_or_else(|e| e.into_inner());
+                let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                if now > 1 {
+                    overlapping.fetch_add(1, Ordering::SeqCst);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                inside.fetch_sub(1, Ordering::SeqCst);
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().expect("a question finishes");
+    }
+    assert_eq!(
+        overlapping.load(Ordering::SeqCst), 0,
+        "a second question ran while the first was still listening",
+    );
 }

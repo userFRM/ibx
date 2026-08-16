@@ -16,7 +16,8 @@ Every field of `Order` falls into one of three kinds:
 `dropped` is the one that matters. It is the order-field form of `silent`: the
 call returns, the order is placed, and the field is gone.
 
-Writes target/gates/order-field-reach.md. CI re-runs this and compares, so the number
+Writes target/gates/order-field-reach.md, which is a report and not the gate:
+this exits non-zero on its own findings. The number
 cannot drift away from the code.
 """
 
@@ -143,6 +144,20 @@ def constants_in_the_conversion() -> list[str]:
     ]
 
 
+def published(pattern: str) -> list[int]:
+    """The figures the capability matrix states, read back out of the sentence.
+
+    A number in a shipped document is a claim. This one was stated once and
+    then drifted, and the check that was supposed to hold it compared a
+    generated report against its own committed copy — which is regenerated and
+    committed by the same commit that moves the figure, so it never failed.
+    Compare against the published prose instead.
+    """
+    text = (ROOT / "docs/capabilities.md").read_text()
+    m = re.search(pattern, text)
+    return [int(g.replace(",", "")) for g in m.groups()] if m else []
+
+
 def main() -> int:
     fields = order_fields()
     says_so = refused()
@@ -190,6 +205,13 @@ def main() -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(lines))
 
+    if dropped:
+        print("a caller can set these and nothing reads them. The call returns,")
+        print("the order is placed, and the field is not on it:")
+        for f in dropped:
+            print(f"  {f}")
+        return 1
+
     refuses = what_the_call_refuses()
     if refuses != set(says_so):
         print("a field's note and the call disagree about what can be placed:")
@@ -208,6 +230,11 @@ def main() -> int:
             print(f"  {f}")
         return 1
 
+    stated = published(r"\| Order fields \| ([\d,]+)\. ([\d,]+) are sent; the other ([\d,]+) ")
+    if stated and stated != [len(fields), len(carried), len(says_so)]:
+        print(f"docs/capabilities.md publishes {stated}, "
+              f"{[len(fields), len(carried), len(says_so)]} exist")
+        return 1
     print(f"{len(fields)} order fields: carried={len(carried)} "
           f"refused={len(says_so)} dropped={len(dropped)}")
     return 0

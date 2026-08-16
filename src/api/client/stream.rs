@@ -35,11 +35,23 @@
 //!
 //! [`connect_with_events`]: super::EClient::connect_with_events
 
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use crate::bridge::Event;
 use crate::types::{Fill, InstrumentId, OrderUpdate, TbtQuote, TbtTrade, TickNews};
+
+/// The session has closed, so nothing more will arrive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ended;
+
+impl std::fmt::Display for Ended {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the session has ended")
+    }
+}
+
+impl std::error::Error for Ended {}
 
 /// Everything a session pushes, in the order it happened.
 ///
@@ -65,12 +77,30 @@ impl Events {
         self.rx.into_iter()
     }
 
-    /// The next event, or `None` if nothing arrives within `timeout`.
+    /// The next event, or nothing.
     ///
-    /// For a program with something else to do between events. A `None` here
-    /// means nothing arrived, not that the session ended.
-    pub fn next_within(&self, timeout: Duration) -> Option<Event> {
-        self.rx.recv_timeout(timeout).ok()
+    /// For a program with something else to do between events. `Ok(None)` is a
+    /// quiet market; `Err(Ended)` is the session gone. Reported as the same
+    /// thing, a program waiting on a quiet market either stands down on the
+    /// quiet or waits for ever on a session that has closed — this says which
+    /// happened.
+    pub fn next_within(&self, timeout: Duration) -> Result<Option<Event>, Ended> {
+        match self.rx.recv_timeout(timeout) {
+            Ok(event) => Ok(Some(event)),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => Err(Ended),
+        }
+    }
+
+    /// How many events the session discarded because this reader was behind.
+    ///
+    /// The engine never waits on a reader — a session that stalled on one would
+    /// stop carrying market data — so an event that arrives at a full channel
+    /// is dropped. A program that acts on every fill it sees needs to know the
+    /// difference between that and every fill there was. Rising here means
+    /// asking for a larger capacity, or reading more often.
+    pub fn lost(&self) -> u64 {
+        crate::engine::hot_loop::EVENTS_LOST.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Every trade printed on a contract under a tick-by-tick subscription.
@@ -130,11 +160,22 @@ impl Events {
     /// `true` for a session that is carrying traffic again, `false` for one
     /// that has just lost it. A program that stands down on a loss needs both,
     /// or an overnight outage leaves it stood down for good.
+    ///
+    /// One outage is reported once. More than one path notices the same loss
+    /// and each says so, and a program counting the losses would have counted
+    /// an outage twice; what a reader wants is the change, so a repeat of what
+    /// it was already told is not delivered.
     pub fn connectivity(self) -> impl Iterator<Item = bool> {
+        let mut last: Option<bool> = None;
         self.only(|e| match e {
             Event::Reconnected => Some(true),
             Event::Disconnected => Some(false),
             _ => None,
+        })
+        .filter(move |now| {
+            let changed = last != Some(*now);
+            last = Some(*now);
+            changed
         })
     }
 
@@ -176,6 +217,19 @@ mod tests {
             vec![false, true],
             "a loss and the recovery after it, in that order",
         );
+
+        // The same outage noticed by two paths is one outage.
+        let (tx, rx) = sync_channel(16);
+        for e in [Event::Disconnected, Event::Disconnected, Event::Reconnected,
+                  Event::Reconnected, Event::Disconnected] {
+            tx.send(e).unwrap();
+        }
+        drop(tx);
+        assert_eq!(
+            Events::new(rx).connectivity().collect::<Vec<_>>(),
+            vec![false, true, false],
+            "each change once, repeats of what the reader was told dropped",
+        );
     }
 
     /// Nothing arriving is not the session ending. Reported as the end, a
@@ -184,8 +238,13 @@ mod tests {
     fn a_wait_that_finds_nothing_says_so_without_ending_the_stream() {
         let (tx, rx) = sync_channel::<Event>(4);
         let events = Events::new(rx);
-        assert!(events.next_within(Duration::from_millis(5)).is_none());
+        assert!(matches!(events.next_within(Duration::from_millis(5)), Ok(None)), "quiet");
         tx.send(Event::Reconnected).unwrap();
-        assert!(events.next_within(Duration::from_millis(50)).is_some());
+        assert!(matches!(events.next_within(Duration::from_millis(50)), Ok(Some(_))));
+        drop(tx);
+        assert!(
+            matches!(events.next_within(Duration::from_millis(5)), Err(Ended)),
+            "a closed session is not a quiet one",
+        );
     }
 }
