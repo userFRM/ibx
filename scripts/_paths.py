@@ -27,3 +27,19 @@ def module(name: str) -> pathlib.Path:
     if folded.exists():
         return folded
     raise FileNotFoundError(f"no module at {name}.rs or {name}/mod.rs")
+
+
+def module_files(name: str) -> list[pathlib.Path]:
+    """Every file a module is written across, tests aside.
+
+    A module is one file until it is several. Reading only `mod.rs` after a
+    split reports the code that moved as absent — which for a reach count
+    means every field that code carries is counted as dropped.
+    """
+    flat = ROOT / f"{name}.rs"
+    if flat.exists():
+        return [flat]
+    folder = ROOT / name
+    if not folder.is_dir():
+        raise FileNotFoundError(f"no module at {name}.rs or {name}/")
+    return sorted(f for f in folder.glob("*.rs") if f.stem != "tests")

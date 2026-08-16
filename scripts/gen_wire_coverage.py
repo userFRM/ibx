@@ -16,7 +16,7 @@ import re
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from _paths import module  # noqa: E402
+from _paths import module, module_files  # noqa: E402
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -139,7 +139,9 @@ def sent_subtypes(srcs: dict) -> list:
 
 
 def dispatch_block(path: str, start: str) -> str:
-    text = without_tests(module(path).read_text(errors="ignore"))
+    text = without_tests(
+        "\n".join(f.read_text(errors="ignore") for f in module_files(path))
+    )
     at = text.find(start)
     if at < 0:
         die(f"no dispatch table matching {start!r} in {path}")
