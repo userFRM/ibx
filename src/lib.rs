@@ -55,24 +55,46 @@
 ///
 /// Documented in full, and required to stay so by `deny(missing_docs)`.
 pub mod api;
-pub mod auth;
-pub mod bridge;
-pub mod client_core;
-pub mod config;
+
+/// What a caller configures about the session, and what it is told when a
+/// request is refused.
 pub mod error_codes;
-pub mod control;
-pub mod gateway;
-pub mod logging;
-/// The last order id handed out, kept between runs.
-pub mod order_ids;
-pub mod protocol;
+/// How the client stays connected, and what a caller gets to say about it.
 pub mod reliability;
+/// What a session announces itself as.
 pub mod settings;
+/// The types a caller works in, and the model both surfaces present.
 pub mod types;
 
-/// Internal engine module. Use [`api::EClient`] for the public API.
+// ── Not the surface ─────────────────────────────────────────────────────────
+//
+// Public because the binaries, benchmarks and integration tests in this
+// repository reach them from outside the crate, and hidden from the
+// documentation for the same reason: a consumer who builds against one of
+// these is building against something that will move. Every one of them
+// already says so in prose; the attribute makes rustdoc agree.
+
+#[doc(hidden)]
+pub mod auth;
+#[doc(hidden)]
+pub mod bridge;
+#[doc(hidden)]
+pub mod client_core;
+#[doc(hidden)]
+pub mod config;
+#[doc(hidden)]
+pub mod control;
 #[doc(hidden)]
 pub mod engine;
+#[doc(hidden)]
+pub mod gateway;
+#[doc(hidden)]
+pub mod logging;
+/// The last order id handed out, kept between runs.
+#[doc(hidden)]
+pub mod order_ids;
+#[doc(hidden)]
+pub mod protocol;
 
 #[cfg(feature = "python")]
 mod python;
