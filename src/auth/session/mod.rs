@@ -16,18 +16,24 @@ use crate::protocol::xyz;
 
 /// Result of authentication.
 ///
-/// `session_token` is the SRP-derived shared secret K as a `BigUint`. For wire-byte uses
-/// (e.g. SHA-1 challenge/response, token short hashes), prefer [`AuthResult::session_token_bytes`],
-/// which returns the canonical big-endian form with leading zeros stripped — matching the
+/// `session_token` is the SRP-derived shared secret K as a `BigUint`. For wire-byte
+/// uses
+/// (e.g. SHA-1 challenge/response, token short hashes), prefer
+/// [`AuthResult::session_token_bytes`],
+/// which returns the canonical big-endian form with leading zeros stripped — matching
+/// the
 /// representation the server expects.
 ///
-/// `token_type` is one of `"st"`, `"tst"`, or `"zenith"` and corresponds verbatim to the
+/// `token_type` is one of `"st"`, `"tst"`, or `"zenith"` and corresponds verbatim to
+/// the
 /// `stoken_type` value used by SSO authenticators in the upstream Java auth flow.
 pub struct AuthResult {
-    /// SRP shared secret K. Use [`session_token_bytes`](Self::session_token_bytes) for the
+    /// SRP shared secret K. Use [`session_token_bytes`](Self::session_token_bytes) for
+    /// the
     /// canonical big-endian wire form.
     pub session_token: BigUint,
-    /// Token type discriminator: `"st"`, `"tst"`, or `"zenith"`. Matches the `stoken_type`
+    /// Token type discriminator: `"st"`, `"tst"`, or `"zenith"`. Matches the
+    /// `stoken_type`
     /// field expected by the SSO `Authenticate-TWS` body.
     pub token_type: String,
     /// The venue's own id for this session.
@@ -157,7 +163,7 @@ fn read_or_create_hwid() -> String {
 ///
 /// Live data farms validate the MAC field; an all-zero MAC causes the FIX
 /// 35=A logon to be silently rejected (paper farms don't validate).
-/// `machine_id` is the persistent 8-hex value from `~/hwid` (see #132).
+/// `machine_id` is the persistent 8-hex value from `~/hwid`.
 pub fn get_hw_info(stated: Option<&str>) -> String {
     let machine_id = match stated.map(str::trim).filter(|v| {
         !v.is_empty() && v.chars().all(|c| c.is_ascii_hexdigit())

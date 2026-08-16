@@ -132,7 +132,8 @@ impl EClient {
         wrapper.managed_accounts(&self.accounts.join(","));
     }
 
-    /// Request account updates for multiple accounts/models. Matches `reqAccountUpdatesMulti` in C++.
+    /// Request account updates for multiple accounts/models. Matches
+    /// `reqAccountUpdatesMulti` in C++.
     /// Account values for one account or model, answered on
     /// `account_update_multi`. The reference client answers this request on
     /// its own callbacks, not on the ones `req_account_updates` uses, and a
@@ -169,7 +170,8 @@ impl EClient {
         // No-op: delivered immediately.
     }
 
-    /// Request positions for multiple accounts/models. Matches `reqPositionsMulti` in C++.
+    /// Request positions for multiple accounts/models. Matches `reqPositionsMulti` in
+    /// C++.
     /// Holdings for one account or model, answered on `position_multi`.
     ///
     /// Answered from the holdings this session already has, rather than by

@@ -73,7 +73,8 @@ impl EClient {
     /// Resolving it costs a request and an answer the first time, so this call
     /// does not return until the venue has named the contract — up to the
     /// answer timeout. Once per description: the answer is kept, and later
-    /// orders on the same contract are sent without asking again. The reference client never waits here, because a gateway
+    /// orders on the same contract are sent without asking again. The reference client
+    /// never waits here, because a gateway
     /// resolved the contract before the order reached it; this client is the
     /// gateway, so the work happens somewhere, and today it happens on the
     /// caller's thread. A caller placing orders from inside a callback stalls
@@ -133,7 +134,8 @@ impl EClient {
             ),
         )?;
 
-        // If orderId is already tracked, this is a modification — emit Modify instead of Submit.
+        // If orderId is already tracked, this is a modification — emit Modify instead
+        // of Submit.
         let cmd = if self.core.is_order_tracked(oid) {
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one, so refuse
@@ -336,7 +338,8 @@ impl EClient {
 
     // ── Executions ──
 
-    /// Automatically bind future orders to this client. Matches `reqAutoOpenOrders` in C++.
+    /// Automatically bind future orders to this client. Matches `reqAutoOpenOrders` in
+    /// C++.
     /// Bind orders entered elsewhere to this client.
     ///
     /// Nothing goes to the venue: the counterpart answers this itself, setting

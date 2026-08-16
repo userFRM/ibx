@@ -47,7 +47,8 @@ use super::contract::Contract;
 /// state so that a subsequent `connect()` on the same instance works correctly.
 #[pyclass(frozen, subclass)]
 pub struct EClient {
-    /// Reference to the EWrapper (which is typically `self` in the `App(EWrapper, EClient)` pattern).
+    /// Reference to the EWrapper (which is typically `self` in the `App(EWrapper,
+    /// EClient)` pattern).
     pub(crate) wrapper: Py<PyAny>,
     /// Set by connect(), cleared by disconnect.
     pub(crate) shared: Mutex<Option<Arc<SharedState>>>,

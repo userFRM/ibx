@@ -354,8 +354,10 @@ pub struct CancelReject {
     pub timestamp_ns: u64,
 }
 
-/// Multi-char OrdType discriminants (values < 32 to avoid collision with ASCII single-char types).
-/// Used in `Order.ord_type` for order types whose FIX tag 40 value is more than one character.
+/// Multi-char OrdType discriminants (values < 32 to avoid collision with ASCII single-
+/// char types).
+/// Used in `Order.ord_type` for order types whose FIX tag 40 value is more than one
+/// character.
 pub const ORD_STP_PRT: u8 = 1;   // FIX "SP"  — Stop with Protection
 /// FIX "MIDPX" — Mid-Price
 pub const ORD_MIDPX: u8 = 2;
@@ -382,7 +384,8 @@ pub const TIF_UNSTATED: u8 = 0;
 pub const ORD_WHAT_IF: u8 = 9;
 
 /// Convert an `ord_type` discriminant to the FIX tag 40 string.
-/// Single-char types (ASCII >= 32) are stored as-is; multi-char types use constants above.
+/// Single-char types (ASCII >= 32) are stored as-is; multi-char types use constants
+/// above.
 pub fn ord_type_fix_str(t: u8) -> &'static str {
     match t {
         ORD_STP_PRT => "SP",
@@ -495,7 +498,8 @@ pub struct Order {
     /// Where it stands.
     pub status: OrderStatus,
     /// FIX tag 40 OrdType: b'1'=MKT, b'2'=LMT, b'3'=STP, b'4'=STPLMT, b'P'=TRAIL, etc.
-    /// For multi-char OrdTypes (MIDPX, SP, SMKT, etc.), uses ORD_* constants (values < 32).
+    /// For multi-char OrdTypes (MIDPX, SP, SMKT, etc.), uses ORD_* constants (values <
+    /// 32).
     pub ord_type: u8,
     /// FIX tag 59 TimeInForce: b'0'=DAY, b'1'=GTC, b'3'=IOC, b'4'=FOK
     pub tif: u8,
@@ -566,10 +570,12 @@ pub struct OrderAttrs {
     /// OCA group ID (FIX tag 583). 0 = not set. Links orders so one cancels others.
     /// Orders sharing the same non-zero oca_group are in the same OCA group.
     pub oca_group: u64,
-    /// OCA group as a string (FIX tag 583). Used by Python compat for user-specified OCA names.
+    /// OCA group as a string (FIX tag 583). Used by Python compat for user-specified
+    /// OCA names.
     /// When non-empty, takes precedence over numeric `oca_group`.
     pub oca_group_str: String,
-    /// Parent order ID (IB tag 6107). 0 = no parent. Links child orders to parent in brackets.
+    /// Parent order ID (IB tag 6107). 0 = no parent. Links child orders to parent in
+    /// brackets.
     pub parent_id: u64,
     /// Discretionary amount (IB tag 9813). 0 = not set. Fixed-point Price value.
     /// The amount above the limit price that the order may trade at.
@@ -739,7 +745,8 @@ pub struct OrderAttrs {
     /// 0=default, 1=double-bid-ask, 2=last, 3=double-last, 4=bid-ask,
     /// 7=last-or-bid-ask, 8=mid-point.
     pub trigger_method: u8,
-    /// Cash quantity — order by dollar amount instead of shares (IB tag 5920). 0 = not set.
+    /// Cash quantity — order by dollar amount instead of shares (IB tag 5920). 0 = not
+    /// set.
     /// Fixed-point Price value (e.g., $1000 = 1000 * PRICE_SCALE).
     pub cash_qty: Price,
     /// Conditions that must be met before the order activates (IB tag 6136+).
@@ -1334,7 +1341,8 @@ pub struct DeltaNeutralAttrs {
 #[derive(Debug, Clone)]
 pub enum OrderRequest {
     /// Bracket order: parent entry + take-profit + stop-loss, linked via OCA.
-    /// Generates 3 FIX messages: parent (35=D), TP child (35=D with 6107+583), SL child (35=D with 6107+583).
+    /// Generates 3 FIX messages: parent (35=D), TP child (35=D with 6107+583), SL child
+    /// (35=D with 6107+583).
     SubmitBracket {
         /// The order this one is a child of.
         parent_id: OrderId,
@@ -1357,8 +1365,7 @@ pub enum OrderRequest {
     },
     /// Extended submission for any order type: `kind` selects the order type
     /// and its prices, paired with a TIF and the full `OrderAttrs` block.
-    /// This is how non-LMT types carry parent_id/oca_group/outside_rth/tif
- ///.
+    /// This is how non-LMT types carry parent_id/oca_group/outside_rth/tif.
     SubmitEx {
         /// The caller's number for the order.
         order_id: OrderId,
@@ -1378,10 +1385,13 @@ pub enum OrderRequest {
     /// Limit order for opening auction (TIF=OPG).
     /// Algorithmic order: limit order with IB algo strategy overlay (VWAP, TWAP, etc.).
     /// Pegged to Benchmark: pegs to a benchmark instrument's price. OrdType PB.
-    /// Companion tags: 6941=refConId, 6938=isPegDecrease, 6939=pegChangeAmt, 6942=refChangeAmt.
-    /// Limit order for auction (TIF=AUC, tag 59=8). Participates in exchange opening/closing auction.
+    /// Companion tags: 6941=refConId, 6938=isPegDecrease, 6939=pegChangeAmt,
+    /// 6942=refChangeAmt.
+    /// Limit order for auction (TIF=AUC, tag 59=8). Participates in exchange
+    /// opening/closing auction.
     /// Market-to-Limit for auction (TIF=AUC, tag 59=8). MTL + auction participation.
-    /// What-If order: sends a limit order with tag 6091=1 for margin/commission preview.
+    /// What-If order: sends a limit order with tag 6091=1 for margin/commission
+    /// preview.
     /// The order is NOT placed — response comes back as 35=8 with margin fields.
     /// Fractional shares limit order. Qty is fixed-point, `QTY_SCALE`, and
     /// goes out on tag 38 as a decimal string.
@@ -1478,8 +1488,8 @@ impl OrderRequest {
         }
     }
 
-    /// Snap every outbound price-like field to the instrument's tick grid
- ///. `tick` is the fixed-point tick from
+    /// Snap every outbound price-like field to the instrument's tick grid. `tick` is
+    /// the fixed-point tick from
     /// `MarketState::min_tick_scaled`; 0 (unknown — no market-data
     /// subscription seen yet) leaves prices unchanged. Percent-based fields
     /// (trailing percent) and non-price fields (quantities, cash amounts)

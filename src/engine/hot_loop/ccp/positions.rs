@@ -261,7 +261,8 @@ pub(crate) fn handle_position_update(
         return;
     };
 
-    // Always store position info for reqPositions/pnlSingle, regardless of instrument registry.
+    // Always store position info for reqPositions/pnlSingle, regardless of instrument
+    // registry.
     let avg_cost = basis_for(shared, con_id, avg_cost, position_raw.unwrap_or(0.0));
     shared.portfolio.set_position_info(PositionInfo {
         con_id, position, avg_cost,
@@ -300,8 +301,8 @@ impl CcpState {
     // `None` until this entry carries a parseable, finite quantity. A zero
     // default meant an entry without one flattened a live position, published
     // it to reqPositions and both P&L paths, and emitted a PositionUpdate
-    // saying flat — the same defect fixed on the account-update path
- //. A genuine flat still arrives as an explicit `6064=0`.
+    // saying flat — the same defect fixed on the account-update path. A genuine flat
+    // still arrives as an explicit `6064=0`.
     let mut qty: Option<f64> = None;
     // `None` where the row states no cost. Folding that into a zero made an
     // absent cost indistinguishable from a real one, and publishing it erased

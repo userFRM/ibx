@@ -103,8 +103,8 @@ impl MarketState {
     }
 
     /// Register an IB contract by conId, returns the assigned InstrumentId, or
-    /// None when MAX_INSTRUMENTS distinct contracts are live concurrently
- ///. Freed slots are reused first, so unsubscribed contracts
+    /// None when MAX_INSTRUMENTS distinct contracts are live concurrently. Freed slots
+    /// are reused first, so unsubscribed contracts
     /// no longer count against the cap. Callers holding a contract that may
     /// carry no conId want `try_register_contract`.
     pub fn try_register(&mut self, con_id: i64) -> Option<InstrumentId> {

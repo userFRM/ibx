@@ -55,8 +55,8 @@ pub(crate) struct HmdsState {
     /// In-flight historical bar queries: (query_id, req_id, idle deadline).
     /// The deadline is refreshed on every matched bar segment and swept by
     /// `sweep_pending_historical` — a gateway that goes silent (e.g. the
-    /// pacing limiter tripping) no longer hangs the request forever
- ///. keepUpToDate entries are exempt: they stay resident by
+    /// pacing limiter tripping) no longer hangs the request forever. keepUpToDate
+    /// entries are exempt: they stay resident by
     /// design and their bars flow on a different path.
     pub(crate) pending_historical: Vec<(String, u32, Instant)>,
     pub(crate) pending_head_ts: Vec<(String, u32)>,
@@ -497,8 +497,8 @@ impl HmdsState {
                             // Activity on this query — push the idle deadline out.
                             self.pending_historical[pos].2 = Instant::now() + HISTORICAL_IDLE_TIMEOUT;
                             // Bar completion rides <eoq>true> in the final segmented
-                            // ResultSetBar; earlier segments carry <eoq>false>
- //. Kept at debug: fires per bar batch.
+                            // ResultSetBar; earlier segments carry <eoq>false>. Kept at
+                            // debug: fires per bar batch.
                             log::debug!(
                                 "HMDS W matched: req_id={} query_id={:?} eoq={} bars={}",
                                 req_id, resp.query_id, is_complete, resp.bars.len()
@@ -576,7 +576,8 @@ impl HmdsState {
                             // Check keepUpToDate historical queries
                             for (qid, req_id, _) in &self.pending_historical {
                                 if xml_tag.contains(qid.as_str()) && self.keep_up_to_date_reqs.contains(req_id) {
-                                    // Store as rtbar subscription so 35=G bars get dispatched
+                                    // Store as rtbar subscription so 35=G bars get
+                                    // dispatched
                                     self.rtbar_subs.push((qid.clone(), *req_id, Some(ticker_id), min_tick));
                                     matched = true;
                                     break;
@@ -656,7 +657,8 @@ impl HmdsState {
                                     "HMDS QueryError req_id={req_id} query_id={query_id:?}: {error_msg}"
                                 );
                                 shared.reference.push_historical_error(req_id, HMDS_ERROR_CODE, error_msg.clone());
-                                // Surface a terminal sentinel for historical-bar consumers
+                                // Surface a terminal sentinel for historical-bar
+                                // consumers
                                 // that wait on historical_data_end. Empty response with
                                 // is_complete=true unblocks the existing dispatch path.
                                 if from_historical {
@@ -703,8 +705,10 @@ impl HmdsState {
                                 && let Some(result) = crate::control::scanner::parse_scanner_response(xml)
                                     && let Some((_, req_id)) = self.pending_scanner.first() {
                                         let req_id = *req_id;
-                                        // ScanResponse only carries con_ids; contract metadata must be
-                                        // resolved via 35=c on CCP. Park results with cache-miss con_ids
+                                        // ScanResponse only carries con_ids; contract
+                                        // metadata must be
+                                        // resolved via 35=c on CCP. Park results with
+                                        // cache-miss con_ids
                                         // for the engine to enrich before dispatch.
                                         let any_cold = result.entries.iter().any(|e| {
                                             e.con_id != 0
@@ -759,8 +763,7 @@ impl HmdsState {
                             // pushed once per contract per session on the first
                             // historical request (any bar size). Not a bar frame and
                             // not a completion sentinel — bar completion rides
-                            // <eoq>true> in the ResultSetBar. Recognized and skipped
- //.
+                            // <eoq>true> in the ResultSetBar. Recognized and skipped.
                         }
                         _ => {}
                     }

@@ -103,8 +103,8 @@ pub fn parse_farm_route(route: &str) -> Option<(String, String, Option<u16>)> {
 ///
 /// The auth server states one per account, and the reconnect uses it rather
 /// than announcing a literal farm and connecting to the host the caller
-/// configured, which would put a regional account on a farm it is not on
-///. Empty means no route was parsed, which is the case the literals
+/// configured, which would put a regional account on a farm it is not on. Empty means
+/// no route was parsed, which is the case the literals
 /// were there for; the initial connect falls back the same way.
 pub(crate) fn reconnect_trading_route(auth: &ReconnectAuth) -> (String, String) {
     let host = if auth.trading_host.is_empty() {
@@ -386,7 +386,8 @@ pub fn farm_logon_exchange(
                     read_iv = iv.to_vec();
                 }
 
-                // Check for auth challenge → respond with token, fall back to SRP if rejected.
+                // Check for auth challenge → respond with token, fall back to SRP if
+                // rejected.
                 // Outcome asymmetry:
                 //   PASSED  — token accepted, continue
                 //   UNKNOWN — server cache miss, recover via SRP on this socket
@@ -878,7 +879,8 @@ pub struct Session {
     pub security_definition: Option<Connection>,
 }
 
-/// Connect to a data farm: key exchange → encrypted logon → token auth → routing → Connection.
+/// Connect to a data farm: key exchange → encrypted logon → token auth → routing →
+/// Connection.
 pub fn connect_farm(
     settings: &crate::api::settings::SessionSettings,
     host: &str,
@@ -1556,7 +1558,8 @@ pub struct GatewayConfig {
     /// handshake — which is how a client comes back after a restart without a
     /// person to approve it. Ignored unless it names this same account and the
     /// same kind of session, and falls back to the password whenever the server
-    /// declines it. Obtained from [`EClient::session()`](crate::api::client::EClient::session).
+    /// declines it. Obtained from
+    /// [`EClient::session()`](crate::api::client::EClient::session).
     pub resume: Option<crate::auth::resume::ResumableSession>,
 
     /// Supplies the second factor's code, for whichever exchange `AUTH_START`
@@ -2204,7 +2207,8 @@ fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
 
 impl Gateway {
     /// Connect to IB: auth + logon + data farm connections.
-    /// Returns Gateway + farm Connection + auth Connection + optional historical data Connection.
+    /// Returns Gateway + farm Connection + auth Connection + optional historical data
+    /// Connection.
     pub fn connect(config: &GatewayConfig) -> io::Result<Session> {
         let first = Self::connect_to_host(config, &config.host, AUTH_PORT, 0);
         let Err(why) = first else { return first };
@@ -2480,24 +2484,26 @@ impl Gateway {
         } else {
             Vec::new()
         };
-        // Seed init burst into connection buffer so the hot loop processes 8=O account data
+        // The init burst, seeded into the connection's buffer so the hot loop
+        // reads the account data it carries.
         ccp_conn.seed_buffer(&init_data);
 
         // --- Phase 3: Data farm connections ---
-        // /#144/#145: the official Gateway opens exactly 3 authed TCP
-        // sessions per login — MARKET_DATA (tag 6145), HISTORICAL_DATA (tag 6171), and
-        // SECDEFARM (tag 8008, UI/telemetry only — not used by ibx). Per/
-        // #131/#133: the SOFT token is `SHA1(strip(S))` where S is the SRP shared
-        // secret. `do_srp` returns exactly that via `srp_compute_k`, so `session_key`
-        // IS the SOFT token — no further hashing. (Tag 8483's per-channel SHA1 is
-        // added by `token_short_hash` at the build-logon site.) Tag 6386 is an S3
-        // object key, not a token source.
+        // A login opens exactly three authed sessions: market data (tag 6145),
+        // historical data (tag 6171), and security definitions (tag 8008).
+        //
+        // The farm token is `SHA1(strip(S))` where S is the SRP shared secret,
+        // which is what `do_srp` returns through `srp_compute_k` — so the
+        // session key IS the token and is not hashed again here. The
+        // per-channel SHA1 on tag 8483 is added where the logon is built. Tag
+        // 6386 is an object key, not a token source.
         let farm_token: BigUint = soft_token.clone().unwrap_or_else(|| session_key.clone());
         // read the farm names from the auth-server's
         // routing tags rather than hardcoding `usfarm`/`ushmds`. EU accounts
         // are routed to `eufarm`/`euhmds`/`secdefeu`, US to `usfarm`/`ushmds`,
         // etc. Format of the route strings:
-        //   trading (6145):  "<host>/<farm>"            (port from tag 6146, default 4000)
+        //   trading (6145):  "<host>/<farm>"            (port from tag 6146, default
+        // 4000)
         //   mktdata (6171):  "<host>/<farm>/<port>"
         //   secdef  (8008):  "<host>/<farm>/<port>"
         // Kept as parsed, before the fallback below materializes one. Storing

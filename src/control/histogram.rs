@@ -15,7 +15,8 @@ pub struct HistogramRequest {
     pub use_rth: bool,
     /// Time period, e.g. "1 week", "3 days", "1 month".
     pub period: String,
-    /// End time for the histogram query (HMDS requires 2 of startTime/endTime/timeLength).
+    /// End time for the histogram query (HMDS requires 2 of
+    /// startTime/endTime/timeLength).
     pub end_time: String,
 }
 

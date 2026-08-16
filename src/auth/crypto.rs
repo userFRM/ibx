@@ -270,7 +270,8 @@ mod tests {
         let ct = aes_cbc_encrypt(&key, &iv, b"hello world12345"); // 16 bytes
 
         let wrong_key = [0xFFu8; 16];
-        // Decrypt with wrong key — should either produce garbage or fail unpadding, but must not panic
+        // Decrypt with wrong key — should either produce garbage or fail unpadding, but
+        // must not panic
         let result = aes_cbc_decrypt(&wrong_key, &iv, &ct);
         // An unpadding failure is acceptable; a successful decrypt must not
         // reproduce the plaintext.

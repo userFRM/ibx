@@ -131,13 +131,15 @@ impl SecureChannel {
         let shared_bytes = shared.to_bytes_be();
         let pre_master = strip_leading_zeros(&shared_bytes);
 
-        // Master secret = PRF(pre_master, "master secret", client_random || server_random)
+        // Master secret = PRF(pre_master, "master secret", client_random ||
+        // server_random)
         let mut seed = Vec::with_capacity(64);
         seed.extend_from_slice(&self.client_random);
         seed.extend_from_slice(&server_random);
         let master_secret = tls10_prf(pre_master, "master secret", &seed, 48);
 
-        // Key block = PRF(master_secret, "key expansion", client_random || server_random)
+        // Key block = PRF(master_secret, "key expansion", client_random ||
+        // server_random)
         let key_block = tls10_prf(&master_secret, "key expansion", &seed, 104);
 
         // Parse key block (104 bytes):
@@ -441,7 +443,8 @@ mod tests {
     #[test]
     fn two_channels_exchange_keys_shared_secret_matches() {
         // In DH, both sides compute the same shared secret: A^b mod N == B^a mod N.
-        // However, the key_block derivation uses each channel's own client_random as seed,
+        // However, the key_block derivation uses each channel's own client_random as
+        // seed,
         // so two independent SecureChannels won't derive identical key_blocks.
         //
         // What is checkable: after the key exchange both sides hold the same

@@ -123,7 +123,8 @@ impl EClient {
 
         let instrument = self.find_or_register_instrument(py, contract)?;
 
-        // If orderId is already tracked, this is a modification — emit Modify instead of Submit.
+        // If orderId is already tracked, this is a modification — emit Modify instead
+        // of Submit.
         let cmd = if self.core.is_order_tracked(oid) {
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one.

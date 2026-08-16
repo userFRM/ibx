@@ -426,7 +426,8 @@ const SCANNER_FILTERS: &[(&str, &str)] = &[
     ("averageOptionVolumeAbove", "avgOptVolumeAbove"),
 ];
 
-/// `stockTypeFilter` name -> its filter value. Anything else, `ALL` included, is no filter.
+/// `stockTypeFilter` name -> its filter value. Anything else, `ALL` included, is no
+/// filter.
 fn stk_types_code(name: &str) -> &'static str {
     match name.to_ascii_uppercase().as_str() {
         "STOCK" => "exc:ETF",
@@ -439,7 +440,8 @@ fn stk_types_code(name: &str) -> &'static str {
     }
 }
 
-/// One filter value, or `None` when the attribute is missing or left at its unset default.
+/// One filter value, or `None` when the attribute is missing or left at its unset
+/// default.
 fn scanner_filter_value(py: Python<'_>, sub: &Py<PyAny>, attr: &str) -> Option<String> {
     let value = sub.getattr(py, attr).ok()?;
     if let Ok(n) = value.extract::<f64>(py) {
@@ -454,7 +456,8 @@ fn scanner_filter_value(py: Python<'_>, sub: &Py<PyAny>, attr: &str) -> Option<S
     (!text.is_empty()).then_some(text)
 }
 
-/// Collect the subscription's filters, then the caller's explicit filter tags, which win
+/// Collect the subscription's filters, then the caller's explicit filter tags, which
+/// win
 /// over the named attribute selecting the same code.
 fn scanner_filters(py: Python<'_>, sub: &Py<PyAny>, filter_options: &[Py<PyAny>]) -> Vec<(String, String)> {
     let mut filters: Vec<(String, String)> = SCANNER_FILTERS.iter()

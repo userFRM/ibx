@@ -227,7 +227,8 @@ fn extract_zip_entry(data: &[u8]) -> Option<Vec<u8>> {
 ///
 /// Format: "200\n" + offset_table + ZIP(ENTRY with Java Properties)
 /// Properties: h:0..h:N = pipe-delimited headlines, has_more flag.
-/// Headline: `{headline}|{time}|{articleId}|{status}|{hasContent}|{providerCode}|{conIds...}`
+/// Headline:
+/// `{headline}|{time}|{articleId}|{status}|{hasContent}|{providerCode}|{conIds...}`
 pub fn parse_news_payload(raw: &[u8]) -> (Vec<NewsHeadline>, bool) {
     let mut headlines = Vec::new();
     let mut has_more = false;
@@ -259,7 +260,8 @@ pub fn parse_news_payload(raw: &[u8]) -> (Vec<NewsHeadline>, bool) {
             let key = &unescaped[..eq_pos];
             if key.starts_with("h:") && key[2..].parse::<u32>().is_ok() {
                 let value = &unescaped[eq_pos + 1..];
-                // Parse pipe-delimited: headline|time|articleId|status|hasContent|providerCode|conIds..
+                // Parse pipe-delimited:
+                // headline|time|articleId|status|hasContent|providerCode|conIds..
                 let parts: Vec<&str> = value.split('|').collect();
                 if parts.len() >= 6 {
                     let raw = parts[0];

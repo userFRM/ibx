@@ -33,10 +33,12 @@ pub enum BarDataType {
 }
 
 impl BarDataType {
-    /// Parse the official API what_to_show string. Unknown values were
-    /// previously coerced to TRADES silently, so a misspelled "BID" quietly
-    /// returned trade bars. An empty string is the documented
-    /// TRADES default; anything else must match exactly (case-insensitive).
+    /// Read the official API's `what_to_show` string.
+    ///
+    /// An empty string is the documented TRADES default; anything else must
+    /// match exactly, case aside. A value this does not know is an error
+    /// rather than a fallback — a misspelled "BID" answered as trade bars
+    /// looks like data.
     pub fn from_api_str(s: &str) -> Result<BarDataType, String> {
         Ok(match s.to_uppercase().as_str() {
             "" | "TRADES" => Self::Trades,
@@ -126,11 +128,12 @@ pub enum BarSize {
 }
 
 impl BarSize {
-    /// Parse the official API bar-size string. THE single table for every
-    /// request path — two divergent copies previously fell back to Min5
-    /// silently, so a typo or an unsupported size returned plausible,
-    /// complete, WRONG candles. Case-sensitive on purpose: the
-    /// official API strings are exact.
+    /// Read the official API's bar-size string.
+    ///
+    /// The one table every request path reads, and case-sensitive on purpose:
+    /// the official strings are exact, and a size this does not know is an
+    /// error rather than a fallback — plausible, complete candles of the wrong
+    /// size are worse than none.
     pub fn from_api_str(s: &str) -> Result<BarSize, String> {
         Ok(match s {
             "1 secs" | "1 sec" => Self::Sec1,
@@ -166,9 +169,9 @@ impl BarSize {
         })
     }
 
-    /// Bar sizes the keepUpToDate streaming path supports. The rest are
-    /// accepted on the batch path only; sending them with
-    /// keep_up_to_date=true previously downgraded to Min5 silently.
+    /// Bar sizes the `keepUpToDate` streaming path supports. The rest are
+    /// accepted on the batch path only, and asking for one here is an error
+    /// rather than a quiet substitution.
     pub fn supports_keep_up_to_date(&self) -> bool {
         matches!(self, Self::Sec1 | Self::Sec5 | Self::Min5 | Self::Hour1 | Self::Day1)
     }
@@ -242,8 +245,7 @@ pub struct HistoricalRequest {
     pub symbol: String,
     /// Wire security type and exchange for the contract being requested.
     /// Owned rather than static: they come from the caller's `Contract`, and
-    /// hardcoding them described a different contract than was asked for
- ///.
+    /// hardcoding them described a different contract than was asked for.
     pub sec_type: String,
     /// Which venue to answer for.
     pub exchange: String,
@@ -501,7 +503,8 @@ pub fn parse_bar_response(xml: &str) -> Option<HistoricalResponse> {
     })
 }
 
-/// Extract the ticker ID from a ResultSetTickerId response (for real-time bar subscriptions).
+/// Extract the ticker ID from a ResultSetTickerId response (for real-time bar
+/// subscriptions).
 pub fn parse_ticker_id(xml: &str) -> Option<String> {
     if !xml.contains("<ResultSetTickerId>") {
         return None;
@@ -602,7 +605,8 @@ pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
 
 /// Build the XML query for a historical ticks request.
 ///
-/// Uses `<type>TickData</type>`, `<step>ticks</step>`, `<timeLength>{N} t</timeLength>`.
+/// Uses `<type>TickData</type>`, `<step>ticks</step>`, `<timeLength>{N}
+/// t</timeLength>`.
 pub fn build_tick_query_xml(
     query_id: &str, con_id: i64, start_date_time: &str, end_date_time: &str,
     number_of_ticks: u32, what_to_show: &str, use_rth: bool,
@@ -861,7 +865,8 @@ pub fn decode_bar_payload(payload: &[u8], min_tick: f64) -> Option<crate::types:
 
 /// Build the XML query for a historical schedule request.
 ///
-/// Schedule requests use `<data>Schedule</data>` and `<scheduleOnly>true</scheduleOnly>`
+/// Schedule requests use `<data>Schedule</data>` and
+/// `<scheduleOnly>true</scheduleOnly>`
 /// with `<type>BarData</type>`. Response is `<ResultSetSchedule>`.
 pub fn build_schedule_xml(
     query_id: &str, con_id: i64, end_time: &str, duration: &str, use_rth: bool,

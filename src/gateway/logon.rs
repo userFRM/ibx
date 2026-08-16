@@ -101,7 +101,6 @@ impl LogonAck {
             // The auth-logon ACK arrives as `8=FIXCOMP` with a DEFLATE-
             // compressed inner body containing the per-account routing tags
             // (6145/6171/8008) and other init data. Inflate before parsing.
-            // (See + #129.)
             let mut response = raw_response.clone();
             if raw_response.starts_with(b"8=FIXCOMP\x01") {
                 let inflated_msgs = fixcomp::fixcomp_decompress(&raw_response)?;
@@ -213,8 +212,10 @@ impl LogonAck {
             }
             if let Some(v) = fields.get(&6542) { keep_first(&mut ack.raw_enabled_features, v, "6542"); }
             if let Some(v) = fields.get(&6571) { keep_first(&mut ack.white_branding_id, v, "6571"); }
-            // Tag 6321: PRIV_LAB_MISC_URLS — try parsed fields first, then raw byte search.
-            // Mirrors the 8035 defensive scan because the value can carry `|` separators
+            // Tag 6321: PRIV_LAB_MISC_URLS — try parsed fields first, then raw byte
+            // search.
+            // Mirrors the 8035 defensive scan because the value can carry `|`
+            // separators
             // that confuse downstream parsers if a chunk is fragmented.
             if ack.raw_misc_urls.is_empty() {
                 if let Some(v) = fields.get(&6321) {

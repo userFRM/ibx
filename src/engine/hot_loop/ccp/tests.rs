@@ -776,8 +776,8 @@ fn a_position_feed_entry_with_an_explicit_zero_still_flattens() {
 }
 
 // A margin-reducing preview (close, cash-account sell) resolves to a
-// post-trade init margin of exactly 0, which the gateway sends as numeric "0"
- //. The old `> 0.0` guard dropped it and the caller timed out.
+// post-trade init margin of exactly 0, which the gateway sends as numeric "0". The old
+// `> 0.0` guard dropped it and the caller timed out.
 #[test]
 fn what_if_zero_init_margin_is_delivered() {
     let (mut ccp, mut context, shared) = what_if_test_state();
@@ -855,8 +855,7 @@ fn what_if_nan_field_with_finite_sibling_is_delivered() {
 // A working order carries wire 39=0 whether it is routed or not.
 // The gateway reports PreSubmitted while it waits (e.g. placed pre-market)
 // and Submitted only once routed to an exchange. The discriminator is the
-// routing tags on the same exec report, not a distinct wire status
- //.
+// routing tags on the same exec report, not a distinct wire status.
 fn ord_status_test_state() -> (CcpState, Context, SharedState) {
     let mut context = Context::new();
     let instrument = context.register_instrument(756733);

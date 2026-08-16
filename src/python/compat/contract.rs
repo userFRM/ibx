@@ -2200,9 +2200,8 @@ pub struct BarData {
     pub wap: f64,
     #[pyo3(get, set)]
     pub bar_count: i32,
-    /// Timezone of `date` as reported by the reply — previously
-    /// parsed and then discarded, leaving the bare timestamp string as the
-    /// only (unverifiable) evidence of what the bar times mean. Empty on
+    /// Which timezone `date` is stated in, as the reply states it. Without
+    /// it the timestamp says nothing about what the bar times mean. Empty on
     /// streaming updates, which carry no timezone of their own.
     #[pyo3(get, set)]
     pub timezone: String,
@@ -3080,11 +3079,37 @@ mod tests {
     use super::*;
     use crate::client_core::ClientCore;
 
+    /// The values an order carries when the caller states none, as written in
+    /// the file that states them.
+    fn order_defaults(source: &str) -> Vec<String> {
+        let at = source.find("impl Default for Order {").expect("no Order default");
+        let body = &source[at..];
+        let end = body.find("\n}").expect("unterminated impl");
+        body[..end]
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with("//"))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// A hundred and fifty-four defaults, written out on both surfaces because
+    /// one of them is a Python class and cannot borrow the other's. Written
+    /// twice, they can drift, and an order placed through one surface would
+    /// then reach the venue stating something an order placed through the
+    /// other does not. So they are compared rather than trusted.
+    #[test]
+    fn both_surfaces_state_the_same_order_defaults() {
+        let rust = order_defaults(include_str!("../../api/types.rs"));
+        let python = order_defaults(include_str!("contract.rs"));
+        assert!(rust.len() > 150, "read {} lines, expected the whole block", rust.len());
+        assert_eq!(rust, python);
+    }
+
     /// A TRAIL LIMIT states how far its limit sits from the trigger. Unset is
     /// `f64::MAX` on both sides, so a value dropped in conversion is not merely
     /// lost, it is indistinguishable from absent, and the wire falls back to
-    /// `lmt_price` — the order goes out with an offset the caller never chose
- ///.
+    /// `lmt_price` — the order goes out with an offset the caller never chose.
     #[test]
     fn a_python_trail_limit_offset_survives_the_conversion() {
         let o = Order {

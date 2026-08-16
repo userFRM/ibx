@@ -11,7 +11,8 @@ use super::EClient;
 impl EClient {
     // ── Smart Components ──
 
-    /// Request smart routing components for a BBO exchange. Matches `reqSmartComponents` in C++.
+    /// Request smart routing components for a BBO exchange. Matches
+    /// `reqSmartComponents` in C++.
     /// Gateway-local — returns component exchanges from init data.
     ///
     /// `bbo_exchange` is taken and not applied. The venue states one table of

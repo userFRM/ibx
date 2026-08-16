@@ -488,7 +488,8 @@ pub struct ClientCore {
     pub pnl_single_reqs: Mutex<HashMap<i64, i64>>, // req_id → con_id
     /// The last running profit stated: daily, unrealised, realised.
     pub last_pnl: Mutex<[i64; 3]>, // [daily, unrealized, realized]
-    // Per-req_id change detection for pnl_single: [pos, daily, unrealized, realized, value] scaled.
+    // Per-req_id change detection for pnl_single: [pos, daily, unrealized, realized,
+    // value] scaled.
     /// The same per position.
     pub last_pnl_single: Mutex<HashMap<i64, [i64; 5]>>,
 
@@ -733,9 +734,9 @@ impl ClientCore {
         *self.registration_timeout.lock().unwrap()
     }
 
-    /// Wait for the hot loop to process a registration command and return the
-    /// assigned ID. The engine replies Err when the instrument table is full
-    /// — previously that condition killed the hot loop.
+    /// Wait for the hot loop to register a contract, and answer with the slot
+    /// it gave. A full instrument table comes back as an `Err` for this
+    /// request alone; the engine keeps running.
     fn recv_registration(
         &self, reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>,
     ) -> Result<InstrumentId, Refusal> {
@@ -878,7 +879,8 @@ impl ClientCore {
                 return Ok(iid);
             }
 
-        // Register new — only allocates an InstrumentId slot, does not subscribe to market data.
+        // Register new — only allocates an InstrumentId slot, does not subscribe to
+        // market data.
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::RegisterInstrument {
             contract: ContractRef { con_id, symbol: symbol.to_string(), sec_type: sec_type.to_string(), exchange: exchange.to_string(), ..Default::default() },
@@ -1395,8 +1397,7 @@ impl ClientCore {
     /// any path that locks `executions` — re-requesting from `exec_details` is
     /// an ordinary ibapi pattern, and the dispatch thread pushes fills through
     /// the same mutex. Handing back indices to be dereferenced later also
-    /// raced `reset()`, which clears the vector. Snapshotting closes both
- ///.
+    /// raced `reset()`, which clears the vector. Snapshotting closes both.
     pub fn snapshot_executions(&self, filter: &ExecutionFilter) -> Vec<StoredExecution> {
         let execs = self.executions.lock().unwrap();
         execs.iter().filter(|se| execution_matches(se, filter)).cloned().collect()
@@ -1616,8 +1617,8 @@ impl ClientCore {
     ///
     /// Upserts, because an order recovered from an earlier session was never
     /// submitted by this client and so has no entry here. Doing nothing for it
-    /// left `collect_open_orders` unable to tell it had just been withdrawn
- ///. A fresh entry seeds contract and order from the same enriched
+    /// left `collect_open_orders` unable to tell it had just been withdrawn. A fresh
+    /// entry seeds contract and order from the same enriched
     /// cache `collect_open_orders` reads, rather than leaving them blank.
     pub fn update_order_status(&self, shared: &SharedState, order_id: u64, status: OrderStatus, filled: f64, remaining: f64) {
         let mut orders = self.open_orders.lock().unwrap();
@@ -1635,7 +1636,8 @@ impl ClientCore {
     }
 
     /// Collect open orders: merge local tracking with shared state.
-    /// Returns (order_id, contract, order, status, filled, remaining) for non-terminal orders.
+    /// Returns (order_id, contract, order, status, filled, remaining) for non-terminal
+    /// orders.
     pub fn collect_open_orders(&self, shared: &SharedState) -> Vec<(u64, TrackedOrder)> {
         let mut result: Vec<(u64, TrackedOrder)> = Vec::new();
 
@@ -2406,7 +2408,8 @@ impl ClientCore {
             _ => return Err(format!("Unsupported order type: '{}'", order.order_type)),
         }
 
-        // Reject orders that require aux_price when it is zero — prevents silent no-trigger bugs.
+        // Reject orders that require aux_price when it is zero — prevents silent no-
+        // trigger bugs.
         match order_type.as_str() {
             "STP" | "STP PRT" | "MIT" if order.aux_price == 0.0 => {
                 return Err(format!(
@@ -2717,10 +2720,10 @@ impl ClientCore {
 
         // Every order type carries its extended attributes and its time-in-force
         // through one encoder. Choosing per type between an attribute-carrying
-        // request and a plain one is how an order type ends up shipping without
-        // something the caller set — unlinked, immediate-DAY bracket children
- //, then the same defect again for the adjustable stop (#240)
-        // and for adaptive, algo and what-if (#318).
+        // request and a plain one is how an order type ends up shipping
+        // without something the caller set: a bracket child that arrives
+        // unlinked and immediate, an adjustable stop that never adjusts, an
+        // algo that runs without its parameters.
 
         // The legs live on the contract, not the order, so they are attached
         // here rather than in `attrs()`.

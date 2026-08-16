@@ -177,7 +177,8 @@ impl EClient {
         Ok(())
     }
 
-    /// Push a completed order + rich info into SharedState (for req_completed_orders regression tests).
+    /// Push a completed order + rich info into SharedState (for req_completed_orders
+    /// regression tests).
     #[doc(hidden)]
     #[pyo3(signature = (
         order_id, instrument, status, filled_qty,

@@ -28,7 +28,8 @@ use crate::control::contracts::MarketRule;
 use crate::types::*;
 use crate::api::types as api;
 
-/// Enriched order info from CCP execution reports, for open_order / completed_order callbacks.
+/// Enriched order info from CCP execution reports, for open_order / completed_order
+/// callbacks.
 #[derive(Clone, Debug)]
 pub struct RichOrderInfo {
     /// The contract it is on.
@@ -112,9 +113,11 @@ pub enum Event {
     /// resume — without it an overnight outage leaves it stood down for good.
     Reconnected,
     /// Gateway logon completed. `ccp_session_id` matches the `x-ccp-session-id` header
-    /// expected by webapp REST endpoints. `misc_urls` maps logical names (e.g. `region_dam`)
+    /// expected by webapp REST endpoints. `misc_urls` maps logical names (e.g.
+    /// `region_dam`)
     /// to host URLs as pushed by the gateway during logon. The map is empty when the
-    /// gateway does not push a URL set; callers should fall back to a documented literal
+    /// gateway does not push a URL set; callers should fall back to a documented
+    /// literal
     /// (e.g. `api.ibkr.com`) in that case.
     GatewayLogon {
         /// What a web endpoint expects as a session header.
@@ -805,7 +808,8 @@ impl OrderState {
     }
 }
 
-/// Historical data, contract definitions, scanners, news archives, market rules, contract cache.
+/// Historical data, contract definitions, scanners, news archives, market rules,
+/// contract cache.
 pub struct ReferenceState {
     historical_data: Mutex<Vec<(u32, HistoricalResponse)>>,
     head_timestamps: Mutex<Vec<(u32, HeadTimestampResponse)>>,
@@ -1843,8 +1847,8 @@ pub struct SharedState {
     ccp_rtt_ns: AtomicU64,
     /// Set by the hot loop when the session is over (connection lost, engine
     /// stopped, or reconnect exhausted). Read-and-clear by the client so the
-    /// `connection_closed` callback can fire without an event channel
- ///. The `Event::Disconnected` channel path is optional; this
+    /// `connection_closed` callback can fire without an event channel. The
+    /// `Event::Disconnected` channel path is optional; this
     /// flag is always populated.
     connection_lost: AtomicBool,
     /// Set when a reconnect recovered a loss that was announced. Read-and-clear
@@ -1963,7 +1967,8 @@ impl SharedState {
         self.notify_condvar.notify_one();
     }
 
-    /// Wait for data notification with a timeout. Returns true if notified, false if timed out.
+    /// Wait for data notification with a timeout. Returns true if notified, false if
+    /// timed out.
     pub fn wait_for_data(&self, timeout: std::time::Duration) -> bool {
         let mut pending = self.notify_mutex.lock().unwrap();
         if *pending {
@@ -1973,7 +1978,8 @@ impl SharedState {
         let (lock, result) = self.notify_condvar.wait_timeout(pending, timeout).unwrap();
         let had_data = *lock;
         if had_data {
-            // Reset the flag via a mutable reference obtained from the MutexGuard's deref.
+            // Reset the flag via a mutable reference obtained from the MutexGuard's
+            // deref.
             drop(lock);
             *self.notify_mutex.lock().unwrap() = false;
         }

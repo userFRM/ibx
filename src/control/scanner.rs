@@ -163,7 +163,8 @@ mod tests {
         assert!(xml.contains("<aggGroup>-1</aggGroup>"));
     }
 
-    /// Filters are what a scan code is worth: `TOP_PERC_GAIN` unfiltered is a penny-stock
+    /// Filters are what a scan code is worth: `TOP_PERC_GAIN` unfiltered is a penny-
+    /// stock
     /// list. They ride as one element per filter code inside the subscription's filter.
     #[test]
     fn scanner_subscribe_xml_carries_filters() {
@@ -182,7 +183,8 @@ mod tests {
         assert!(xml.contains("<priceAbove>10</priceAbove>"), "{xml}");
         assert!(xml.contains("<stkTypes>inc:ETF</stkTypes>"), "{xml}");
         assert!(xml.contains("</Filter>"), "{xml}");
-        // The filter sits between maxItems and suspend, where the subscription declares it.
+        // The filter sits between maxItems and suspend, where the subscription declares
+        // it.
         let filter_at = xml.find("<Filter").unwrap();
         assert!(xml.find("<maxItems>").unwrap() < filter_at, "{xml}");
         assert!(filter_at < xml.find("<suspend>").unwrap(), "{xml}");

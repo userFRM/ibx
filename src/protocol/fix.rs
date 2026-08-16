@@ -212,7 +212,8 @@ fn xor_fold_bytes(h: &[u8]) -> [u8; 4] {
     r
 }
 
-/// Compare 4 XOR-folded bytes against an 8-char hex string (case-insensitive, no alloc).
+/// Compare 4 XOR-folded bytes against an 8-char hex string (case-insensitive, no
+/// alloc).
 #[inline]
 fn sig_hex_eq(expected: &[u8; 4], hex_ascii: &[u8]) -> bool {
     if hex_ascii.len() != 8 {
