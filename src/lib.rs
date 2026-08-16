@@ -100,3 +100,8 @@ mod python;
 // Re-exports for convenience.
 pub use error_codes::Refusal;
 pub use api::{EClient, EClientConfig, Wrapper};
+
+/// The client, under the name a program that is not being migrated would look
+/// for. The same type as [`EClient`], which keeps the reference client's name
+/// for a program that is.
+pub use api::EClient as Client;

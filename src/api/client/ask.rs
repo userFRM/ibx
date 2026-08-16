@@ -28,7 +28,7 @@ const ANSWER_TIMEOUT: Duration =
 /// an answer to theirs.
 static NEXT_ASK_ID: AtomicI64 = AtomicI64::new(crate::bridge::ReferenceState::ASK_ID_BASE as i64);
 
-fn ask_id() -> i64 {
+pub(crate) fn ask_id() -> i64 {
     NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed)
 }
 

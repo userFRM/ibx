@@ -17,7 +17,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Requests | 76. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
 | Order fields | 154. 125 are sent; the other 29 have no field in the protocol to carry them, and the call says so rather than dropping them |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 1,971 offline, and 157 more that only run against a broker session |
+| Tests | 1,973 offline, and 157 more that only run against a broker session |
 
 45 of the 46 capabilities are verified against IBKR production servers; the
 remaining one, advisor configuration, reaches the server and needs an advisor
