@@ -177,7 +177,7 @@ not hold. `scripts/endurance.py --minutes 175`.
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,575 | No |
+| Rust unit and integration | 1,583 | No |
 | Python | 381 | No |
 | Python, live | 131 | Yes |
 | Paper compatibility suite (136 phases) | 26 tests | Yes |

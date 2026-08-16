@@ -256,7 +256,9 @@ def main() -> None:
     # message type directly, so it is stated rather than extracted.
     logon = sorted(set(re.findall(
         r'msg_type == "([A-Za-z0-9]+)"|== Some\("([A-Za-z0-9]+)"\)',
-        without_tests(module("src/gateway").read_text(errors="ignore")),
+        without_tests("\n".join(
+            f.read_text(errors="ignore") for f in module_files("src/gateway")
+        )),
     )))
     logon = sorted({a or b for a, b in logon})
     lines += table(
