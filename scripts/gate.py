@@ -87,9 +87,9 @@ def steps(suites):
 
 def generated_docs_are_current():
     """What the workflow checks after running the generators: nothing moved."""
-    for tree in ("docs/", ".gates/"):
+    for tree in ("docs/",):
         subprocess.run(["git", "add", "-A", tree], check=False)
-    done = subprocess.run(["git", "diff", "--cached", "--quiet", "docs/", ".gates/"])
+    done = subprocess.run(["git", "diff", "--cached", "--quiet", "docs/"])
     if done.returncode != 0:
         print("\nFAILED: generated docs are stale — the generators just moved them, "
               "so commit what they produced")

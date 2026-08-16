@@ -1,6 +1,6 @@
 # Engineering notes
 
-Detail behind [STATUS.md](../STATUS.md): the per-call matrix, the wire coverage
+Detail behind [the capability matrix](capabilities.md): the per-call matrix, the wire coverage
 measurements, what was measured against the counterpart, and the reasoning
 behind fields this client does not send. Kept for whoever works on the protocol;
 the status board is the summary.
@@ -538,3 +538,76 @@ One open item: settings decided by configuration where the server states a grant
 The surface question is settled. `EClient`/`EWrapper` is the product; the ib_async shape and the Rust shape are adapters over it, and the rust-ibapi shape is not written.
 
 The one capability a gateway has and this does not is [#2](https://github.com/userFRM/ibx/issues/2): several programs sharing one logon. A gateway rents its single session out over a local socket, and this client, having no socket, cannot. One process holds one session.
+
+## Architecture
+
+```
+    ┌──────────────────────────────────────────────┐
+    │           Your code (Rust / Python)          │
+    │  process_msgs() → Wrapper callbacks          │
+    │  client.quote(id) → lock-free read           │
+    │  client.place_order(id,c,o) → control channel│
+    └─────────┬──────────────────────┬─────────────┘
+              │ events               │ commands
+    ┌─────────▼──────────────────────▼─────────────────┐
+    │              Engine (pinned thread)              │
+    │  ┌────────────────────────────────────────────┐  │
+    │  │   Encryption → Auth → Compression → Decode │  │
+    │  └────────────┬───────────────┬───────────────┘  │
+    └───────────────┼───────────────┼──────────────────┘
+               ┌────▼───┐     ┌─────▼────┐
+               │ market │     │   auth   │
+               │  data  │     │  orders  │
+               │  feed  │     │  control │
+               └────┬───┘     └────┬─────┘
+                    │              │
+              ──────▼──────────────▼──────
+                     IB servers
+```
+
+One pinned core polls the sockets, verifies, decompresses, decodes, updates the
+quote table, and drains outgoing orders, without allocating. Quotes are read
+through a seqlock from any thread; everything else arrives on the callbacks.
+The Python bindings run the same engine and do not hold the GIL while reading
+the wire.
+
+### One process, one session
+
+The logon lives in your process. An account takes one logon at a time, so two
+programs on one account are two logons, and the venue hands the account to
+whichever connected last: the first is told it has lost the session and stops.
+
+Several strategies inside one process share the session and cost nothing
+extra: one subscription per contract on the wire, whoever asks for it. Several
+*programs* need something holding the session in front of them, which is what a
+gateway's local socket does and what this client, having no socket, does not.
+See [#2](https://github.com/userFRM/ibx/issues/2).
+
+Run one after another and nothing is needed: the last order id handed out is
+remembered, so a later run does not reuse ids the account already holds.
+
+## Performance
+
+The engine runs on a pinned thread and does not allocate on the hot path:
+socket poll → verify → decompress → decode → publish quote → drain outgoing
+orders. Ticks are delivered in-process, without a localhost round trip, a JVM,
+or a garbage collector.
+
+Measured with `cargo run --release --features dev-tools --bin bench_replay`
+and `bench_decode`,
+1,000,000 iterations after 100,000 warm-up, no network I/O, on an Intel
+i7-10700K with rustc 1.97:
+
+| Path | Mean |
+| --- | ---: |
+| Inbound: verify → decode → state update (5-tick message) | 214 ns |
+| Inbound: same, plus seqlock publish and channel send | 252 ns |
+| Outbound: build + sign a 16-field limit order | 911 ns |
+| Outbound: build + sign a cancel | 687 ns |
+| Outbound: build + sign a modify | 939 ns |
+| Message type dispatch, body extraction | 4 ns each |
+
+These measure this engine only. `scripts/gateway_benchmark.cpp` is a TWS API harness that times
+the same operations through a running gateway; the two are not directly
+comparable — one is an in-process call, the other a round trip across a
+localhost socket into a JVM — and no ratio between them is published here.
