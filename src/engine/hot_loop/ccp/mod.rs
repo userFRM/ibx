@@ -10,7 +10,7 @@ const MATCHING_SYMBOLS_TIMEOUT: Duration = Duration::from_secs(60);
 const OPTION_CHAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 use crate::bridge::{Event, SharedState};
-use crate::api::types as api;
+use crate::types::model as api;
 use crate::engine::context::Context;
 use crate::config::chrono_free_timestamp;
 use crate::protocol::connection::Connection;

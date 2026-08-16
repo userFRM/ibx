@@ -9,7 +9,7 @@ use crate::bridge::{Event, SharedState};
 use crate::client_core::order_status_str;
 use crate::types::*;
 
-use crate::api::types::{
+use crate::types::model::{
     Execution as ApiExecution,
     CommissionAndFeesReport as ApiCommissionAndFeesReport,
 };
@@ -424,7 +424,7 @@ impl EClient {
         // (iso with official ibapi: server delivers margin via openOrder.orderState)
         let what_ifs = shared.orders.drain_what_if_responses();
         for wi in what_ifs {
-            let state = OrderState::from_api(&crate::api::types::OrderState::from(&wi));
+            let state = OrderState::from_api(&crate::types::model::OrderState::from(&wi));
 
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {

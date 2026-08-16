@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 
 use crate::error_codes::Refusal;
-use crate::api::types::{ExecutionFilter, PRICE_SCALE_F};
+use crate::types::model::{ExecutionFilter, PRICE_SCALE_F};
 use crate::api::wrapper::Wrapper;
 use crate::client_core::ClientCore;
 use crate::types::*;
@@ -285,7 +285,7 @@ impl EClient {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         for (order_id, tracked) in self.core.collect_open_orders(&self.shared) {
-            let state = crate::api::types::OrderState {
+            let state = crate::types::model::OrderState {
                 status: tracked.status,
                 ..Default::default()
             };
@@ -323,7 +323,7 @@ impl EClient {
             } else {
                 let contract = Contract::default();
                 let api_order = Order { order_id: order.order_id as i64, ..Default::default() };
-                let state = crate::api::types::OrderState {
+                let state = crate::types::model::OrderState {
                     status: status_str.into(),
                     ..Default::default()
                 };

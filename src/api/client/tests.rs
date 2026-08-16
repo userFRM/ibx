@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::api::types::PRICE_SCALE_F;
+use crate::types::model::PRICE_SCALE_F;
 use crate::api::wrapper::Wrapper;
 use crate::api::wrapper::tests::RecordingWrapper;
 use crate::bridge::SharedState;
@@ -1934,7 +1934,7 @@ fn req_executions_does_not_hold_the_lock_across_callbacks() {
         rows: usize,
     }
     impl Wrapper for Reentrant<'_> {
-        fn exec_details(&mut self, _r: i64, _c: &Contract, _e: &crate::api::types::Execution) {
+        fn exec_details(&mut self, _r: i64, _c: &Contract, _e: &crate::types::model::Execution) {
             self.rows += 1;
             // Re-entering while the lock is held is exactly the deadlock.
             if self.core.executions.try_lock().is_err() {
@@ -1946,13 +1946,13 @@ fn req_executions_does_not_hold_the_lock_across_callbacks() {
     let (client, _rx, _shared) = test_client();
     client.core.push_execution(
         1,
-        crate::api::types::Contract { symbol: "AAPL".into(), ..Default::default() },
+        crate::types::model::Contract { symbol: "AAPL".into(), ..Default::default() },
         Default::default(),
         Default::default(),
     );
 
     let mut w = Reentrant { core: &client.core, observed_locked: false, rows: 0 };
-    client.req_executions(1, &crate::api::types::ExecutionFilter::default(), &mut w);
+    client.req_executions(1, &crate::types::model::ExecutionFilter::default(), &mut w);
     assert_eq!(w.rows, 1, "the execution must still be replayed");
     assert!(!w.observed_locked,
         "executions lock must be released before the callback runs");
@@ -1965,7 +1965,7 @@ fn execution_filter_time_is_a_lower_bound() {
     #[derive(Default)]
     struct Rows { seen: Vec<String> }
     impl Wrapper for Rows {
-        fn exec_details(&mut self, _r: i64, _c: &Contract, e: &crate::api::types::Execution) {
+        fn exec_details(&mut self, _r: i64, _c: &Contract, e: &crate::types::model::Execution) {
             self.seen.push(e.time.clone());
         }
     }
@@ -1974,14 +1974,14 @@ fn execution_filter_time_is_a_lower_bound() {
     for t in ["20260729-09:00:00", "20260729-11:00:00"] {
         client.core.push_execution(
             1,
-            crate::api::types::Contract { symbol: "AAPL".into(), ..Default::default() },
-            crate::api::types::Execution { time: t.into(), ..Default::default() },
+            crate::types::model::Contract { symbol: "AAPL".into(), ..Default::default() },
+            crate::types::model::Execution { time: t.into(), ..Default::default() },
             Default::default(),
         );
     }
 
     let mut w = Rows::default();
-    client.req_executions(1, &crate::api::types::ExecutionFilter {
+    client.req_executions(1, &crate::types::model::ExecutionFilter {
         time: "20260729-10:00:00".into(), ..Default::default()
     }, &mut w);
     assert_eq!(w.seen, vec!["20260729-11:00:00"], "only executions at or after the bound");
@@ -1989,14 +1989,14 @@ fn execution_filter_time_is_a_lower_bound() {
     // Punctuation differs between the two sides in practice; the comparison is
     // on digits, so a space-separated bound behaves identically.
     let mut w2 = Rows::default();
-    client.req_executions(1, &crate::api::types::ExecutionFilter {
+    client.req_executions(1, &crate::types::model::ExecutionFilter {
         time: "20260729 10:00:00".into(), ..Default::default()
     }, &mut w2);
     assert_eq!(w2.seen, vec!["20260729-11:00:00"], "separator must not change the bound");
 
     // A date-only bound keeps the whole day rather than dropping it.
     let mut w3 = Rows::default();
-    client.req_executions(1, &crate::api::types::ExecutionFilter {
+    client.req_executions(1, &crate::types::model::ExecutionFilter {
         time: "20260729".into(), ..Default::default()
     }, &mut w3);
     assert_eq!(w3.seen.len(), 2, "a date-only bound keeps that day");
@@ -4357,9 +4357,9 @@ fn a_kept_up_to_date_request_reports_its_history_then_its_updates() {
         real_time: Vec<i64>,
     }
     impl Wrapper for Heard {
-        fn historical_data(&mut self, req_id: i64, _bar: &crate::api::types::BarData) { self.history.push(req_id); }
+        fn historical_data(&mut self, req_id: i64, _bar: &crate::types::model::BarData) { self.history.push(req_id); }
         fn historical_data_end(&mut self, req_id: i64, _s: &str, _e: &str) { self.ended.push(req_id); }
-        fn historical_data_update(&mut self, req_id: i64, _bar: &crate::api::types::BarData) { self.updates.push(req_id); }
+        fn historical_data_update(&mut self, req_id: i64, _bar: &crate::types::model::BarData) { self.updates.push(req_id); }
         fn real_time_bar(&mut self, req_id: i64, _t: i64, _o: f64, _h: f64, _l: f64,
                          _c: f64, _v: f64, _w: f64, _n: i32) { self.real_time.push(req_id); }
     }
@@ -4677,12 +4677,12 @@ fn a_request_gets_its_bar_times_written_the_way_it_asked() {
     #[derive(Default)]
     struct Heard(Vec<(i64, String)>);
     impl Wrapper for Heard {
-        fn historical_data(&mut self, req_id: i64, bar: &crate::api::types::BarData) {
+        fn historical_data(&mut self, req_id: i64, bar: &crate::types::model::BarData) {
             self.0.push((req_id, bar.date.clone()));
         }
         // A request that has already answered with its history keeps speaking
         // on this one, and its times are written the same way.
-        fn historical_data_update(&mut self, req_id: i64, bar: &crate::api::types::BarData) {
+        fn historical_data_update(&mut self, req_id: i64, bar: &crate::types::model::BarData) {
             self.0.push((req_id, bar.date.clone()));
         }
     }

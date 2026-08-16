@@ -10,6 +10,13 @@
 //! that way. This module is the engine underneath it, exported because the
 //! binaries, benchmarks and integration tests in this repository reach it.
 
+/// The objects a caller works in: contracts, orders, executions, the state
+/// the venue reports them in. Named apart from the wire scalars above because
+/// both surfaces present them and both carry an `Order` — one the caller's,
+/// one this engine's.
+pub mod model;
+
+
 /// Internal instrument identifier. Mapped from IB's conId at subscription time.
 /// Used as an index into pre-allocated arrays, so values are dense and small.
 pub type InstrumentId = u32;
@@ -1975,14 +1982,14 @@ pub struct ContractRef {
     pub multiplier: String,
 }
 
-impl From<&crate::api::types::Contract> for ContractRef {
+impl From<&crate::types::model::Contract> for ContractRef {
     /// Take what identifies the contract, and leave the rest.
     ///
     /// A caller's contract carries more than this — a primary exchange, a
     /// trading class, the fields a lookup filters on. Those travel separately
     /// where they are needed, because a request that filters is a different
     /// thing from a request that names.
-    fn from(c: &crate::api::types::Contract) -> Self {
+    fn from(c: &crate::types::model::Contract) -> Self {
         Self {
             con_id: c.con_id,
             symbol: c.symbol.clone(),

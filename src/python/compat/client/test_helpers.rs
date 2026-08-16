@@ -192,7 +192,7 @@ impl EClient {
         completed_status: &str, completed_time: &str, commission_and_fees_currency: &str,
         warning_text: &str, commission_and_fees: f64,
     ) -> PyResult<()> {
-        use crate::api::types::{Contract as ApiContract, Order as ApiOrder, Execution as ApiExecution, OrderState as ApiOrderState};
+        use crate::types::model::{Contract as ApiContract, Order as ApiOrder, Execution as ApiExecution, OrderState as ApiOrderState};
         let shared = self.shared_state()?;
         let st = match status {
             "Filled" => OrderStatus::Filled,
@@ -243,7 +243,7 @@ impl EClient {
         symbol: &str, action: &str, total_quantity: f64, lmt_price: f64,
         parent_id: i64,
     ) -> PyResult<()> {
-        use crate::api::types::{Contract as ApiContract, Order as ApiOrder};
+        use crate::types::model::{Contract as ApiContract, Order as ApiOrder};
         let contract = ApiContract {
             symbol: symbol.to_string(),
             sec_type: "STK".into(),

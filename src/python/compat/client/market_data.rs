@@ -101,7 +101,7 @@ impl EClient {
         )) {
             return self.report_refusal(py, req_id, why);
         }
-        self.core.cache_contract(contract.con_id, crate::api::types::Contract {
+        self.core.cache_contract(contract.con_id, crate::types::model::Contract {
             con_id: contract.con_id,
             symbol: contract.symbol.clone(),
             sec_type: contract.sec_type.clone(),

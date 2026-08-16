@@ -51,7 +51,7 @@ use std::thread;
 
 use std::sync::mpsc::{Receiver, SyncSender};
 
-use crate::api::types::{
+use crate::types::model::{
     Contract as ApiContract, Order as ApiOrder, TagValue as ApiTagValue,
 };
 use crate::bridge::{Event, SharedState};

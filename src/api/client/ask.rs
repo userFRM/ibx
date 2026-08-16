@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::error_codes::Refusal;
-use crate::api::types::{BarData, ContractDetails};
+use crate::types::model::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
 
 use super::{Contract, EClient};
@@ -316,14 +316,14 @@ impl EClient {
     /// Contracts whose name or symbol matches a pattern.
     pub fn matching_symbols(
         &self, pattern: &str,
-    ) -> Result<Vec<crate::api::types::ContractDescription>, Refusal> {
+    ) -> Result<Vec<crate::types::model::ContractDescription>, Refusal> {
         struct Matches {
             req_id: i64,
-            state: Arc<Mutex<Pending<crate::api::types::ContractDescription>>>,
+            state: Arc<Mutex<Pending<crate::types::model::ContractDescription>>>,
         }
         impl Wrapper for Matches {
             fn symbol_samples(
-                &mut self, req_id: i64, descriptions: &[crate::api::types::ContractDescription],
+                &mut self, req_id: i64, descriptions: &[crate::types::model::ContractDescription],
             ) {
                 if req_id == self.req_id {
                     let mut s = self.state.lock().unwrap();
@@ -455,16 +455,16 @@ impl EClient {
     /// The order is marked as a question rather than an instruction, so
     /// nothing reaches the market.
     pub fn what_if_order(
-        &self, contract: &Contract, order: &crate::api::types::Order,
-    ) -> Result<crate::api::types::OrderState, Refusal> {
+        &self, contract: &Contract, order: &crate::types::model::Order,
+    ) -> Result<crate::types::model::OrderState, Refusal> {
         struct Preview {
             order_id: i64,
-            state: Arc<Mutex<Pending<crate::api::types::OrderState>>>,
+            state: Arc<Mutex<Pending<crate::types::model::OrderState>>>,
         }
         impl Wrapper for Preview {
             fn open_order(
-                &mut self, order_id: i64, _c: &Contract, _o: &crate::api::types::Order,
-                order_state: &crate::api::types::OrderState,
+                &mut self, order_id: i64, _c: &Contract, _o: &crate::types::model::Order,
+                order_state: &crate::types::model::OrderState,
             ) {
                 if order_id == self.order_id {
                     let mut s = self.state.lock().unwrap();
@@ -481,7 +481,7 @@ impl EClient {
             }
         }
         let order_id = ask_id();
-        let asked = crate::api::types::Order { what_if: true, ..order.clone() };
+        let asked = crate::types::model::Order { what_if: true, ..order.clone() };
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Preview { order_id, state: Arc::clone(&state) };
         self.place_order(order_id, contract, &asked)?;

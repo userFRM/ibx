@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::api::client::{EClient, EClientConfig};
-use crate::api::types::{BarData, ContractDetails};
+use crate::types::model::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
 use crate::error_codes::Refusal;
 use crate::api::client::{AccountValue, OptionChain, PositionRow};
@@ -416,7 +416,7 @@ impl Client {
     ///
     /// The order's own id is what the venue answers under, so it is returned:
     /// a caller with nothing to correlate on cannot tell which answer is theirs.
-    pub fn place_order(&self, order_id: i64, contract: &Contract, order: &crate::api::types::Order) -> Result<i64, Refusal> {
+    pub fn place_order(&self, order_id: i64, contract: &Contract, order: &crate::types::model::Order) -> Result<i64, Refusal> {
         self.inner.place_order(order_id, contract, order)?;
         Ok(order_id)
     }
@@ -580,7 +580,7 @@ impl Client {
         location_code: &str,
         scan_code: &str,
         max_items: u32,
-        filters: &[crate::api::types::TagValue],
+        filters: &[crate::types::model::TagValue],
     ) -> Result<i64, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_scanner_subscription(
@@ -596,7 +596,7 @@ impl Client {
 
     /// Fills matching a filter. The venue holds a week, and a request reaching
     /// further back is refused in full.
-    pub fn executions(&self, filter: &crate::api::types::ExecutionFilter) {
+    pub fn executions(&self, filter: &crate::types::model::ExecutionFilter) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_executions(self.stream_id(), filter, &mut *r);
     }
@@ -727,7 +727,7 @@ impl Client {
     }
 
     /// Send an order, under an id this shape chooses.
-    pub fn submit_order(&self, contract: &Contract, order: &crate::api::types::Order) -> Result<i64, Refusal> {
+    pub fn submit_order(&self, contract: &Contract, order: &crate::types::model::Order) -> Result<i64, Refusal> {
         let order_id = self.inner.next_order_id();
         self.place_order(order_id, contract, order)
     }
@@ -739,7 +739,7 @@ impl Client {
     pub fn submit_oca_orders(
         &self,
         contract: &Contract,
-        orders: &mut [crate::api::types::Order],
+        orders: &mut [crate::types::model::Order],
         oca_group: &str,
         oca_type: i32,
     ) -> Result<Vec<i64>, Refusal> {
@@ -829,7 +829,7 @@ mod tests {
     /// them can both fill, which is the one thing the set exists to prevent.
     #[test]
     fn an_oca_set_is_linked_before_any_of_it_is_sent() {
-        use crate::api::types::Order;
+        use crate::types::model::Order;
 
         let mut orders = [Order::default(), Order::default(), Order::default()];
         for order in orders.iter_mut() {

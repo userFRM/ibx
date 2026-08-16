@@ -129,7 +129,7 @@ impl Contract {
     /// leg that is missing an attribute contributes its default rather than
     /// failing the order, except the contract id, without which the leg names
     /// nothing and the whole list is refused.
-    pub fn combo_legs_api(&self, py: Python<'_>) -> Result<Vec<crate::api::types::ComboLeg>, String> {
+    pub fn combo_legs_api(&self, py: Python<'_>) -> Result<Vec<crate::types::model::ComboLeg>, String> {
         let mut out = Vec::with_capacity(self.combo_legs.len());
         for (i, obj) in self.combo_legs.iter().enumerate() {
             let g = |n: &str| obj.getattr(py, n).ok();
@@ -137,7 +137,7 @@ impl Contract {
             if con_id == 0 {
                 return Err(format!("combo leg {i} has no conId, so it names no contract"));
             }
-            out.push(crate::api::types::ComboLeg {
+            out.push(crate::types::model::ComboLeg {
                 con_id,
                 ratio: g("ratio").and_then(|v| v.extract(py).ok()).unwrap_or(1),
                 action: g("action").and_then(|v| v.extract(py).ok()).unwrap_or_default(),
@@ -157,7 +157,7 @@ impl Contract {
     /// names nothing the caller can act on. Combo legs and the delta-neutral
     /// contract need a `Python` token to build and are dropped here exactly as
     /// `Clone` drops them.
-    pub(crate) fn from_api(c: &crate::api::types::Contract) -> Self {
+    pub(crate) fn from_api(c: &crate::types::model::Contract) -> Self {
         Self {
             con_id: c.con_id,
             symbol: c.symbol.clone(),
@@ -187,8 +187,8 @@ impl Contract {
     ///
     /// Combo legs and the delta-neutral contract are dropped, exactly as
     /// `from_api` drops them: they need a `Python` token to read.
-    pub(crate) fn to_api(&self) -> crate::api::types::Contract {
-        crate::api::types::Contract {
+    pub(crate) fn to_api(&self) -> crate::types::model::Contract {
+        crate::types::model::Contract {
             con_id: self.con_id,
             symbol: self.symbol.clone(),
             sec_type: self.sec_type.clone(),
@@ -1620,8 +1620,8 @@ impl Order {
     }
 
     /// Convert to Rust API Order.
-    pub fn to_api(&self) -> crate::api::types::Order {
-        crate::api::types::Order {
+    pub fn to_api(&self) -> crate::types::model::Order {
+        crate::types::model::Order {
             order_id: self.order_id,
             action: self.action.clone(),
             total_quantity: self.total_quantity,
@@ -1645,7 +1645,7 @@ impl Order {
             trail_stop_price: self.trail_stop_price,
             trailing_percent: self.trailing_percent,
             algo_strategy: self.algo_strategy.clone(),
-            algo_params: self.algo_params.iter().map(|tv| crate::api::types::TagValue {
+            algo_params: self.algo_params.iter().map(|tv| crate::types::model::TagValue {
                 tag: tv.tag.clone(),
                 value: tv.value.clone(),
             }).collect(),
@@ -1732,7 +1732,7 @@ impl OrderAllocation {
 
 impl OrderAllocation {
     /// The same allocation, as the Python side names it.
-    pub(crate) fn from_api(a: &crate::api::types::OrderAllocation) -> Self {
+    pub(crate) fn from_api(a: &crate::types::model::OrderAllocation) -> Self {
         Self {
             account: a.account.clone(),
             position: a.position.clone(),
@@ -1803,7 +1803,7 @@ pub struct OrderState {
 
 impl OrderState {
     /// The same order state, as the Python side names it.
-    pub(crate) fn from_api(s: &crate::api::types::OrderState) -> Self {
+    pub(crate) fn from_api(s: &crate::types::model::OrderState) -> Self {
         Self {
             status: s.status.clone(),
             init_margin_before: s.init_margin_before.clone(),
@@ -3100,7 +3100,7 @@ mod tests {
     /// other does not. So they are compared rather than trusted.
     #[test]
     fn both_surfaces_state_the_same_order_defaults() {
-        let rust = order_defaults(include_str!("../../api/types.rs"));
+        let rust = order_defaults(include_str!("../../types/model.rs"));
         let python = order_defaults(include_str!("contract.rs"));
         assert!(rust.len() > 150, "read {} lines, expected the whole block", rust.len());
         assert_eq!(rust, python);
