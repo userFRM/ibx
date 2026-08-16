@@ -23,7 +23,6 @@ use std::sync::mpsc::SyncSender;
 
 use super::{HeartbeatState, emit, clone_for_event, parse_price_tag, decode_tif};
 
-
 /// Bound for an in-flight contract-details request (secdef reply or
 /// per-exchange fan-out). Refreshed on fan-out activity; on expiry the
 /// request surfaces error 200 + contract_details_end instead of hanging
@@ -35,8 +34,6 @@ const SECDEF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// memory of `seen_exec_ids` while staying large enough that a server replay
 /// after a reconnect burst still hits the window.
 const EXEC_ID_WINDOW: usize = 1024;
-
-
 
 /// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a stable i64 permId.
 /// Uses FNV-1a hash of the first 3 dot-segments (the stable prefix) so that permId
@@ -52,7 +49,6 @@ fn extract_tag_value(msg: &[u8], prefix: &[u8]) -> Option<String> {
     }
     None
 }
-
 
 /// What the venue says went wrong.
 ///
@@ -246,7 +242,6 @@ pub(crate) fn maturity_tag(maturity: &str) -> Option<u32> {
     }
 }
 
-
 /// How long a reconnect waits for the recovery push before judging the orders
 /// it did not mention. Generous, because a push that says nothing at all is
 /// indistinguishable from one that has not started.
@@ -395,7 +390,6 @@ pub(crate) struct PendingFanout {
     pub deadline: Instant,
 }
 
-
 impl CcpState {
     pub(crate) fn new() -> Self {
         Self {
@@ -452,7 +446,6 @@ impl CcpState {
         }
         true
     }
-
 
     pub(crate) fn process_ccp_message(
         &mut self,
@@ -1037,7 +1030,6 @@ impl CcpState {
         }
     }
 
-
     fn handle_news_bulletin(&mut self, parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
         static BULLETIN_TYPE_MAP: &[(i32, i32)] = &[
             (1, 1), (2, 2), (3, 3), (8, 1), (9, 1), (10, 1),
@@ -1490,7 +1482,6 @@ impl CcpState {
         // Known-conId lookup: single record, no paginated terminator.
         self.pending_secdef.push((req_id, true, Instant::now() + SECDEF_TIMEOUT));
     }
-
 
     /// Ask the venue to name a contract so a subscription can be sent for it.
     pub(crate) fn resolve_for_subscribe(
@@ -2056,7 +2047,6 @@ fn handle_account_update_elsewhere(
     }
 }
 
-
 /// Handle 6040=152, the venue's price table: 146={count} with a list of
 /// contract ids in 6008 paired positionally with a list of prices in 8057.
 /// The price is stored as text and read where it is used, so one that does not
@@ -2194,7 +2184,6 @@ impl CcpState {
     }
 }
 
-
 /// Fill in a holding's contract once its definition arrives.
 ///
 /// The position feed states a contract id, a quantity and often a cost, and
@@ -2219,7 +2208,6 @@ fn identify_position(shared: &SharedState, def: &crate::control::contracts::Cont
     });
 }
 
-
 /// Take the server's position as the engine's own.
 ///
 /// The callback side reads `context.position`, and a snapshot that reached
@@ -2233,7 +2221,6 @@ fn adopt_position(context: &mut Context, instrument: InstrumentId, position: f64
         context.update_position(instrument, delta);
     }
 }
-
 
 pub(crate) mod executions;
 pub(crate) mod positions;

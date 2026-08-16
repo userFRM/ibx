@@ -152,7 +152,6 @@ impl Contract {
         Ok(out)
     }
 
-
     /// The whole contract the engine holds, not the handful of fields a
     /// callback happens to print: an option with no strike, right or expiry
     /// names nothing the caller can act on. Combo legs and the delta-neutral
@@ -213,7 +212,6 @@ impl Contract {
         }
     }
 }
-
 
 /// Set a field on a freshly made object from what a caller named it.
 ///
@@ -1733,7 +1731,6 @@ impl OrderAllocation {
     }
 }
 
-
 impl OrderAllocation {
     /// The same allocation, as the Python side names it.
     pub(crate) fn from_api(a: &crate::api::types::OrderAllocation) -> Self {
@@ -2937,20 +2934,6 @@ pub struct ContractDescription {
     pub primary_exchange: String,
     #[pyo3(get, set)]
     pub derivative_sec_types: Vec<String>,
-}
-
-impl ContractDescription {
-    /// The same description, as the Python side names it.
-    pub(crate) fn from_api(d: &crate::api::types::ContractDescription) -> Self {
-        Self {
-            con_id: d.con_id,
-            symbol: d.symbol.clone(),
-            sec_type: d.sec_type.clone(),
-            currency: d.currency.clone(),
-            primary_exchange: d.primary_exchange.clone(),
-            derivative_sec_types: d.derivative_sec_types.clone(),
-        }
-    }
 }
 
 #[pymethods]

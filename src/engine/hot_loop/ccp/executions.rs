@@ -1,8 +1,6 @@
 use super::{CcpState, RECOVERY_TERMINATOR_GRACE};
 use std::time::Instant;
 
-
-
 use crate::bridge::{Event, RichOrderInfo, SharedState};
 use crate::api::types as api;
 use crate::engine::context::Context;
@@ -16,16 +14,12 @@ use std::sync::mpsc::SyncSender;
 
 use super::{HeartbeatState, emit, parse_price_tag, decode_tif};
 
-
-
-
 /// Synthetic ibapi error code for a parked (39=I) order's reason, delivered
 /// through `Wrapper::error` since ibapi has no callback dedicated to an order
 /// held with a reason. Mirrors IB's generic order-message code (399) rather
 /// than the reject code (201) — an Inactive order is not rejected, it can
 /// still reactivate.
 const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
-
 
 /// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a stable i64 permId.
 /// Uses FNV-1a hash of the first 3 dot-segments (the stable prefix) so that permId
@@ -154,11 +148,16 @@ pub(crate) fn uncertain_update(
 /// Derived from the handler itself so it cannot fall behind as fields are
 /// added, the same way a definition's is.
 pub fn tags_read_from_an_execution() -> Vec<u32> {
-    // Both files, because the reading is done in both: the report handler is
-    // here and the routing that reads a few tags of its own is next door. A
-    // scan of one names fewer tags than are read, and every tag it misses is
-    // then reported as a field the venue sent that nothing read.
-    let source = concat!(include_str!("mod.rs"), include_str!("executions.rs"));
+    // Every file this module is written across, because the reading is done
+    // across all of them: the report handler is here, the routing that reads a
+    // few tags of its own is next door, and the position and P&L handlers read
+    // more. A scan of one names fewer tags than are read, and every tag it
+    // misses is then reported as a field the venue sent that nothing read.
+    let source = concat!(
+        include_str!("mod.rs"),
+        include_str!("executions.rs"),
+        include_str!("positions.rs"),
+    );
     let mut seen: Vec<u32> = Vec::new();
     for cap in source.split("parsed.get(&").skip(1) {
         let token: String = cap.chars().take_while(|c| *c != ')').collect();
@@ -317,6 +316,11 @@ impl CcpState {
     /// client, one left from an earlier session. The report names the contract
     /// and the side, so it is booked from those rather than dropped — a
     /// position the account actually holds is not this client's to forget.
+    ///
+    /// The figures arrive as arguments rather than being read here, because
+    /// the caller reads several of them again after this returns and one of
+    /// them — the order's cumulative quantity — has to be read before the
+    /// booking below moves it.
     #[allow(clippy::too_many_arguments)]
     fn book_fill(
         &mut self,
@@ -428,7 +432,6 @@ impl CcpState {
             }
         }
     }
-
 
     /// Take an order this session never saw from the venue's own account of it.
     ///
@@ -844,7 +847,6 @@ impl CcpState {
         }
 
         let status = status_of(ord_status, clord_id, parsed);
-
 
         // A replace is acknowledged as 39=5, and the gateway reaches it through
         // 39=6 first: captured live, a modify runs PendingCancel then Replaced.
