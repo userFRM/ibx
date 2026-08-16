@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::error_codes::Refusal;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
+use std::sync::LazyLock;
 
 use std::sync::mpsc::SyncSender;
 
@@ -2437,19 +2438,92 @@ impl ClientCore {
             ));
         }
 
-        // `good_after_time` asks the venue to hold the order until a stated
-        // time. The field the venue reads it under is not established, so an
-        // order carrying it would be sent under a guessed encoding or — as it
-        // was — sent without the delay and filled at once. Neither is what the
-        // caller asked for, and one of them trades.
-        if !order.good_after_time.is_empty() {
-            return Err(
-                "good_after_time is not supported: the field this venue reads \
-                 a delayed activation under is not established, so the order \
-                 would be placed immediately rather than held. Submit the \
-                 order when you want it live."
-                    .into(),
-            );
+        // Everything this protocol has no field for. Each is documented on the
+        // field with what is known about the absence; each is refused here,
+        // because a caller that set one and was answered anyway would have an
+        // order the venue never saw the instruction on, and nothing to say so.
+        //
+        // Compared against the default rather than against emptiness: a field
+        // left alone is not a field asked for, and only what a caller stated
+        // is refused. The list is checked against the documented one by
+        // `scripts/gen_order_field_reach.py`, so a field that gains or loses
+        // its note here cannot drift from the note itself.
+        static UNCARRIED: LazyLock<ApiOrder> = LazyLock::new(ApiOrder::default);
+        macro_rules! refuse_if_stated {
+            ($($field:ident),+ $(,)?) => {
+                $(if order.$field != UNCARRIED.$field {
+                    return Err(format!(
+                        "{} is not carried by this protocol: there is no field \
+                         to send it under, so the order would go out without \
+                         it and do something other than what was asked. It is \
+                         documented on the field with what is known about the \
+                         absence. Leave it at its default to place the order \
+                         without it.",
+                        stringify!($field),
+                    ));
+                })+
+            };
+        }
+        refuse_if_stated!(
+            algo_id, auction_strategy, basis_points, basis_points_type,
+            bond_accrued_interest, delta_neutral_clearing_account,
+            delta_neutral_clearing_intent, delta_neutral_designated_location,
+            delta_neutral_open_close, delta_neutral_settling_firm,
+            delta_neutral_short_sale, delta_neutral_short_sale_slot,
+            dont_use_auto_price_for_hedge, opt_out_smart_routing,
+            order_misc_options, origin, override_percentage_constraints,
+            parent_perm_id, pt_order_id, pt_order_type, randomize_price,
+            scale_init_fill_qty, scale_table, shareholder, sl_order_id,
+            sl_order_type, smart_combo_routing_params,
+            soft_dollar_tier_display_name, what_if_type,
+        );
+
+
+        // Held until a stated moment. Unreadable, the delay used to be dropped
+        // and the order filled at once, which is the opposite of what was asked.
+        if !order.good_after_time.is_empty()
+            && let Err(e) = crate::protocol::datetime::parse_ib_expiry(&order.good_after_time)
+        {
+            return Err(format!(
+                "good_after_time '{}' cannot be read: {e}. State it as \
+                 `yyyyMMdd HH:mm:ss` with an optional zone, or `yyyyMMdd` for \
+                 the start of a day — sent unread, the order would go live at \
+                 once instead of waiting.",
+                order.good_after_time,
+            ));
+        }
+
+        // A hedge is stated as a kind and a parameter that goes with it. A
+        // kind this client does not know reads as no hedge at all, and the
+        // order goes out unhedged; a beta or a ratio it cannot read becomes
+        // zero, which is omitted, and the order goes out hedged against
+        // nothing. Both are a different order from the one asked for.
+        const HEDGE: [&str; 5] = ["D", "B", "F", "P", "S"];
+        if !order.hedge_type.is_empty() {
+            let kind = order.hedge_type.to_ascii_uppercase();
+            if !HEDGE.contains(&kind.as_str()) {
+                return Err(format!(
+                    "hedge_type '{}' is not one this venue carries. It is one of \
+                     {} — delta, beta, FX, pair, or the venue's own pair. An \
+                     unrecognised kind would otherwise be dropped and the order \
+                     sent unhedged.",
+                    order.hedge_type,
+                    HEDGE.join(", "),
+                ));
+            }
+            // Only these two kinds are struck at a number. Delta and FX take
+            // no parameter, so one stated with them is not read.
+            if matches!(kind.as_str(), "B" | "P")
+                && order.hedge_param.parse::<f64>().is_err()
+            {
+                return Err(format!(
+                    "hedge_type '{}' is struck at a number and hedge_param \
+                     '{}' is not one. Stated unreadable, the hedge would be \
+                     sent as zero and dropped, leaving the order hedged \
+                     against nothing.",
+                    order.hedge_type, order.hedge_param,
+                ));
+            }
         }
 
         // Financial-advisor allocation is not wire-encoded, so an accepted

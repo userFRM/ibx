@@ -72,3 +72,30 @@ def test_both_clients_carry_the_same_contract_details():
         "a contract-details field exists on one client and not the other: "
         f"rust only={sorted(rust - python)} python only={sorted(python - rust)}"
     )
+
+
+#: An argument a surface takes and will not send is refused with this sentence,
+#: which names the argument first. Read from the sources for the same reason the
+#: fields are: a list beside them is a third thing to forget.
+_REFUSED = re.compile(r'"([a-z_]+)=?\{?[a-z_]*\}? is not carried by this protocol')
+
+
+def _refused(where: str) -> set[str]:
+    return {
+        m.group(1)
+        for f in (ROOT / where).rglob("*.rs")
+        for m in _REFUSED.finditer(f.read_text())
+    }
+
+
+def test_both_clients_refuse_the_same_arguments():
+    """An argument one client refuses and the other accepts is the worse half
+    of the same bug the fields test covers. Refused on one surface, the caller
+    is told; accepted on the other, they are answered with a stream or an order
+    that is not the one they asked for, and nothing says so."""
+    rust = _refused("src/api/client")
+    python = _refused("src/python/compat/client")
+    assert rust == python, (
+        "an argument is refused by one client and accepted by the other: "
+        f"rust only={sorted(rust - python)} python only={sorted(python - rust)}"
+    )

@@ -578,7 +578,7 @@ def cancel_mkt_data(req_id)
 
 #### `req_tick_by_tick_data`
 
-Request tick-by-tick data.  `number_of_ticks` and `ignore_size` are taken and not applied. The subscription states the contract and the kind of stream and nothing else: there is no field for a prelude of past ticks, and none for suppressing size-only changes. The Rust surface refuses them rather than dropping them; here they are answered with the stream the venue gives, which is what their defaults describe.
+Request tick-by-tick data.  `number_of_ticks` and `ignore_size` are refused rather than dropped. The subscription states the contract and the kind of stream and nothing else: there is no field for a prelude of past ticks, and none for suppressing size-only changes. A caller that set either and was answered anyway would be reading a stream it did not ask for, with nothing to say so. Their defaults — no prelude, sizes included — are what the venue does, so an ordinary call is unaffected. Reported through `error`, where a request this client will not send belongs.
 
 ```python
 def req_tick_by_tick_data(req_id, contract, tick_type, number_of_ticks=0, ignore_size=False)

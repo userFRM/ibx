@@ -439,6 +439,8 @@ pub struct OrderAttrs {
     pub hedge_beta: f64,
     /// The ratio a pair hedge is struck at.
     pub hedge_ratio: f64,
+    /// When the order becomes active (168), unix seconds. Zero for at once.
+    pub good_after: i64,
     /// The soft-dollar arrangement this order's commission goes to: which
     /// tier (tag 6519) and what it is worth (tag 6520). Taken from a caller
     /// and dropped, the commission went wherever the account's default sends
@@ -580,6 +582,7 @@ impl Default for OrderAttrs {
             hedge_type: Default::default(),
             hedge_beta: Default::default(),
             hedge_ratio: Default::default(),
+            good_after: Default::default(),
             rule80a: Default::default(),
             post_to_ats: Default::default(),
             deactivate: Default::default(),

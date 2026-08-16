@@ -70,6 +70,20 @@ def refused() -> dict[str, str]:
     return out
 
 
+def what_the_call_refuses() -> set[str]:
+    """The fields `place_order` will not take a stated value for.
+
+    The note on a field and the refusal in the call have to name the same set:
+    a note without a refusal is an order that goes out missing what it says it
+    cannot carry, and a refusal without a note is a caller told no with nowhere
+    to read why.
+    """
+    text = module("src/client_core").read_text()
+    at = text.index("refuse_if_stated!(")
+    end = text.index(");", at)
+    return set(re.findall(r"\b([a-z_]+)\b", text[at + len("refuse_if_stated!("):end]))
+
+
 def where_fields_are_read() -> str:
     """Everything that reads an order, with the order's own definition removed.
 
@@ -174,6 +188,16 @@ def main() -> int:
     lines.append("")
 
     OUT.write_text("\n".join(lines))
+
+    refuses = what_the_call_refuses()
+    if refuses != set(says_so):
+        print("a field's note and the call disagree about what can be placed:")
+        for f in sorted(set(says_so) - refuses):
+            print(f"  {f} is documented as not carried and the call takes it anyway")
+        for f in sorted(refuses - set(says_so)):
+            print(f"  {f} is refused by the call and no field says why")
+        return 1
+
     unstated = [f for f in constants_in_the_conversion() if f not in STATED_CONSTANTS]
     if unstated:
         print("the order conversion fills a field with a literal and nobody has")
