@@ -18,7 +18,10 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-STATUS = ROOT / "STATUS.md"
+# The inventory sits with the engineering notes: it is a fact about this
+# repository rather than about what the client can do, and the compatibility
+# matrix is the latter.
+STATUS = ROOT / "docs" / "engineering-notes.md"
 README = ROOT / "README.md"
 
 #: Row label in the table, and how to count what it describes.
