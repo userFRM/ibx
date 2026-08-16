@@ -321,7 +321,6 @@ impl CcpState {
     /// the caller reads several of them again after this returns and one of
     /// them — the order's cumulative quantity — has to be read before the
     /// booking below moves it.
-    #[allow(clippy::too_many_arguments)]
     fn book_fill(
         &mut self,
         parsed: &std::collections::HashMap<u32, String>,

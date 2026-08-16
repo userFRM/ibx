@@ -928,7 +928,6 @@ impl HmdsState {
 
 
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_tbt_subscribe(
         &mut self,
         // What the caller numbered this request, which every record it
@@ -1455,7 +1454,7 @@ impl HmdsState {
             self.pending_fundamental.remove(pos);
         }
         let Some(conn) = hmds_conn.as_mut() else { return };
-        let xml = crate::control::fundamental::build_fundamental_cancel_xml(
+        let xml = crate::control::xml::cancel_query(
             crate::control::fundamental::FUNDAMENTALS_QUERY_ID,
         );
         let ts = chrono_free_timestamp();
@@ -1492,7 +1491,6 @@ impl HmdsState {
         self.pending_histogram.push((query_id, req_id));
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_historical_ticks_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, start_date_time: &str, end_date_time: &str, number_of_ticks: u32, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
@@ -1514,7 +1512,6 @@ impl HmdsState {
         self.pending_ticks.push((query_id, req_id, what_to_show.to_string()));
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_realtime_bar_subscribe(&mut self, req_id: u32, con_id: i64, _symbol: &str, sec_type: &str, exchange: &str, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
@@ -1542,7 +1539,6 @@ impl HmdsState {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_schedule_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, end_date_time: &str, duration: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;

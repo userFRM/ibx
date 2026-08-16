@@ -1499,11 +1499,6 @@ impl ReferenceState {
         self.island_granted.load(Ordering::Relaxed)
     }
 
-    /// Whether the venue granted this capability at logon.
-    pub fn feature_enabled(&self, token: &str) -> bool {
-        self.enabled_features.lock().unwrap().iter().any(|t| t == token)
-    }
-
     #[doc(hidden)] pub fn set_order_permissions(&self, perms: HashMap<String, Vec<String>>) {
         *self.order_permissions.lock().unwrap() = perms;
     }

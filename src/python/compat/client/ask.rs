@@ -237,7 +237,6 @@ impl EClient {
     ///
     /// Answers rather than reporting through the wrapper, because a program
     /// written against the reference client reads the return value.
-    #[allow(clippy::too_many_arguments)]
     fn news_headlines(
         &self,
         py: Python<'_>,

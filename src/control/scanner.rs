@@ -2,9 +2,6 @@
 
 use crate::protocol::fix;
 
-// Tags for scanner messages
-/// FIX tag 6118: the scanner xml.
-pub const TAG_SCANNER_XML: u32 = 6118;
 /// FIX tag 6040: the sub protocol.
 pub const TAG_SUB_PROTOCOL: u32 = 6040;
 

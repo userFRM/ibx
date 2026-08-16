@@ -117,7 +117,6 @@ pub trait Wrapper {
         &mut self, req_id: i64, account: &str, model_code: &str,
         contract: &Contract, pos: f64, avg_cost: f64,
     ) {
-        let _ = (req_id, account, model_code, contract, pos, avg_cost);
     }
     /// Every position answering this request has been stated.
     fn position_multi_end(&mut self, req_id: i64) { let _ = req_id; }
@@ -126,7 +125,6 @@ pub trait Wrapper {
         &mut self, req_id: i64, account: &str, model_code: &str,
         key: &str, value: &str, currency: &str,
     ) {
-        let _ = (req_id, account, model_code, key, value, currency);
     }
     /// Every figure answering this request has been stated.
     fn account_update_multi_end(&mut self, req_id: i64) { let _ = req_id; }
@@ -242,42 +240,32 @@ pub trait Wrapper {
         implied_vol: f64, delta: f64, opt_price: f64, pv_dividend: f64,
         gamma: f64, vega: f64, theta: f64, und_price: f64,
     ) {
-        let _ = (req_id, tick_type, tick_attrib, implied_vol, delta, opt_price,
-                 pv_dividend, gamma, vega, theta, und_price);
     }
     /// The display groups this client offers, `|`-separated.
     fn display_group_list(&mut self, req_id: i64, groups: &str) {
-        let _ = (req_id, groups);
     }
     /// The contract a display group now holds, as `conId@exchange`, or `none`.
     fn display_group_updated(&mut self, req_id: i64, contract_info: &str) {
-        let _ = (req_id, contract_info);
     }
     /// A bond's contract details, answering `req_contract_details` for a bond.
     /// The venue answers bonds on the same callback as everything else here,
     /// so this exists for callers written against a client that separates them.
     fn bond_contract_details(&mut self, req_id: i64, details: &ContractDetails) {
-        let _ = (req_id, details);
     }
     /// The permanent id an order was given, paired with the id this client used.
     fn order_bound(&mut self, perm_id: i64, client_id: i64, order_id: i64) {
-        let _ = (perm_id, client_id, order_id);
     }
     /// An advisor's allocation groups, profiles or aliases, as XML.
     fn receive_fa(&mut self, fa_data_type: i32, cxml: &str) {
-        let _ = (fa_data_type, cxml);
     }
     /// The end of a `replace_fa` exchange.
     fn replace_fa_end(&mut self, req_id: i64, text: &str) {
-        let _ = (req_id, text);
     }
     /// What the event calendar can answer about, as JSON.
     fn wsh_meta_data(&mut self, req_id: i64, data_json: &str) {
-        let _ = (req_id, data_json);
     }
     /// Calendar events, as JSON.
     fn wsh_event_data(&mut self, req_id: i64, data_json: &str) {
-        let _ = (req_id, data_json);
     }
     /// One venue's option chain for an underlying: the
     /// expiries and strikes it lists.
@@ -285,7 +273,6 @@ pub trait Wrapper {
         &mut self, req_id: i64, exchange: &str, underlying_con_id: i64,
         trading_class: &str, multiplier: &str, expirations: &[String], strikes: &[f64],
     ) {
-        let _ = (req_id, exchange, underlying_con_id, trading_class, multiplier, expirations, strikes);
     }
     /// Every venue's chain has been stated.
     fn security_definition_option_parameter_end(&mut self, req_id: i64) { let _ = req_id; }
@@ -296,7 +283,6 @@ pub trait Wrapper {
     fn delta_neutral_validation(
         &mut self, req_id: i64, con_id: i64, delta: f64, price: f64,
     ) {
-        let _ = (req_id, con_id, delta, price);
     }
 
     // ── Histogram ──

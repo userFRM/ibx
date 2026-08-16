@@ -54,15 +54,6 @@ pub const IB_LOCALE: &str = "en_US";
 /// Network ports.
 pub const MISC_PORT: u16 = 4000;
 
-/// Which port the session opens on.
-pub fn misc_port() -> u16 {
-    std::env::var("IBX_MISC_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(4000)
-}
-/// A host to use instead of the one the venue routed to, where one
-/// is set.
-pub fn farm_host_override() -> Option<String> {
-    std::env::var("IBX_FARM_HOST").ok()
-}
 /// Where the login is made.
 pub const AUTH_PORT: u16 = 4001;
 
@@ -71,17 +62,10 @@ pub const CCP_HEARTBEAT: u64 = 10;
 /// How many seconds between heartbeats on a farm connection.
 pub const FARM_HEARTBEAT: u64 = 30;
 
-/// Recv buffer sizes (bytes).
-pub const CCP_RECV_BUF: usize = 8192;
 /// How much of a farm's traffic is read at once.
 pub const FARM_RECV_BUF: usize = 32768;
-/// How much of a FIX connection's traffic is read at once.
-pub const FIX_RECV_BUF: usize = 4096;
-
 /// Timeouts (seconds).
 pub const TIMEOUT_FIX_LOGON: f64 = 10.0;
-/// How long to wait for a FIX message before giving up, in seconds.
-pub const TIMEOUT_FIX_READ: f64 = 30.0;
 /// Overall wall-clock budget for a farm logon exchange (key exchange excluded).
 /// Raised from 5 s: on a high-latency regional gateway a single response
 /// segment can lag past 5 s, and the read must retry against this deadline

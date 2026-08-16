@@ -1818,30 +1818,17 @@ mod outside_rth_polarity_tests {
     fn every_submit_path_emits_outside_rth_only_when_it_was_asked_for() {
         let cases: Vec<SubmitCase> = vec![
             ("limit gtc", |c, i, o| {
-                c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)
+                c.submit(i, Side::Buy, 1, crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE }, b'1', crate::types::OrderAttrs { outside_rth: o, ..Default::default() })
             }),
             ("stop gtc", |c, i, o| {
-                c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)
+                c.submit(i, Side::Sell, 1, crate::types::OrderKind::Stop { stop_price: 90 * crate::types::PRICE_SCALE }, b'1', crate::types::OrderAttrs { outside_rth: o, ..Default::default() })
             }),
             ("stop limit gtc", |c, i, o| {
-                c.submit_stop_limit_gtc(
-                    i,
-                    Side::Sell,
-                    1,
-                    89 * crate::types::PRICE_SCALE,
-                    90 * crate::types::PRICE_SCALE,
-                    o,
-                )
+                c.submit(i, Side::Sell, 1, crate::types::OrderKind::StopLimit { price: 89 * crate::types::PRICE_SCALE, stop_price: 90 * crate::types::PRICE_SCALE }, b'1', crate::types::OrderAttrs { outside_rth: o, ..Default::default() })
             }),
             ("extended encoder", |c, i, o| {
-                c.submit_limit_ex(
-                    i,
-                    Side::Buy,
-                    1,
-                    100 * crate::types::PRICE_SCALE,
-                    b'0',
-                    crate::types::OrderAttrs { outside_rth: o, ..Default::default() },
-                )
+                c.submit(i, Side::Buy, 1, crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE }, b'0',
+                    crate::types::OrderAttrs { outside_rth: o, ..Default::default() })
             }),
         ];
 
@@ -2190,26 +2177,19 @@ mod outside_rth_polarity_tests {
     fn every_submit_path_names_the_contract_and_not_just_its_symbol() {
         let cases: Vec<SubmitCase> = vec![
             ("limit gtc", |c, i, o| {
-                c.submit_limit_gtc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, o)
+                c.submit(i, Side::Buy, 1, crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE }, b'1', crate::types::OrderAttrs { outside_rth: o, ..Default::default() })
             }),
             ("stop gtc", |c, i, o| {
-                c.submit_stop_gtc(i, Side::Sell, 1, 90 * crate::types::PRICE_SCALE, o)
+                c.submit(i, Side::Sell, 1, crate::types::OrderKind::Stop { stop_price: 90 * crate::types::PRICE_SCALE }, b'1', crate::types::OrderAttrs { outside_rth: o, ..Default::default() })
             }),
             ("stop limit gtc", |c, i, o| {
-                c.submit_stop_limit_gtc(
-                    i,
-                    Side::Sell,
-                    1,
-                    89 * crate::types::PRICE_SCALE,
-                    90 * crate::types::PRICE_SCALE,
-                    o,
-                )
+                c.submit(i, Side::Sell, 1, crate::types::OrderKind::StopLimit { price: 89 * crate::types::PRICE_SCALE, stop_price: 90 * crate::types::PRICE_SCALE }, b'1', crate::types::OrderAttrs { outside_rth: o, ..Default::default() })
             }),
             ("limit ioc", |c, i, _| {
-                c.submit_limit_ioc(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)
+                c.submit(i, Side::Buy, 1, crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE }, b'3', crate::types::OrderAttrs { outside_rth: false, ..Default::default() })
             }),
             ("limit fok", |c, i, _| {
-                c.submit_limit_fok(i, Side::Buy, 1, 100 * crate::types::PRICE_SCALE)
+                c.submit(i, Side::Buy, 1, crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE }, b'4', crate::types::OrderAttrs { outside_rth: false, ..Default::default() })
             }),
         ];
 

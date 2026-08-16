@@ -8,9 +8,6 @@
 
 use std::io::Read;
 
-// Tags for news data
-/// FIX tag 6118: the news xml.
-pub const TAG_NEWS_XML: u32 = 6118;
 /// FIX tag 6040: the sub protocol.
 pub const TAG_SUB_PROTOCOL: u32 = 6040;
 /// FIX tag 95: the raw data length.

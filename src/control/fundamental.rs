@@ -2,9 +2,6 @@
 
 use std::io::Read;
 
-// FIX tags for fundamental data
-/// FIX tag 6118: the fundamental xml.
-pub const TAG_FUNDAMENTAL_XML: u32 = 6118;
 /// FIX tag 6040: the sub protocol.
 pub const TAG_SUB_PROTOCOL: u32 = 6040;
 /// FIX tag 95: the raw data length.
@@ -56,33 +53,9 @@ pub struct FundamentalRequest {
     pub report_type: ReportType,
 }
 
-/// Parsed fundamental data response.
-#[derive(Debug, Clone)]
-pub struct FundamentalResponse {
-    /// The name this client gave the query, which the answer echoes.
-    pub query_id: String,
-    /// The report itself, as the venue sent it.
-    pub data: Vec<u8>,
-}
-
 /// What a fundamentals request calls itself, and what a cancel names to
 /// withdraw it.
 pub const FUNDAMENTALS_QUERY_ID: &str = "COMPANY_FUNDAMENTALS";
-
-/// Withdraw a fundamentals request.
-///
-/// A request withdrawn only here goes on being served: the venue was never
-/// told, and keeps sending. It is named by the id the request gave itself, and
-/// carried in the list the venue expects even when it withdraws one thing.
-pub fn build_fundamental_cancel_xml(query_id: &str) -> String {
-    format!(
-        "<ListOfCancelQueries>\
-         <CancelQuery>\
-         <id>{query_id}</id>\
-         </CancelQuery>\
-         </ListOfCancelQueries>",
-    )
-}
 
 /// Build the XML query for a fundamental data request.
 pub fn build_fundamental_request_xml(req: &FundamentalRequest) -> String {
@@ -189,7 +162,7 @@ mod tests {
     /// thing, and names the request by the id the request gave itself.
     #[test]
     fn a_withdrawal_names_the_request_it_withdraws() {
-        let xml = build_fundamental_cancel_xml(FUNDAMENTALS_QUERY_ID);
+        let xml = crate::control::xml::cancel_query(FUNDAMENTALS_QUERY_ID);
         assert_eq!(
             xml,
             "<ListOfCancelQueries><CancelQuery><id>COMPANY_FUNDAMENTALS</id>\

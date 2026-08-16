@@ -354,7 +354,6 @@ impl EClient {
     /// without a session, and that is exactly where it was found not to arrive.
     #[doc(hidden)]
     #[pyo3(signature = (req_id, position, market_maker, operation, side, price, size, is_smart_depth=false))]
-    #[allow(clippy::too_many_arguments)]
     fn _test_push_depth(
         &self, req_id: u32, position: i32, market_maker: &str, operation: i32,
         side: i32, price: f64, size: f64, is_smart_depth: bool,

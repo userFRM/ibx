@@ -65,50 +65,6 @@ pub const TICK_LAST_EXCHANGE: i32 = 84;
 
 // ── Shared account field definitions ──
 
-/// Account update fields: (tag_name, accessor). Used by both `update_account_value`
-/// and the subscription-gated account updates dispatch.
-pub const ACCOUNT_UPDATE_FIELDS: &[&str] = &[
-    "NetLiquidation",
-    "TotalCashValue",
-    "SettledCash",
-    "BuyingPower",
-    "EquityWithLoanValue",
-    "GrossPositionValue",
-    "InitMarginReq",
-    "MaintMarginReq",
-    "AvailableFunds",
-    "ExcessLiquidity",
-    "Cushion",
-    "SMA",
-    "UnrealizedPnL",
-    "RealizedPnL",
-    "AccruedCash",
-    "DailyPnL",
-];
-
-/// Extract the 16 price-scaled fields from AccountState in ACCOUNT_UPDATE_FIELDS order.
-#[inline]
-pub fn account_field_values(acct: &AccountState) -> [i64; 16] {
-    [
-        acct.net_liquidation,
-        acct.total_cash_value,
-        acct.settled_cash,
-        acct.buying_power,
-        acct.equity_with_loan,
-        acct.gross_position_value,
-        acct.init_margin_req,
-        acct.maint_margin_req,
-        acct.available_funds,
-        acct.excess_liquidity,
-        acct.cushion,
-        acct.sma,
-        acct.unrealized_pnl,
-        acct.realized_pnl,
-        acct.accrued_cash,
-        acct.daily_pnl,
-    ]
-}
-
 /// Account summary tags (numeric). Superset of update fields + extras.
 pub const ACCOUNT_SUMMARY_TAGS: &[&str] = &[
     "NetLiquidation",
@@ -128,29 +84,6 @@ pub const ACCOUNT_SUMMARY_TAGS: &[&str] = &[
     "RealizedPnL",
     "DailyPnL",
 ];
-
-/// Extract account summary values in ACCOUNT_SUMMARY_TAGS order.
-#[inline]
-pub fn account_summary_values(acct: &AccountState) -> [f64; 16] {
-    [
-        acct.net_liquidation as f64 / PRICE_SCALE_F,
-        acct.total_cash_value as f64 / PRICE_SCALE_F,
-        acct.settled_cash as f64 / PRICE_SCALE_F,
-        acct.buying_power as f64 / PRICE_SCALE_F,
-        acct.equity_with_loan as f64 / PRICE_SCALE_F,
-        acct.gross_position_value as f64 / PRICE_SCALE_F,
-        acct.init_margin_req as f64 / PRICE_SCALE_F,
-        acct.maint_margin_req as f64 / PRICE_SCALE_F,
-        acct.available_funds as f64 / PRICE_SCALE_F,
-        acct.excess_liquidity as f64 / PRICE_SCALE_F,
-        acct.cushion as f64 / PRICE_SCALE_F,
-        acct.day_trades_remaining as f64,
-        acct.leverage as f64 / PRICE_SCALE_F,
-        acct.unrealized_pnl as f64 / PRICE_SCALE_F,
-        acct.realized_pnl as f64 / PRICE_SCALE_F,
-        acct.daily_pnl as f64 / PRICE_SCALE_F,
-    ]
-}
 
 /// Render an exchange-code bitmask to a letter string using the smart components
 /// table. Each set bit at position N picks `smart_components[N].exchange_letter`.
@@ -1172,7 +1105,6 @@ impl ClientCore {
     /// Everything the lookup narrows on is in here. Two descriptions that
     /// differ only in a field the key leaves out are one key, and the second
     /// order goes out under the first one's contract.
-    #[allow(clippy::too_many_arguments)]
     pub fn description_key_of(
         symbol: &str, sec_type: &str, exchange: &str, identity: &str,
         primary_exchange: &str, local_symbol: &str, trading_class: &str,
