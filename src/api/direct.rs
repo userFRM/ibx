@@ -128,7 +128,9 @@ impl Client {
     /// available, which is the right answer: this client speaks the current
     /// protocol, not an older one it has to ask permission for.
     pub fn server_version(&self) -> i32 {
-        crate::config::ib_build().parse().unwrap_or(0)
+        // The build this session actually stated, not the one a fresh session
+        // would state: a caller that set its own build is told what it sent.
+        self.inner.shared_state().settings().build.parse().unwrap_or(0)
     }
 
     /// Which client this is, of several sharing one local process.

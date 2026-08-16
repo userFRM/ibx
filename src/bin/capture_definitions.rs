@@ -10,6 +10,10 @@
 //!
 //!     IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_definitions
 
+#[path = "support/window.rs"]
+mod window;
+use window::live_window_is_open;
+
 use std::time::Duration;
 
 use ibx::api::client::{EClient, EClientConfig};
@@ -137,26 +141,6 @@ fn subjects() -> Vec<(&'static str, Contract)> {
             ..Default::default()
         }),
     ]
-}
-
-/// Whether a session may be opened on the *live* account right now.
-///
-/// The live account is shared with a daemon that trades it during the session,
-/// and that daemon must not be interrupted — so the live account is reachable
-/// only before the open and after the close. The paper account is a different
-/// account with nothing trading it, and is reachable at any hour.
-fn live_window_is_open() -> bool {
-    let out = std::process::Command::new("date")
-        .env("TZ", "America/New_York")
-        .arg("+%H%M")
-        .output()
-        .ok();
-    let hhmm: u32 = out
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(1200); // Unreadable clock counts as inside the session.
-    // Open before 09:15 and from 16:15, New York.
-    !(915..1615).contains(&hhmm)
 }
 
 fn main() {
