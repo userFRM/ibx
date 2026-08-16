@@ -9,7 +9,7 @@
 <p class="ibx-cta">
   <a class="primary" href="./getting-started.html">Get Started →</a>
   <a class="secondary" href="./recipes/rust/login.html">Read the recipes</a>
-  <a class="secondary" href="https://github.com/deepentropy/ibx">GitHub</a>
+  <a class="secondary" href="https://github.com/userFRM/ibx">GitHub</a>
 </p>
 
 </div>
@@ -24,8 +24,8 @@
     <div class="ibx-stat-label">Order send latency</div>
   </div>
   <div class="ibx-stat">
-    <div class="ibx-stat-value">5,900×</div>
-    <div class="ibx-stat-label">Faster than Java Gateway</div>
+    <div class="ibx-stat-value">0</div>
+    <div class="ibx-stat-label">Local processes to keep alive</div>
   </div>
   <div class="ibx-stat">
     <div class="ibx-stat-value">2</div>

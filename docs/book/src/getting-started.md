@@ -6,13 +6,13 @@
 
 ```toml
 [dependencies]
-ibx = { git = "https://github.com/deepentropy/ibx" }
+ibx = { git = "https://github.com/userFRM/ibx" }
 ```
 
 ### Python
 
 ```bash
-pip install git+https://github.com/deepentropy/ibx
+pip install git+https://github.com/userFRM/ibx
 ```
 
 > Python wheels are built from the same Rust core via [PyO3](https://pyo3.rs) / [maturin](https://www.maturin.rs/). You need a working Rust toolchain to install from source.

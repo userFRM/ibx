@@ -318,7 +318,6 @@ fn an_order_defined_by_more_than_its_type_is_not_modified() {
         ("bracket child", |o| o.parent_id = 4242),
         ("OCA member", |o| o.oca_group = "bracket_1".into()),
         ("good-till expiry", |o| o.good_till_date = "20260311 16:00:00".into()),
-        ("good-after time", |o| o.good_after_time = "20260311 09:30:00".into()),
         ("iceberg", |o| o.display_size = 100),
         ("minimum quantity", |o| o.min_qty = 50),
         ("discretionary", |o| o.discretionary_amt = 0.05),
@@ -343,6 +342,42 @@ fn an_order_defined_by_more_than_its_type_is_not_modified() {
             .expect_err("modifying it must be refused");
         assert!(err.message.contains("cannot be modified"), "{name}: {err}");
         assert!(rx.try_recv().is_err(), "{name}: nothing reaches the wire");
+    }
+}
+
+/// An order that cannot be placed the way it was asked for is refused, rather
+/// than placed a different way.
+///
+/// Each of these used to go out transformed: a delayed order placed at once, a
+/// misspelled time in force placed as DAY and gone at the close, an unreadable
+/// expiry placed with none. The order reached the venue every time and nothing
+/// said what had changed.
+#[test]
+fn an_order_that_cannot_be_placed_as_asked_is_refused() {
+    /// What the case does to an order, and the field its refusal must name.
+    type Refusal = (&'static str, fn(&mut Order), &'static str);
+    let cases: &[Refusal] = &[
+        ("a delay this venue's field for is not established",
+         |o| o.good_after_time = "20260311 09:30:00".into(), "good_after_time"),
+        ("a time in force spelled the wrong way",
+         |o| o.tif = "gtc".into(), "tif"),
+        ("a time in force that is not one",
+         |o| o.tif = "FOREVER".into(), "tif"),
+        ("an expiry that cannot be read",
+         |o| o.good_till_date = "next tuesday".into(), "good_till_date"),
+    ];
+    for (what, set, names) in cases {
+        let (client, rx, _shared) = test_client();
+        let mut order = Order {
+            action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+            lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+        };
+        set(&mut order);
+        let err = client.place_order(9401, &spy(), &order)
+            .expect_err(&format!("{what} must be refused"));
+        assert!(err.message.contains(names), "{what}: {err}");
+        assert!(rx.try_recv().is_err(), "{what}: nothing reaches the wire");
+        assert!(!client.core.is_order_tracked(9401), "{what}: nothing is tracked");
     }
 }
 

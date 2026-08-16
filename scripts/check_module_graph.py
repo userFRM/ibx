@@ -38,7 +38,17 @@ def edges() -> dict[str, set[str]]:
         )
         body = re.sub(r"#\[cfg\(test\)\]\s*mod tests \{.*", "", body, flags=re.S)
         here = module_of(f)
-        for named in re.findall(r"\bcrate::(\w+)", body):
+        # Both spellings: `crate::gateway::X` and `crate::{gateway, types}`.
+        # A grouped import is the form the API module uses, and reading only
+        # the first would let a cycle through the check that exists to catch it.
+        named_directly = re.findall(r"\bcrate::(\w+)", body)
+        grouped = [
+            n.strip().split("::")[0]
+            for group in re.findall(r"\bcrate::\{([^}]*)\}", body)
+            for n in group.split(",")
+            if n.strip()
+        ]
+        for named in named_directly + grouped:
             if named != here and (SRC / named).exists() or (SRC / f"{named}.rs").exists():
                 if named != here:
                     out[here].add(named)
