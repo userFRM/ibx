@@ -39,12 +39,14 @@ named artifact — a test, a script, or a recorded server response. 29 of 30
 capabilities are verified against IBKR production servers; the remaining one
 requires an advisor account.
 
-| Measure | Value | Enforced by |
-| --- | --- | --- |
-| Caller-facing requests | 76, of which 0 return as though they acted when they did not | [`scripts/gen_wire_reach.py`](scripts/gen_wire_reach.py) (CI) |
-| Order fields | 154: 125 transmitted, 29 not carried by the protocol, 0 silently dropped | [`scripts/gen_order_field_reach.py`](scripts/gen_order_field_reach.py) (CI) |
-| Rust/Python equivalence | 4 static gates plus a 10-request live comparison | [`scripts/conformance.py`](scripts/conformance.py) |
-| Tests | 1,968 offline, 157 against production servers | `cargo test`, `pytest tests/python` |
+| | |
+| --- | --- |
+| Caller-facing requests | 76, none of which return as though they acted when they did not |
+| Order fields | 154: 125 transmitted, 29 not carried by the protocol, none silently dropped |
+| Rust and Python | the same request produces the same call on both, compared against live responses |
+| Tests | 1,968 offline, 157 against production servers |
+
+Every figure above is measured on each commit and the build fails if it moves.
 
 ## Python
 
@@ -260,6 +262,11 @@ localhost socket into a JVM — and no ratio between them is published here.
 Adapted from [ib_async's examples](https://ib-api-reloaded.github.io/ib_async/notebooks.html),
 running against this engine with no gateway process.
 
+Each subject is written twice: once in the TWS API shape, and once in
+[`ib_async`'s own shape](notebooks/ib_async_nogateway/) with that library
+unmodified. Only the connect line differs between the second set and the
+library's own notebooks, because there is no gateway to name.
+
 | Notebook | What it shows |
 | --- | --- |
 | [basics](notebooks/basics.ipynb) | Connect, positions, account summary |
@@ -269,6 +276,8 @@ running against this engine with no gateway process.
 | [ordering](notebooks/ordering.ipynb) | Limit orders, cancel, market orders |
 | [market_depth](notebooks/market_depth.ipynb) | The book, and the smart book across venues |
 | [scanners](notebooks/scanners.ipynb) | Scanner parameters and subscriptions |
+
+The same seven in `ib_async`'s shape: [`notebooks/ib_async_nogateway/`](notebooks/ib_async_nogateway/).
 
 ## Architecture
 
