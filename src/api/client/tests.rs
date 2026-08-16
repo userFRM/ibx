@@ -357,14 +357,30 @@ fn an_order_that_cannot_be_placed_as_asked_is_refused() {
     /// What the case does to an order, and the field its refusal must name.
     type Refusal = (&'static str, fn(&mut Order), &'static str);
     let cases: &[Refusal] = &[
-        ("a delay this venue's field for is not established",
-         |o| o.good_after_time = "20260311 09:30:00".into(), "good_after_time"),
+        ("a delayed activation that cannot be read",
+         |o| o.good_after_time = "next tuesday".into(), "good_after_time"),
         ("a time in force spelled the wrong way",
          |o| o.tif = "gtc".into(), "tif"),
         ("a time in force that is not one",
          |o| o.tif = "FOREVER".into(), "tif"),
         ("an expiry that cannot be read",
          |o| o.good_till_date = "next tuesday".into(), "good_till_date"),
+        ("a hedge of a kind this venue does not carry",
+         |o| o.hedge_type = "X".into(), "hedge_type"),
+        ("a beta hedge struck at something that is not a number",
+         |o| { o.hedge_type = "B".into(); o.hedge_param = "market".into() },
+         "hedge_param"),
+        ("a pair hedge with no ratio stated",
+         |o| o.hedge_type = "P".into(), "hedge_param"),
+        // One of the twenty-nine this protocol has no field for. Stated by a
+        // caller, the order would otherwise be placed with the instruction
+        // missing and nothing to say it had been.
+        ("a routing preference this protocol cannot express",
+         |o| o.opt_out_smart_routing = true, "opt_out_smart_routing"),
+        ("an order origin other than the account's own",
+         |o| o.origin = 1, "origin"),
+        ("a scale table this protocol has no field for",
+         |o| o.scale_table = "SCALE".into(), "scale_table"),
     ];
     for (what, set, names) in cases {
         let (client, rx, _shared) = test_client();

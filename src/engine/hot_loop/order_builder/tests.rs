@@ -2225,3 +2225,27 @@ mod outside_rth_polarity_tests {
         }
     }
 }
+
+/// A delayed activation goes out under tag 168, joined by a dash and in UTC,
+/// which is how the counterpart writes it and not how this client writes its
+/// other timestamps. Read the other way round the venue holds the order to a
+/// different moment, and it goes live at a time nobody chose.
+#[test]
+fn a_delayed_activation_is_written_the_way_it_is_read() {
+    let order = crate::types::model::Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(),
+        good_after_time: "20260311 09:30:00".into(),
+        ..Default::default()
+    };
+    let attrs = order.attrs();
+    assert_eq!(attrs.good_after, 1_773_221_400, "read as UTC");
+
+    let mut fields: Vec<(u32, String)> = Vec::new();
+    push_order_attrs(
+        &mut fields, &attrs, &crate::types::OrderKind::Limit { price: 100_0000_0000 },
+        Side::Buy, String::new(),
+    );
+    let stated = fields.iter().find(|(t, _)| *t == 168).map(|(_, v)| v.as_str());
+    assert_eq!(stated, Some("20260311-09:30:00"), "sent on 168: {fields:?}");
+}

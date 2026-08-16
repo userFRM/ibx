@@ -45,7 +45,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | 23 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat` |
-| Order fields | ✅ Supported | An order has 154 fields. 124 are sent. The other 30 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. A check on every commit fails if a field starts being dropped |
+| Order fields | ✅ Supported | An order has 154 fields. 125 are sent. The other 29 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. A check on every commit fails if a field starts being dropped |
 | Non-US markets | ✅ Supported | Previews accepted on DE, NL, GB, CH, AU, CA, US equities and FX; JP and HK rejected for lot size, which is the exchange rule and is surfaced to the caller |
 | Modify, cancel, global cancel | ✅ Supported | `scripts/sdk_lifecycle.py` (place → modify → cancel), `tests/ib_paper_compat` Phase 9 / 9b |
 | Brackets, OCA, combos | ✅ Supported | Per-leg pricing; leg order validated by server rejection of the inverted spread; `src/bin/capture_combo.rs` |

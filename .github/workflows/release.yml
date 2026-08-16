@@ -80,31 +80,37 @@ jobs:
       - name: The crate would publish
         run: cargo publish --dry-run
 
-  # One wheel per platform a caller runs on. Built from the tag, so what is
-  # attached to the release is what the tag says and not what a developer had
-  # on their machine.
+  # One wheel per platform and per interpreter a caller runs on. The extension
+  # links against the interpreter it was built for, so a wheel built on 3.12
+  # will not install on 3.13 — every version `requires-python` claims is built,
+  # or the claim is one a caller finds out is untrue at `pip install`. Built
+  # from the tag, so what is attached to the release is what the tag says and
+  # not what a developer had on their machine.
   wheels:
-    name: wheel (${{ matrix.os }})
+    name: wheel (${{ matrix.os }}, py${{ matrix.python }})
     needs: gate
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - name: Build
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --out dist
-          # The wheel asks for both features: `extension-module` tells PyO3 not
-          # to link libpython, which is right for a wheel and wrong for a test
-          # binary.
+          # Linux builds inside a manylinux container, where the interpreter
+          # has to be named; on macOS and Windows it is the one setup-python
+          # just put on PATH.
+          args: >-
+            --release --out dist --interpreter
+            ${{ matrix.os == 'ubuntu-latest' && format('python{0}', matrix.python) || 'python' }}
           sccache: "true"
 
       # A wheel that compiles is not a wheel that loads: an extension can fail
@@ -121,7 +127,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}
+          name: wheel-${{ matrix.os }}-py${{ matrix.python }}
           path: dist/*.whl
 
   # Attached to the release rather than published to an index: pushing to PyPI

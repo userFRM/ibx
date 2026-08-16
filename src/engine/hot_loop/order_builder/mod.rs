@@ -1180,6 +1180,11 @@ fn push_order_attrs(
     if attrs.hidden {
         fields.push((6135, "1".to_string()));
     }
+    // Held until this moment, in the dash-joined UTC form the counterpart
+    // writes on 168 — not the space-joined form used elsewhere here.
+    if attrs.good_after > 0 {
+        fields.push((168, unix_to_ib_utc_dash(attrs.good_after)));
+    }
     // GTD expiry: date-only -> tag 432; time-precise -> tag 126 (UTC).
     // Mutually exclusive — never both (gateway rejects both together).
     if attrs.good_till_date_ymd > 0 {

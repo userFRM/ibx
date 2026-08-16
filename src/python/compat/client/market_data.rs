@@ -134,12 +134,14 @@ impl EClient {
 
     /// Request tick-by-tick data.
     ///
-    /// `number_of_ticks` and `ignore_size` are taken and not applied. The
-    /// subscription states the contract and the kind of stream and nothing
+    /// `number_of_ticks` and `ignore_size` are refused rather than dropped.
+    /// The subscription states the contract and the kind of stream and nothing
     /// else: there is no field for a prelude of past ticks, and none for
-    /// suppressing size-only changes. The Rust surface refuses them rather than
-    /// dropping them; here they are answered with the stream the venue gives,
-    /// which is what their defaults describe.
+    /// suppressing size-only changes. A caller that set either and was answered
+    /// anyway would be reading a stream it did not ask for, with nothing to say
+    /// so. Their defaults — no prelude, sizes included — are what the venue
+    /// does, so an ordinary call is unaffected. Reported through `error`, where
+    /// a request this client will not send belongs.
     #[pyo3(signature = (req_id, contract, tick_type, number_of_ticks=0, ignore_size=false))]
     fn req_tick_by_tick_data(
         &self,
@@ -151,6 +153,22 @@ impl EClient {
         ignore_size: bool,
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+
+        if number_of_ticks != 0 {
+            return self.report_refusal(py, req_id, Refusal::validation(format!(
+                "number_of_ticks={number_of_ticks} is not carried by this protocol: a \
+                 tick-by-tick subscription states the contract and the kind of stream, \
+                 with no field for a prelude of past ticks. Ask for those with \
+                 reqHistoricalTicks",
+            )));
+        }
+        if ignore_size {
+            return self.report_refusal(py, req_id, Refusal::validation(
+                "ignore_size is not carried by this protocol: a tick-by-tick \
+                 subscription has no field for suppressing size-only changes, so \
+                 every change the venue sends is delivered",
+            ));
+        }
 
         let tbt_type = match TbtType::named(tick_type) {
             Ok(named) => named,
