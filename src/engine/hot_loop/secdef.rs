@@ -98,7 +98,7 @@ impl SecDefState {
     pub(crate) fn send_calendar_events_request(
         &mut self,
         req_id: u32,
-        query: &cal::CalendarQuery,
+        query: &crate::types::CalendarQuery,
         conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
         shared: &SharedState,
@@ -394,7 +394,7 @@ mod tests {
     fn events_before_metadata_are_refused_here() {
         let shared = SharedState::new();
         let mut state = SecDefState::new();
-        let query = cal::CalendarQuery { con_id: Some(265598), ..Default::default() };
+        let query = crate::types::CalendarQuery { con_id: Some(265598), ..Default::default() };
         state.send_calendar_events_request(9, &query, &mut None, &mut HeartbeatState::new(), &shared);
         let told = shared.reference.drain_historical_errors_for_dispatch();
         assert_eq!(told.len(), 1);
@@ -431,7 +431,7 @@ mod tests {
         let (socket, _peer) = Connection::for_test();
         let mut conn = Some(socket);
         state.send_calendar_meta_data_request(7, &mut conn, &mut HeartbeatState::new(), &shared);
-        let query = cal::CalendarQuery { con_id: Some(1), ..Default::default() };
+        let query = crate::types::CalendarQuery { con_id: Some(1), ..Default::default() };
         state.send_calendar_events_request(8, &query, &mut conn, &mut HeartbeatState::new(), &shared);
         assert_eq!(
             state.pending.len(), 2,

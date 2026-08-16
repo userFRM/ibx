@@ -742,7 +742,7 @@ impl HotLoop {
                     // which would take a second one — with no quote on it, and
                     // stating the wrong currency because the slot it did take
                     // never recorded one.
-                    let option_key = crate::client_core::ClientCore::contract_identity(
+                    let option_key = crate::types::model::contract_identity(
                         &last_trade_date, strike, &right, &multiplier, &currency,
                     );
                     // Registered without answering yet: a contract with no conId

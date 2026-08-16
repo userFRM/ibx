@@ -687,14 +687,14 @@ impl Client {
     pub fn wsh_event_data_by_contract(&self, con_id: i64) -> Result<(), Refusal> {
         self.inner.req_wsh_event_data(
             self.stream_id(),
-            crate::control::calendar::CalendarQuery { con_id: Some(con_id), ..Default::default() },
+            crate::types::CalendarQuery { con_id: Some(con_id), ..Default::default() },
         )
     }
 
     /// The calendar's events under a filter the caller writes.
     pub fn wsh_event_data(
         &self,
-        query: crate::control::calendar::CalendarQuery,
+        query: crate::types::CalendarQuery,
     ) -> Result<(), Refusal> {
         self.inner.req_wsh_event_data(self.stream_id(), query)
     }

@@ -687,7 +687,7 @@ pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
     // contract. This is the identity the client surface builds for itself.
     hot_loop.context_mut().set_order_identity(
         inst,
-        &ibx::client_core::ClientCore::contract_identity("", 0.0, "", "", &def.currency),
+        &ibx::types::model::contract_identity("", 0.0, "", "", &def.currency),
     );
 
     // A tenth of a pound, against a share that trades near three quarters of

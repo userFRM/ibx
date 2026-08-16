@@ -1640,103 +1640,6 @@ impl Contract {
     }
 }
 
-impl ContractDetails {
-    /// Everything the venue stated about a contract, as a caller reads it.
-    pub fn from_definition(def: &crate::control::contracts::ContractDefinition) -> Self {
-        let c = Contract {
-            con_id: def.con_id as i64,
-            symbol: def.symbol.clone(),
-            sec_type: def.sec_type.to_api_str().to_string(),
-            exchange: def.exchange.clone(),
-            primary_exchange: def.primary_exchange.clone(),
-            currency: def.currency.clone(),
-            local_symbol: def.local_symbol.clone(),
-            trading_class: def.trading_class.clone(),
-            last_trade_date_or_contract_month: def.last_trade_date.clone(),
-            strike: def.strike,
-            // Never carried across, so every option came back with its right
-            // unset and a call was indistinguishable from a put outside the
-            // local symbol.
-            right: match def.right {
-                Some(crate::control::contracts::OptionRight::Call) => "C".to_string(),
-                Some(crate::control::contracts::OptionRight::Put) => "P".to_string(),
-                None => String::new(),
-            },
-            multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
-            ..Default::default()
-        };
-        Self {
-            contract: c,
-            // Parsed from the reply all along but thrown away.
-            market_name: def.market_name.clone(),
-            min_tick: def.min_tick,
-            order_types: def.order_types.join(","),
-            valid_exchanges: def.valid_exchanges.join(","),
-            long_name: def.long_name.clone(),
-            last_trade_date: def.last_trade_date.clone(),
-            multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
-            trading_hours: def.trading_hours.clone(),
-            liquid_hours: def.liquid_hours.clone(),
-            time_zone_id: def.time_zone_id.clone(),
-            market_rule_ids: def.market_rule_id.map(|r| r.to_string()).unwrap_or_default(),
-            stock_type: def.stock_type.clone(),
-            ev_rule: def.ev_rule.clone(),
-            ev_multiplier: def.ev_multiplier,
-            coupon: def.coupon,
-            contract_month: def.contract_month.clone(),
-            under_sec_type: def.under_sec_type.clone(),
-            under_con_id: def.under_con_id,
-            under_symbol: def.under_symbol.clone(),
-            last_trade_time: def.last_trade_time.clone(),
-            issue_date: def.issue_date.clone(),
-            size_increment: def.size_increment,
-            suggested_size_increment: def.suggested_size_increment,
-            last_price_precision: def.last_price_precision,
-            last_size_precision: def.last_size_precision,
-            settlement_method: def.settlement_method.clone(),
-            unnamed_fields: def.unnamed_fields.clone(),
-            bond_notes: def.bond_notes.clone(),
-            desc_append: def.desc_append.clone(),
-            bond_type: def.bond_type.clone(),
-            coupon_type: def.coupon_type.clone(),
-            next_option_date: def.next_option_date.clone(),
-            next_option_type: def.next_option_type.clone(),
-            ratings: def.ratings.clone(),
-            fund_name: def.fund_name.clone(),
-            fund_family: def.fund_family.clone(),
-            fund_type: def.fund_type.clone(),
-            fund_front_load: def.fund_front_load.clone(),
-            fund_back_load: def.fund_back_load.clone(),
-            fund_back_load_time_interval: def.fund_back_load_time_interval.clone(),
-            fund_management_fee: def.fund_management_fee.clone(),
-            fund_notify_amount: def.fund_notify_amount.clone(),
-            fund_minimum_initial_purchase: def.fund_minimum_initial_purchase.clone(),
-            fund_minimum_subsequent_purchase: def.fund_minimum_subsequent_purchase.clone(),
-            fund_blue_sky_states: def.fund_blue_sky_states.clone(),
-            fund_blue_sky_territories: def.fund_blue_sky_territories.clone(),
-            fund_distribution_policy_indicator: def.fund_distribution_policy_indicator.clone(),
-            fund_asset_type: def.fund_asset_type.clone(),
-            real_expiration_date: def.real_expiration_date.clone(),
-            callable: def.callable,
-            puttable: def.puttable,
-            convertible: def.convertible,
-            next_option_partial: def.next_option_partial,
-            fund_closed: def.fund_closed,
-            fund_closed_for_new_investors: def.fund_closed_for_new_investors,
-            fund_closed_for_new_money: def.fund_closed_for_new_money,
-            agg_group: def.agg_group,
-            price_magnifier: def.price_magnifier,
-            industry: def.industry.clone(),
-            category: def.category.clone(),
-            subcategory: def.subcategory.clone(),
-            country: def.country.clone(),
-            isin: def.isin.clone(),
-            cusip: def.cusip.clone(),
-            sec_id_list: def.sec_id_list.clone(),
-            min_size: def.min_size,
-        }
-    }
-}
 
 // ── ContractDescription ──
 
@@ -1757,19 +1660,6 @@ pub struct ContractDescription {
     pub derivative_sec_types: Vec<String>,
 }
 
-impl From<&crate::control::contracts::SymbolMatch> for ContractDescription {
-    /// A symbol search result, as a caller reads it.
-    fn from(m: &crate::control::contracts::SymbolMatch) -> Self {
-        Self {
-            con_id: m.con_id as i64,
-            symbol: m.symbol.clone(),
-            sec_type: m.sec_type.to_fix().to_string(),
-            currency: m.currency.clone(),
-            primary_exchange: m.primary_exchange.clone(),
-            derivative_sec_types: m.derivative_types.clone(),
-        }
-    }
-}
 
 // ── PriceIncrement (for market rules) ──
 
@@ -1780,6 +1670,24 @@ pub struct PriceIncrement {
     pub low_edge: f64,
     /// What the price moves in above it.
     pub increment: f64,
+}
+
+/// What separates two contracts that share a symbol: expiry, strike, right
+/// and multiplier. Empty for anything those do not distinguish, which is
+/// every stock and every currency pair.
+pub fn contract_identity(
+    last_trade_date: &str, strike: f64, right: &str, multiplier: &str, currency: &str,
+) -> String {
+    let named_by_symbol = last_trade_date.is_empty() && strike <= 0.0 && right.is_empty();
+    // A holding priced in the account's own currency is named completely by
+    // its symbol. One priced in another is not: an order that says nothing
+    // about the currency is taken as an order in the default one, which is a
+    // different contract, and the venue answers it with nothing at all.
+    let stated_currency = !currency.is_empty() && !currency.eq_ignore_ascii_case("USD");
+    if named_by_symbol && !stated_currency {
+        return String::new();
+    }
+    format!("{last_trade_date}|{strike}|{right}|{multiplier}|||{currency}")
 }
 
 #[cfg(test)]
@@ -1966,28 +1874,6 @@ mod tests {
             let o = Order { trigger_method: input, ..Default::default() };
             assert_eq!(o.attrs().trigger_method, expected, "input {input}");
         }
-    }
-
-    // The reported Contract must round-trip — sec_type is the
-    // official API string, and market_name is no longer thrown away.
-    #[test]
-    fn contract_details_from_definition_round_trips() {
-        let def = crate::control::contracts::ContractDefinition {
-            con_id: 265598,
-            symbol: "AAPL".into(),
-            sec_type: crate::control::contracts::SecurityType::Stock,
-            market_name: "NMS".into(),
-            ..Default::default()
-        };
-        let details = ContractDetails::from_definition(&def);
-        assert_eq!(details.contract.sec_type, "STK", "not the Debug derive 'Stock'");
-        assert_eq!(details.market_name, "NMS");
-        // Unclassifiable instruments must not claim to be stocks.
-        let def = crate::control::contracts::ContractDefinition {
-            sec_type: crate::control::contracts::SecurityType::Other,
-            ..Default::default()
-        };
-        assert_eq!(ContractDetails::from_definition(&def).contract.sec_type, "");
     }
 
     // ── ContractDescription ──

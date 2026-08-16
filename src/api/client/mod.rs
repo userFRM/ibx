@@ -68,7 +68,9 @@ pub type Order = ApiOrder;
 pub type TagValue = ApiTagValue;
 
 // Re-export public items from submodules
-pub use orders::parse_algo_params;
+// Reads an order the caller composed, so it lives with the order model;
+// reachable here because that is the path callers know it by.
+pub use crate::client_core::parse_algo_params;
 
 /// Configuration for connecting to IB via EClient.
 ///

@@ -1357,4 +1357,26 @@ mod delivered_name_tests {
     fn what_goes_out_still_routes_as_nasdaq() {
         assert_eq!(super::super::exchange_to_fix("ISLAND"), "NASDAQ");
     }
+    // The reported Contract must round-trip — sec_type is the
+    // official API string, and market_name is no longer thrown away.
+    #[test]
+    fn contract_details_from_definition_round_trips() {
+        let def = super::ContractDefinition {
+            con_id: 265598,
+            symbol: "AAPL".into(),
+            sec_type: super::SecurityType::Stock,
+            market_name: "NMS".into(),
+            ..Default::default()
+        };
+        let details = crate::types::model::ContractDetails::from_definition(&def);
+        assert_eq!(details.contract.sec_type, "STK", "not the Debug derive 'Stock'");
+        assert_eq!(details.market_name, "NMS");
+        // Unclassifiable instruments must not claim to be stocks.
+        let def = super::ContractDefinition {
+            sec_type: super::SecurityType::Other,
+            ..Default::default()
+        };
+        assert_eq!(crate::types::model::ContractDetails::from_definition(&def).contract.sec_type, "");
+    }
+
 }

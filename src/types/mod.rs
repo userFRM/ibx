@@ -2007,6 +2007,29 @@ impl From<&crate::types::model::Contract> for ContractRef {
     }
 }
 
+/// What a caller asked for of the calendar.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CalendarQuery {
+    /// The contract to fetch events for, where the caller named one rather
+    /// than writing its own filter.
+    pub con_id: Option<i64>,
+    /// The caller's own filter document, passed to the venue as written.
+    pub filter: String,
+    /// The window, stated as the venue states dates.
+    pub start_date: String,
+    /// Its end.
+    pub end_date: String,
+    /// How many events at most. Stated as text, which is how the venue takes
+    /// it, and left out entirely when the caller set no limit.
+    pub total_limit: Option<i64>,
+    /// Whether to fill from the watchlist, the portfolio, and competitors.
+    pub fill_watchlist: bool,
+    /// Whether to include what the account holds.
+    pub fill_portfolio: bool,
+    /// Whether to include the issuer's competitors.
+    pub fill_competitors: bool,
+}
+
 /// Commands sent from the control plane to the hot loop via SPSC channel.
 ///
 /// The submitting command is much larger than the rest, because it carries an
@@ -2201,7 +2224,7 @@ pub enum ControlCommand {
         /// The caller's number for the request.
         req_id: u32,
         /// What is being asked of the calendar.
-        query: Box<crate::control::calendar::CalendarQuery>,
+        query: Box<crate::types::CalendarQuery>,
     },
     /// Stop waiting on a calendar query. One message and one answer, so what
     /// is withdrawn is the answer.

@@ -69,7 +69,7 @@ impl EClient {
         if let Err(why) = ClientCore::validate_order_contract(
             contract.con_id,
             &contract.sec_type,
-            &ClientCore::contract_identity(
+            &crate::types::model::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
                 &contract.right, &contract.multiplier, &contract.currency,
             ),
@@ -194,7 +194,7 @@ impl EClient {
         if let Err(why) = ClientCore::validate_order_contract(
             contract.con_id,
             &contract.sec_type,
-            &ClientCore::contract_identity(
+            &crate::types::model::contract_identity(
                 &contract.last_trade_date_or_contract_month, contract.strike,
                 &contract.right, &contract.multiplier, &contract.currency,
             ),
