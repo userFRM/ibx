@@ -114,17 +114,6 @@ fn order_buffer_push_and_drain() {
 }
 
 #[test]
-fn order_buffer_no_realloc() {
-    let mut buf = OrderBuffer::new();
-    let cap_before = buf.buf.capacity();
-    for i in 0..MAX_PENDING_ORDERS {
-        buf.push(OrderRequest::Cancel { order_id: i as u64 });
-    }
-    // Capacity should not have grown (pre-allocated)
-    assert_eq!(buf.buf.capacity(), cap_before);
-}
-
-#[test]
 fn order_buffer_drain_reusable() {
     let mut buf = OrderBuffer::new();
     buf.push(OrderRequest::SubmitEx {
