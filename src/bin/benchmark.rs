@@ -194,7 +194,8 @@ fn main() {
     // 2. Create hot loop with event channel
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = sync_channel::<Event>(65536);
-    let (mut hot_loop, control_tx) = gw.into_hot_loop(
+    let (mut hot_loop, control_tx) = ibx::engine::hot_loop::HotLoop::for_session(
+        gw,
         shared, Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
         ibx::gateway::CallerAuth {
             settings: config.settings.clone(),

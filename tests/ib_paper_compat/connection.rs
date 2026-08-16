@@ -500,7 +500,8 @@ pub(super) fn phase_farm_recovers_with_credentials(
     let account_id = conns.account_id.clone();
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
-    let (mut hot_loop, control_tx) = gw.into_hot_loop_with_farms(
+    let (mut hot_loop, control_tx) = ibx::engine::hot_loop::HotLoop::for_session(
+        gw,
         shared.clone(), Some(event_tx), conns.farm, conns.ccp, conns.hmds, None, None,
         gateway::CallerAuth {
             settings: Default::default(),

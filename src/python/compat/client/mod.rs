@@ -303,7 +303,8 @@ impl EClient {
         let connect_password = config.password.clone();
         let connect_paper = config.paper;
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
-        let (hot_loop, control_tx) = gw.into_hot_loop_with_farms(
+        let (hot_loop, control_tx) = crate::engine::hot_loop::HotLoop::for_session(
+            gw,
             shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id,
             crate::gateway::CallerAuth {
                 settings: Default::default(),
