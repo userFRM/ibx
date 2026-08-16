@@ -423,27 +423,6 @@ fn build_farm_logon_has_required_tags() {
 }
 
 #[test]
-fn build_mktdata_subscribe_structure() {
-    let msg = build_mktdata_subscribe(265598, "SMART", "CS", "REQ1", 5);
-    let fields = fix_parse(&msg);
-    assert_eq!(fields[&35], "V");
-    assert_eq!(fields[&262], "REQ1");
-    assert_eq!(fields[&263], "1");
-    assert_eq!(fields[&6008], "265598");
-    assert_eq!(fields[&207], "BEST"); // SMART→BEST
-    assert_eq!(fields[&167], "CS");
-}
-
-#[test]
-fn build_mktdata_unsubscribe_structure() {
-    let msg = build_mktdata_unsubscribe("REQ1", 6);
-    let fields = fix_parse(&msg);
-    assert_eq!(fields[&35], "V");
-    assert_eq!(fields[&262], "REQ1");
-    assert_eq!(fields[&263], "2");
-}
-
-#[test]
 fn chrono_free_timestamp_format() {
     let ts = chrono_free_timestamp();
     assert_eq!(ts.len(), 17); // "YYYYMMDD-HH:MM:SS"
@@ -549,26 +528,6 @@ fn try_frame_farm_msg_with_trailing() {
 
 // Note: build_farm_encrypted_logon requires a DH-initialized SecureChannel
 // which can't be created in unit tests. Tested via compatibility tests instead.
-
-#[test]
-fn build_mktdata_subscribe_exchange_passthrough() {
-    // Non-SMART exchanges should pass through as-is
-    let msg = build_mktdata_subscribe(265598, "ARCA", "CS", "REQ2", 3);
-    let fields = fix_parse(&msg);
-    assert_eq!(fields[&207], "ARCA"); // not mapped to BEST
-}
-
-#[test]
-fn build_mktdata_subscribe_has_correct_tags() {
-    let msg = build_mktdata_subscribe(756733, "SMART", "ETF", "REQ5", 10);
-    let fields = fix_parse(&msg);
-    assert_eq!(fields[&35], "V");
-    assert_eq!(fields[&6008], "756733");
-    assert_eq!(fields[&207], "BEST");
-    assert_eq!(fields[&167], "ETF");
-    assert_eq!(fields[&263], "1"); // subscribe
-    assert_eq!(fields[&146], "1"); // NumRelatedSym
-}
 
 #[test]
 fn days_to_ymd_leap_year() {

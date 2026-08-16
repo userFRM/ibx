@@ -13,6 +13,8 @@
 
 /// The venue's own way of writing a date and a time.
 pub mod datetime;
+/// What a subscription says on the wire.
+pub mod market_data;
 pub mod connection;
 pub mod fix;
 pub mod tbt_stream;
