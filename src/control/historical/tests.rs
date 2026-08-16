@@ -226,13 +226,6 @@ fn parse_ticker_id_rejects_other() {
     assert!(super::parse_ticker_id("<ResultSetBar>...</ResultSetBar>").is_none());
 }
 
-#[test]
-fn extract_xml_tag_basic() {
-    assert_eq!(extract_xml_tag("<a>hello</a>", "a"), Some("hello"));
-    assert_eq!(extract_xml_tag("<x>123</x>", "x"), Some("123"));
-    assert_eq!(extract_xml_tag("<x>123</x>", "y"), None);
-}
-
 /// The contract's own security type and exchange have to reach the query.
 /// Hardcoding them described a stock on SMART whatever was asked for, and
 /// the gateway rejected anything venue-specific with error 162.

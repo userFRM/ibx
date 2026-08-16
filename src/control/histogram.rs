@@ -77,14 +77,6 @@ pub fn build_histogram_fix_request(req: &HistogramRequest, seq: u32) -> Vec<u8> 
     )
 }
 
-/// Extract a simple XML tag value: `<tag>value</tag>` → `value`.
-fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = xml.find(&open)? + open.len();
-    let end = xml[start..].find(&close)? + start;
-    Some(&xml[start..end])
-}
 
 /// Parse a histogram XML response into entries.
 ///
@@ -106,10 +98,10 @@ pub fn parse_histogram_response(xml: &str) -> Option<Vec<HistogramEntry>> {
         };
         let tick_xml = &xml[abs_start..tick_end];
 
-        let price = extract_xml_tag(tick_xml, "price")
+        let price = crate::control::xml::tag(tick_xml, "price")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0);
-        let count = extract_xml_tag(tick_xml, "size")
+        let count = crate::control::xml::tag(tick_xml, "size")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 

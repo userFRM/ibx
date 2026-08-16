@@ -65,14 +65,6 @@ pub struct FundamentalResponse {
     pub data: Vec<u8>,
 }
 
-/// Extract a simple XML tag value: `<tag>value</tag>` -> `value`.
-fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = xml.find(&open)? + open.len();
-    let end = xml[start..].find(&close)? + start;
-    Some(&xml[start..end])
-}
 
 /// What a fundamentals request calls itself, and what a cancel names to
 /// withdraw it.
@@ -122,7 +114,7 @@ pub fn parse_fundamental_response_id(xml: &str) -> Option<String> {
     if !xml.contains("<FundResponse>") {
         return None;
     }
-    extract_xml_tag(xml, "id").map(|s| s.to_string())
+    crate::control::xml::tag(xml, "id").map(|s| s.to_string())
 }
 
 /// Decompress gzip-compressed fundamental data (FIX tag 96).

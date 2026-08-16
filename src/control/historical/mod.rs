@@ -427,7 +427,7 @@ pub fn build_cancel_request(ticker_id: &str, seq: u32) -> Vec<u8> {
 /// The venue states it on the definition, so a definition that does not is the
 /// interesting case and says so rather than passing quietly as a share.
 pub fn min_tick_of(xml_tag: &str, ticker_id: &str) -> Option<f64> {
-    match extract_xml_tag(xml_tag, "minTick").and_then(|s| s.parse::<f64>().ok()) {
+    match crate::control::xml::tag(xml_tag, "minTick").and_then(|s| s.parse::<f64>().ok()) {
         Some(tick) => Some(tick),
         None => {
             // Nothing is decoded without it. Prices in a bar are counted in
@@ -442,14 +442,6 @@ pub fn min_tick_of(xml_tag: &str, ticker_id: &str) -> Option<f64> {
     }
 }
 
-/// Extract a simple XML tag value: `<tag>value</tag>` → `value`.
-pub fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = xml.find(&open)? + open.len();
-    let end = xml[start..].find(&close)? + start;
-    Some(&xml[start..end])
-}
 
 /// Parse a ResultSetBar XML response into bars.
 pub fn parse_bar_response(xml: &str) -> Option<HistoricalResponse> {
@@ -458,9 +450,9 @@ pub fn parse_bar_response(xml: &str) -> Option<HistoricalResponse> {
         return None;
     }
 
-    let query_id = extract_xml_tag(xml, "id").unwrap_or("").to_string();
-    let timezone = extract_xml_tag(xml, "tz").unwrap_or("").to_string();
-    let is_complete = extract_xml_tag(xml, "eoq").unwrap_or("false") == "true";
+    let query_id = crate::control::xml::tag(xml, "id").unwrap_or("").to_string();
+    let timezone = crate::control::xml::tag(xml, "tz").unwrap_or("").to_string();
+    let is_complete = crate::control::xml::tag(xml, "eoq").unwrap_or("false") == "true";
 
     let mut bars = Vec::new();
     let mut search_start = 0;
@@ -474,26 +466,26 @@ pub fn parse_bar_response(xml: &str) -> Option<HistoricalResponse> {
         let bar_xml = &xml[abs_start..bar_end];
 
         let bar = HistoricalBar {
-            time: extract_xml_tag(bar_xml, "time").unwrap_or("").to_string(),
-            open: extract_xml_tag(bar_xml, "open")
+            time: crate::control::xml::tag(bar_xml, "time").unwrap_or("").to_string(),
+            open: crate::control::xml::tag(bar_xml, "open")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
-            high: extract_xml_tag(bar_xml, "high")
+            high: crate::control::xml::tag(bar_xml, "high")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
-            low: extract_xml_tag(bar_xml, "low")
+            low: crate::control::xml::tag(bar_xml, "low")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
-            close: extract_xml_tag(bar_xml, "close")
+            close: crate::control::xml::tag(bar_xml, "close")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
-            volume: extract_xml_tag(bar_xml, "volume")
+            volume: crate::control::xml::tag(bar_xml, "volume")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
-            wap: extract_xml_tag(bar_xml, "weightedAvg")
+            wap: crate::control::xml::tag(bar_xml, "weightedAvg")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
-            count: extract_xml_tag(bar_xml, "count")
+            count: crate::control::xml::tag(bar_xml, "count")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
         };
@@ -519,8 +511,8 @@ pub fn parse_ticker_id(xml: &str) -> Option<String> {
     // Reading only the first left every tick-by-tick assignment unmatched, so
     // the ticker was never bound to the subscription and every tick that
     // followed had nowhere to go.
-    extract_xml_tag(xml, "tickerId")
-        .or_else(|| extract_xml_tag(xml, "rtTickerId"))
+    crate::control::xml::tag(xml, "tickerId")
+        .or_else(|| crate::control::xml::tag(xml, "rtTickerId"))
         .map(|s| s.to_string())
 }
 
@@ -660,8 +652,8 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
         return None;
     }
 
-    let query_id = extract_xml_tag(xml, "id").unwrap_or("").to_string();
-    let is_complete = extract_xml_tag(xml, "eoq").unwrap_or("false") == "true";
+    let query_id = crate::control::xml::tag(xml, "id").unwrap_or("").to_string();
+    let is_complete = crate::control::xml::tag(xml, "eoq").unwrap_or("false") == "true";
 
     let upper = what_to_show.to_uppercase();
     let mut search_start = 0;
@@ -677,11 +669,11 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
                 };
                 let t = &xml[abs..end];
                 ticks.push(crate::types::HistoricalTickBidAsk {
-                    time: extract_xml_tag(t, "time").unwrap_or("").to_string(),
-                    bid_price: extract_xml_tag(t, "priceBid").and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    ask_price: extract_xml_tag(t, "priceAsk").and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    bid_size: extract_xml_tag(t, "sizeBid").and_then(|s| s.parse().ok()).unwrap_or(0),
-                    ask_size: extract_xml_tag(t, "sizeAsk").and_then(|s| s.parse().ok()).unwrap_or(0),
+                    time: crate::control::xml::tag(t, "time").unwrap_or("").to_string(),
+                    bid_price: crate::control::xml::tag(t, "priceBid").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    ask_price: crate::control::xml::tag(t, "priceAsk").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    bid_size: crate::control::xml::tag(t, "sizeBid").and_then(|s| s.parse().ok()).unwrap_or(0),
+                    ask_size: crate::control::xml::tag(t, "sizeAsk").and_then(|s| s.parse().ok()).unwrap_or(0),
                 });
                 search_start = end;
             }
@@ -697,8 +689,8 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
                 };
                 let t = &xml[abs..end];
                 ticks.push(crate::types::HistoricalTickMidpoint {
-                    time: extract_xml_tag(t, "time").unwrap_or("").to_string(),
-                    price: extract_xml_tag(t, "price").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    time: crate::control::xml::tag(t, "time").unwrap_or("").to_string(),
+                    price: crate::control::xml::tag(t, "price").and_then(|s| s.parse().ok()).unwrap_or(0.0),
                 });
                 search_start = end;
             }
@@ -715,11 +707,11 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
                 };
                 let t = &xml[abs..end];
                 ticks.push(crate::types::HistoricalTickLast {
-                    time: extract_xml_tag(t, "time").unwrap_or("").to_string(),
-                    price: extract_xml_tag(t, "price").and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    size: extract_xml_tag(t, "size").and_then(|s| s.parse().ok()).unwrap_or(0),
-                    exchange: extract_xml_tag(t, "exchange").unwrap_or("").to_string(),
-                    special_conditions: extract_xml_tag(t, "specialConditions").unwrap_or("").to_string(),
+                    time: crate::control::xml::tag(t, "time").unwrap_or("").to_string(),
+                    price: crate::control::xml::tag(t, "price").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    size: crate::control::xml::tag(t, "size").and_then(|s| s.parse().ok()).unwrap_or(0),
+                    exchange: crate::control::xml::tag(t, "exchange").unwrap_or("").to_string(),
+                    special_conditions: crate::control::xml::tag(t, "specialConditions").unwrap_or("").to_string(),
                 });
                 search_start = end;
             }
@@ -908,9 +900,9 @@ pub fn parse_schedule_response(xml: &str) -> Option<crate::types::HistoricalSche
         return None;
     }
 
-    let query_id = extract_xml_tag(xml, "id").unwrap_or("").to_string();
-    let timezone = extract_xml_tag(xml, "tz").unwrap_or("").to_string();
-    let start_date_time = extract_xml_tag(xml, "derivedStart").unwrap_or("").to_string();
+    let query_id = crate::control::xml::tag(xml, "id").unwrap_or("").to_string();
+    let timezone = crate::control::xml::tag(xml, "tz").unwrap_or("").to_string();
+    let start_date_time = crate::control::xml::tag(xml, "derivedStart").unwrap_or("").to_string();
 
     let mut sessions = Vec::new();
     let mut search_start = 0;
@@ -924,8 +916,8 @@ pub fn parse_schedule_response(xml: &str) -> Option<crate::types::HistoricalSche
         };
         let open_xml = &xml[abs_open..open_end];
 
-        let open_time = extract_xml_tag(open_xml, "time").unwrap_or("").to_string();
-        let ref_date = extract_xml_tag(open_xml, "refDate").unwrap_or("").to_string();
+        let open_time = crate::control::xml::tag(open_xml, "time").unwrap_or("").to_string();
+        let ref_date = crate::control::xml::tag(open_xml, "refDate").unwrap_or("").to_string();
 
         // Find the matching Close
         let close_time = if let Some(close_pos) = xml[open_end..].find("<Close>") {
@@ -936,7 +928,7 @@ pub fn parse_schedule_response(xml: &str) -> Option<crate::types::HistoricalSche
             };
             let close_xml = &xml[abs_close..close_end];
             search_start = close_end;
-            extract_xml_tag(close_xml, "time").unwrap_or("").to_string()
+            crate::control::xml::tag(close_xml, "time").unwrap_or("").to_string()
         } else {
             search_start = open_end;
             String::new()
@@ -963,8 +955,8 @@ pub fn parse_head_timestamp_response(xml: &str) -> Option<HeadTimestampResponse>
     if !xml.contains("<ResultSetHeadTimeStamp>") {
         return None;
     }
-    let head_timestamp = extract_xml_tag(xml, "headTS")?.to_string();
-    let timezone = extract_xml_tag(xml, "tz").unwrap_or("").to_string();
+    let head_timestamp = crate::control::xml::tag(xml, "headTS")?.to_string();
+    let timezone = crate::control::xml::tag(xml, "tz").unwrap_or("").to_string();
     Some(HeadTimestampResponse { head_timestamp, timezone })
 }
 

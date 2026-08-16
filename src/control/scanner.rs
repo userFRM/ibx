@@ -102,14 +102,6 @@ pub fn build_scanner_cancel_xml(scan_id: &str) -> String {
     )
 }
 
-/// Extract a simple XML tag value: `<tag>value</tag>` -> `value`.
-fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = xml.find(&open)? + open.len();
-    let end = xml[start..].find(&close)? + start;
-    Some(&xml[start..end])
-}
 
 /// Parse a ScanResponse XML into contract IDs and scan time.
 pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
@@ -117,7 +109,7 @@ pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
         return None;
     }
 
-    let scan_time = extract_xml_tag(xml, "scanTime").unwrap_or("").to_string();
+    let scan_time = crate::control::xml::tag(xml, "scanTime").unwrap_or("").to_string();
 
     let mut con_ids = Vec::new();
     let mut entries = Vec::new();
@@ -131,7 +123,7 @@ pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
         };
         let contract_xml = &xml[abs_start..c_end];
 
-        let con_id = extract_xml_tag(contract_xml, "contractID")
+        let con_id = crate::control::xml::tag(contract_xml, "contractID")
             .and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
         if con_id != 0 {
             con_ids.push(con_id);
