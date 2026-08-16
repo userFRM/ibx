@@ -6,9 +6,15 @@
 //! caller is holding, so what goes on the wire can be read back in a test.
 
 use std::io::{self, Read, Write};
-use std::time::Instant;
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
 
-use super::{init_scan_buffer, keep_first, note_account};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use num_bigint::BigUint;
+use sha1::{Digest, Sha1};
+
+use super::*;
+
 use crate::settings::ExecutionReportScope;
 use crate::config::CCP_HEARTBEAT;
 use crate::protocol::fix::{fix_build, fix_parse, fix_read_deadline, SOH};
@@ -374,6 +380,598 @@ pub(super) fn send_post_burst_grace(
     send(&[(35, "U"), (52, now), (6040, "74"), (1, account), (6700, "Core"), (6544, "2")])?;
     w.flush()?;
     Ok(seq)
+}
+
+/// Split the venue's per-security-type order permissions, logon tag 6652.
+///
+/// `SECTYPE:ORDTYPE,ORDTYPE;SECTYPE:...`. A security type named with no order
+/// types after it is still permitted, so an absent list is an empty one and
+/// never a missing key.
+pub(super) fn parse_order_permissions(raw: &str) -> std::collections::HashMap<String, Vec<String>> {
+    raw.split(';')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (sec_type, types) = entry.split_once(':').unwrap_or((entry, ""));
+            let types = types.split(',').filter(|t| !t.is_empty()).map(str::to_string).collect();
+            (sec_type.to_string(), types)
+        })
+        .collect()
+}
+
+/// Parse the `PRIV_LAB_MISC_URLS` blob (FIX tag 6321) into a `{key: value}` map.
+///
+/// Wire format: pipe-delimited `k=v|k=v|…`, with `%7C` escaping a literal `|`
+/// inside keys or values. Falls back to comma as the entry separator when the
+/// payload contains no `|`. Empty input yields an empty map; entries without
+/// `=` or with an empty key are dropped.
+pub fn parse_misc_urls(s: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    if s.is_empty() {
+        return out;
+    }
+    let sep = if s.contains('|') { '|' } else { ',' };
+    for entry in s.split(sep) {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((k, v)) = entry.split_once('=') else {
+            continue;
+        };
+        let key = k.trim().replace("%7C", "|").replace("%7c", "|");
+        let val = v.trim().replace("%7C", "|").replace("%7c", "|");
+        if key.is_empty() {
+            continue;
+        }
+        out.insert(key, val);
+    }
+    out
+}
+
+/// Parse a farm-route string from the auth-server's routing tags.
+///
+/// Three accepted shapes:
+///   `"<host>/<farm>"`            — tag 6145 (trading)
+///   `"<host>/<farm>/<port>"`     — tags 6171 (mktdata) / 8008 (secdef)
+///
+/// The port is the venue's, where it states one. A route names the port to
+/// reach that farm on, and the counterpart takes it from there when no tag
+/// carries it separately — it treats a route with neither as an error rather
+/// than substituting a default. `None` here means the route stated no port,
+/// which is the only case the configured one applies to.
+///
+/// Returns `None` for empty or malformed input.
+pub fn parse_farm_route(route: &str) -> Option<(String, String, Option<u16>)> {
+    if route.is_empty() { return None; }
+    let mut parts = route.splitn(3, '/');
+    let host = parts.next()?.to_string();
+    let farm = parts.next()?.to_string();
+    if host.is_empty() || farm.is_empty() { return None; }
+    let port = parts.next().and_then(|p| p.trim().parse::<u16>().ok());
+    Some((host, farm, port))
+}
+
+/// Returns true if `buf` contains at least one complete `8=O` (binary) or
+/// `8=FIXCOMP` frame. Used to terminate read drains as soon as the expected
+/// response is fully buffered.
+pub(super) fn has_complete_response_frame(buf: &[u8]) -> bool {
+    if buf.starts_with(b"8=O\x01") {
+        if let Some(tag9_off) = buf[4..].windows(2).position(|w| w == b"9=") {
+            let tag9_pos = 4 + tag9_off;
+            if let Some(soh_off) = buf[tag9_pos..].iter().position(|&b| b == b'\x01') {
+                let soh_pos = tag9_pos + soh_off;
+                if let Ok(s) = std::str::from_utf8(&buf[tag9_pos + 2..soh_pos])
+                    && let Ok(body_len) = s.parse::<usize>() {
+                        return soh_pos + 1 + body_len <= buf.len();
+                    }
+            }
+        }
+        return false;
+    }
+    let mut cursor = 0usize;
+    while cursor + 12 <= buf.len() {
+        if buf[cursor..].starts_with(b"8=FIXCOMP\x01") {
+            if let Some(total_len) = fixcomp::fixcomp_length(&buf[cursor..]) {
+                return cursor + total_len <= buf.len();
+            }
+            return false;
+        }
+        cursor += 1;
+    }
+    false
+}
+
+/// Compute token short hash for farm logon (FIX tag 8483).
+///
+/// gateway always emits this as **8 hex chars padded with
+/// leading zeros**. `format!("{:x}", n)` is wrong when `hash_int`'s high
+/// nibble is zero — server silently rejects the FIX 35=A logon in that case.
+pub fn token_short_hash(session_token: &BigUint) -> String {
+    let token_bytes = session_token.to_bytes_be();
+    let stripped = strip_leading_zeros(&token_bytes);
+    let digest = Sha1::digest(stripped);
+    // Take last 4 bytes as u32 (Java BigInteger.intValue() truncates to low 32 bits)
+    let hash_int = u32::from_be_bytes([digest[16], digest[17], digest[18], digest[19]]);
+    format!("{hash_int:08x}")
+}
+
+/// Build auth server logon message.
+///
+/// Tag 6266 (`encoded`) carries `{jdkVer}/{platform}/{locale}/{dist}`.
+/// The auth server requires the `{locale}` segment to be a canonical Java
+/// `Locale.toString()` value — `en_US`, `fr`, `ja_JP`, etc. Bare `en` is
+/// rejected as `invalid twsInfo`. Override via `IBX_LOCALE` (locale only)
+/// or `IBX_ENCODED` (full string).
+///
+/// Tag 8361 = `"(rolling)"` is load-bearing: it marks the client as a
+/// rolling-release build, which bypasses the server's IB_BUILD allow-list
+/// check. Without it the server rejects with "The TWS build you are
+/// currently running is no longer supported." Per the
+/// The reference client also keeps 6397/6947/8098, so they stay.
+///
+/// Tag 6947 carries the JVM default timezone (e.g. `Europe/Paris`,
+/// `America/New_York`). The auth server doesn't validate it — `UTC` is
+/// the safe default — but `IBX_TZ` overrides for users who want to mirror
+/// their locale or comply with regional logging requirements. The session
+/// states its own, settled when it opened.
+pub fn build_ccp_logon(
+    settings: &crate::settings::SessionSettings,
+    hw_info: &str, encoded: &str, heartbeat: u64, seq: u32,
+) -> Vec<u8> {
+    let now = chrono_free_timestamp();
+    let tz = settings.timezone.as_str();
+    let hb_str = heartbeat.to_string();
+    let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
+    let build = settings.build.clone();
+    let version = settings.version.clone();
+    fix_build(
+        &[
+            (fix::TAG_MSG_TYPE, fix::MSG_LOGON),
+            (fix::TAG_SENDING_TIME, &now),
+            (fix::TAG_ENCRYPT_METHOD, "0"),
+            (fix::TAG_HEARTBEAT_INT, &hb_str),
+            (fix::TAG_RESET_SEQ_NUM, "Y"),
+            (fix::TAG_IB_BUILD, &build),
+            (fix::TAG_IB_VERSION, &version),
+            (6490, "dark"),
+            (6266, encoded),
+            (6351, &hw_field),
+            (6397, "1"),
+            (6947, tz),
+            (8361, "(rolling)"),
+            (8098, "0"),
+            // Declared at logon, and the server will not answer a request on a
+            // user message without it: asking the same question three times
+            // drew three replies with it and none without, while an idle
+            // stretch of the same length drew the opposite.
+            (6900, "1"),
+        ],
+        seq,
+    )
+}
+
+/// Build encrypted farm logon message.
+pub fn build_farm_encrypted_logon(
+    settings: &crate::settings::SessionSettings,
+    channel: &mut SecureChannel,
+    username: &str,
+    _paper: bool,
+    farm_name: &str,
+    session_id: &str,
+    session_token: &BigUint,
+    hw_info: &str,
+    encoded: &str,
+    slot: u32,
+) -> Vec<u8> {
+    let display_name = format!("S{username}");
+    let farm_id = format!("{display_name}/{slot}/{farm_name}");
+    let farm_id_len = farm_id.len().to_string();
+    let token_hash = token_short_hash(session_token);
+    let ns_range = format!("{NS_VERSION_MIN}..{NS_VERSION}");
+    let now = chrono_free_timestamp();
+    let hb_str = FARM_HEARTBEAT.to_string();
+    let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
+    let build = settings.build.clone();
+    let version = settings.version.clone();
+
+    let inner = fix_build(
+        &[
+            (fix::TAG_MSG_TYPE, fix::MSG_LOGON),
+            (fix::TAG_SENDING_TIME, &now),
+            (fix::TAG_ENCRYPT_METHOD, "0"),
+            (fix::TAG_HEARTBEAT_INT, &hb_str),
+            (95, &farm_id_len),
+            (96, &farm_id),
+            (fix::TAG_IB_BUILD, &build),
+            (fix::TAG_IB_VERSION, &version),
+            (6351, &hw_field),
+            (6266, encoded),
+            (6903, "1"),
+            (8035, session_id),
+            (8285, &ns_range),
+            (8483, &token_hash),
+        ],
+        0,
+    );
+
+    log::info!(
+        "{} FIX 35=A pre-encrypt ({} bytes): {}",
+        farm_name,
+        inner.len(),
+        String::from_utf8_lossy(&inner).replace('\x01', "|"),
+    );
+    let encrypted_raw = channel.encrypt(&inner);
+    let b64_str = B64.encode(&encrypted_raw);
+
+    // Outer wrapper: 8=FIX.4.1|9=<bodylen>|90=<b64_len>|91=<b64>|10=<cksum>
+    let b64_len_str = b64_str.len().to_string();
+    let body = format!("90={b64_len_str}\x0191={b64_str}\x01");
+    let header = format!("8=FIX.4.1\x019={:04}\x01", body.len());
+    let pre_cksum = format!("{header}{body}");
+    let cksum = fix::fix_checksum(pre_cksum.as_bytes());
+    let mut wrapper = pre_cksum.into_bytes();
+    wrapper.extend_from_slice(format!("10={cksum}\x01").as_bytes());
+    wrapper
+}
+
+/// What a farm's logon leaves behind for the connection that follows it.
+pub struct FarmLogon {
+    /// Where verification of inbound frames resumes.
+    pub read_iv: Vec<u8>,
+    /// Where signing of outbound frames resumes.
+    pub sign_iv: Vec<u8>,
+    /// Anything read past the logon answer, to be handed to the connection
+    /// rather than dropped.
+    pub remaining: Vec<u8>,
+    /// How often this farm said it expects to hear from the session, where it
+    /// said anything. `None` leaves the interval this client proposed.
+    pub heartbeat_secs: Option<u64>,
+}
+
+/// Execute farm logon exchange.
+///
+/// Returns (read_iv, sign_iv, remaining_buf) for message signing/verification.
+pub fn farm_logon_exchange(
+    stream: &mut TcpStream,
+    channel: &mut SecureChannel,
+    session_token: &BigUint,
+    username: &str,
+    password: &str,
+    read_mac_key: &[u8],
+    initial_read_iv: &[u8],
+) -> io::Result<FarmLogon> {
+    // Poll on a short read timeout and tolerate transient WouldBlock/TimedOut
+    // returns until an overall deadline. A single slow response segment from a
+    // high-latency regional gateway must not tear down the connection.
+    stream.set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
+    let mut buf = Vec::new();
+    let mut read_iv = initial_read_iv.to_vec();
+    // What the farm says it expects, where it says anything at all.
+    let mut heartbeat_secs: Option<u64> = None;
+
+    for _msg_num in 0..20 {
+        // Read until a frame is complete
+        let msg = loop {
+            if let Some((msg, consumed)) = try_frame_farm_msg(&buf) {
+                buf.drain(..consumed);
+                break msg;
+            }
+            let mut tmp = [0u8; FARM_RECV_BUF];
+            let n = match stream.read(&mut tmp) {
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut =>
+                {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "farm logon timed out waiting for server response",
+                        ));
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "farm connection closed during logon",
+                ));
+            }
+            buf.extend_from_slice(&tmp[..n]);
+        };
+
+        // FIX.4.1 message
+        if msg.starts_with(b"8=FIX.4.1\x01") {
+            let has_sig = msg.windows(6).any(|w| w == b"\x018349=");
+            // Check for HMAC signature → unsign
+            let parsed_msg = if has_sig {
+                let (unsigned, new_iv, valid) = fix::fix_unsign(&msg, read_mac_key, &read_iv);
+                if !valid {
+                    // Same rule as `Connection::unsign`: a frame that does not
+                    // verify is neither parsed nor allowed to move the chain,
+                    // since the IV it would move to is derived from a body the
+                    // MAC just declined to vouch for.
+                    log::warn!("auth frame failed signature verification — dropped");
+                    continue;
+                }
+                read_iv = new_iv;
+                unsigned
+            } else {
+                msg.clone()
+            };
+            let fields = fix_parse(&parsed_msg);
+            // Check for encrypted content (tags 91/96)
+            let enc_tag = fields.get(&91).or_else(|| fields.get(&96));
+            if let Some(b64_data) = enc_tag {
+                let encrypted = B64.decode(b64_data).map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+                })?;
+                let decrypted = channel.decrypt(&encrypted).map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidData, e)
+                })?;
+
+                // Sync HMAC read IV with AES read IV after decryption (CBC chaining)
+                if let Some(iv) = channel.read_iv() {
+                    read_iv = iv.to_vec();
+                }
+
+                // Check for auth challenge → respond with token, fall back to SRP if
+                // rejected.
+                // Outcome asymmetry:
+                //   PASSED  — token accepted, continue
+                //   UNKNOWN — server cache miss, recover via SRP on this socket
+                //   FAILED  — `do_soft_token` returns Err; the OUTER reconnect loop
+                //             must drop this socket and retry from scratch with a
+                //             fresh soft-token (NOT SRP — captured behavior).
+                if decrypted.windows(5).any(|w| w == b"35=S\x01") {
+                    // Pass the farm read buffer as the auth carry buffer: the
+                    // auth exchange reads on the same socket, and a high-latency
+                    // gateway can coalesce its final response with the farm logon
+                    // ACK. Threading `buf` through keeps those trailing ACK bytes
+                    // so the loop below re-frames them instead of stalling on a
+                    // read for bytes already consumed.
+                    match do_soft_token(stream, session_token, &mut buf)? {
+                        session::SoftTokenOutcome::Passed => {}
+                        session::SoftTokenOutcome::Unknown => {
+                            log::warn!("Soft token rejected — falling back to SRP farm auth");
+                            stream.set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
+                            session::do_srp_farm(stream, username, password, &mut buf)?;
+                        }
+                    }
+                }
+            } else if fields.get(&35).map(|s| s.as_str()) == Some("A") {
+                // Logon ACK — sign_iv is the current write_iv (mutated by encrypt)
+                let sign_iv = channel
+                    .write_iv()
+                    .map(|iv| iv.to_vec())
+                    .unwrap_or_default();
+                // How often this farm expects to hear from the session, if it
+                // says. The logon proposes a number and the answer may name a
+                // different one; read from the answer, because the proposal is
+                // not what the session is held to. The auth connection had the
+                // same shape and was being answered too slowly for it.
+                if let Some(stated) = fields.get(&108).and_then(|v| v.parse::<u64>().ok())
+                    && stated > 0
+                {
+                    log::info!("a farm states a heartbeat interval of {stated}s");
+                    heartbeat_secs = Some(stated);
+                }
+                if !buf.is_empty() {
+                    log::warn!("{} bytes remaining in buffer after logon ACK",
+                        buf.len());
+                }
+                return Ok(FarmLogon { read_iv, sign_iv, remaining: buf, heartbeat_secs });
+            } else if fields.get(&35).map(|s| s.as_str()) == Some("3") {
+                let text = fields.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("Farm logon rejected: {text}"),
+                ));
+            } else {
+                // Anything else the server says during logon.
+                //
+                // Dropped silently, this reads as the server having said
+                // nothing: the loop waits for a message that has already been
+                // sent and thrown away, the server waits for the answer, and
+                // whoever gives up first ends it — which is the server, with a
+                // close and no reason, about ten seconds in. A logon that fails
+                // that way is indistinguishable from one the server never
+                // answered, so say what arrived.
+                log::warn!(
+                    "farm logon: unhandled message type {:?} — nothing here answers it",
+                    fields.get(&35).map(|s| s.as_str()).unwrap_or("(none)"),
+                );
+            }
+        } else if msg.starts_with(b"8=1\x01") {
+            // Token auth response
+            if msg.windows(6).any(|w| w == b"PASSED") {
+                log::info!("Token auth PASSED");
+            }
+        } else {
+            log::warn!(
+                "farm logon: unhandled frame, {} bytes, starting {:?}",
+                msg.len(),
+                String::from_utf8_lossy(&msg[..msg.len().min(16)]),
+            );
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "exceeded max messages without farm logon ACK",
+    ))
+}
+
+/// Try to extract one complete FIX message from a buffer.
+/// Returns (message, bytes_consumed) or None if incomplete.
+pub(super) fn try_frame_farm_msg(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
+    if buf.len() < 10 {
+        return None;
+    }
+    // Look for FIX header
+    if !buf.starts_with(b"8=") {
+        // Skip garbage
+        let next = buf.windows(2).position(|w| w == b"8=")?;
+        return Some((Vec::new(), next)); // skip garbage, caller retries
+    }
+    // Find tag 9 body length
+    let tag9_pos = buf.windows(3).position(|w| w == b"\x019=")?;
+    let val_start = tag9_pos + 3;
+    let soh_pos = buf[val_start..].iter().position(|&b| b == SOH)? + val_start;
+    let body_len: usize = std::str::from_utf8(&buf[val_start..soh_pos]).ok()?.parse().ok()?;
+    let total = soh_pos + 1 + body_len + 7; // +7 for "10=XXX\x01"
+    if buf.len() < total {
+        return None;
+    }
+    Some((buf[..total].to_vec(), total))
+}
+
+/// Keep the first value the venue sends for a field it sends once, and say so
+/// when it sends a second one that differs. Each of these carries its whole
+/// list in one field, so a second differing value would mean the list arrives
+/// in parts and keeping the first silently drops the rest — which looks
+/// identical to the venue having sent nothing more.
+pub(super) fn keep_first(slot: &mut String, value: &str, field: &str) {
+    if slot.is_empty() {
+        *slot = value.to_string();
+    } else if slot != value {
+        log::warn!(
+            "Logon sent {field} a second time with different content ({} then {} bytes); \
+             keeping the first. This field is read as arriving whole.",
+            slot.len(), value.len(),
+        );
+    }
+}
+
+/// Record an account the venue named, in the order it named them, ignoring
+/// repeats. The venue names an account more than once across the logon ACK and
+/// the init burst, and a login holding several accounts names each of them.
+pub(super) fn note_account(accounts: &mut Vec<String>, account: &str) {
+    if !account.is_empty() && !accounts.iter().any(|a| a == account) {
+        accounts.push(account.to_string());
+    }
+}
+
+/// Another session already logged in on this account when this one connected.
+///
+/// The venue states this in its answer to the connect, and the counterpart
+/// reads it there: a session that arrives second is told who was already here.
+/// Whether that matters is the caller's to decide — the venue may serve both,
+/// or may hold this one to reading only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompetingSession {
+    /// Where the session that was already logged in connected from.
+    pub ip: String,
+    /// When it logged in, as the venue stated it: `yyyyMMdd-HH:mm:ss`, GMT.
+    pub since: String,
+    /// This session may look but not trade, because the other one holds the
+    /// account.
+    ///
+    /// Worth knowing before an order is sent rather than after it is refused.
+    pub read_only: bool,
+}
+
+/// A host the venue named, and the port it named it on.
+///
+/// The venue states `host:port` in a redirect. Falls back to the port this
+/// session is already on when it states only a host, which is the common
+/// case.
+pub(super) fn host_and_port(target: &str, fallback: u16) -> (&str, u16) {
+    match target.split_once(':') {
+        Some((host, port)) => (host, port.parse().unwrap_or(fallback)),
+        None => (target, fallback),
+    }
+}
+
+/// Whether a session the venue names belongs to another client rather than to
+/// this one.
+///
+/// Both stamps are GMT `YYYYMMDD-HH:MM:SS`, so comparing them as text compares
+/// them as moments. Equal counts as this session's own: a reconnect that lands
+/// in the same second as the logon being reaped is the common case, and giving
+/// the account up over it would strand a caller who has no competitor at all.
+pub(super) fn is_another_client(other_since: &str, our_logon: &str) -> bool {
+    other_since > our_logon
+}
+
+/// Read a competing session out of the venue's answer to the connect.
+///
+/// The answer carries one field for this, and it is either `0` for nobody
+/// else, or an address and a login time separated by a slash. Found by shape
+/// rather than by position: the field's own form — an address, a slash, a
+/// timestamp the venue writes as `yyyyMMdd-HH:mm:ss` — identifies it, and a
+/// frame that gains a field does not move it.
+pub fn parse_competing_session(frame: &str) -> Option<CompetingSession> {
+    frame.split(';').find_map(|field| {
+        let field = field.trim();
+        if field.is_empty() || field == "0" {
+            return None;
+        }
+        let (ip, rest) = field.split_once('/')?;
+        if ip.is_empty() {
+            return None;
+        }
+        let (since, read_only) = match rest.strip_suffix(COMPETING_READ_ONLY) {
+            Some(stripped) => (stripped, true),
+            None => (rest, false),
+        };
+        // yyyyMMdd-HH:mm:ss, and nothing else in the frame looks like it.
+        let (day, clock) = since.split_once('-')?;
+        if day.len() != 8 || !day.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        if clock.len() != 8 || clock.as_bytes()[2] != b':' || clock.as_bytes()[5] != b':' {
+            return None;
+        }
+        Some(CompetingSession {
+            ip: ip.to_string(),
+            since: since.to_string(),
+            read_only,
+        })
+    })
+}
+
+/// The buffer the init burst is scanned in.
+///
+/// The auth-server's logon ACK arrives DEFLATE-compressed inside one or more
+/// `8=FIXCOMP` envelopes. The compressed body is ~30 kB on
+/// the wire but expands to ~48 kB of plaintext carrying the routing tags
+/// 6145/6171/8008, which the tag scan needs to
+///
+/// The inflated plaintext belongs to that scan and nowhere else. The engine is
+/// handed the burst exactly as it arrived and decompresses the same segments
+/// itself, so appending the plaintext to the engine's copy delivered every
+/// message in the burst twice from a single delivery — once from the segment,
+/// once from the appended copy. Takes the burst by reference so the
+/// engine's copy cannot be the one that grows.
+pub(super) fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
+    let mut scan = init_data.to_vec();
+    let mut cursor = 0usize;
+    while cursor + 12 < init_data.len() {
+        if init_data[cursor..].starts_with(b"8=FIXCOMP\x01")
+            && let Some(total_len) = fixcomp::fixcomp_length(&init_data[cursor..]) {
+                let segment = &init_data[cursor..cursor + total_len.min(init_data.len() - cursor)];
+                let inflated = fixcomp::fixcomp_decompress(segment).unwrap_or_else(|e| {
+                    log::warn!("Init FIXCOMP segment at offset {cursor}: dropping malformed frame: {e}");
+                    Vec::new()
+                });
+                let inflated_bytes: usize = inflated.iter().map(|m| m.len() + 1).sum();
+                log::info!(
+                    "Init FIXCOMP segment at offset {}: {} compressed → {} inner messages, ~{} inflated bytes",
+                    cursor, total_len, inflated.len(), inflated_bytes,
+                );
+                for inner in inflated {
+                    scan.extend_from_slice(&inner);
+                    scan.push(b'\x01');
+                }
+                cursor += total_len;
+                continue;
+            }
+        cursor += 1;
+    }
+    scan
 }
 
 #[cfg(test)]
