@@ -8,7 +8,7 @@
 //!   BENCH_ITERATIONS - number of buy/sell pairs (default: 5)
 //!   BENCH_WARMUP     - warmup ticks before starting (default: 50)
 
-#[path = "../../bench/bench_harness.rs"]
+#[path = "support/harness.rs"]
 mod harness;
 
 use std::time::{Duration, Instant};

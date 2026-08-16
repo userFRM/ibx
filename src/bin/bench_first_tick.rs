@@ -7,7 +7,7 @@
 //!   BENCH_CON_ID     - contract ID (default: 756733 = SPY)
 //!   BENCH_ITERATIONS - number of sub/unsub cycles (default: 10)
 
-#[path = "../../bench/bench_harness.rs"]
+#[path = "support/harness.rs"]
 mod harness;
 
 use std::time::{Duration, Instant};

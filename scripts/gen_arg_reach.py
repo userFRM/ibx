@@ -21,7 +21,7 @@ Every argument of every call falls into one of three kinds:
 caller can set and nothing reads is the argument form of a silent call: the
 request goes out, the answer comes back, and what was asked for is gone.
 
-Writes docs/arg-reach.md. CI re-runs this and compares.
+Writes docs/generated/arg-reach.md. CI re-runs this and compares.
 """
 
 import pathlib
@@ -29,7 +29,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / "docs/arg-reach.md"
+OUT = ROOT / "docs/generated/arg-reach.md"
 
 #: Where a caller's call is taken. Both surfaces, because an argument dropped
 #: on one and read on the other is a difference between the two clients.

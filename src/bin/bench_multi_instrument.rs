@@ -7,7 +7,7 @@
 //!   BENCH_TICKS    - total ticks to collect across all instruments (default: 10000)
 //!   BENCH_WARMUP   - warmup ticks (default: 200)
 
-#[path = "../../bench/bench_harness.rs"]
+#[path = "support/harness.rs"]
 mod harness;
 
 use std::collections::HashMap;

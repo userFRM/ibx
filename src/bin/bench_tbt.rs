@@ -8,7 +8,7 @@
 //!   BENCH_TICKS    - events to collect per stream (default: 5000)
 //!   BENCH_WARMUP   - warmup events (default: 100)
 
-#[path = "../../bench/bench_harness.rs"]
+#[path = "support/harness.rs"]
 mod harness;
 
 use std::time::{Duration, Instant};
