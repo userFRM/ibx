@@ -694,7 +694,7 @@ fn a_position_feed_entry_without_a_quantity_leaves_the_position_alone() {
         let shared = SharedState::new();
         let mut hb = HeartbeatState::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
-        let event_tx = Some(tx);
+        let event_tx = Some(crate::engine::hot_loop::EventSink::new(tx, Default::default()));
         let instrument = context.market.register(265598);
         shared.portfolio.set_position_info(PositionInfo {
             con_id: 265598, position: 100.0, avg_cost: 0, ..Default::default()
@@ -732,7 +732,7 @@ fn a_position_feed_entry_with_a_quantity_publishes_it_everywhere() {
     let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let (tx, rx) = std::sync::mpsc::sync_channel(4096);
-    let event_tx = Some(tx);
+    let event_tx = Some(crate::engine::hot_loop::EventSink::new(tx, Default::default()));
     let instrument = context.market.register(265598);
 
     // Two entries, so the first is flushed by the second's conId.
@@ -1895,7 +1895,7 @@ fn a_report_that_fills_an_order_also_says_the_order_is_filled() {
     let frame = exec_report_frame(&[
         (39, "2"), (150, "F"), (32, "100"), (31, "150.00"), (14, "100"), (151, "0"),
     ]);
-    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &Some(tx), "");
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &Some(crate::engine::hot_loop::EventSink::new(tx, Default::default())), "");
 
     let events: Vec<_> = rx.try_iter().collect();
     assert!(
@@ -2736,7 +2736,7 @@ fn every_side_maps_to_the_right_position_delta() {
 fn a_duplicate_exec_id_suppresses_the_fill_and_nothing_else() {
     let (mut ccp, mut context, shared) = ord_status_test_state();
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
-    let event_tx = Some(event_tx);
+    let event_tx = Some(crate::engine::hot_loop::EventSink::new(event_tx, Default::default()));
 
     // Partial fill, booked normally.
     ccp.handle_exec_report(

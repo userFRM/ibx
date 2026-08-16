@@ -196,7 +196,7 @@ fn main() {
     let (event_tx, event_rx) = sync_channel::<Event>(65536);
     let (mut hot_loop, control_tx) = ibx::engine::hot_loop::HotLoop::for_session(
         gw,
-        shared, Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
+        shared, Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
         ibx::gateway::CallerAuth {
             settings: config.settings.clone(),
             host: config.host.clone(),

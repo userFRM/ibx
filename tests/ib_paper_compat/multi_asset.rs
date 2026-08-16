@@ -67,7 +67,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, ccp, conns.hmds, None,
     );
     let inst = hot_loop.context_mut().register_instrument(fx_con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "EUR".to_string());
@@ -184,7 +184,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, ccp, conns.hmds, None,
     );
     let inst = hot_loop.context_mut().register_instrument(fut_def.con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "MES".to_string());
@@ -332,7 +332,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, ccp, conns.hmds, None,
     );
     let inst = hot_loop.context_mut().register_instrument(opt_con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "SPY".to_string());
@@ -400,7 +400,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
     // Register SPY
@@ -676,7 +676,7 @@ pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, ccp, conns.hmds, None,
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, ccp, conns.hmds, None,
     );
     let inst = hot_loop.context_mut().register_instrument(def.con_id as i64);
     hot_loop.context_mut().set_symbol(inst, "VOD".to_string());

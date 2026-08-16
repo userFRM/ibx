@@ -119,7 +119,7 @@ def classify(name: str, all_bodies: dict[str, str], seen: set[str] | None = None
     return "silent"
 
 
-def published(pattern: str) -> list[int]:
+def published(pattern: str) -> list[list[int]]:
     """The figures the capability matrix states, read back out of the sentence.
 
     A number in a shipped document is a claim. This one was stated once and
@@ -129,8 +129,19 @@ def published(pattern: str) -> list[int]:
     Compare against the published prose instead.
     """
     text = (ROOT / "docs/capabilities.md").read_text()
-    m = re.search(pattern, text)
-    return [int(g.replace(",", "")) for g in m.groups()] if m else []
+    found = [
+        [int(g.replace(",", "")) for g in m.groups()]
+        for m in re.finditer(pattern, text)
+    ]
+    if not found:
+        # A claim that has been reworded is a claim nobody is checking. Read as
+        # "nothing published", this skipped silently and the figure it was
+        # written to hold drifted anyway.
+        raise SystemExit(
+            f"docs/capabilities.md states nothing matching {pattern!r}, so the "
+            f"figure it publishes is measured by nobody"
+        )
+    return found
 
 
 def main() -> int:
@@ -180,10 +191,16 @@ def main() -> int:
     if silent:
         print("a call returns as though it acted and did not:", ", ".join(silent))
         return 1
-    stated = published(r"\| Requests \| ([\d,]+)\.")
-    if stated and stated != [len(calls)]:
-        print(f"docs/capabilities.md publishes {stated[0]} requests, {len(calls)} exist")
-        return 1
+    # Every place the figure is published, not only the headline: the same
+    # count is stated three times over and each one is a claim.
+    for pattern in (r"\| Requests \| ([\d,]+)\.",
+                    r"([\d,]+)/([\d,]+) callable",
+                    r"\| ([\d,]+) requests, none silent \|"):
+        for stated in published(pattern):
+            if any(n != len(calls) for n in stated):
+                print(f"docs/capabilities.md publishes {stated} where "
+                      f"{len(calls)} requests exist ({pattern})")
+                return 1
     print(f"{len(calls)} requests: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     return 0
 

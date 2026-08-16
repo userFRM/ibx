@@ -65,7 +65,7 @@ const _: () = assert!(LIVENESS_TEST_SECS < LIVENESS_DEAD_SECS);
 /// The pinned-core hot loop. Pushes events to SharedState + optional event channel.
 pub struct HotLoop {
     shared: Arc<SharedState>,
-    event_tx: Option<SyncSender<Event>>,
+    event_tx: Option<EventSink>,
     context: Context,
     /// Core ID to pin the hot loop thread to. None = no pinning.
     core_id: Option<usize>,
@@ -281,7 +281,7 @@ impl HotLoop {
     pub fn for_session(
         gateway: crate::gateway::Gateway,
         shared: Arc<SharedState>,
-        event_tx: Option<SyncSender<Event>>,
+        event_tx: Option<EventSink>,
         farm_conn: Connection,
         ccp_conn: Connection,
         hmds_conn: Option<Connection>,
@@ -291,12 +291,13 @@ impl HotLoop {
     ) -> (HotLoop, SyncSender<ControlCommand>) {
         let (tx, rx) = sync_channel(64);
         let reconnect_auth = gateway.reconnect_auth(caller);
-        if let Some(tx) = event_tx.as_ref() {
-            let _ = tx.send(Event::GatewayLogon {
-                ccp_session_id: gateway.server_session_id.clone(),
-                misc_urls: gateway.misc_urls.clone(),
-            });
-        }
+        // Emitted like everything else, so a logon that arrives at a channel
+        // nobody has read yet is counted rather than waited on: this runs on
+        // the thread that carries the session.
+        emit(&event_tx, Event::GatewayLogon {
+            ccp_session_id: gateway.server_session_id.clone(),
+            misc_urls: gateway.misc_urls.clone(),
+        });
         let mut hot_loop = HotLoop::new(shared, event_tx, core_id);
         hot_loop.set_control_rx(rx);
         hot_loop.set_account_id(gateway.account_id.clone());
@@ -313,7 +314,7 @@ impl HotLoop {
         (hot_loop, tx)
     }
 
-    pub fn new(shared: Arc<SharedState>, event_tx: Option<SyncSender<Event>>, core_id: Option<usize>) -> Self {
+    pub fn new(shared: Arc<SharedState>, event_tx: Option<EventSink>, core_id: Option<usize>) -> Self {
         Self {
             shared,
             event_tx,
@@ -389,7 +390,7 @@ impl HotLoop {
     /// Gateway.
     pub fn with_connections(
         shared: Arc<SharedState>,
-        event_tx: Option<SyncSender<Event>>,
+        event_tx: Option<EventSink>,
         account_id: String,
         farm_conn: Connection,
         ccp_conn: Connection,
@@ -2100,23 +2101,40 @@ pub(crate) fn format_uint(val: u64) -> StackStr {
     s
 }
 
-/// How many events were discarded because nobody had read far enough.
-///
-/// A full channel is a reader that fell behind, and the engine drops rather
-/// than waits — a session that stalled on a slow reader would stop carrying
-/// market data. Dropping is right; dropping silently is not, because a program
-/// that acted on every fill it saw cannot tell that from every fill there was.
-/// Counted here and reported by `Events::lost`.
-pub(crate) static EVENTS_LOST: AtomicU64 = AtomicU64::new(0);
 
-/// Emit an event to the channel (if connected). Non-blocking — counts and
-/// drops the event if the reader has fallen a whole channel behind.
+/// Where an event goes, and where a loss against that channel is counted.
+///
+/// The two travel together because the only place that knows an event was
+/// dropped is the send that dropped it. Counted on the session rather than on
+/// the process: two sessions in one program each fall behind on their own, and
+/// a count shared between them tells a reader about a channel it does not hold.
+#[derive(Clone)]
+pub struct EventSink {
+    tx: SyncSender<Event>,
+    lost: std::sync::Arc<AtomicU64>,
+}
+
+impl EventSink {
+    /// Where events go and where losses against that channel are counted.
+    pub fn new(tx: SyncSender<Event>, lost: std::sync::Arc<AtomicU64>) -> Self {
+        Self { tx, lost }
+    }
+}
+
+/// Emit an event to the channel (if connected). Non-blocking: the engine drops
+/// rather than waits, because a session that stalled on a slow reader would
+/// stop carrying market data.
+///
+/// Dropping is right; dropping silently is not, because a program that acted on
+/// every fill it saw cannot tell that from every fill there was. A full channel
+/// is counted on the session and reported by `Events::lost`. A closed one is
+/// not: nobody is behind, the reader has gone.
 #[inline]
-pub(crate) fn emit(event_tx: &Option<SyncSender<Event>>, event: Event) {
-    if let Some(tx) = event_tx
-        && tx.try_send(event).is_err()
+pub(crate) fn emit(event_tx: &Option<EventSink>, event: Event) {
+    if let Some(sink) = event_tx
+        && let Err(std::sync::mpsc::TrySendError::Full(_)) = sink.tx.try_send(event)
     {
-        EVENTS_LOST.fetch_add(1, Ordering::Relaxed);
+        sink.lost.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -2130,7 +2148,7 @@ pub(crate) fn emit(event_tx: &Option<SyncSender<Event>>, event: Event) {
 /// Clone first, push second, emit last, so the event never becomes visible
 /// before the same data is readable from `SharedState`.
 #[inline]
-pub(crate) fn clone_for_event<T: Clone>(event_tx: &Option<SyncSender<Event>>, value: &T) -> Option<T> {
+pub(crate) fn clone_for_event<T: Clone>(event_tx: &Option<EventSink>, value: &T) -> Option<T> {
     event_tx.as_ref().map(|_| value.clone())
 }
 
@@ -2766,7 +2784,7 @@ mod tests {
     fn a_spent_budget_stops_the_reconnect() {
         let shared = Arc::new(SharedState::new());
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
-        let mut hl = HotLoop::new(shared, Some(tx), None);
+        let mut hl = HotLoop::new(shared, Some(EventSink::new(tx, Default::default())), None);
         hl.set_reconnect_config(
             crate::reliability::ReconnectConfig::default().with_max_attempts(2),
         );
@@ -2792,7 +2810,7 @@ mod tests {
     fn an_unrecoverable_transport_is_reported_rather_than_retried_in_silence() {
         let shared = Arc::new(SharedState::new());
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
-        let mut hl = HotLoop::new(shared.clone(), Some(tx), None);
+        let mut hl = HotLoop::new(shared.clone(), Some(EventSink::new(tx, Default::default())), None);
         hl.ccp.disconnected = true;
         // No credentials were ever cached, so there is nothing to reconnect with.
 
@@ -2992,7 +3010,7 @@ mod tests {
     fn inject_tick_emits_events() {
         let shared = Arc::new(SharedState::new());
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
-        let mut engine = HotLoop::new(shared.clone(), Some(event_tx), None);
+        let mut engine = HotLoop::new(shared.clone(), Some(EventSink::new(event_tx, Default::default())), None);
         engine.context_mut().market.register(265598);
 
         engine.inject_tick(0);
@@ -3007,7 +3025,7 @@ mod tests {
     fn inject_tick_multiple_instruments() {
         let shared = Arc::new(SharedState::new());
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
-        let mut engine = HotLoop::new(shared.clone(), Some(event_tx), None);
+        let mut engine = HotLoop::new(shared.clone(), Some(EventSink::new(event_tx, Default::default())), None);
         engine.context_mut().market.register(265598); // 0: AAPL
         engine.context_mut().market.register(272093); // 1: MSFT
 
@@ -3026,7 +3044,7 @@ mod tests {
     fn inject_fill_updates_position() {
         let shared = Arc::new(SharedState::new());
         let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
-        let mut engine = HotLoop::new(shared.clone(), Some(event_tx), None);
+        let mut engine = HotLoop::new(shared.clone(), Some(EventSink::new(event_tx, Default::default())), None);
         engine.context_mut().market.register(265598);
 
         let fill = Fill {
@@ -3070,7 +3088,7 @@ mod tests {
         let shared = Arc::new(SharedState::new());
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut engine = HotLoop::new(shared, Some(event_tx), None);
+        let mut engine = HotLoop::new(shared, Some(EventSink::new(event_tx, Default::default())), None);
         engine.set_control_rx(rx);
         engine.running = true;
 
@@ -3154,7 +3172,7 @@ mod tests {
         assert!(clone_for_event(&None, &payload).is_none());
 
         let (tx, _rx) = std::sync::mpsc::sync_channel::<Event>(1);
-        assert_eq!(clone_for_event(&Some(tx), &payload), Some(payload));
+        assert_eq!(clone_for_event(&Some(EventSink::new(tx, Default::default())), &payload), Some(payload));
     }
 
     #[test]

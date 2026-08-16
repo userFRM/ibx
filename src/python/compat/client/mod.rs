@@ -292,7 +292,11 @@ impl EClient {
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
         let (hot_loop, control_tx) = crate::engine::hot_loop::HotLoop::for_session(
             gw,
-            shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id,
+            shared.clone(),
+            // This session's own count of what it discarded, so a program with
+            // two sessions is not told about the other one's.
+            Some(crate::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+            farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id,
             crate::gateway::CallerAuth {
                 settings: Default::default(),
                 host: connect_host,

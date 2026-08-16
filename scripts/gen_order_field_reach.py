@@ -85,6 +85,79 @@ def what_the_call_refuses() -> set[str]:
     return set(re.findall(r"\b([a-z_]+)\b", text[at + len("refuse_if_stated!("):end]))
 
 
+def without_tests(text: str) -> str:
+    """The file with any `#[cfg(test)]` block after it removed.
+
+    A test names the fields it exercises, and a name is all this looks for. A
+    field read nowhere but by the test of the code that used to read it is a
+    field nothing carries.
+    """
+    at = text.find("#[cfg(test)]")
+    return text if at < 0 else text[:at]
+
+
+def without_declarations(text: str) -> str:
+    """The file with its struct definitions and their defaults removed.
+
+    A declaration names every field and reads none. Left in, the attributes
+    struct beside the builder said each name and the field counted as carried:
+    a field could lose both its conversion and the tag it went out under and
+    still be reported as reaching the venue, because two declarations of it
+    remained.
+    """
+    out, at = [], 0
+    while True:
+        starts = [
+            (text.find(k, at), k)
+            for k in ("pub struct ", "impl Default for ", "struct ")
+        ]
+        starts = [(i, k) for i, k in starts if i >= 0]
+        if not starts:
+            out.append(text[at:])
+            return "".join(out)
+        start = min(starts)[0]
+        end = text.find("\n}", start)
+        if end < 0:
+            out.append(text[at:])
+            return "".join(out)
+        out.append(text[at:start])
+        at = end + 2
+
+
+def the_conversion(text: str) -> str:
+    """The order's conversion, and everything it calls to finish the job.
+
+    In the file that declares the order, only the conversion carries a field to
+    the engine. Everything else there names fields without carrying them — the
+    declaration, the defaults, and a predicate asking whether an order has
+    extended attributes at all, which names forty of them and would report
+    every one as carried. `deactivate_on_disconnect` could lose both its
+    conversion and its tag and stay counted, because that predicate still said
+    its name.
+
+    The conversion is not one function: it hands the scale, the delta hedge and
+    the rest to helpers beside it. Taking only its own body reports every field
+    those carry as dropped, so the calls are followed.
+    """
+    def body_of(name: str) -> str:
+        at = text.find(f"fn {name}(")
+        if at < 0:
+            return ""
+        end = text.find("\n    }\n", at)
+        return text[at:end] if end > 0 else text[at:]
+
+    wanted, seen, out = ["attrs"], set(), []
+    while wanted:
+        name = wanted.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        body = body_of(name)
+        out.append(body)
+        wanted += re.findall(r"self\.([a-z_0-9]+)\(", body)
+    return "\n".join(out)
+
+
 def where_fields_are_read() -> str:
     """Everything that reads an order, with the order's own definition removed.
 
@@ -93,26 +166,24 @@ def where_fields_are_read() -> str:
     declaration and reports that all of them are carried, which is the same
     blindness in the other direction; searching without it reports a field the
     conversion carries as lost.
+
+    The tests written beside the code are removed for the same reason the
+    declaration is: a test naming a field is not code carrying it. Left in,
+    a field whose only remaining mention was the test that used to check it
+    read as carried — `deactivate_on_disconnect` could lose both its
+    conversion and its tag and still be counted.
     """
     out = []
     for path in BUILDERS:
         if not path.exists():
             continue
-        text = path.read_text()
+        text = without_declarations(without_tests(path.read_text()))
         # Whichever file holds it, not whichever file held it once: keyed on
         # a filename, this went quiet the day the model moved and reported
         # every field as carried by its own declaration. That is the fourth
         # time a moved file has silently disabled a check here.
-        if "pub struct Order " in text:
-            at = text.index("pub struct Order ")
-            end = text.index("\n}", at)
-            declaration = text[at:end]
-            # And the value that fills it in, which names every field too.
-            default = ""
-            if "impl Default for Order" in text:
-                d_at = text.index("impl Default for Order")
-                default = text[d_at : text.index("\n}\n", d_at)]
-            text = text.replace(declaration, "").replace(default, "")
+        if "pub fn attrs(&self)" in text:
+            text = the_conversion(text)
         out.append(text)
     return "\n".join(out)
 
@@ -144,7 +215,7 @@ def constants_in_the_conversion() -> list[str]:
     ]
 
 
-def published(pattern: str) -> list[int]:
+def published(pattern: str) -> list[list[int]]:
     """The figures the capability matrix states, read back out of the sentence.
 
     A number in a shipped document is a claim. This one was stated once and
@@ -154,8 +225,19 @@ def published(pattern: str) -> list[int]:
     Compare against the published prose instead.
     """
     text = (ROOT / "docs/capabilities.md").read_text()
-    m = re.search(pattern, text)
-    return [int(g.replace(",", "")) for g in m.groups()] if m else []
+    found = [
+        [int(g.replace(",", "")) for g in m.groups()]
+        for m in re.finditer(pattern, text)
+    ]
+    if not found:
+        # A claim that has been reworded is a claim nobody is checking. Read as
+        # "nothing published", this skipped silently and the figure it was
+        # written to hold drifted anyway.
+        raise SystemExit(
+            f"docs/capabilities.md states nothing matching {pattern!r}, so the "
+            f"figure it publishes is measured by nobody"
+        )
+    return found
 
 
 def main() -> int:
@@ -230,11 +312,13 @@ def main() -> int:
             print(f"  {f}")
         return 1
 
-    stated = published(r"\| Order fields \| ([\d,]+)\. ([\d,]+) are sent; the other ([\d,]+) ")
-    if stated and stated != [len(fields), len(carried), len(says_so)]:
-        print(f"docs/capabilities.md publishes {stated}, "
-              f"{[len(fields), len(carried), len(says_so)]} exist")
-        return 1
+    have = [len(fields), len(carried), len(says_so)]
+    for pattern in (r"\| Order fields \| ([\d,]+)\. ([\d,]+) are sent; the other ([\d,]+) ",
+                    r"An order has ([\d,]+) fields\. ([\d,]+) are sent\. The other ([\d,]+) "):
+        for stated in published(pattern):
+            if stated != have:
+                print(f"docs/capabilities.md publishes {stated}, {have} exist")
+                return 1
     print(f"{len(fields)} order fields: carried={len(carried)} "
           f"refused={len(says_so)} dropped={len(dropped)}")
     return 0

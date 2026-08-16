@@ -413,6 +413,14 @@ pub struct Order {
     /// The smallest quantity the order will trade in.
     pub min_trade_qty: i32,
     /// Which model the order belongs to.
+    ///
+    /// **Not carried by this protocol.** The counterpart names every field it
+    /// can write, and none of the three hundred and one that carry a tag is
+    /// this one — it declares which model a rebalance is of, and what kind of
+    /// change to a model an order is, but not a model an order belongs to.
+    /// Taken here and kept, so an order built against another client reads
+    /// back what it set, and refused rather than sent, so an order meant for
+    /// one model is not placed against the account at large.
     pub model_code: String,
     /// Whether the venue may use its discretion over the order.
     pub not_held: bool,

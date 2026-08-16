@@ -7,9 +7,8 @@ use crate::types::{
     MidnightSeed,
     PositionInfo, Price, PRICE_SCALE,
 };
-use std::sync::mpsc::SyncSender;
 
-use super::{HeartbeatState, emit};
+use super::{HeartbeatState, emit, EventSink};
 
 /// Where to book a fill whose order this session does not track.
 ///
@@ -207,7 +206,7 @@ pub(crate) fn handle_position_update(
     parsed: &std::collections::HashMap<u32, String>,
     context: &mut Context,
     shared: &SharedState,
-    event_tx: &Option<SyncSender<Event>>,
+    event_tx: &Option<EventSink>,
 ) {
     let con_id: i64 = match parsed.get(&6008).and_then(|s| s.parse().ok()) {
         Some(v) => v,
@@ -289,7 +288,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) {
     let text = match std::str::from_utf8(msg) {

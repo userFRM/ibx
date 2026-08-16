@@ -38,7 +38,7 @@ mod simple;
 mod async_client;
 mod stream;
 pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow};
-pub use stream::Events;
+pub use stream::{Ended, Events};
 #[cfg(feature = "async")]
 pub use async_client::AsyncClient;
 mod market_data;
@@ -61,7 +61,8 @@ use std::sync::mpsc::SyncSender;
 use crate::types::model::{
     Contract as ApiContract, Order as ApiOrder, TagValue as ApiTagValue,
 };
-use crate::bridge::{Event, SharedState};
+use crate::bridge::SharedState;
+use crate::engine::hot_loop::EventSink;
 use crate::client_core::ClientCore;
 use crate::gateway::{Gateway, GatewayConfig, Session};
 use crate::types::*;
@@ -305,10 +306,9 @@ impl EClient {
         Self::connect_inner(config, None)
     }
 
-    /// Connect to IB and start the engine with an [`Event`] channel attached.
+    /// Connect to IB and start the engine with an [`Events`] channel attached.
     ///
-    /// Returns the client plus a receiver carrying every [`Event`] the engine
-    /// produces. This is a second, optional delivery path that runs alongside
+    /// Returns the client plus the stream of everything the engine pushes. This is a second, optional delivery path that runs alongside
     /// [`process_msgs()`](EClient::process_msgs) — it does not replace it, and
     /// nothing is removed from the wrapper callbacks when it is in use.
     ///
@@ -326,13 +326,17 @@ impl EClient {
         capacity: usize,
     ) -> Result<(Self, Events), Box<dyn std::error::Error>> {
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(capacity.max(1));
-        let client = Self::connect_inner(config, Some(event_tx))?;
-        Ok((client, Events::new(event_rx)))
+        // The count of what this channel discards travels with the channel, so
+        // a reader learns about its own losses and not another session's.
+        let lost = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let client =
+            Self::connect_inner(config, Some(EventSink::new(event_tx, std::sync::Arc::clone(&lost))))?;
+        Ok((client, Events::new(event_rx, lost)))
     }
 
     fn connect_inner(
         config: &EClientConfig,
-        event_tx: Option<SyncSender<Event>>,
+        event_tx: Option<EventSink>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let gw_config = gateway_config(config);
 

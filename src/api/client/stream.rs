@@ -35,6 +35,8 @@
 //!
 //! [`connect_with_events`]: super::EClient::connect_with_events
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
@@ -65,14 +67,40 @@ impl std::error::Error for Ended {}
 /// reader might be away.
 pub struct Events {
     rx: Receiver<Event>,
+    lost: Arc<AtomicU64>,
+}
+
+/// What a session has discarded, readable after the stream has been taken.
+///
+/// The streams below consume the handle they came from, so a program that is
+/// iterating one has nothing left to ask. Take one of these first: it reads the
+/// same count and costs a pointer.
+#[derive(Clone)]
+pub struct Losses(Arc<AtomicU64>);
+
+impl Losses {
+    /// How many events the session has discarded so far.
+    pub fn count(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
 }
 
 impl Events {
-    pub(crate) fn new(rx: Receiver<Event>) -> Self {
-        Self { rx }
+    pub(crate) fn new(rx: Receiver<Event>, lost: Arc<AtomicU64>) -> Self {
+        Self { rx, lost }
+    }
+
+    /// A handle to the loss count that outlives taking a stream.
+    pub fn losses(&self) -> Losses {
+        Losses(Arc::clone(&self.lost))
     }
 
     /// Everything, in order, until the session ends.
+    ///
+    /// Raw: what the session pushed, not what it meant. More than one path can
+    /// notice the same outage and each says so, so a program counting losses
+    /// here counts an outage more than once — [`connectivity`](Events::connectivity)
+    /// reports the change instead.
     pub fn all(self) -> impl Iterator<Item = Event> {
         self.rx.into_iter()
     }
@@ -100,7 +128,7 @@ impl Events {
     /// difference between that and every fill there was. Rising here means
     /// asking for a larger capacity, or reading more often.
     pub fn lost(&self) -> u64 {
-        crate::engine::hot_loop::EVENTS_LOST.load(std::sync::atomic::Ordering::Relaxed)
+        self.lost.load(Ordering::Relaxed)
     }
 
     /// Every trade printed on a contract under a tick-by-tick subscription.
@@ -202,7 +230,7 @@ mod tests {
         tx.send(Event::Tick(9)).unwrap();
         drop(tx);
         assert_eq!(
-            Events::new(rx).tick_of().collect::<Vec<_>>(),
+            Events::new(rx, Arc::new(AtomicU64::new(0))).tick_of().collect::<Vec<_>>(),
             vec![7, 9],
             "both ticks, neither notice, in the order they happened",
         );
@@ -213,7 +241,7 @@ mod tests {
         tx.send(Event::Reconnected).unwrap();
         drop(tx);
         assert_eq!(
-            Events::new(rx).connectivity().collect::<Vec<_>>(),
+            Events::new(rx, Arc::new(AtomicU64::new(0))).connectivity().collect::<Vec<_>>(),
             vec![false, true],
             "a loss and the recovery after it, in that order",
         );
@@ -226,10 +254,43 @@ mod tests {
         }
         drop(tx);
         assert_eq!(
-            Events::new(rx).connectivity().collect::<Vec<_>>(),
+            Events::new(rx, Arc::new(AtomicU64::new(0))).connectivity().collect::<Vec<_>>(),
             vec![false, true, false],
             "each change once, repeats of what the reader was told dropped",
         );
+    }
+
+    /// A full channel is counted, and a reader that took a stream can still
+    /// ask. Counted nowhere, a program that acted on every fill it saw could
+    /// not tell that from every fill there was.
+    #[test]
+    fn what_the_session_discarded_is_counted_and_still_readable() {
+        use crate::engine::hot_loop::{emit, EventSink};
+        let (tx, rx) = sync_channel(2);
+        let lost = Arc::new(AtomicU64::new(0));
+        let sink = Some(EventSink::new(tx, Arc::clone(&lost)));
+        let events = Events::new(rx, lost);
+        let counter = events.losses();
+
+        for _ in 0..5 {
+            emit(&sink, Event::Reconnected);
+        }
+        assert_eq!(events.lost(), 3, "two fit, three did not");
+
+        // Taking a stream consumes the handle; the count outlives it. The sink
+        // goes first: a stream runs until the session closes, and the session
+        // is closed by the last sender going away.
+        drop(sink);
+        assert_eq!(events.all().count(), 2);
+        assert_eq!(counter.count(), 3);
+
+        // A channel nobody holds is not a reader falling behind.
+        let (tx, rx) = sync_channel(1);
+        let lost = Arc::new(AtomicU64::new(0));
+        let sink = Some(EventSink::new(tx, Arc::clone(&lost)));
+        drop(rx);
+        emit(&sink, Event::Reconnected);
+        assert_eq!(lost.load(Ordering::Relaxed), 0, "gone is not behind");
     }
 
     /// Nothing arriving is not the session ending. Reported as the end, a
@@ -237,7 +298,7 @@ mod tests {
     #[test]
     fn a_wait_that_finds_nothing_says_so_without_ending_the_stream() {
         let (tx, rx) = sync_channel::<Event>(4);
-        let events = Events::new(rx);
+        let events = Events::new(rx, Arc::new(AtomicU64::new(0)));
         assert!(matches!(events.next_within(Duration::from_millis(5)), Ok(None)), "quiet");
         tx.send(Event::Reconnected).unwrap();
         assert!(matches!(events.next_within(Duration::from_millis(50)), Ok(Some(_))));

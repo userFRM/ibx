@@ -6,9 +6,8 @@ use crate::protocol::connection::{Connection, Frame};
 use crate::protocol::fix;
 use crate::protocol::fixcomp;
 use crate::types::{InstrumentId, TbtType};
-use std::sync::mpsc::SyncSender;
 
-use super::{HeartbeatState, emit, clone_for_event, find_body_after_tag, extract_raw_tag};
+use super::{HeartbeatState, emit, clone_for_event, find_body_after_tag, extract_raw_tag, EventSink};
 
 /// Idle bound for an in-flight historical query: if no bar segment, error,
 /// or completion arrives for this long, the request is failed with error 162
@@ -324,7 +323,7 @@ impl HmdsState {
         &mut self,
         hmds_conn: &mut Option<Connection>,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) {
         if self.disconnected { return; }
@@ -421,7 +420,7 @@ impl HmdsState {
         msg: &[u8],
         hmds_conn: &mut Option<Connection>,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) {
         let parsed = fix::fix_parse(msg);
@@ -783,7 +782,7 @@ impl HmdsState {
         }
     }
 
-    fn handle_tbt_data(&mut self, msg: &[u8], shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
+    fn handle_tbt_data(&mut self, msg: &[u8], shared: &SharedState, event_tx: &Option<EventSink>) {
         use crate::protocol::tbt_stream::{self, TbtKind, TbtRecord};
 
         let body = match find_body_after_tag(msg, b"35=E\x01") {

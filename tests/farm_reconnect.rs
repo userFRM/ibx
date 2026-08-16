@@ -97,7 +97,7 @@ fn hotloop_auto_reconnect_on_farm_disconnect() {
 
     let (mut hot_loop, _control_tx) = ibx::engine::hot_loop::HotLoop::for_session(
         gw,
-        shared.clone(), Some(event_tx),
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         farm_conn, ccp_conn, hmds, None, None,
         ibx::gateway::CallerAuth {
             settings: Default::default(),

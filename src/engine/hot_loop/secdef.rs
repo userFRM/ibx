@@ -10,10 +10,10 @@
 //! to open because one farm was down would be worse than one that says which
 //! farms it has.
 
-use std::sync::mpsc::SyncSender;
+use crate::engine::hot_loop::EventSink;
 use std::time::Instant;
 
-use crate::bridge::{Event, SharedState};
+use crate::bridge::SharedState;
 use crate::protocol::datetime::chrono_free_timestamp;
 use crate::control::calendar as cal;
 use crate::protocol::connection::{Connection, Frame};
@@ -151,7 +151,7 @@ impl SecDefState {
         &mut self,
         conn: &mut Option<Connection>,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) {
         if let Err(lost) = self.read(conn, shared, event_tx, hb) {
@@ -186,7 +186,7 @@ impl SecDefState {
         &mut self,
         conn: &mut Option<Connection>,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) -> Result<(), String> {
         self.sweep(shared);
@@ -260,7 +260,7 @@ impl SecDefState {
         msg: &[u8],
         conn: &mut Option<Connection>,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) {
         let parsed = fix::fix_parse(msg);
@@ -322,7 +322,7 @@ impl SecDefState {
         parsed: &std::collections::HashMap<u32, String>,
         refused: bool,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         let Some(key) = parsed.get(&cal::TAG_CALENDAR_KEY) else {
             log::warn!("A calendar answer arrived naming no request; dropping it");

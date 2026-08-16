@@ -583,6 +583,19 @@ impl EClient {
     ) -> Result<OrderReport, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        self.await_order_holding_the_turn(order_id, timeout)
+    }
+
+    /// [`await_order`](EClient::await_order) for a caller that already holds
+    /// the turn, because it sent the order under it.
+    ///
+    /// Placing and then waiting under two separate turns leaves a gap between
+    /// them, and a question that starts in the gap pumps the order's own reply
+    /// into its collector and discards it. The order is then reported as
+    /// unanswered although the venue answered.
+    pub(crate) fn await_order_holding_the_turn(
+        &self, order_id: i64, timeout: Duration,
+    ) -> Result<OrderReport, Refusal> {
         struct Watch { order_id: i64, report: Arc<Mutex<Option<OrderReport>>>, done: Arc<Mutex<bool>> }
         impl Wrapper for Watch {
             fn order_status(

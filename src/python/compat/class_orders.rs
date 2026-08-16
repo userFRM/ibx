@@ -1290,14 +1290,22 @@ impl Order {
     /// A leg is a Python object, so reading one needs the interpreter, which
     /// the conversion does not hold. Dropped, every leg of a combination
     /// priced by the caller went out at whatever the venue struck it at.
-    pub fn convert_order_combo_legs(&self, py: Python<'_>) -> Vec<f64> {
+    pub fn convert_order_combo_legs(&self, py: Python<'_>) -> Result<Vec<f64>, String> {
         self.order_combo_legs
             .iter()
-            .map(|leg| {
+            .enumerate()
+            .map(|(at, leg)| {
                 leg.bind(py)
                     .getattr("price")
                     .and_then(|v| v.extract::<f64>())
-                    .unwrap_or(f64::MAX)
+                    .map_err(|e| {
+                        format!(
+                            "leg {at} of this combination states a price that \
+                             cannot be read: {e}. Read as absent, the leg would \
+                             be struck at whatever the venue struck it at, which \
+                             is not the price the caller stated"
+                        )
+                    })
             })
             .collect()
     }
@@ -1307,14 +1315,22 @@ impl Order {
     /// This protocol carries no field for them, so an order stating any is
     /// refused rather than sent without them — which is what the refusal needs
     /// them read for.
-    pub fn convert_misc_options(&self, py: Python<'_>) -> Vec<crate::types::model::TagValue> {
+    pub fn convert_misc_options(
+        &self, py: Python<'_>,
+    ) -> Result<Vec<crate::types::model::TagValue>, String> {
         self.order_misc_options
             .iter()
-            .filter_map(|obj| {
+            .enumerate()
+            .map(|(at, obj)| {
                 let any = obj.bind(py);
-                Some(crate::types::model::TagValue {
-                    tag: any.getattr("tag").ok()?.extract().ok()?,
-                    value: any.getattr("value").ok()?.extract().ok()?,
+                let read = |name: &str| -> Result<String, String> {
+                    any.getattr(name)
+                        .and_then(|v| v.extract())
+                        .map_err(|e| format!("option {at} states no readable {name}: {e}"))
+                };
+                Ok(crate::types::model::TagValue {
+                    tag: read("tag")?,
+                    value: read("value")?,
                 })
             })
             .collect()

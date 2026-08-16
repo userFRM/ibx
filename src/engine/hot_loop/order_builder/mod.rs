@@ -19,7 +19,7 @@ pub(crate) fn drain_and_send_orders(
     shared: &Arc<SharedState>,
     // Whether a reconnect's recovery is still settling what the broker holds.
     recovery_pending: bool,
-    event_tx: &Option<std::sync::mpsc::SyncSender<crate::bridge::Event>>,
+    event_tx: &Option<crate::engine::hot_loop::EventSink>,
 ) {
     // If CCP is disconnected, leave orders in the pending buffer for retry after
     // reconnect.
@@ -653,7 +653,7 @@ fn synthesize_pending_cancel(
     context: &mut Context,
     shared: &Arc<SharedState>,
     order_id: crate::types::OrderId,
-    event_tx: &Option<std::sync::mpsc::SyncSender<crate::bridge::Event>>,
+    event_tx: &Option<crate::engine::hot_loop::EventSink>,
 ) {
     if !context.update_order_status(order_id, OrderStatus::PendingCancel) {
         return; // unknown order, already terminal, or already pending-cancel

@@ -174,7 +174,7 @@ pub(super) fn phase_graceful_shutdown(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared, Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
     let join = run_hot_loop(hot_loop);
@@ -234,7 +234,7 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     // Use fake farm, real auth connection — hot loop should detect farm disconnect
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), fake_conn, conns.ccp, conns.hmds, None,
+        shared, Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), fake_conn, conns.ccp, conns.hmds, None,
     );
 
     let join = run_hot_loop(hot_loop);
@@ -288,7 +288,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
     control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
@@ -315,7 +315,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
     let shared2 = Arc::new(SharedState::new());
     let (event_tx2, event_rx2) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop2, control_tx2) = HotLoop::with_connections(
-        shared2.clone(), Some(event_tx2), conns1.account_id.clone(),
+        shared2.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx2, Default::default())), conns1.account_id.clone(),
         conns1.farm, conns1.ccp, conns1.hmds, None,
     );
 
@@ -381,7 +381,7 @@ pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
     let join = run_hot_loop(hot_loop);
 
@@ -428,7 +428,7 @@ pub(super) fn phase_update_param(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+        shared, Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
@@ -502,7 +502,7 @@ pub(super) fn phase_farm_recovers_with_credentials(
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = ibx::engine::hot_loop::HotLoop::for_session(
         gw,
-        shared.clone(), Some(event_tx), conns.farm, conns.ccp, conns.hmds, None, None,
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), conns.farm, conns.ccp, conns.hmds, None, None,
         gateway::CallerAuth {
             settings: Default::default(),
             host: config.host.clone(),

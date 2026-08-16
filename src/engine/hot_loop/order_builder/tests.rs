@@ -389,7 +389,7 @@ fn a_bracket_whose_write_failed_leaves_no_leg_reported_as_working() {
     let shared = std::sync::Arc::new(SharedState::new());
     let (tx, rx) = std::sync::mpsc::sync_channel(4096);
     drain_and_send_orders(
-        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &Some(tx),
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &Some(crate::engine::hot_loop::EventSink::new(tx, Default::default())),
     );
 
     for id in [10u64, 11, 12] {
@@ -460,7 +460,7 @@ fn an_order_whose_write_failed_is_unknown_rather_than_rejected() {
         false,
         &shared,
         false,
-        &Some(tx),
+        &Some(crate::engine::hot_loop::EventSink::new(tx, Default::default())),
     );
 
     // Both deliveries, because the event channel is documented as a second

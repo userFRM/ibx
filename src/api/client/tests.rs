@@ -4911,3 +4911,35 @@ fn two_questions_asked_at_once_do_not_consume_each_other() {
         "a second question ran while the first was still listening",
     );
 }
+
+/// Every question takes its turn before it sends.
+///
+/// The test above holds the lock itself, so it stays green if the lock is taken
+/// nowhere in the code that ships. This reads the questions instead: one that
+/// waits for an answer and does not take a turn is one that can be handed
+/// another question's reply, and there is no way to observe that from a test
+/// with no session to answer it.
+#[test]
+fn a_question_takes_its_turn_before_it_sends() {
+    let source = include_str!("ask.rs");
+    let waits_for_an_answer: Vec<&str> = source
+        .split("\n    pub fn ")
+        .skip(1)
+        .filter(|body| body.contains("self.wait_for(") || body.contains("holding_the_turn("))
+        .collect();
+    assert!(waits_for_an_answer.len() >= 10, "the reader found the questions");
+    let without: Vec<&str> = waits_for_an_answer
+        .iter()
+        .filter(|body| !body.contains("self.asking.lock()"))
+        .map(|body| body.split('(').next().unwrap_or(body))
+        .collect();
+    assert!(without.is_empty(), "asks without taking a turn: {without:?}");
+
+    // And the one place that sends before it waits holds the turn across both.
+    let placing = include_str!("simple.rs");
+    let place = placing.split("pub fn place(").nth(1).expect("place is there");
+    let body = place.split("\n    }").next().unwrap_or(place);
+    let turn = body.find("self.asking.lock()").expect("place takes a turn");
+    let send = body.find("self.place_order(").expect("place sends the order");
+    assert!(turn < send, "the order is sent before the turn is taken");
+}
