@@ -1387,8 +1387,13 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     // (, same tolerance as the farm-logon path).
     tls.get_ref().set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
     let fix_deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
+    // What a read took past the end of the message it returned. On this path
+    // the venue pushes what it holds as soon as the logon is answered, so
+    // those bytes are the session's own state and are handed to the connection
+    // below rather than dropped here.
+    let mut carry: Vec<u8> = Vec::new();
     for _ in 0..5 {
-        let response = fix_read_deadline(&mut tls, fix_deadline)?;
+        let response = fix_read_deadline(&mut tls, &mut carry, fix_deadline)?;
         let fields = fix_parse(&response);
         let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("");
         match msg_type {
@@ -1440,6 +1445,10 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     tls.flush()?;
 
     let mut conn = Connection::new(tls)?;
+    if !carry.is_empty() {
+        log::info!("{} bytes arrived with the reconnect ACK", carry.len());
+        conn.seed_buffer(&carry);
+    }
     conn.seq = ccp_seq;
     log::info!("CCP reconnect complete (seq={})", conn.seq);
     conn.competing = took_from;
@@ -2361,7 +2370,11 @@ impl Gateway {
         // high-latency gateway is retried, not fatal.
         tls.get_ref().set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
         let ack_deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
-        let mut ack = logon::LogonAck::read(&mut tls, ack_deadline)?;
+        // What the venue sent past the end of the message that ended the
+        // logon. It arrived before the burst below was asked for, so it leads
+        // what that burst is answered with.
+        let mut carry: Vec<u8> = Vec::with_capacity(65536);
+        let mut ack = logon::LogonAck::read(&mut tls, &mut carry, ack_deadline)?;
         tls.get_ref().set_read_timeout(None)?;
 
         // Fall back to the auth session_id where the server states none
@@ -2391,7 +2404,7 @@ impl Gateway {
         // intra-burst jitter (the burst is continuous) and well short of the
         // 10 s keep-alive trickle interval, so the read ends promptly after the burst.
         tls.get_ref().set_read_timeout(Some(Duration::from_millis(300)))?;
-        let mut init_data: Vec<u8> = Vec::with_capacity(65536);
+        let mut init_data: Vec<u8> = carry;
         let mut tmp_buf = vec![0u8; 65536];
         let read_start = std::time::Instant::now();
         loop {

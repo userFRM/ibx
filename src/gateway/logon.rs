@@ -83,11 +83,21 @@ impl LogonAck {
     /// them it likes and the ACK is not always the first to arrive. The reader
     /// wants a short read timeout so a slow ACK segment from a high-latency
     /// venue is retried against `deadline` rather than being fatal.
-    pub fn read(r: &mut impl Read, deadline: Instant) -> io::Result<Self> {
+    ///
+    /// `carry` holds what a read took off the socket past the end of the
+    /// message it returned. Those bytes are the next message, and after the
+    /// last one they are the venue's first unprompted words to this session —
+    /// so the caller keeps them and reads on from there rather than losing
+    /// them here.
+    pub fn read(
+        r: &mut impl Read,
+        carry: &mut Vec<u8>,
+        deadline: Instant,
+    ) -> io::Result<Self> {
         // What the venue is asked for, until it answers with its own.
         let mut ack = Self { heartbeat_interval: CCP_HEARTBEAT, ..Self::default() };
         for _ in 0..5 {
-            let raw_response = fix_read_deadline(r, deadline)?;
+            let raw_response = fix_read_deadline(r, carry, deadline)?;
             // The auth-logon ACK arrives as `8=FIXCOMP` with a DEFLATE-
             // compressed inner body containing the per-account routing tags
             // (6145/6171/8008) and other init data. Inflate before parsing.
@@ -410,6 +420,16 @@ mod tests {
         )
     }
 
+    /// The same answer, with every message in one read — which is what a venue
+    /// that sends them back to back looks like from this side.
+    fn answered_all_at_once(msgs: &[&[(u32, &str)]]) -> Answer {
+        let mut one = Vec::new();
+        for (i, fields) in msgs.iter().enumerate() {
+            one.extend_from_slice(&fix_build(fields, i as u32 + 1));
+        }
+        Answer([one].into_iter().collect())
+    }
+
     fn a_minute_from_now() -> Instant {
         Instant::now() + std::time::Duration::from_secs(60)
     }
@@ -428,7 +448,7 @@ mod tests {
             (6171, "hdc1.ibllc.com/ushmds/4002"),
             (8008, "sdc1.ibllc.com/secdefil/4003"),
         ]]);
-        let ack = LogonAck::read(&mut wire, a_minute_from_now()).unwrap();
+        let ack = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now()).unwrap();
 
         assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
         assert_eq!(ack.trading_port, Some(4001));
@@ -449,7 +469,7 @@ mod tests {
             &[(35, "U"), (6145, "cdc1.ibllc.com/usfarm")],
             &[(35, "A"), (1, "DU999999"), (6145, "elsewhere/eufarm")],
         ]);
-        let ack = LogonAck::read(&mut wire, a_minute_from_now()).unwrap();
+        let ack = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now()).unwrap();
         assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
         assert!(ack.account_id.is_empty(), "read past the message that ended the logon");
     }
@@ -464,9 +484,47 @@ mod tests {
             &[(35, "0")],
             &[(35, "A"), (1, "DU111111"), (6145, "cdc1.ibllc.com/usfarm")],
         ]);
-        let ack = LogonAck::read(&mut wire, a_minute_from_now()).unwrap();
+        let ack = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now()).unwrap();
         assert_eq!(ack.account_id, "DU111111");
         assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
+    }
+
+    /// The venue puts what it likes in one segment, and the messages behind
+    /// the first one are not this reader's to drop: they carry the routes the
+    /// session connects on and the stamp it is reaped against.
+    #[test]
+    fn messages_arriving_together_are_all_read() {
+        let msgs: &[&[(u32, &str)]] = &[
+            &[(35, "0")],
+            &[(35, "0"), (6145, "cdc1.ibllc.com/usfarm"), (6146, "4001")],
+            &[(35, "A"), (1, "DU111111"), (52, "20260101-12:00:00"),
+              (6171, "hdc1.ibllc.com/ushmds/4002")],
+        ];
+        let mut wire = answered_all_at_once(msgs);
+        let ack = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now()).unwrap();
+
+        assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
+        assert_eq!(ack.trading_port, Some(4001));
+        assert_eq!(ack.mktdata_route, "hdc1.ibllc.com/ushmds/4002");
+        assert_eq!(ack.account_id, "DU111111");
+        assert_eq!(ack.logged_in_at, "20260101-12:00:00");
+    }
+
+    /// What arrives behind the message that ended the logon is the venue's
+    /// first unprompted words to this session, and the caller reads on from
+    /// them rather than losing them here.
+    #[test]
+    fn what_follows_the_ack_is_left_for_the_caller() {
+        let msgs: &[&[(u32, &str)]] = &[
+            &[(35, "A"), (1, "DU111111")],
+            &[(35, "8"), (11, "42"), (39, "2")],
+        ];
+        let mut wire = answered_all_at_once(msgs);
+        let mut carry = Vec::new();
+        let ack = LogonAck::read(&mut wire, &mut carry, a_minute_from_now()).unwrap();
+
+        assert_eq!(ack.account_id, "DU111111");
+        assert_eq!(fix_parse(&carry)[&11], "42", "the fill behind the ACK was dropped");
     }
 
     /// A logout is the venue refusing the logon as much as a reject is, and it
@@ -474,7 +532,7 @@ mod tests {
     #[test]
     fn a_logout_in_place_of_the_ack_is_a_refusal() {
         let mut wire = answered_with(&[&[(35, "5"), (58, "Too many sessions")]]);
-        let err = LogonAck::read(&mut wire, a_minute_from_now())
+        let err = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now())
             .err()
             .expect("a logout is not an answer to read past");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
@@ -486,7 +544,7 @@ mod tests {
     #[test]
     fn a_rejected_logon_carries_the_reason_the_venue_gave() {
         let mut wire = answered_with(&[&[(35, "3"), (58, "Invalid username or password")]]);
-        let err = LogonAck::read(&mut wire, a_minute_from_now())
+        let err = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now())
             .err()
             .expect("a rejected logon is not an answer to read past");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
