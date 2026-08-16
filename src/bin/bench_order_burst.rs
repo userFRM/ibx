@@ -8,7 +8,7 @@
 //!   BENCH_BURST_SIZE - number of orders in burst (default: 20)
 //!   BENCH_WARMUP     - warmup ticks before starting (default: 50)
 
-#[path = "../../bench/bench_harness.rs"]
+#[path = "support/harness.rs"]
 mod harness;
 
 use std::collections::HashMap;

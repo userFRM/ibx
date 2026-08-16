@@ -12,7 +12,11 @@
 //! client.run()
 //! ```
 
-mod types;
+/// What the Python side scales prices by, which is what the model scales them
+/// by. A file of its own said nothing more than this line.
+mod types {
+    pub use crate::types::model::PRICE_SCALE_F;
+}
 pub mod compat;
 
 /// What a session runs under, from the names the Python client states them by.

@@ -7,7 +7,7 @@
 //!   BENCH_TICKS    - ticks to collect (default: 10000)
 //!   BENCH_WARMUP   - warmup ticks (default: 200)
 
-#[path = "../../bench/bench_harness.rs"]
+#[path = "support/harness.rs"]
 mod harness;
 
 use std::time::{Duration, Instant};
