@@ -1,4 +1,4 @@
-//! Gateway: orchestrates auth + data connections into a running HotLoop.
+//! Gateway: authenticates a login and opens the connections a session runs on.
 
 mod logon;
 
@@ -7,7 +7,6 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-use std::sync::mpsc::{SyncSender, sync_channel};
 use native_tls::TlsConnector;
 use num_bigint::BigUint;
 use sha1::{Digest, Sha1};
@@ -19,14 +18,11 @@ use crate::auth::crypto::strip_leading_zeros;
 use crate::auth::dh::SecureChannel;
 use crate::auth::session::{self, do_srp, do_soft_token};
 use crate::config::*;
-use std::sync::Arc;
-use crate::bridge::{Event, SharedState};
-use crate::engine::hot_loop::HotLoop;
+use crate::bridge::SharedState;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix::{self, fix_build, fix_parse, fix_read_deadline, SOH};
 use crate::protocol::fixcomp;
 use crate::protocol::ns;
-use crate::types::ControlCommand;
 
 /// Split the venue's per-security-type order permissions, logon tag 6652.
 ///
@@ -661,7 +657,7 @@ const COMPETING_READ_ONLY: &str = "(RO)";
 /// that cannot be reached says nothing about the account, and one that refuses
 /// says everything, at every door.
 fn nobody_answered(e: &io::Error) -> bool {
-    use crate::engine::hot_loop::retry::DisconnectReason;
+    use crate::reliability::retry::DisconnectReason;
     matches!(
         DisconnectReason::from_error(e),
         DisconnectReason::Transport | DisconnectReason::NoResponse,
@@ -2758,24 +2754,6 @@ impl Gateway {
         }));
     }
 
-    /// Create the control channel and build a HotLoop with connected sockets.
-    pub fn into_hot_loop(
-        self,
-        shared: Arc<SharedState>,
-        event_tx: Option<SyncSender<Event>>,
-        farm_conn: Connection,
-        ccp_conn: Connection,
-        hmds_conn: Option<Connection>,
-        secdef_conn: Option<Connection>,
-        core_id: Option<usize>,
-        caller: CallerAuth,
-    ) -> (HotLoop, SyncSender<ControlCommand>) {
-        self.into_hot_loop_with_farms(
-            shared, event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id, caller,
-        )
-    }
-
-    /// Create the control channel and build a HotLoop with farm connections.
     /// The credentials and session a reconnect needs, from this gateway plus
     /// what the caller supplied.
     ///
@@ -2817,41 +2795,6 @@ impl Gateway {
         }
     }
 
-    /// Hand the open connections to the loop that will run them.
-    pub fn into_hot_loop_with_farms(
-        self,
-        shared: Arc<SharedState>,
-        event_tx: Option<SyncSender<Event>>,
-        farm_conn: Connection,
-        ccp_conn: Connection,
-        hmds_conn: Option<Connection>,
-        secdef_conn: Option<Connection>,
-        core_id: Option<usize>,
-        caller: CallerAuth,
-    ) -> (HotLoop, SyncSender<ControlCommand>) {
-        let (tx, rx) = sync_channel(64);
-        let reconnect_auth = self.reconnect_auth(caller);
-        if let Some(tx) = event_tx.as_ref() {
-            let _ = tx.send(Event::GatewayLogon {
-                ccp_session_id: self.server_session_id.clone(),
-                misc_urls: self.misc_urls.clone(),
-            });
-        }
-        let mut hot_loop = HotLoop::new(shared, event_tx, core_id);
-        hot_loop.set_control_rx(rx);
-        hot_loop.set_account_id(self.account_id.clone());
-        hot_loop.set_reconnect_auth(reconnect_auth);
-        // Held to the interval the venue named in its answer to the logon, not
-        // to the one this client proposed.
-        hot_loop.set_ccp_heartbeat_interval(self.heartbeat_interval);
-        hot_loop.farm_conn = Some(farm_conn);
-        hot_loop.ccp_conn = Some(ccp_conn);
-        hot_loop.ccp.ccp_sign_key = self.ccp_sign_key.clone();
-        hot_loop.ccp.ccp_sign_iv = std::sync::Mutex::new(self.ccp_sign_iv.clone());
-        hot_loop.hmds_conn = hmds_conn;
-        hot_loop.secdef_conn = secdef_conn;
-        (hot_loop, tx)
-    }
 }
 
 /// Build market data subscription request.

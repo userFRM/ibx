@@ -3,7 +3,7 @@ pub mod ccp;
 pub mod hmds;
 pub mod secdef;
 pub mod order_builder;
-pub(crate) mod retry;
+pub use crate::reliability::retry;
 
 /// How fast a reconnect may put its subscriptions back.
 ///
@@ -271,6 +271,47 @@ impl HeartbeatState {
 }
 
 impl HotLoop {
+    /// Take a session that has logged on, and the connections it opened, and
+    /// make the loop that will run them.
+    ///
+    /// The session's own data — the account, the heartbeat the venue held it
+    /// to, the signing keys, and what a reconnect will need — is read here
+    /// rather than pushed from there: a logon knows nothing about a loop.
+    pub fn for_session(
+        gateway: crate::gateway::Gateway,
+        shared: Arc<SharedState>,
+        event_tx: Option<SyncSender<Event>>,
+        farm_conn: Connection,
+        ccp_conn: Connection,
+        hmds_conn: Option<Connection>,
+        secdef_conn: Option<Connection>,
+        core_id: Option<usize>,
+        caller: crate::gateway::CallerAuth,
+    ) -> (HotLoop, SyncSender<ControlCommand>) {
+        let (tx, rx) = sync_channel(64);
+        let reconnect_auth = gateway.reconnect_auth(caller);
+        if let Some(tx) = event_tx.as_ref() {
+            let _ = tx.send(Event::GatewayLogon {
+                ccp_session_id: gateway.server_session_id.clone(),
+                misc_urls: gateway.misc_urls.clone(),
+            });
+        }
+        let mut hot_loop = HotLoop::new(shared, event_tx, core_id);
+        hot_loop.set_control_rx(rx);
+        hot_loop.set_account_id(gateway.account_id.clone());
+        hot_loop.set_reconnect_auth(reconnect_auth);
+        // Held to the interval the venue named in its answer to the logon, not
+        // to the one this client proposed.
+        hot_loop.set_ccp_heartbeat_interval(gateway.heartbeat_interval);
+        hot_loop.farm_conn = Some(farm_conn);
+        hot_loop.ccp_conn = Some(ccp_conn);
+        hot_loop.ccp.ccp_sign_key = gateway.ccp_sign_key.clone();
+        hot_loop.ccp.ccp_sign_iv = std::sync::Mutex::new(gateway.ccp_sign_iv.clone());
+        hot_loop.hmds_conn = hmds_conn;
+        hot_loop.secdef_conn = secdef_conn;
+        (hot_loop, tx)
+    }
+
     pub fn new(shared: Arc<SharedState>, event_tx: Option<SyncSender<Event>>, core_id: Option<usize>) -> Self {
         Self {
             shared,

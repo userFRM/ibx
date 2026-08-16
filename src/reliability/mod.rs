@@ -13,6 +13,12 @@
 //! same as one failing ten times a minute, and only the second is worth giving
 //! up on.
 
+/// Why a connection went away, and how long to wait before trying again.
+///
+/// Read by the engine deciding whether to retry and by the session deciding
+/// whether another address is worth knocking on.
+pub mod retry;
+
 use std::time::Duration;
 
 /// Who decides when to reconnect.

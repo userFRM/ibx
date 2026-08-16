@@ -78,6 +78,8 @@ impl DisconnectReason {
         }
     }
 
+    /// What to do about a connection that ended this way: try again, try
+    /// again after a wait, or stop.
     pub fn recovery(self) -> Recovery {
         match self {
             Self::Transport | Self::NoResponse => Recovery::Retry,
@@ -103,6 +105,7 @@ impl DisconnectReason {
         self.recovery() == Recovery::Stop
     }
 
+    /// What to tell a caller, in the words they would use to describe it.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Transport => "the connection broke",

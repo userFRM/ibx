@@ -347,7 +347,8 @@ impl EClient {
         shared.set_settings(gw_config.settings.clone());
         gw.populate_init_data(&shared);
 
-        let (mut hot_loop, control_tx) = gw.into_hot_loop_with_farms(
+        let (mut hot_loop, control_tx) = crate::engine::hot_loop::HotLoop::for_session(
+            gw,
             shared.clone(), event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn, config.core_id,
             crate::gateway::CallerAuth {
                 settings: Default::default(),
