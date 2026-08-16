@@ -16,7 +16,7 @@ Every field of `Order` falls into one of three kinds:
 `dropped` is the one that matters. It is the order-field form of `silent`: the
 call returns, the order is placed, and the field is gone.
 
-Writes .gates/order-field-reach.md. CI re-runs this and compares, so the number
+Writes target/gates/order-field-reach.md. CI re-runs this and compares, so the number
 cannot drift away from the code.
 """
 
@@ -28,7 +28,7 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from _paths import module, module_files  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / ".gates/order-field-reach.md"
+OUT = ROOT / "target/gates/order-field-reach.md"
 
 # Where an order is turned into tags. A field that reaches the venue is read in
 # one of these.
@@ -187,6 +187,7 @@ def main() -> int:
     )
     lines.append("")
 
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(lines))
 
     refuses = what_the_call_refuses()

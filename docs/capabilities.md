@@ -12,6 +12,19 @@ or a recorded server response — not from code inspection.
 
 Verification runs against a paper account on IBKR production servers, and the order path has additionally been run once end to end on a funded account during regular hours. Where a market or data set is not entitled to that account, the entitlement response is recorded as the result.
 
+| | |
+| --- | --- |
+| Requests | 76. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
+| Order fields | 154. 125 are sent; the other 29 have no field in the protocol to carry them, and the call says so rather than dropping them |
+| Rust and Python | the same request produces the same call on both, compared against live responses |
+| Tests | 1,971 offline, and 157 more that only run against a broker session |
+
+45 of the 46 capabilities are verified against IBKR production servers; the
+remaining one, advisor configuration, reaches the server and needs an advisor
+account to see what it answers.
+
+Every figure above is measured on each commit, and the build fails if one moves.
+
 ---
 
 ## Client surfaces
@@ -182,3 +195,31 @@ validation, 200 for a contract description that matches nothing, 504 for a call
 with no session, and 327 for binding orders entered elsewhere, which that
 client refuses for any client but the one they bind to. Construction and
 configuration raise, as does a synchronous call with a return value.
+
+## Calls
+
+| Category | Calls |
+| --- | --- |
+| **Connection** | `connect`, `disconnect`, `is_connected`, `run`, `get_account_id` |
+| **Market data** | `req_mkt_data`, `cancel_mkt_data`, `req_tick_by_tick_data`, `cancel_tick_by_tick_data`, `req_mkt_depth`, `cancel_mkt_depth`, `req_market_data_type` |
+| **Orders** | `place_order`, `cancel_order`, `req_global_cancel`, `req_ids`, `req_open_orders`, `req_all_open_orders`, `req_auto_open_orders`, `req_completed_orders`, `req_executions` |
+| **Account** | `req_positions`, `cancel_positions`, `req_positions_multi`, `cancel_positions_multi`, `req_account_summary`, `cancel_account_summary`, `req_account_updates`, `req_account_updates_multi`, `cancel_account_updates_multi`, `req_pnl`, `cancel_pnl`, `req_pnl_single`, `cancel_pnl_single`, `req_managed_accts` |
+| **Historical** | `req_historical_data`, `cancel_historical_data`, `req_head_time_stamp`, `cancel_head_time_stamp`, `req_historical_ticks`, `req_historical_schedule`, `req_real_time_bars`, `cancel_real_time_bars`, `req_histogram_data`, `cancel_histogram_data` |
+| **Reference** | `req_contract_details`, `req_matching_symbols`, `req_sec_def_opt_params`, `req_mkt_depth_exchanges`, `req_market_rule`, `req_smart_components` |
+| **Scanner** | `req_scanner_parameters`, `req_scanner_subscription`, `cancel_scanner_subscription` |
+| **News** | `req_news_providers`, `req_news_article`, `req_historical_news`, `req_news_bulletins`, `cancel_news_bulletins` |
+| **Fundamental** | `req_fundamental_data`, `cancel_fundamental_data` |
+| **Options** | `calculate_implied_volatility`, `cancel_calculate_implied_volatility`, `calculate_option_price`, `cancel_calculate_option_price`, `exercise_options` |
+| **Other** | `req_current_time`, `req_user_info`, `req_family_codes`, `req_soft_dollar_tiers`, `set_server_log_level`, `req_wsh_meta_data`, `req_wsh_event_data`, `query_display_groups`, `subscribe_to_group_events` |
+
+**Order types.** MKT, LMT, STP, STP LMT, TRAIL, TRAIL LIMIT, MOC, LOC, MTL,
+MIT, LIT, MKT PRT, STP PRT, REL, PEG MKT, PEG MID, MIDPRICE, SNAP MKT,
+SNAP MID, SNAP PRI, BOX TOP. Algos: VWAP, TWAP, Arrival Price, Close Price,
+Dark Ice, PctVol. Conditions: price, volume, percent change, margin, execution
+and time. Brackets, one-cancels-all, and combinations with a price per leg.
+
+**Settings.** The gateway's configuration file is replaced by settings on the
+client: announced build, time zone, message pacing, execution-report scope, and
+others — 17 in total, readable at runtime. Seven gateway settings have no
+counterpart and report why (no window geometry, no local listening socket, no
+JVM heap). Rust: `EClientConfig.gateway`. Python: `ibx.configure()`.

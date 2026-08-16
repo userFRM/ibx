@@ -21,7 +21,7 @@ Every argument of every call falls into one of three kinds:
 caller can set and nothing reads is the argument form of a silent call: the
 request goes out, the answer comes back, and what was asked for is gone.
 
-Writes .gates/arg-reach.md. CI re-runs this and compares.
+Writes target/gates/arg-reach.md. CI re-runs this and compares.
 """
 
 import pathlib
@@ -29,7 +29,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / ".gates/arg-reach.md"
+OUT = ROOT / "target/gates/arg-reach.md"
 
 #: Where a caller's call is taken. Both surfaces, because an argument dropped
 #: on one and read on the other is a difference between the two clients.
@@ -186,6 +186,7 @@ def main() -> int:
         lines += ["## Taken and not applied", ""]
         lines += [f"- `{call}` — `{name}`" for call, name in stated]
         lines += [""]
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(lines))
 
     print(f"{len(rows)} call arguments: read={counts['read']} "

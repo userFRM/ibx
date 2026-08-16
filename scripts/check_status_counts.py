@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the test counts STATUS.md and the README publish against what exists.
+"""Check the counts docs/capabilities.md publishes against what exists.
 
 A number in a shipped document is a claim. Typed in once and left, it is a
 claim that goes quietly wrong: the suites grow, the figure does not, and a
@@ -22,7 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # repository rather than about what the client can do, and the compatibility
 # matrix is the latter.
 STATUS = ROOT / "docs" / "engineering-notes.md"
-README = ROOT / "README.md"
+MATRIX = ROOT / "docs/capabilities.md"
 
 #: Row label in the table, and how to count what it describes.
 ROWS = {
@@ -129,7 +129,7 @@ def published() -> dict[str, int]:
 
 def capabilities() -> tuple[int, int]:
     """How many capabilities the matrix lists, and how many are verified."""
-    text = (ROOT / "STATUS.md").read_text()
+    text = (ROOT / "docs/capabilities.md").read_text()
     # From the first capability section, so the table defining the marks is
     # not counted as capabilities carrying them.
     rows = text[text.index("## Client surfaces"):].splitlines()
@@ -142,7 +142,7 @@ def capabilities() -> tuple[int, int]:
 
 
 def readme_says() -> tuple[int, int] | None:
-    """What the README's own test row states, offline and session-only.
+    """What the matrix's own test row states, offline and session-only.
 
     Both figures count tests as written, not as run: the second set is skipped
     without credentials, so it is what would run against a session and not a
@@ -154,7 +154,7 @@ def readme_says() -> tuple[int, int] | None:
     it.
     """
     m = re.search(r"\| ([\d,]+) offline, and ([\d,]+) more that only run against a broker session \|",
-                  README.read_text())
+                  MATRIX.read_text())
     if not m:
         return None
     return (int(m.group(1).replace(",", "")), int(m.group(2).replace(",", "")))
@@ -164,25 +164,28 @@ def main() -> int:
     have, said = counted(), published()
     wrong = []
 
-    # The README states the same thing in a sentence.
+    # The prose states the same thing in a sentence.
     offline = have["rust"] + have["python"]
     live = have["python_live"] + have["paper"]
     verified, total = capabilities()
-    readme_text = README.read_text()
-    if f"{verified} of the {total} capabilities" not in readme_text:
+    # The prose above the matrix restates what the matrix lists. Both live in
+    # the same file now, which is not a reason to trust one against the other:
+    # the sentence is typed and the marks are counted.
+    matrix_text = MATRIX.read_text()
+    if f"{verified} of the {total} capabilities" not in matrix_text:
         wrong.append(
-            f"README.md does not say {verified} of {total} capabilities, which "
-            f"is what STATUS.md lists"
+            f"docs/capabilities.md does not say {verified} of {total} "
+            f"capabilities, which is what its own matrix lists"
         )
     else:
         print(f"capabilities: {verified} of {total} verified")
 
     stated = readme_says()
     if stated is None:
-        wrong.append("README.md states no test counts")
+        wrong.append("docs/capabilities.md states no test counts")
     elif stated != (offline, live):
         wrong.append(
-            f"README.md says {stated[0]:,} offline and {stated[1]:,} live, "
+            f"docs/capabilities.md says {stated[0]:,} offline and {stated[1]:,} live, "
             f"{offline:,} and {live:,} exist"
         )
     else:
@@ -192,7 +195,7 @@ def main() -> int:
         if key not in said:
             wrong.append(f"{key}: nothing published, {n} exist")
         elif said[key] != n:
-            wrong.append(f"{key}: STATUS.md says {said[key]:,}, {n:,} exist")
+            wrong.append(f"{key}: docs/capabilities.md says {said[key]:,}, {n:,} exist")
         else:
             print(f"{key}: {n:,}")
     if wrong:
