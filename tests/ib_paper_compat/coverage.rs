@@ -141,7 +141,7 @@ pub(super) fn phase_endpoint_coverage(conns: Conns) -> Conns {
 }
 
 fn enum_variants_from_types(enum_name: &str) -> Vec<String> {
-    let src = include_str!("../../src/types.rs");
+    let src = include_str!("../../src/types/mod.rs");
     let marker = format!("pub enum {enum_name} {{");
     let start = src
         .find(&marker)

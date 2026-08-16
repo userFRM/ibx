@@ -27,24 +27,35 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "docs/order-field-reach.md"
 
+def module(name: str) -> pathlib.Path:
+    """A module by name, whichever file it lives in.
+
+    A module is `x.rs` until it grows a folder, and then it is `x/mod.rs`.
+    Naming one form means the count silently drops a builder the day it moves
+    — and a builder that is not read counts every field it carries as lost.
+    """
+    flat = ROOT / f"{name}.rs"
+    return flat if flat.exists() else ROOT / name / "mod.rs"
+
+
 # Where an order is turned into tags. A field that reaches the venue is read in
 # one of these.
 BUILDERS = [
     # Where a caller's order becomes the engine's, which is as much a part of
     # reaching the venue as the encoder is: a field the conversion drops never
     # gets as far as a tag. Leaving this out counted a carried field as lost.
-    ROOT / "src/api/types.rs",
-    ROOT / "src/engine/hot_loop/order_builder.rs",
-    ROOT / "src/engine/hot_loop/ccp.rs",
-    ROOT / "src/engine/hot_loop/mod.rs",
-    ROOT / "src/control/orders.rs",
-    ROOT / "src/client_core.rs",
-    ROOT / "src/types.rs",
+    module("src/api/types"),
+    module("src/engine/hot_loop/order_builder"),
+    module("src/engine/hot_loop/ccp"),
+    module("src/engine/hot_loop/mod"),
+    module("src/control/orders"),
+    module("src/client_core"),
+    module("src/types"),
 ]
 
 
 def order_fields() -> list[str]:
-    text = (ROOT / "src/api/types.rs").read_text()
+    text = module("src/api/types").read_text()
     at = text.index("pub struct Order ")
     end = text.index("\n}", at)
     return re.findall(r"^\s*pub (\w+):", text[at:end], re.M)
@@ -56,7 +67,7 @@ def refused() -> dict[str, str]:
     Written on the field rather than kept in a list here, so that the reason
     sits where someone reading the field will find it.
     """
-    text = (ROOT / "src/api/types.rs").read_text()
+    text = module("src/api/types").read_text()
     at = text.index("pub struct Order ")
     end = text.index("\n}", at)
     out = {}
