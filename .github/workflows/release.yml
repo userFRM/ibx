@@ -50,11 +50,14 @@ jobs:
         run: |
           cargo clippy --lib --all-targets --features dev-tools -- -D warnings
           cargo clippy --lib --all-targets --features python -- -D warnings
+          cargo clippy --lib --all-targets --features async -- -D warnings
 
       - name: Test
         run: |
           cargo test --lib
           cargo test --lib --features python
+          cargo test --lib --features async
+          cargo test --doc --features async
 
       - name: The suites that need no session
         env:

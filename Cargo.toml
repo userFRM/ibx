@@ -38,12 +38,20 @@ default = []
 # credentials.
 dev-tools = []
 python = ["pyo3"]
+# The asynchronous surface. Off by default: a program that drives this client
+# from a thread of its own needs nothing here, and the runtime is a dependency
+# it should not pay for.
+async = ["dep:tokio"]
 # Split out so a test binary can link libpython. `extension-module` tells PyO3
 # not to link it, which is right for the wheel and wrong for `cargo test`: the
 # harness then fails at link time on every Python symbol, and no Rust-side test
 # under this feature has ever run (ibx#381). The wheel build asks for both.
 extension-module = ["pyo3/extension-module"]
 compat = []
+
+[[example]]
+name = "hello_async"
+required-features = ["async"]
 
 [[bin]]
 name = "bench_decode"
@@ -225,6 +233,10 @@ native-tls = "0.2"
 
 # Secure-memory wrappers (zeroize plaintext credentials on drop)
 zeroize = "1"
+
+# Only for the asynchronous surface, and only the parts of it that surface
+# uses: somewhere to put a question that is allowed to wait.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
 
 
 # Logging

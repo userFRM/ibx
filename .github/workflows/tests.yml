@@ -139,6 +139,19 @@ jobs:
       - name: Lint the Python bindings
         run: cargo clippy --lib --all-targets --features python -- -D warnings
 
+      # The asynchronous surface is off by default, so nothing above builds it.
+      # Left out, a break in it reaches main compiling nowhere.
+      - name: clippy, asynchronous surface
+        run: cargo clippy --lib --all-targets --features async -- -D warnings
+
+      - name: Test, asynchronous surface
+        run: cargo test --lib --features async
+
+      # `cargo doc` renders an example without compiling it, so a broken one is
+      # published looking right. This compiles and runs them.
+      - name: The examples in the documentation
+        run: cargo test --doc --features async
+
   docs:
     name: generated docs match the source
     runs-on: ubuntu-latest

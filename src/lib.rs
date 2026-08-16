@@ -105,3 +105,7 @@ pub use api::{EClient, EClientConfig, Wrapper};
 /// for. The same type as [`EClient`], which keeps the reference client's name
 /// for a program that is.
 pub use api::EClient as Client;
+
+/// The same session, for a program already running an asynchronous runtime.
+#[cfg(feature = "async")]
+pub use api::client::AsyncClient;
