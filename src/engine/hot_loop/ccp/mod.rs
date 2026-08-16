@@ -250,42 +250,50 @@ pub(crate) struct PendingSubscribe {
 ///
 /// Only the requests that must be sent under an id are listed: everything else
 /// either carries no contract or is resolved by the venue from the symbol.
-pub(crate) fn contract_named(cmd: &crate::types::ControlCommand) -> Option<(&str, &str, &str, &str)> {
+pub(crate) fn contract_named(cmd: &crate::types::ControlCommand) -> Option<&crate::types::ContractRef> {
+    let contract = contract_of(cmd)?;
+    // Only one the venue has not named yet: the rest already carry its id.
+    (contract.con_id == 0).then_some(contract)
+}
+
+/// The contract a request names, whether or not the venue has numbered it.
+fn contract_of(cmd: &crate::types::ControlCommand) -> Option<&crate::types::ContractRef> {
+    use crate::types::ControlCommand as C;
     match cmd {
-        crate::types::ControlCommand::FetchHistorical { con_id: 0, symbol, sec_type, exchange, currency, .. }
-        | crate::types::ControlCommand::FetchHeadTimestamp { con_id: 0, symbol, sec_type, exchange, currency, .. }
-        | crate::types::ControlCommand::FetchHistoricalTicks { con_id: 0, symbol, sec_type, exchange, currency, .. }
-        | crate::types::ControlCommand::FetchHistoricalSchedule { con_id: 0, symbol, sec_type, exchange, currency, .. }
-        | crate::types::ControlCommand::SubscribeRealTimeBar { con_id: 0, symbol, sec_type, exchange, currency, .. }
-        | crate::types::ControlCommand::SubscribeDepth { con_id: 0, symbol, sec_type, exchange, currency, .. } => {
-            Some((symbol, sec_type, exchange, currency))
-        }
+        C::FetchHistorical { contract, .. }
+        | C::FetchHeadTimestamp { contract, .. }
+        | C::FetchHistoricalTicks { contract, .. }
+        | C::FetchHistoricalSchedule { contract, .. }
+        | C::SubscribeRealTimeBar { contract, .. }
+        | C::SubscribeDepth { contract, .. } => Some(contract),
         _ => None,
     }
 }
 
 /// The filters that go with that contract.
 fn filters_named(cmd: &crate::types::ControlCommand) -> crate::types::SecDefFilters {
+    use crate::types::ControlCommand as C;
     match cmd {
-        crate::types::ControlCommand::FetchHistorical { filters, .. }
-        | crate::types::ControlCommand::FetchHeadTimestamp { filters, .. }
-        | crate::types::ControlCommand::FetchHistoricalTicks { filters, .. }
-        | crate::types::ControlCommand::FetchHistoricalSchedule { filters, .. }
-        | crate::types::ControlCommand::SubscribeRealTimeBar { filters, .. }
-        | crate::types::ControlCommand::SubscribeDepth { filters, .. } => filters.clone(),
+        C::FetchHistorical { filters, .. }
+        | C::FetchHeadTimestamp { filters, .. }
+        | C::FetchHistoricalTicks { filters, .. }
+        | C::FetchHistoricalSchedule { filters, .. }
+        | C::SubscribeRealTimeBar { filters, .. }
+        | C::SubscribeDepth { filters, .. } => filters.clone(),
         _ => crate::types::SecDefFilters::default(),
     }
 }
 
 /// Fill in the id the venue has given the contract a request named.
 fn name_the_contract(cmd: &mut crate::types::ControlCommand, id: i64) {
+    use crate::types::ControlCommand as C;
     match cmd {
-        crate::types::ControlCommand::FetchHistorical { con_id, .. }
-        | crate::types::ControlCommand::FetchHeadTimestamp { con_id, .. }
-        | crate::types::ControlCommand::FetchHistoricalTicks { con_id, .. }
-        | crate::types::ControlCommand::FetchHistoricalSchedule { con_id, .. }
-        | crate::types::ControlCommand::SubscribeRealTimeBar { con_id, .. }
-        | crate::types::ControlCommand::SubscribeDepth { con_id, .. } => *con_id = id,
+        C::FetchHistorical { contract, .. }
+        | C::FetchHeadTimestamp { contract, .. }
+        | C::FetchHistoricalTicks { contract, .. }
+        | C::FetchHistoricalSchedule { contract, .. }
+        | C::SubscribeRealTimeBar { contract, .. }
+        | C::SubscribeDepth { contract, .. } => contract.con_id = id,
         _ => {}
     }
 }
@@ -2847,11 +2855,10 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) -> Option<crate::types::ControlCommand> {
-        let (symbol, sec_type, exchange, currency) = match contract_named(&cmd) {
-            Some(named) if !named.0.is_empty() => (
-                named.0.to_string(), named.1.to_string(),
-                named.2.to_string(), named.3.to_string(),
-            ),
+        // Cloned rather than borrowed: the command is moved onto the pending
+        // list below, and what it named has to outlive it.
+        let named = match contract_named(&cmd) {
+            Some(c) if !c.symbol.is_empty() => c.clone(),
             _ => return Some(cmd),
         };
         let filters = filters_named(&cmd);
@@ -2859,7 +2866,8 @@ impl CcpState {
         self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
         self.pending_named.push((req_id, cmd, Instant::now()));
         self.send_secdef_request_by_symbol(
-            req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
+            req_id, &named.symbol, &named.sec_type, &named.exchange, &named.currency,
+            &filters, ccp_conn, hb,
         );
         None
     }
@@ -2880,10 +2888,11 @@ impl CcpState {
             false
         });
         for cmd in gave_up {
-            let Some((symbol, sec_type, exchange, _)) = contract_named(&cmd) else { continue };
+            let Some(named) = contract_named(&cmd) else { continue };
             let reason = format!(
-                "no security definition has been found for {sec_type} {symbol} on \
-                 {exchange}, so the request could not be sent",
+                "no security definition has been found for {} {} on {}, so the \
+                 request could not be sent",
+                named.sec_type, named.symbol, named.exchange,
             );
             log::warn!("Request abandoned: {reason}");
             if let Some(req_id) = request_id(&cmd) {

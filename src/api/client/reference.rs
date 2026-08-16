@@ -23,12 +23,8 @@ impl EClient {
         // form; the counterpart writes whichever the caller asked for.
         self.core.note_date_format(req_id, format_date);
         self.send(ControlCommand::FetchHistorical {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             end_date_time: end_date_time.into(),
             duration: duration.into(),
             bar_size: bar_size.into(),
@@ -51,13 +47,9 @@ impl EClient {
     ) -> Result<(), Refusal> {
         self.core.note_date_format(req_id, format_date);
         self.send(ControlCommand::FetchHeadTimestamp {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
             filters: contract.lookup_filters(),
-            currency: contract.currency.clone(),
             what_to_show: what_to_show.into(),
             use_rth,
         })
@@ -68,12 +60,8 @@ impl EClient {
     /// Request contract details. Matches `reqContractDetails` in C++.
     pub fn req_contract_details(&self, req_id: i64, contract: &Contract) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchContractDetails {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             filters: contract.lookup_filters(),
         })
     }
@@ -293,12 +281,8 @@ impl EClient {
         // Refused here rather than turned into trades on the way out.
         crate::control::historical::tick_data_type(what_to_show)?;
         self.send(ControlCommand::FetchHistoricalTicks {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             start_date_time: start_date_time.into(),
             end_date_time: end_date_time.into(),
             filters: contract.lookup_filters(),
@@ -316,12 +300,8 @@ impl EClient {
         end_date_time: &str, duration: &str, use_rth: bool,
     ) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchHistoricalSchedule {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             filters: contract.lookup_filters(),
             end_date_time: end_date_time.into(),
             duration: duration.into(),

@@ -11,6 +11,7 @@ use ibx::bridge::SharedState;
 use ibx::control::historical::{HistoricalResponse, HistoricalBar, HeadTimestampResponse};
 use ibx::control::contracts::{ContractDefinition, SecurityType};
 use ibx::engine::hot_loop::HotLoop;
+use ibx::types::ContractRef;
 use ibx::types::*;
 
 /// Helper: build an EClient backed by SharedState + channel.
@@ -650,7 +651,7 @@ fn contract_lookup_then_subscribe() {
     // Step 1: request contract details
     client.req_contract_details(20, &aapl()).unwrap();
     let cmd = rx.try_recv().unwrap();
-    assert!(matches!(cmd, ControlCommand::FetchContractDetails { req_id: 20, con_id: 265598, .. }));
+    assert!(matches!(cmd, ControlCommand::FetchContractDetails { contract: ContractRef { con_id: 265598, .. }, req_id: 20, .. }));
 
     // Step 2: engine responds with contract details
     shared.reference.push_contract_details(20, ContractDefinition {

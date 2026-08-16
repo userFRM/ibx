@@ -113,6 +113,14 @@ impl Default for Contract {
     }
 }
 
+impl From<&Contract> for crate::types::ContractRef {
+    /// What a request names, taken through the shape the rest of the client
+    /// uses so there is one definition of which fields identify a contract.
+    fn from(c: &Contract) -> Self {
+        Self::from(&c.to_api())
+    }
+}
+
 impl Contract {
     /// The legs, read out of the Python objects that hold them.
     ///

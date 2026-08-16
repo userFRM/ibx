@@ -129,7 +129,7 @@ fn place_order_zero_con_id_asks_the_venue_to_name_it() {
     // borrowing one the venue never sent.
     assert_eq!(refused.code, ibx::api::error_codes::Refusal::NO_ANSWER);
     let asked = rx.try_iter().any(|cmd| matches!(
-        cmd, ControlCommand::FetchContractDetails { ref symbol, .. } if symbol == "TEST"
+        cmd, ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { ref symbol, .. }, .. } if symbol == "TEST"
     ));
     assert!(asked, "the venue was asked to name the contract");
 }

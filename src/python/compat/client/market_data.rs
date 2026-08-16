@@ -179,10 +179,7 @@ impl EClient {
 
         let shared = self.shared_state()?;
         Self::send_control(py, &tx, ControlCommand::RegisterInstrument {
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
+            contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), sec_type: contract.sec_type.clone(), exchange: contract.exchange.clone(), ..Default::default() },
             identity: String::new(),
             reply_tx: None,
         })?;
@@ -269,12 +266,8 @@ impl EClient {
         let sec_type = if contract.sec_type.is_empty() { "STK".to_string() } else { contract.sec_type.clone() };
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::SubscribeDepth {
+            contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange, sec_type, currency: contract.currency.clone(), ..Default::default() },
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            exchange,
-            sec_type,
-            currency: contract.currency.clone(),
             num_rows,
             is_smart_depth,
             filters: contract.lookup_filters(),
@@ -314,12 +307,8 @@ impl EClient {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = (bar_size, real_time_bars_options);
         Self::send_control(py, &tx, ControlCommand::SubscribeRealTimeBar {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             what_to_show: what_to_show.to_string(),
             use_rth: use_rth != 0,
             filters: contract.lookup_filters(),

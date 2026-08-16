@@ -47,12 +47,8 @@ impl EClient {
         }
         if what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
+                contract: contract.into(),
                 req_id: wire_req_id(req_id)?,
-                con_id: contract.con_id,
-                symbol: contract.symbol.clone(),
-                sec_type: contract.sec_type.clone(),
-                exchange: contract.exchange.clone(),
-                currency: contract.currency.clone(),
                 end_date_time: end_date_time.to_string(),
                 duration: duration_str.to_string(),
                 use_rth: use_rth != 0,
@@ -60,12 +56,8 @@ impl EClient {
             })?;
         } else {
             Self::send_control(py, &tx, ControlCommand::FetchHistorical {
+                contract: contract.into(),
                 req_id: wire_req_id(req_id)?,
-                con_id: contract.con_id,
-                symbol: contract.symbol.clone(),
-                sec_type: contract.sec_type.clone(),
-                exchange: contract.exchange.clone(),
-                currency: contract.currency.clone(),
                 end_date_time: end_date_time.to_string(),
                 duration: duration_str.to_string(),
                 bar_size: bar_size_setting.to_string(),
@@ -101,12 +93,8 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchHeadTimestamp {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             what_to_show: what_to_show.to_string(),
             use_rth: use_rth != 0,
             filters: contract.lookup_filters(),
@@ -126,12 +114,8 @@ impl EClient {
     pub(crate) fn req_contract_details(&self, py: Python<'_>, req_id: i64, contract: &Contract) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchContractDetails {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             filters: contract.lookup_filters(),
         })?;
         Ok(())
@@ -331,12 +315,8 @@ impl EClient {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = (ignore_size, misc_options);
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalTicks {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             start_date_time: start_date_time.to_string(),
             end_date_time: end_date_time.to_string(),
             number_of_ticks: number_of_ticks as u32,
@@ -415,12 +395,8 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            currency: contract.currency.clone(),
             end_date_time: end_date_time.into(),
             duration: duration_str.into(),
             use_rth,

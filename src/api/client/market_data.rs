@@ -181,12 +181,8 @@ impl EClient {
         let exchange = if contract.exchange.is_empty() { "SMART".to_string() } else { contract.exchange.clone() };
         let sec_type = if contract.sec_type.is_empty() { "STK".to_string() } else { contract.sec_type.clone() };
         self.send(ControlCommand::SubscribeDepth {
+            contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange, sec_type, currency: contract.currency.clone(), ..Default::default() },
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            exchange,
-            sec_type,
-            currency: contract.currency.clone(),
             filters: contract.lookup_filters(),
             num_rows,
             is_smart_depth,
@@ -210,13 +206,9 @@ impl EClient {
         _bar_size: i32, what_to_show: &str, use_rth: bool,
     ) -> Result<(), Refusal> {
         self.send(ControlCommand::SubscribeRealTimeBar {
+            contract: contract.into(),
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id,
-            symbol: contract.symbol.clone(),
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
             filters: contract.lookup_filters(),
-            currency: contract.currency.clone(),
             what_to_show: what_to_show.into(),
             use_rth,
         })
