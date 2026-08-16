@@ -34,6 +34,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # The Python step below builds and runs through uv, the same way the test
+      # workflow does. Without this it is not on PATH and the step dies at its
+      # first line.
+      - uses: astral-sh/setup-uv@v5
 
       - name: Install tzdata
         run: sudo apt-get update && sudo apt-get install -y tzdata
