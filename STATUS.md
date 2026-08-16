@@ -45,7 +45,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | 23 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat` |
-| Order fields | ✅ Supported | 154 fields: 125 transmitted, 29 documented as not carried by the protocol, 0 silently dropped, held there by a check that runs on every commit |
+| Order fields | ✅ Supported | An order has 154 fields. 125 are sent. The other 29 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. A check on every commit fails if a field starts being dropped |
 | Non-US markets | ✅ Supported | Previews accepted on DE, NL, GB, CH, AU, CA, US equities and FX; JP and HK rejected for lot size, which is the exchange rule and is surfaced to the caller |
 | Modify, cancel, global cancel | ✅ Supported | `scripts/sdk_lifecycle.py` (place → modify → cancel), `tests/ib_paper_compat` Phase 9 / 9b |
 | Brackets, OCA, combos | ✅ Supported | Per-leg pricing; leg order validated by server rejection of the inverted spread; `src/bin/capture_combo.rs` |
@@ -80,16 +80,16 @@ Verification runs against a paper account on IBKR production servers, and the or
 
 ## Invariants
 
-Three properties are enforced by generators that run in CI and fail the build
-on drift.
+Three properties are measured on every commit, and the build fails if one
+stops holding.
 
-| Invariant | Measure | Generator |
-| --- | --- | --- |
-| No request returns as though it acted when it did not | 76 caller-facing requests, 0 silent | `scripts/gen_wire_reach.py` |
-| No caller-set order field is discarded without notice | 154 fields, 0 dropped | `scripts/gen_order_field_reach.py` |
-| No server field is discarded | Unnamed fields retained under their tag number (49 on an equity definition, 46 on a bond) | `scripts/gen_wire_coverage.py` |
+| What is guaranteed | Where it stands |
+| --- | --- |
+| A call never returns success having sent nothing | 76 requests, none silent |
+| A field a caller sets is never quietly ignored | 154 order fields, none dropped |
+| A field the server sends is never thrown away | What this client has no name for is kept under its tag number — 49 such fields on an equity definition, 46 on a bond |
 
-A fourth is enforced by a test rather than a generator: **no wire parser aborts
+A fourth is held by a test rather than a measurement: **no wire parser aborts
 on malformed input.** Every parser is given each prefix of a well-formed frame,
 that frame with a byte replaced at each position, and runs that are not frames
 at all (`tests/malformed_input.rs`).

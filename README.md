@@ -41,12 +41,12 @@ requires an advisor account.
 
 | | |
 | --- | --- |
-| Caller-facing requests | 76, none of which return as though they acted when they did not |
-| Order fields | 154: 125 transmitted, 29 not carried by the protocol, none silently dropped |
+| Requests | 76. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
+| Order fields | 154. 125 are sent; the other 29 have no field in the protocol to carry them, and the call says so rather than dropping them |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
 | Tests | 1,968 offline, 157 against production servers |
 
-Every figure above is measured on each commit and the build fails if it moves.
+Every figure above is measured on each commit, and the build fails if one moves.
 
 ## Python
 
