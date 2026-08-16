@@ -41,6 +41,29 @@ def _run(args: list[str]) -> str:
     return done.stdout
 
 
+def _python() -> str:
+    """An interpreter that can collect the Python suite.
+
+    The virtual environment where one exists, and whatever is running this
+    otherwise: a checker that only works on a machine set up one particular
+    way fails on the machine that matters, which is the one that decides
+    whether a commit lands.
+    """
+    venv = ROOT / ".venv" / "bin" / "python"
+    for candidate in (str(venv), sys.executable):
+        if candidate == str(venv) and not venv.exists():
+            continue
+        probe = subprocess.run(
+            [candidate, "-c", "import pytest"], cwd=ROOT, capture_output=True,
+        )
+        if probe.returncode == 0:
+            return candidate
+    raise SystemExit(
+        "no interpreter here can import pytest, so the Python suite cannot be "
+        "counted. A count nobody can take is not a count that agrees."
+    )
+
+
 def _cargo_count(args: list[str]) -> int:
     """Tests named by one `--list` run, summed across its targets."""
     out = _run(["cargo", "test", *args, "--", "--list"])
@@ -54,7 +77,8 @@ def counted() -> dict[str, int]:
     # makes it the superset.
     rust = _cargo_count(["--tests", "--features", "python"])
 
-    py = _run([".venv/bin/python", "-m", "pytest", "tests/python", "--collect-only", "-q"])
+    python = _python()
+    py = _run([python, "-m", "pytest", "tests/python", "--collect-only", "-q"])
     collected = re.search(r"^(\d+) tests collected", py, re.M)
     python_all = int(collected.group(1)) if collected else 0
 
@@ -63,7 +87,7 @@ def counted() -> dict[str, int]:
     # apart because a reader without credentials runs none of them.
     live_files = [p for p in sorted((ROOT / "tests" / "python").glob("*.py"))
                   if "IB_USERNAME" in p.read_text()]
-    live = _run([".venv/bin/python", "-m", "pytest", *[str(p) for p in live_files],
+    live = _run([python, "-m", "pytest", *[str(p) for p in live_files],
                  "--collect-only", "-q"])
     live_hit = re.search(r"^(\d+) tests collected", live, re.M)
     python_live = int(live_hit.group(1)) if live_hit else 0
