@@ -426,53 +426,45 @@ pub fn fix_unsign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>, b
     (msg_bytes, new_iv.to_vec(), sig_valid)
 }
 
-/// Read one complete FIX message from a reader.
+/// The end of the first complete FIX message in a buffer, if there is one.
 ///
-/// Scans for `10=XXX\x01` (checksum tag) to detect message boundary.
-pub fn fix_read<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
-    let mut buf = Vec::with_capacity(4096);
-    let mut tmp = [0u8; 4096];
-    loop {
-        let n = reader.read(&mut tmp)?;
-        if n == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionReset,
-                "socket closed while reading FIX message",
-            ));
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        // Look for checksum tag ending: \x0110=XXX\x01
-        if let Some(idx) = buf.windows(4).position(|w| w == b"\x0110=")
-            && let Some(end) = buf[idx + 4..].iter().position(|&b| b == SOH) {
-                let total = idx + 4 + end + 1;
-                return Ok(buf[..total].to_vec());
-            }
-    }
+/// A message ends at its checksum field, which is the last field it carries.
+fn frame_end(buf: &[u8]) -> Option<usize> {
+    let idx = buf.windows(4).position(|w| w == b"\x0110=")?;
+    let end = buf[idx + 4..].iter().position(|&b| b == SOH)?;
+    Some(idx + 4 + end + 1)
 }
 
 /// Read one complete FIX message, tolerating transient read timeouts.
 ///
-/// Identical to [`fix_read`] on the happy path, but a `WouldBlock`/`TimedOut`
-/// read (a poll-timeout expiry on a slow, high-latency gateway) is retried
-/// until `deadline` instead of being treated as fatal. The reader's socket
-/// should carry a short read timeout so the poll stays responsive.
-pub fn fix_read_deadline<R: Read>(reader: &mut R, deadline: std::time::Instant) -> io::Result<Vec<u8>> {
-    let mut buf = Vec::with_capacity(4096);
+/// The caller holds the buffer, and holds it across every call it makes on one
+/// socket. A read takes whatever the peer has already sent, and this peer
+/// sends messages back to back: the bytes past the end of one message are the
+/// start of the next, so a reader that returned the first message and dropped
+/// the rest would take them off the socket and lose them. What that costs is
+/// not abstract — the routing tags, the account, and the venue's stamp on the
+/// logon all arrive in the messages that follow the first one.
+///
+/// A `WouldBlock`/`TimedOut` read (a poll-timeout expiry on a slow,
+/// high-latency venue) is retried until `deadline` rather than being treated
+/// as fatal. The reader's socket should carry a short read timeout so the poll
+/// stays responsive.
+pub fn fix_read_deadline<R: Read>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    deadline: std::time::Instant,
+) -> io::Result<Vec<u8>> {
     let mut tmp = [0u8; 4096];
     loop {
+        if let Some(total) = frame_end(buf) {
+            return Ok(buf.drain(..total).collect());
+        }
         match reader.read(&mut tmp) {
             Ok(0) => return Err(io::Error::new(
                 io::ErrorKind::ConnectionReset,
                 "socket closed while reading FIX message",
             )),
-            Ok(n) => {
-                buf.extend_from_slice(&tmp[..n]);
-                if let Some(idx) = buf.windows(4).position(|w| w == b"\x0110=")
-                    && let Some(end) = buf[idx + 4..].iter().position(|&b| b == SOH) {
-                        let total = idx + 4 + end + 1;
-                        return Ok(buf[..total].to_vec());
-                    }
-            }
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock
                 || e.kind() == io::ErrorKind::TimedOut =>
             {
@@ -511,7 +503,7 @@ mod tests {
         let msg = fix_build(&[(35, "A"), (108, "30")], 1);
         let mut reader = SlowReader { blocks_left: 3, data: std::io::Cursor::new(msg.clone()) };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let got = fix_read_deadline(&mut reader, deadline).unwrap();
+        let got = fix_read_deadline(&mut reader, &mut Vec::new(), deadline).unwrap();
         assert_eq!(got, msg);
     }
 
@@ -520,7 +512,7 @@ mod tests {
         let mut reader = SlowReader { blocks_left: u32::MAX, data: std::io::Cursor::new(Vec::new()) };
         // Deadline already passed: the first WouldBlock must surface as TimedOut.
         let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
-        let err = fix_read_deadline(&mut reader, deadline).unwrap_err();
+        let err = fix_read_deadline(&mut reader, &mut Vec::new(), deadline).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 
@@ -757,53 +749,65 @@ mod tests {
         assert!(valid);
     }
 
-    // ── fix_read tests ─────────────────────────────────────────────────
+    // ── reading ───────────────────────────────────────────────────────
 
-    #[test]
-    fn fix_read_single_message() {
-        let msg = fix_build(&[(35, "0")], 1);
-        let mut cursor = std::io::Cursor::new(msg.clone());
-        let result = fix_read(&mut cursor).unwrap();
-        assert_eq!(result, msg);
+    fn read_one(reader: &mut impl Read, buf: &mut Vec<u8>) -> io::Result<Vec<u8>> {
+        fix_read_deadline(reader, buf, std::time::Instant::now()
+            + std::time::Duration::from_secs(5))
     }
 
     #[test]
-    fn fix_read_logon_message() {
+    fn one_message_is_read_whole() {
         let msg = fix_build(&[(35, "A"), (108, "30"), (98, "0")], 1);
         let mut cursor = std::io::Cursor::new(msg.clone());
-        let result = fix_read(&mut cursor).unwrap();
-        assert_eq!(result, msg);
-        let parsed = fix_parse(&result);
-        assert_eq!(parsed[&35], "A");
-        assert_eq!(parsed[&108], "30");
+        let mut buf = Vec::new();
+        let got = read_one(&mut cursor, &mut buf).unwrap();
+        assert_eq!(got, msg);
+        assert!(buf.is_empty(), "nothing was left over");
+        assert_eq!(fix_parse(&got)[&108], "30");
     }
 
+    /// A peer that sends two messages back to back puts both in one read, and
+    /// the second one is not the reader's to drop.
     #[test]
-    fn fix_read_returns_first_message_from_buffer() {
-        // fix_read is a single-message reader (used during handshake).
-        // When two messages arrive together, it returns only the first.
+    fn a_second_message_in_the_same_read_is_kept() {
         let msg1 = fix_build(&[(35, "0")], 1);
         let msg2 = fix_build(&[(35, "D"), (55, "AAPL")], 2);
-        let mut buf = msg1.clone();
-        buf.extend_from_slice(&msg2);
-        let mut cursor = std::io::Cursor::new(buf);
-        let r1 = fix_read(&mut cursor).unwrap();
-        assert_eq!(r1, msg1);
+        let mut wire = msg1.clone();
+        wire.extend_from_slice(&msg2);
+        let mut cursor = std::io::Cursor::new(wire);
+        let mut buf = Vec::new();
+
+        assert_eq!(read_one(&mut cursor, &mut buf).unwrap(), msg1);
+        assert_eq!(read_one(&mut cursor, &mut buf).unwrap(), msg2);
+        assert!(buf.is_empty());
+    }
+
+    /// And the bytes of a message split across two reads are one message.
+    #[test]
+    fn a_message_split_across_reads_is_read_whole() {
+        let msg = fix_build(&[(35, "A"), (108, "30")], 1);
+        let (head, tail) = msg.split_at(msg.len() / 2);
+        let mut reader = std::io::Cursor::new(head.to_vec())
+            .chain(std::io::Cursor::new(tail.to_vec()));
+        let mut buf = Vec::new();
+        assert_eq!(read_one(&mut reader, &mut buf).unwrap(), msg);
     }
 
     #[test]
-    fn fix_read_eof_returns_error() {
+    fn a_closed_socket_is_an_error() {
         let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
-        let err = fix_read(&mut cursor).unwrap_err();
+        let mut buf = Vec::new();
+        let err = read_one(&mut cursor, &mut buf).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::ConnectionReset);
     }
 
     #[test]
-    fn fix_read_incomplete_then_eof() {
-        // Partial message (no checksum tag) then EOF
+    fn a_message_cut_short_by_a_close_is_an_error() {
         let partial = b"8=FIX.4.1\x019=0010\x0135=0\x01".to_vec();
         let mut cursor = std::io::Cursor::new(partial);
-        let err = fix_read(&mut cursor).unwrap_err();
+        let mut buf = Vec::new();
+        let err = read_one(&mut cursor, &mut buf).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::ConnectionReset);
     }
 
