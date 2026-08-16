@@ -8,7 +8,7 @@ pub(crate) mod retry;
 /// How fast a reconnect may put its subscriptions back.
 ///
 /// Taken from the caller's
-/// [`ReconnectConfig`](crate::api::reliability::ReconnectConfig).
+/// [`ReconnectConfig`](crate::reliability::ReconnectConfig).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReplayPacing {
     pub burst: usize,
@@ -17,7 +17,7 @@ pub(crate) struct ReplayPacing {
 
 impl Default for ReplayPacing {
     fn default() -> Self {
-        let d = crate::api::reliability::ReconnectConfig::default();
+        let d = crate::reliability::ReconnectConfig::default();
         Self { burst: d.replay_burst, pace: d.replay_pace }
     }
 }
@@ -77,8 +77,8 @@ pub struct HotLoop {
     reconnect_halted: Option<retry::DisconnectReason>,
     /// What the caller said about recovery. Defaults recover automatically and
     /// keep trying, which is what a process that must stay up wants.
-    reconnect_cfg: crate::api::reliability::ReconnectConfig,
-    budget: crate::api::reliability::RecoveryBudget,
+    reconnect_cfg: crate::reliability::ReconnectConfig,
+    budget: crate::reliability::RecoveryBudget,
     /// Slots a caller asked to free that were held open by a position. The
     /// table is bounded, so they are reconsidered once the account is flat
     /// rather than being lost until the process ends.
@@ -1444,7 +1444,7 @@ impl HotLoop {
     }
 
     /// Take the caller's recovery settings.
-    pub fn set_reconnect_config(&mut self, cfg: crate::api::reliability::ReconnectConfig) {
+    pub fn set_reconnect_config(&mut self, cfg: crate::reliability::ReconnectConfig) {
         self.reconnect_cfg = cfg;
     }
 
@@ -2698,7 +2698,7 @@ mod tests {
     #[test]
     fn a_manual_policy_leaves_the_reconnect_to_the_caller() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        hl.set_reconnect_config(crate::api::reliability::ReconnectConfig::manual());
+        hl.set_reconnect_config(crate::reliability::ReconnectConfig::manual());
         hl.farm.disconnected = true;
 
         hl.maybe_spawn_farm_reconnect();
@@ -2714,7 +2714,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let mut hl = HotLoop::new(shared, Some(tx), None);
         hl.set_reconnect_config(
-            crate::api::reliability::ReconnectConfig::default().with_max_attempts(2),
+            crate::reliability::ReconnectConfig::default().with_max_attempts(2),
         );
         hl.farm.disconnected = true;
 

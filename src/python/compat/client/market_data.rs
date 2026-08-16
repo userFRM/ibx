@@ -1,7 +1,7 @@
 //! Market data request/cancel methods.
 
 use pyo3::prelude::*;
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 
 use crate::types::*;
 use super::{wire_req_id, EClient};

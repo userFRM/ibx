@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use crate::api::client::{EClient, EClientConfig};
 use crate::api::types::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 use crate::api::client::{AccountValue, OptionChain, PositionRow};
 use crate::api::subscription::Subscription;
 use crate::types::{DepthUpdate, RealTimeBar};
@@ -260,8 +260,8 @@ impl Client {
         req_id: i64,
         what: &str,
         take: impl Fn(&SharedState) -> Option<T>,
-    ) -> Result<T, crate::api::error_codes::Refusal> {
-        use crate::api::error_codes::Refusal;
+    ) -> Result<T, crate::error_codes::Refusal> {
+        use crate::error_codes::Refusal;
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         loop {
             if let Some(v) = take(&self.inner.shared) {

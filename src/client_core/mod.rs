@@ -6,7 +6,7 @@
 //! respective callback formats (Rust `Wrapper` trait calls or PyO3 `call_method`).
 
 use std::collections::{HashMap, HashSet};
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
 
@@ -2973,7 +2973,7 @@ impl ClientCore {
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,
         ) -> Option<f64>,
-    ) -> Result<f64, crate::api::error_codes::Refusal> {
+    ) -> Result<f64, crate::error_codes::Refusal> {
         let instrument = self
             .con_id_to_instrument.lock().unwrap().get(&contract.con_id).copied()
             .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
@@ -3007,7 +3007,7 @@ impl ClientCore {
             present_value_of_dividends: stated_or_none(stated.pv_dividend).unwrap_or(0.0),
         };
         solve(terms, model).ok_or_else(|| {
-            crate::api::error_codes::Refusal::validation(
+            crate::error_codes::Refusal::validation(
             "this contract cannot be solved under the venue's own model for it. The model is \
              anchored to the price the venue published, so a figure no rate reproduces leaves \
              nothing to solve against — and an option far enough into the money is worth its \

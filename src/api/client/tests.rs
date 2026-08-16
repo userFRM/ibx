@@ -1860,7 +1860,7 @@ fn an_order_states_where_it_is_to_be_filled() {
     };
 
     let refused = client.place_order(1, &nowhere, &order).expect_err("no destination");
-    assert_eq!(refused.code, crate::api::error_codes::Refusal::VALIDATION);
+    assert_eq!(refused.code, crate::error_codes::Refusal::VALIDATION);
     assert!(rx.try_recv().is_err(), "and nothing reaches the engine");
 
     client.place_order(2, &spy(), &order).expect("a destination is all it lacked");
@@ -2465,7 +2465,7 @@ fn a_request_with_no_engine_behind_it_says_so_under_its_own_code() {
         .expect_err("nothing can be sent with no engine to send it");
     assert_eq!(
         refused.code,
-        crate::api::error_codes::Refusal::NOT_CONNECTED,
+        crate::error_codes::Refusal::NOT_CONNECTED,
         "not connected, rather than a request that failed validation: {refused}",
     );
 }

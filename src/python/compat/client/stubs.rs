@@ -192,7 +192,7 @@ impl EClient {
     /// nothing is refused rather than sent as an empty partition.
     fn request_fa(&self, py: Python<'_>, fa_data_type: i32) -> PyResult<()> {
         let Some(partition) = advisor_partition(fa_data_type) else {
-            return self.report_refusal(py, -1, crate::api::error_codes::Refusal::validation(
+            return self.report_refusal(py, -1, crate::error_codes::Refusal::validation(
                 format!("no advisor configuration is named by {fa_data_type}"),
             ));
         };
@@ -210,7 +210,7 @@ impl EClient {
     fn replace_fa(&self, py: Python<'_>, req_id: i64, fa_data_type: i32, cxml: &str) -> PyResult<()> {
         let _ = req_id;
         let Some(partition) = advisor_partition(fa_data_type) else {
-            return self.report_refusal(py, req_id, crate::api::error_codes::Refusal::validation(
+            return self.report_refusal(py, req_id, crate::error_codes::Refusal::validation(
                 format!("no advisor configuration is named by {fa_data_type}"),
             ));
         };

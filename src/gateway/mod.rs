@@ -184,7 +184,7 @@ pub fn token_short_hash(session_token: &BigUint) -> String {
 /// their locale or comply with regional logging requirements. The session
 /// states its own, settled when it opened.
 pub fn build_ccp_logon(
-    settings: &crate::api::settings::SessionSettings,
+    settings: &crate::settings::SessionSettings,
     hw_info: &str, encoded: &str, heartbeat: u64, seq: u32,
 ) -> Vec<u8> {
     let now = chrono_free_timestamp();
@@ -221,7 +221,7 @@ pub fn build_ccp_logon(
 
 /// Build encrypted farm logon message.
 pub fn build_farm_encrypted_logon(
-    settings: &crate::api::settings::SessionSettings,
+    settings: &crate::settings::SessionSettings,
     channel: &mut SecureChannel,
     username: &str,
     _paper: bool,
@@ -506,7 +506,7 @@ fn try_frame_farm_msg(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
 /// empty host. The compiler asks for them now.
 pub struct CallerAuth {
     /// What this session runs under.
-    pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
+    pub settings: std::sync::Arc<crate::settings::SessionSettings>,
     /// Which host to open the session against.
     pub host: String,
     /// The login.
@@ -531,7 +531,7 @@ pub struct ReconnectAuth {
     /// What this session runs under. Carried so a reconnect states what the
     /// session stated when it opened, rather than whatever the process holds
     /// by the time it drops.
-    pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
+    pub settings: std::sync::Arc<crate::settings::SessionSettings>,
     /// Which host to open the session against.
     pub host: String,
     /// When the session being rebuilt first logged in, in the venue's spelling.
@@ -882,7 +882,7 @@ pub struct Session {
 /// Connect to a data farm: key exchange → encrypted logon → token auth → routing →
 /// Connection.
 pub fn connect_farm(
-    settings: &crate::api::settings::SessionSettings,
+    settings: &crate::settings::SessionSettings,
     host: &str,
     farm_id: &str,
     username: &str,
@@ -1524,7 +1524,7 @@ pub struct GatewayConfig {
     /// Held per session rather than read from the process as it goes, so a
     /// second session in one process cannot write its own settings where the
     /// first session's reconnects would find them.
-    pub settings: std::sync::Arc<crate::api::settings::SessionSettings>,
+    pub settings: std::sync::Arc<crate::settings::SessionSettings>,
     /// The login.
     pub username: String,
     /// Wrapped in `Zeroizing` so the plaintext is wiped from memory on drop.

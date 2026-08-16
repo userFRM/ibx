@@ -1334,7 +1334,7 @@ impl FarmState {
             if named_at_all && !serves_a_book {
                 shared.reference.push_historical_error(
                     req_id,
-                    crate::api::error_codes::Refusal::VALIDATION,
+                    crate::error_codes::Refusal::VALIDATION,
                     format!(
                         "the venue serves no book for a {sec_type} on {destination}, \
                          only the top of one — ask on the exchange the contract \

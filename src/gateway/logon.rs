@@ -9,7 +9,7 @@ use std::io::{self, Read, Write};
 use std::time::Instant;
 
 use super::{init_scan_buffer, keep_first, note_account};
-use crate::api::settings::ExecutionReportScope;
+use crate::settings::ExecutionReportScope;
 use crate::config::CCP_HEARTBEAT;
 use crate::protocol::fix::{fix_build, fix_parse, fix_read_deadline, SOH};
 use crate::protocol::fixcomp;

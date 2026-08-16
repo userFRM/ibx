@@ -570,7 +570,7 @@ impl EClient {
         &self,
         py: Python<'_>,
         req_id: i64,
-        refusal: crate::api::error_codes::Refusal,
+        refusal: crate::error_codes::Refusal,
     ) -> PyResult<()> {
         let _ = self.wrapper.call_method(
             py,

@@ -59,12 +59,15 @@ pub mod auth;
 pub mod bridge;
 pub mod client_core;
 pub mod config;
+pub mod error_codes;
 pub mod control;
 pub mod gateway;
 pub mod logging;
 /// The last order id handed out, kept between runs.
 pub mod order_ids;
 pub mod protocol;
+pub mod reliability;
+pub mod settings;
 pub mod types;
 
 /// Internal engine module. Use [`api::EClient`] for the public API.
@@ -75,5 +78,5 @@ pub mod engine;
 mod python;
 
 // Re-exports for convenience.
-pub use api::error_codes::Refusal;
+pub use error_codes::Refusal;
 pub use api::{EClient, EClientConfig, Wrapper};
