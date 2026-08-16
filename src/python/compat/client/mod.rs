@@ -789,7 +789,7 @@ mod tests {
     // Most callers reach this engine through Python, so a request the Rust
     // surface carries and this one drops is a defect the majority of users hit.
 
-    use crate::api::types::{Contract as ApiContract, Order as ApiOrder};
+    use crate::types::model::{Contract as ApiContract, Order as ApiOrder};
     use crate::types::PositionInfo;
 
     /// A wrapper that keeps every callback it is handed, so a test can read

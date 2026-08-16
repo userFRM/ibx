@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use crate::api::types::{
+use crate::types::model::{
     ExecutionFilter,
 };
 use crate::error_codes::Refusal;
@@ -37,12 +37,12 @@ impl EClient {
         // What the order path reads off a contract: where it is listed, its
         // legs, and the contract it hedges against. The legs and the hedge are
         // Python objects, so reading them needs the interpreter.
-        let api_contract = crate::api::types::Contract {
+        let api_contract = crate::types::model::Contract {
             primary_exchange: contract.primary_exchange.clone(),
             combo_legs: contract.combo_legs_api(py).map_err(PyRuntimeError::new_err)?,
             delta_neutral_contract: contract.delta_neutral_contract.as_ref().map(|d| {
                 let g = |n: &str| d.getattr(py, n).ok();
-                crate::api::types::DeltaNeutralContract {
+                crate::types::model::DeltaNeutralContract {
                     con_id: g("conId").and_then(|v| v.extract(py).ok()).unwrap_or(0),
                     delta: g("delta").and_then(|v| v.extract(py).ok()).unwrap_or(0.0),
                     price: g("price").and_then(|v| v.extract(py).ok()).unwrap_or(0.0),
@@ -131,11 +131,11 @@ impl EClient {
             if let Some(refusal) = self.core.modify_refusal(oid, &api_order) {
                 return self.report_refusal(py, order_id, refusal.into());
             }
-            let price = (api_order.lmt_price * crate::api::types::PRICE_SCALE_F) as i64;
+            let price = (api_order.lmt_price * crate::types::model::PRICE_SCALE_F) as i64;
             let qty = api_order.total_quantity as u32;
             // A stop's trigger rides on aux_price, exactly as it does on the
             // submit path.
-            let stop_price = (api_order.aux_price * crate::api::types::PRICE_SCALE_F) as i64;
+            let stop_price = (api_order.aux_price * crate::types::model::PRICE_SCALE_F) as i64;
             ControlCommand::Order(OrderRequest::Modify {
                 order_id: oid,
                 price,

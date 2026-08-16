@@ -12,7 +12,7 @@ use std::sync::Mutex;
 
 use std::sync::mpsc::SyncSender;
 
-use crate::api::types::{
+use crate::types::model::{
     Contract as ApiContract, CommissionAndFeesReport as ApiCommissionAndFeesReport,
     Execution as ApiExecution, ExecutionFilter,
     Order as ApiOrder, TagValue,
@@ -2712,7 +2712,7 @@ impl ClientCore {
         order: &ApiOrder,
         order_id: u64,
         instrument: InstrumentId,
-        contract: Option<&crate::api::types::Contract>,
+        contract: Option<&crate::types::model::Contract>,
     ) -> Result<ControlCommand, String> {
         let side = order.side()?;
         let qty = order.total_quantity as u32;
@@ -2968,7 +2968,7 @@ impl ClientCore {
     pub(crate) fn solve_option(
         &self,
         shared: &SharedState,
-        contract: &crate::api::types::Contract,
+        contract: &crate::types::model::Contract,
         solve: impl Fn(
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,

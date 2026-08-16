@@ -7,7 +7,7 @@
 use super::*;
 use crate::types::SmartComponent;
 use crate::bridge::RichOrderInfo;
-use crate::api::types::OrderState as ApiOrderState;
+use crate::types::model::OrderState as ApiOrderState;
 
 /// An account holding nothing still has a P&L, and a P&L of zero is an
 /// answer. Neither an empty position list nor a zero value withholds it.
@@ -127,20 +127,20 @@ fn collect_open_orders_shared_only_admits_inactive_but_excludes_rejected() {
 fn a_shared_order_reports_its_filled_quantity() {
     let shared = SharedState::new();
     let core = ClientCore::new();
-    let order = crate::api::types::Order {
+    let order = crate::types::model::Order {
         total_quantity: 10.0,
         filled_quantity: 4.0,
         ..Default::default()
     };
-    let order_state = crate::api::types::OrderState {
+    let order_state = crate::types::model::OrderState {
         status: "Submitted".to_string(),
         ..Default::default()
     };
     shared.orders.push_order_info(55, crate::bridge::RichOrderInfo {
-        contract: crate::api::types::Contract::default(),
+        contract: crate::types::model::Contract::default(),
         order,
         order_state,
-        last_exec: crate::api::types::Execution::default(),
+        last_exec: crate::types::model::Execution::default(),
     });
 
     let open = core.collect_open_orders(&shared);
@@ -783,7 +783,7 @@ mod contract_gate_tests {
         // be an order for something else. Refused until they are encoded.
         // An instruction that is carried and not sent makes the order a
         // different one, so it is refused by name.
-        use crate::api::types::Order as ApiOrder;
+        use crate::types::model::Order as ApiOrder;
         let plain = ApiOrder::default();
         assert!(ClientCore::validate_supported_instructions(&plain).is_ok(), "a plain order is fine");
         // Sent now, so no longer refused.
@@ -884,7 +884,7 @@ mod exchange_mask_provenance_tests {
     /// here, or an order on one is sent under the other's id.
     #[test]
     fn a_description_names_one_contract_and_no_other() {
-        use crate::api::types::Contract as ApiContract;
+        use crate::types::model::Contract as ApiContract;
         use super::super::ClientCore;
         let spy = |exchange: &str| ApiContract {
             symbol: "SPY".into(), sec_type: "STK".into(), exchange: exchange.into(),

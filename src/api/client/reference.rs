@@ -150,7 +150,7 @@ impl EClient {
     pub fn req_market_rule(&self, market_rule_id: i32, wrapper: &mut impl crate::api::wrapper::Wrapper) {
         match self.shared.reference.market_rule(market_rule_id) {
             Some(rule) => wrapper.market_rule(market_rule_id as i64, &rule.price_increments.iter()
-                .map(|pi| crate::api::types::PriceIncrement { low_edge: pi.low_edge, increment: pi.increment })
+                .map(|pi| crate::types::model::PriceIncrement { low_edge: pi.low_edge, increment: pi.increment })
                 .collect::<Vec<_>>()),
             None => wrapper.error(
                 market_rule_id as i64,

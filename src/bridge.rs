@@ -26,7 +26,7 @@ use crate::control::news::NewsHeadline;
 use crate::control::histogram::HistogramEntry;
 use crate::control::contracts::MarketRule;
 use crate::types::*;
-use crate::api::types as api;
+use crate::types::model as api;
 
 /// Enriched order info from CCP execution reports, for open_order / completed_order
 /// callbacks.
@@ -284,7 +284,7 @@ mod order_replay_tests {
         s.push_order_info(7, RichOrderInfo {
             contract: Default::default(),
             order: Default::default(),
-            order_state: crate::api::types::OrderState {
+            order_state: crate::types::model::OrderState {
                 status: "Submitted".to_string(), ..Default::default()
             },
             last_exec: Default::default(),

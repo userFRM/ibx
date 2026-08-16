@@ -2,7 +2,7 @@ use super::{CcpState, RECOVERY_TERMINATOR_GRACE};
 use std::time::Instant;
 
 use crate::bridge::{Event, RichOrderInfo, SharedState};
-use crate::api::types as api;
+use crate::types::model as api;
 use crate::engine::context::Context;
 use crate::protocol::connection::{Connection, Frame};
 use crate::protocol::fix;

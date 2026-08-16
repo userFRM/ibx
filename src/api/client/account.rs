@@ -1,6 +1,6 @@
 //! Account-related methods: positions, PnL, account summary/updates.
 
-use crate::api::types::PRICE_SCALE_F;
+use crate::types::model::PRICE_SCALE_F;
 use crate::api::wrapper::Wrapper;
 use crate::types::*;
 

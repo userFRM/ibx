@@ -1,6 +1,6 @@
 //! Event dispatch: drains SharedState queues and fires Wrapper callbacks.
 
-use crate::api::types::{
+use crate::types::model::{
     BarData, CommissionAndFeesReport, ContractDetails, ContractDescription, Execution,
     Order as ApiOrder, OrderState, TickAttribLast, TickAttribBidAsk, PRICE_SCALE_F,
 };
@@ -180,7 +180,7 @@ impl EClient {
     fn dispatch_quotes(&self, wrapper: &mut impl Wrapper) {
         // Quote polling → tick_price / tick_size (via ClientCore)
         let instruments = self.core.snapshot_instruments();
-        let attrib = crate::api::types::TickAttrib::default();
+        let attrib = crate::types::model::TickAttrib::default();
         let mut snapshot_done: Vec<i64> = Vec::new();
         for (iid, req_id) in instruments {
             let result = self.core.poll_instrument_ticks(&self.shared, iid, req_id);
@@ -542,7 +542,7 @@ impl EClient {
             for entry in self.core.prepare_portfolio_updates(&self.shared) {
                 let contract = self.core
                     .get_contract(entry.con_id, &self.shared)
-                    .unwrap_or_else(|| crate::api::types::Contract {
+                    .unwrap_or_else(|| crate::types::model::Contract {
                         con_id: entry.con_id,
                         ..Default::default()
                     });

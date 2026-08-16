@@ -3,7 +3,7 @@
 //! All methods have default no-op implementations. Users implement only the
 //! callbacks they care about.
 
-use crate::api::types::*;
+use crate::types::model::*;
 use crate::types::HistoricalTickData;
 
 /// ibapi-compatible callback interface. Mirrors C++ `EWrapper`.
