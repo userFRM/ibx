@@ -1876,7 +1876,7 @@ fn ord_status_presubmitted_then_routed_advances_to_submitted() {
 }
 
 // 39=I (Inactive) and 39=8 (Rejected) both stringify to
-// "Inactive" downstream (client_core::order_status_str), but must not be
+// "Inactive" downstream (types::order_status::order_status_str), but must not be
 // treated the same here. A parked (39=I) order's reason is queued for
 // delivery through Wrapper::error, and its completed_status stays empty
 // (it is not completed and may reactivate). A rejected order's reason

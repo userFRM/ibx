@@ -90,7 +90,7 @@ fn compat_suite() {
         let conn = &mut conns.farm;
         let result = conn.send_fixcomp(&[
             (fix::TAG_MSG_TYPE, "V"),
-            (fix::TAG_SENDING_TIME, &ibx::gateway::chrono_free_timestamp()),
+            (fix::TAG_SENDING_TIME, &ibx::config::chrono_free_timestamp()),
             (263, "1"),
             (146, "2"),
             (262, "1"),
@@ -887,7 +887,7 @@ fn routing_table_probe() {
     // One reply after one send cannot be told from the line's own cadence; a
     // reply after each of three sends can.
     for round in 1..=3 {
-        let now = ibx::gateway::chrono_free_timestamp();
+        let now = ibx::config::chrono_free_timestamp();
         ccp.send_fix(&[
             (fix::TAG_MSG_TYPE, "U"),
             (fix::TAG_SENDING_TIME, &now),
@@ -907,7 +907,7 @@ fn routing_table_probe() {
     // unavailable. If it is silent, only messages the session already pushes
     // ever come back.
     for round in 1..=3 {
-        let now = ibx::gateway::chrono_free_timestamp();
+        let now = ibx::config::chrono_free_timestamp();
         ccp.send_fix(&[
             (fix::TAG_MSG_TYPE, "U"),
             (fix::TAG_SENDING_TIME, &now),
@@ -927,7 +927,7 @@ fn routing_table_probe() {
         ("aapl stk", vec![(55, "AAPL"), (310, "STK"), (6346, "265598"), (6320, "1"), (6994, "1")]),
     ];
     for (label, body) in variants {
-        let now = ibx::gateway::chrono_free_timestamp();
+        let now = ibx::config::chrono_free_timestamp();
         let mut fields: Vec<(u32, &str)> = vec![
             (fix::TAG_MSG_TYPE, "U"),
             (fix::TAG_SENDING_TIME, &now),

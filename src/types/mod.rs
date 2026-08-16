@@ -16,6 +16,9 @@
 /// one this engine's.
 pub mod model;
 
+/// How the venue names an order's state.
+pub mod order_status;
+
 
 /// Internal instrument identifier. Mapped from IB's conId at subscription time.
 /// Used as an index into pre-allocated arrays, so values are dense and small.

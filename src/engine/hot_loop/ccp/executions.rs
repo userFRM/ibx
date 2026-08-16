@@ -1095,7 +1095,7 @@ impl CcpState {
                 } else { "" },
             };
 
-            let status_str = crate::client_core::order_status_str(status);
+            let status_str = crate::types::order_status::order_status_str(status);
 
             let resolved_con_id = if con_id != 0 {
                 con_id

@@ -673,7 +673,7 @@ impl OrderState {
     pub fn drain_open_orders(&self) -> Vec<(u64, RichOrderInfo)> {
         let lock = self.order_cache.lock().unwrap();
         lock.iter()
-            .filter(|(_, v)| crate::client_core::is_open_or_reactivatable(
+            .filter(|(_, v)| crate::types::order_status::is_open_or_reactivatable(
                 &v.order_state.status, &v.order_state.completed_status))
             .map(|(&k, v)| (k, v.clone()))
             .collect()
@@ -781,7 +781,7 @@ impl OrderState {
     /// A correction from the gateway is not a replay and goes through
     /// [`push_order_correction`](Self::push_order_correction).
     #[doc(hidden)] pub fn push_order_info(&self, order_id: u64, info: RichOrderInfo) {
-        if crate::client_core::is_open_status(&info.order_state.status) {
+        if crate::types::order_status::is_open_status(&info.order_state.status) {
             if self.recently_completed(order_id) {
                 return;
             }

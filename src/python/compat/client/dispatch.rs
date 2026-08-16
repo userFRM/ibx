@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use pyo3::prelude::*;
 
 use crate::bridge::{Event, SharedState};
-use crate::client_core::order_status_str;
+use crate::types::order_status::order_status_str;
 use crate::types::*;
 
 use crate::types::model::{
