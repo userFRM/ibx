@@ -356,8 +356,8 @@ pub(crate) struct CcpState {
     /// conIds already auto-fetched a secdef for, keyed by con_id (dedup).
     pub(crate) auto_fetched_conids: HashSet<i64>,
     /// Scanner results awaiting per-conId contract-detail enrichment.
-    /// Each entry parks a parsed `<ScanResponse>` until every cache-miss
-    /// con_id has been resolved via the same 35=d path that user-initiated
+    /// Each entry parks a parsed `<ScanResponse>` until every con_id the
+    /// cache missed has been resolved via the same 35=d path that user-initiated
     /// `reqContractDetails` uses.
     pub(crate) pending_scanner_enrichment: Vec<PendingScannerEnrichment>,
 }
@@ -388,10 +388,10 @@ pub(crate) struct PendingFanout {
     pub received: usize,
     /// Idle deadline, refreshed on every per-exchange reply.
     ///
-    /// A fan-out asks about twenty-seven exchanges and counts the answers.
-    /// One reply lost or unreadable leaves the count short for good, so what
-    /// ends the request is the silence after the last answer rather than the
-    /// count reaching its total.
+    /// A fan-out asks each exchange the contract lists on and ends when every
+    /// one has answered. One reply lost or unreadable would leave the count
+    /// short for good, so this bounds the wait — but reaching it is a failed
+    /// request, reported as one, not the ordinary way a fan-out finishes.
     pub deadline: Instant,
 }
 
