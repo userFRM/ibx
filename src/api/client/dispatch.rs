@@ -77,11 +77,7 @@ impl EClient {
             let status = if fill.remaining == 0 { "Filled" } else { "PartiallyFilled" };
             // A fill emits its own order_status and never reaches the branch
             // below, so the client's record has to be preferred here too.
-            let (perm_id, engine_parent) = self.shared.orders.get_order_info(fill.order_id)
-                .map(|info| (info.order.perm_id, info.order.parent_id))
-                .unwrap_or((0, 0));
-            let parent_id = self.core.tracked_parent_id(fill.order_id)
-                .unwrap_or(engine_parent);
+            let (perm_id, parent_id) = self.core.perm_and_parent(&self.shared, fill.order_id);
             // `filled` and `avgFillPrice` describe the order so far;
             // `lastFillPrice` describes this print.
             let avg_price_f = fill.avg_price as f64 / PRICE_SCALE_F;
@@ -119,19 +115,9 @@ impl EClient {
             let req_id = self.core.req_id_for_instrument(fill.instrument);
             wrapper.exec_details(req_id, &c, &exec);
 
-            let report = CommissionAndFeesReport {
-                exec_id: exec.exec_id.clone(),
-                commission_and_fees: commission_and_fees_f,
-                // The currency the venue stated on this execution. Empty
-                // where it stated none: a currency nobody stated is not the
-                // dollar by default, and a fill on a contract denominated in
-                // anything else would otherwise report a cost in a currency it
-                // was not charged in.
-                currency: c.currency.clone(),
-                realized_pnl: f64::MAX,
-                yield_amount: f64::MAX,
-                yield_redemption_date: String::new(),
-            };
+            let report = CommissionAndFeesReport::charged(
+                &exec.exec_id, commission_and_fees_f, &c.currency,
+            );
             wrapper.commission_and_fees_report(&report);
 
             // Store for req_executions replay
@@ -162,15 +148,7 @@ impl EClient {
 
         // Cancel rejects → error
         for reject in self.shared.orders.drain_cancel_rejects() {
-            let code = if reject.reject_type == 1 { 202 } else { 10147 };
-            let msg = format!("Order {} cancel/modify rejected (reason: {})", reject.order_id, reject.reason_code);
-            // Reason 1 is UnknownOrder: the gateway has said the order does not
-            // exist, and the engine has already retired its record. The client's
-            // own record has to go with it, or the open-order snapshot keeps
-            // reporting the order the rejection was about.
-            if reject.reason_code == 1 {
-                self.core.untrack_order(reject.order_id);
-            }
+            let (code, msg) = self.core.retire_rejected(&reject);
             wrapper.error(reject.order_id as i64, code, &msg, "");
         }
 
@@ -182,21 +160,7 @@ impl EClient {
 
         // What-if → open_order(contract, order, OrderState) + order_status (iso with ibapi)
         for wi in self.shared.orders.drain_what_if_responses() {
-            let fmt = |p: Price| format!("{:.2}", p as f64 / PRICE_SCALE_F);
-            let state = OrderState {
-                status: "PreSubmitted".into(),
-                init_margin_before: fmt(wi.init_margin_before),
-                maint_margin_before: fmt(wi.maint_margin_before),
-                equity_with_loan_before: fmt(wi.equity_with_loan_before),
-                init_margin_change: fmt(wi.init_margin_after - wi.init_margin_before),
-                maint_margin_change: fmt(wi.maint_margin_after - wi.maint_margin_before),
-                equity_with_loan_change: fmt(wi.equity_with_loan_after - wi.equity_with_loan_before),
-                init_margin_after: fmt(wi.init_margin_after),
-                maint_margin_after: fmt(wi.maint_margin_after),
-                equity_with_loan_after: fmt(wi.equity_with_loan_after),
-                commission_and_fees: wi.commission as f64 / PRICE_SCALE_F,
-                ..Default::default()
-            };
+            let state = OrderState::from(&wi);
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract, order) = tracked
                 .map(|t| (t.contract, t.order))
@@ -432,16 +396,8 @@ impl EClient {
 
         // Matching symbols → symbol_samples
         for (req_id, matches) in self.shared.reference.drain_matching_symbols() {
-            let descriptions: Vec<ContractDescription> = matches.iter().map(|m| {
-                ContractDescription {
-                    con_id: m.con_id as i64,
-                    symbol: m.symbol.clone(),
-                    sec_type: m.sec_type.to_fix().to_string(),
-                    currency: m.currency.clone(),
-                    primary_exchange: m.primary_exchange.clone(),
-                    derivative_sec_types: m.derivative_types.clone(),
-                }
-            }).collect();
+            let descriptions: Vec<ContractDescription> =
+                matches.iter().map(ContractDescription::from).collect();
             wrapper.symbol_samples(req_id as i64, &descriptions);
         }
 

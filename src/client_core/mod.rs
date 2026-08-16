@@ -1642,6 +1642,39 @@ impl ClientCore {
         self.open_orders.lock().unwrap().remove(&order_id);
     }
 
+    /// An order's permanent id and its parent.
+    ///
+    /// The parent is the one this client recorded where it placed the order:
+    /// the engine reads no parent from a report, but a client that placed the
+    /// order was told. An order it did not place keeps the engine's answer.
+    pub(crate) fn perm_and_parent(&self, shared: &SharedState, order_id: u64) -> (i64, i64) {
+        let (perm_id, engine_parent) = shared.orders.get_order_info(order_id)
+            .map(|info| (info.order.perm_id, info.order.parent_id))
+            .unwrap_or((0, 0));
+        (perm_id, self.tracked_parent_id(order_id).unwrap_or(engine_parent))
+    }
+
+    /// Retire the client's record of an order the venue rejected as unknown,
+    /// and say what that rejection reports.
+    ///
+    /// Reason 1 is UnknownOrder: the venue has said the order does not exist,
+    /// and the engine has already retired its record. The client's own record
+    /// has to go with it, or the open-order snapshot keeps reporting the order
+    /// the rejection was about.
+    pub(crate) fn retire_rejected(&self, reject: &CancelReject) -> (i64, String) {
+        if reject.reason_code == 1 {
+            self.untrack_order(reject.order_id);
+        }
+        let code = if reject.reject_type == 1 { 202 } else { 10147 };
+        (
+            code,
+            format!(
+                "Order {} cancel/modify rejected (reason: {})",
+                reject.order_id, reject.reason_code,
+            ),
+        )
+    }
+
     /// Update a tracked order status from an order update event.
     ///
     /// Takes the pre-stringification `OrderStatus` rather than the ibapi string

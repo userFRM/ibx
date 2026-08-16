@@ -1223,6 +1223,33 @@ pub struct OrderState {
     pub order_allocations: Vec<OrderAllocation>,
 }
 
+impl From<&WhatIfResponse> for OrderState {
+    /// What a preview says about the account, as margin figures rather than
+    /// scaled integers.
+    ///
+    /// The venue answers a preview with the account's margin before and after
+    /// the order; the change between them is the arithmetic, and the status a
+    /// preview carries is what the order would be if it were sent.
+    fn from(wi: &WhatIfResponse) -> Self {
+        let fmt = |p: Price| format!("{:.2}", p as f64 / PRICE_SCALE_F);
+        Self {
+            status: "PreSubmitted".into(),
+            init_margin_before: fmt(wi.init_margin_before),
+            maint_margin_before: fmt(wi.maint_margin_before),
+            equity_with_loan_before: fmt(wi.equity_with_loan_before),
+            init_margin_change: fmt(wi.init_margin_after - wi.init_margin_before),
+            maint_margin_change: fmt(wi.maint_margin_after - wi.maint_margin_before),
+            equity_with_loan_change: fmt(wi.equity_with_loan_after - wi.equity_with_loan_before),
+            init_margin_after: fmt(wi.init_margin_after),
+            maint_margin_after: fmt(wi.maint_margin_after),
+            equity_with_loan_after: fmt(wi.equity_with_loan_after),
+            commission_and_fees: wi.commission as f64 / PRICE_SCALE_F,
+            ..Default::default()
+        }
+    }
+}
+
+
 // ── Execution ──
 
 /// ibapi-compatible Execution (used in execDetails callback).
@@ -1320,6 +1347,28 @@ pub struct CommissionAndFeesReport {
     pub yield_amount: f64,
     /// Which redemption that yield is measured to.
     pub yield_redemption_date: String,
+}
+
+impl CommissionAndFeesReport {
+    /// What a fill cost, against the execution it was charged on.
+    ///
+    /// The currency is the one the venue stated on that execution. Empty where
+    /// it stated none: a currency nobody stated is not the dollar by default,
+    /// and a fill on a contract denominated in anything else would otherwise
+    /// report a cost in a currency it was not charged in.
+    ///
+    /// A fill states no realised P&L and no yield, and `f64::MAX` is how a
+    /// field carrying no value is written on this surface.
+    pub fn charged(exec_id: &str, commission_and_fees: f64, currency: &str) -> Self {
+        Self {
+            exec_id: exec_id.to_string(),
+            commission_and_fees,
+            currency: currency.to_string(),
+            realized_pnl: f64::MAX,
+            yield_amount: f64::MAX,
+            yield_redemption_date: String::new(),
+        }
+    }
 }
 
 // ── TickAttrib ──
@@ -1708,6 +1757,20 @@ pub struct ContractDescription {
     pub primary_exchange: String,
     /// Which kinds of derivative the venue lists on it.
     pub derivative_sec_types: Vec<String>,
+}
+
+impl From<&crate::control::contracts::SymbolMatch> for ContractDescription {
+    /// A symbol search result, as a caller reads it.
+    fn from(m: &crate::control::contracts::SymbolMatch) -> Self {
+        Self {
+            con_id: m.con_id as i64,
+            symbol: m.symbol.clone(),
+            sec_type: m.sec_type.to_fix().to_string(),
+            currency: m.currency.clone(),
+            primary_exchange: m.primary_exchange.clone(),
+            derivative_sec_types: m.derivative_types.clone(),
+        }
+    }
 }
 
 // ── PriceIncrement (for market rules) ──

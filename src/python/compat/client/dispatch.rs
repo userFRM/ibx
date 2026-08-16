@@ -99,11 +99,7 @@ impl EClient {
             let status = if fill.remaining == 0 { "Filled" } else { "PartiallyFilled" };
             // A fill emits its own order_status and never reaches the branch
             // below, so the client's record has to be preferred here too.
-            let (perm_id, engine_parent) = shared.orders.get_order_info(fill.order_id)
-                .map(|info| (info.order.perm_id, info.order.parent_id))
-                .unwrap_or((0, 0));
-            let parent_id = self.core.tracked_parent_id(fill.order_id)
-                .unwrap_or(engine_parent);
+            let (perm_id, parent_id) = self.core.perm_and_parent(shared, fill.order_id);
             // `filled` and `avgFillPrice` describe the order so far;
             // `lastFillPrice` describes this print.
             let avg_price = fill.avg_price as f64 / PRICE_SCALE_F;
@@ -155,16 +151,9 @@ impl EClient {
                 avg_price,
                 ..Default::default()
             };
-            let api_commission = ApiCommissionAndFeesReport {
-                exec_id: exec_id.clone(),
-                commission_and_fees: commission,
-                // As stated on the execution rather than assumed. See the
-                // matching note on the other surface.
-                currency: api_contract.currency.clone(),
-                realized_pnl: f64::MAX,
-                yield_amount: f64::MAX,
-                yield_redemption_date: String::new(),
-            };
+            let api_commission = ApiCommissionAndFeesReport::charged(
+                &exec_id, commission, &api_contract.currency,
+            );
 
             // Build Python contract for callback
             let exec_contract = Contract::from_api(&api_contract);
@@ -304,15 +293,7 @@ impl EClient {
         // Drain cancel rejects -> error
         let rejects = shared.orders.drain_cancel_rejects();
         for reject in rejects {
-            let code = if reject.reject_type == 1 { 202i64 } else { 10147i64 };
-            let msg = format!("Order {} cancel/modify rejected (reason: {})", reject.order_id, reject.reason_code);
-            // Reason 1 is UnknownOrder: the gateway has said the order does not
-            // exist, and the engine has already retired its record. The client's
-            // own record has to go with it, or the open-order snapshot keeps
-            // reporting the order the rejection was about.
-            if reject.reason_code == 1 {
-                self.core.untrack_order(reject.order_id);
-            }
+            let (code, msg) = self.core.retire_rejected(&reject);
             call_wrapper!(self.wrapper, py, "error", (reject.order_id as i64, code, msg.as_str(), ""));
         }
 
@@ -440,21 +421,7 @@ impl EClient {
         // (iso with official ibapi: server delivers margin via openOrder.orderState)
         let what_ifs = shared.orders.drain_what_if_responses();
         for wi in what_ifs {
-            let fmt = |p: Price| format!("{:.2}", p as f64 / PRICE_SCALE_F);
-            let state = OrderState {
-                status: "PreSubmitted".into(),
-                init_margin_before: fmt(wi.init_margin_before),
-                maint_margin_before: fmt(wi.maint_margin_before),
-                equity_with_loan_before: fmt(wi.equity_with_loan_before),
-                init_margin_change: fmt(wi.init_margin_after - wi.init_margin_before),
-                maint_margin_change: fmt(wi.maint_margin_after - wi.maint_margin_before),
-                equity_with_loan_change: fmt(wi.equity_with_loan_after - wi.equity_with_loan_before),
-                init_margin_after: fmt(wi.init_margin_after),
-                maint_margin_after: fmt(wi.maint_margin_after),
-                equity_with_loan_after: fmt(wi.equity_with_loan_after),
-                commission_and_fees: wi.commission as f64 / PRICE_SCALE_F,
-                ..Default::default()
-            };
+            let state = OrderState::from_api(&crate::api::types::OrderState::from(&wi));
 
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {
@@ -555,14 +522,7 @@ impl EClient {
         let symbol_results = shared.reference.drain_matching_symbols_for_dispatch();
         for (req_id, matches) in symbol_results {
             let descriptions: Vec<Py<ContractDescription>> = matches.iter().map(|m| {
-                Py::new(py, ContractDescription {
-                    con_id: m.con_id as i64,
-                    symbol: m.symbol.clone(),
-                    sec_type: m.sec_type.to_fix().to_string(),
-                    currency: m.currency.clone(),
-                    primary_exchange: m.primary_exchange.clone(),
-                    derivative_sec_types: m.derivative_types.clone(),
-                }).unwrap()
+                Py::new(py, ContractDescription::from_api(&m.into())).unwrap()
             }).collect();
             let list = pyo3::types::PyList::new(py, &descriptions)?;
             call_wrapper!(self.wrapper, py, "symbol_samples", (req_id as i64, list.as_any()));
