@@ -558,7 +558,6 @@ fn find_body_after_tag<'a>(msg: &'a [u8], tag_marker: &[u8]) -> Option<&'a [u8]>
         .map(|pos| &msg[pos + tag_marker.len()..])
 }
 
-#[inline]
 fn bench(label: &str, iterations: u64, mut f: impl FnMut()) {
     for _ in 0..WARMUP { f(); }
     let start = Instant::now();

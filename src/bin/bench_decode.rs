@@ -227,7 +227,6 @@ fn fast_msg_type(msg: &[u8]) -> Option<u8> {
     None
 }
 
-#[inline]
 fn bench(label: &str, iterations: u64, mut f: impl FnMut()) {
     // Warmup
     for _ in 0..WARMUP {

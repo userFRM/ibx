@@ -74,6 +74,7 @@ pub fn finalize_payload(bits: &[u8]) -> Vec<u8> {
     body
 }
 
+#[inline]
 pub fn apply_tick(q: &mut Quote, tick: &RawTick, min_tick_scaled: i64) {
     match tick.tick_type {
         tick_decoder::O_BID_PRICE => q.bid = tick.magnitude * min_tick_scaled,

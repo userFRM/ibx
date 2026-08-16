@@ -354,8 +354,8 @@ pub struct CancelReject {
     pub timestamp_ns: u64,
 }
 
-/// Multi-char OrdType discriminants (values < 32 to avoid collision with ASCII single-
-/// char types).
+/// Multi-char OrdType discriminants: values below 32, so they cannot collide
+/// with the single-char ASCII types.
 /// Used in `Order.ord_type` for order types whose FIX tag 40 value is more than one
 /// character.
 pub const ORD_STP_PRT: u8 = 1;   // FIX "SP"  — Stop with Protection

@@ -163,8 +163,8 @@ mod tests {
         assert!(xml.contains("<aggGroup>-1</aggGroup>"));
     }
 
-    /// Filters are what a scan code is worth: `TOP_PERC_GAIN` unfiltered is a penny-
-    /// stock
+    /// Filters are what a scan code is worth: `TOP_PERC_GAIN` unfiltered is
+    /// a penny-stock
     /// list. They ride as one element per filter code inside the subscription's filter.
     #[test]
     fn scanner_subscribe_xml_carries_filters() {
