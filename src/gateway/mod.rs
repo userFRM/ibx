@@ -2896,7 +2896,5 @@ pub fn build_mktdata_unsubscribe(md_req_id: &str, seq: u32) -> Vec<u8> {
 }
 
 /// Format timestamp as YYYYMMDD-HH:MM:SS (no chrono dependency).
-/// Re-exports for backward compatibility.
-
 #[cfg(test)]
 mod tests;
