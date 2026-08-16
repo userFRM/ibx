@@ -101,8 +101,11 @@ impl EClient {
     ///
     /// The fuller call takes an id so that a program with its own bookkeeping
     /// can match a tick to the request that asked for it. A program that only
-    /// wants the price of a thing has no use for one, and this picks an id that
-    /// cannot collide with the caller's own. Pass what it returns to
+    /// wants the price of a thing has no use for one, and this picks from the
+    /// range this client asks its own questions under — far above what a caller
+    /// is likely to state, and what the dispatch loop uses to tell the two
+    /// apart. A caller that states an id from that range for a request of its
+    /// own is the one case where they meet. Pass what this returns to
     /// [`cancel_mkt_data`](EClient::cancel_mkt_data) to stop the stream.
     ///
     /// The contract must carry the venue's own id, which
