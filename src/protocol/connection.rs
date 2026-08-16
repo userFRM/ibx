@@ -14,6 +14,11 @@ use super::fixcomp;
 /// Recv buffer size.
 const RECV_BUF_SIZE: usize = 32768;
 
+/// What a compressed frame starts with, and the longest header this framing
+/// recognises. A read that stops inside it leaves fewer bytes than the marker,
+/// so the buffer holds them until the rest arrives.
+const FIXCOMP_MARKER: &[u8] = b"8=FIXCOMP\x01";
+
 /// A framed message extracted from the connection buffer.
 #[derive(Debug)]
 pub enum Frame {
@@ -270,7 +275,7 @@ impl Connection {
                 break;
             }
             // Compressed protocol
-            if self.buf.starts_with(b"8=FIXCOMP\x01") {
+            if self.buf.starts_with(FIXCOMP_MARKER) {
                 match fixcomp::fixcomp_length(&self.buf) {
                     Some(total) if self.buf.len() >= total => {
                         let msg: Vec<u8> = self.buf.drain(..total).collect();
@@ -291,8 +296,15 @@ impl Connection {
             let o_pos = find_subsequence(&self.buf, b"8=O\x01");
             let one_pos = find_subsequence(&self.buf, b"8=1\x01");
             let x_pos = find_subsequence(&self.buf, b"8=X\x01");
+            // The compressed header belongs in this scan as much as the rest.
+            // Left out, a stream of nothing but compressed frames has no
+            // header to resynchronise onto: one cut header drops the `8=` that
+            // starts it, and every frame behind it is then dumped as garbage
+            // while the socket keeps delivering bytes and the connection keeps
+            // reading as alive.
+            let comp_pos = find_subsequence(&self.buf, FIXCOMP_MARKER);
 
-            let earliest = [fix_pos, o_pos, one_pos, x_pos]
+            let earliest = [fix_pos, o_pos, one_pos, x_pos, comp_pos]
                 .into_iter()
                 .flatten()
                 .min();
@@ -312,12 +324,11 @@ impl Connection {
                         .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
                         .collect();
                     // The tail could be a header the socket has not finished
-                    // delivering. The longest marker is `8=FIX.`, so anything
-                    // shorter than that at the end is kept: clearing it
-                    // discards a genuine frame — an ack, a fill — that had
-                    // only been split across two reads, and leaves the read
-                    // after it starting mid-header.
-                    const LONGEST_MARKER: usize = b"8=FIX.".len();
+                    // delivering. Anything shorter than the longest marker is
+                    // kept: clearing it discards a genuine frame — an ack, a
+                    // fill — that had only been split across two reads, and
+                    // leaves the read after it starting mid-header.
+                    const LONGEST_MARKER: usize = FIXCOMP_MARKER.len();
                     let keep = self.buf.len().min(LONGEST_MARKER - 1);
                     let dropped = self.buf.len() - keep;
                     if dropped > 0 {
@@ -755,6 +766,42 @@ mod tests {
             Frame::FixComp(data) => assert_eq!(data, &comp),
             other => panic!("expected Frame::FixComp, got {other:?}"),
         }
+    }
+
+    /// A read boundary can land anywhere, including inside a header. The
+    /// bytes it stops on are the start of a frame, not garbage — and on a
+    /// connection carrying nothing but compressed frames, dropping them takes
+    /// every frame behind them with it: there is no other header left to
+    /// resynchronise on, and the socket goes on delivering bytes that never
+    /// reach the caller while the connection still reads as alive.
+    #[test]
+    fn a_compressed_header_split_by_a_read_boundary_still_arrives() {
+        let comp = fixcomp_build(&fix_build(&[(35, "0")], 1));
+        // Every place a read can stop inside the ten-byte header.
+        for split in 1..FIXCOMP_MARKER.len() {
+            let mut conn = test_connection_with_buf(comp[..split].to_vec());
+            assert!(conn.extract_frames().is_empty(), "split {split}");
+            conn.buf.extend_from_slice(&comp[split..]);
+            let frames = conn.extract_frames();
+            assert_eq!(frames.len(), 1, "split {split} lost the frame");
+            match &frames[0] {
+                Frame::FixComp(data) => assert_eq!(data, &comp, "split {split}"),
+                other => panic!("split {split}: expected FixComp, got {other:?}"),
+            }
+        }
+    }
+
+    /// And a header the buffer has already lost the start of does not take the
+    /// whole frames queued behind it.
+    #[test]
+    fn a_cut_compressed_header_does_not_eat_the_frames_behind_it() {
+        let comp = fixcomp_build(&fix_build(&[(35, "0")], 1));
+        let mut buf = comp[7..].to_vec();   // a header already missing its start
+        buf.extend_from_slice(&comp);
+        buf.extend_from_slice(&comp);
+        let mut conn = test_connection_with_buf(buf);
+        let frames = conn.extract_frames();
+        assert_eq!(frames.len(), 2, "the two whole frames were dropped with the cut one");
     }
 
     #[test]
