@@ -94,7 +94,10 @@ jobs:
       - name: Build the extension into the environment under test
         run: |
           uv venv
-          uv pip install maturin pytest
+          # ib_async too: twelve tests establish that its own library runs on
+          # this engine, and without it they are not collected and the
+          # claim is tested nowhere.
+          uv pip install maturin pytest ib_async
           .venv/bin/maturin develop
 
       - name: Test
@@ -153,6 +156,12 @@ jobs:
       # existing block takes it and leaves the item it was written for bare.
       # `missing_docs` cannot see that: the count does not change, only which
       # item each doc is on. Five of these reached main before it was checked.
+      # A cycle between two modules means neither can be read or changed
+      # without the other. One was reintroduced by a compatibility shim for a
+      # method returning a type no caller can use, and nothing noticed.
+      - name: No module depends on one that depends on it
+        run: python scripts/check_module_graph.py
+
       - name: A function did not take a doc comment written for something else
         run: |
           python scripts/check_orphaned_docs.py --demo

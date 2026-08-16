@@ -1053,7 +1053,7 @@ def reexported_into(stem: str) -> list[dict]:
     return out
 
 
-def rust_client_files() -> list[pathlib.Path]:
+def rust_client_files() -> list[Path]:
     """Every file the Rust client's surface is written across.
 
     A module publishes what it declares and what it re-exports, and a reader

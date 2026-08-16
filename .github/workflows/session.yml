@@ -102,7 +102,7 @@ jobs:
       - name: Build the extension into the environment under test
         run: |
           python -m venv .venv
-          .venv/bin/pip install maturin pytest
+          .venv/bin/pip install maturin pytest ib_async
           .venv/bin/maturin develop --release --features python
       - name: Test
         env:
