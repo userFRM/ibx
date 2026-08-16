@@ -34,7 +34,13 @@
 
 mod ask;
 mod simple;
+#[cfg(feature = "async")]
+mod async_client;
+mod stream;
 pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow};
+pub use stream::Events;
+#[cfg(feature = "async")]
+pub use async_client::AsyncClient;
 mod market_data;
 mod orders;
 mod account;
@@ -50,7 +56,7 @@ use crate::error_codes::Refusal;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::mpsc::SyncSender;
 
 use crate::types::model::{
     Contract as ApiContract, Order as ApiOrder, TagValue as ApiTagValue,
@@ -308,10 +314,10 @@ impl EClient {
     pub fn connect_with_events(
         config: &EClientConfig,
         capacity: usize,
-    ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>> {
+    ) -> Result<(Self, Events), Box<dyn std::error::Error>> {
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(capacity.max(1));
         let client = Self::connect_inner(config, Some(event_tx))?;
-        Ok((client, event_rx))
+        Ok((client, Events::new(event_rx)))
     }
 
     fn connect_inner(

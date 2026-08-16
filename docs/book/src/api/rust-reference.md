@@ -35,7 +35,7 @@ pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error
 Connect to IB and start the engine with an [`Event`] channel attached. Returns the client plus a receiver carrying every [`Event`] the engine produces. This is a second, optional delivery path that runs alongside [`process_msgs()`](EClient::process_msgs) — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks.
 
 ```rust
-pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>>
+pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result<(Self, Events), Box<dyn std::error::Error>>
 ```
 
 | Parameter | Type | Description |
@@ -43,7 +43,7 @@ pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result
 | `config` | `&EClientConfig` | Connection configuration (username, password, host, paper, core_id). |
 | `capacity` | `usize` |  |
 
-**Returns:** `Result<(Self, Receiver<Event>), Box<dyn std::error::Error>>`
+**Returns:** `Result<(Self, Events), Box<dyn std::error::Error>>`
 
 ---
 

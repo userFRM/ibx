@@ -9,12 +9,12 @@ use ibx::types::model::{Contract, Order};
 use ibx::{Client, EClientConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ib = Client::connect(&EClientConfig {
+    let (ib, events) = Client::connect_with_events(&EClientConfig {
         username: env::var("IB_USERNAME")?,
         password: env::var("IB_PASSWORD")?,
         paper: true,
         ..Default::default()
-    })?;
+    }, 1024)?;
 
     let spy = ib.qualify(Contract::stock("SPY"))?;
     println!("SPY is contract {}", spy.con_id);
@@ -40,6 +40,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let preview = ib.preview(&spy, &Order::limit("BUY", 1.0, 1.00))?;
     println!("that order would cost {}", preview.commission_and_fees);
+
+    // Every trade printed on the contract, without writing the match over the
+    // rest of what the session pushes.
+    ib.req_tick_by_tick_data(2, &spy, "Last", 0, false)?;
+    for trade in events.trades().take(5) {
+        println!("printed {} at {}", trade.size, trade.price);
+    }
 
     for value in ib.summary()? {
         println!("{:<22} {} {}", value.tag, value.value, value.currency);

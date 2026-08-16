@@ -94,41 +94,67 @@ rather than a contract id is resolved before transmission.
 In Rust:
 
 ```rust
-use ibx::api::client::{EClient, EClientConfig};
-use ibx::api::types::{Contract, Order};
+use ibx::types::model::{Contract, Order};
+use ibx::{Client, EClientConfig};
 
-let client = EClient::connect(&EClientConfig {
+let ib = Client::connect(&EClientConfig {
     username: "your_user".into(),
     password: "your_pass".into(),
     paper: true,
     ..Default::default()
 })?;
 
-let spy = client.qualify_contract(&Contract {
-    symbol: "SPY".into(), sec_type: "STK".into(),
-    exchange: "SMART".into(), currency: "USD".into(),
-    ..Default::default()
-})?;
-
-let bars = client.historical_data(&spy, "", "2 D", "1 hour", "TRADES", true)?;
-let preview = client.what_if_order(&spy, &Order {
-    action: "BUY".into(), order_type: "LMT".into(),
-    total_quantity: 1.0, lmt_price: 1.0, ..Default::default()
-})?;
-println!("{} bars, preview {}", bars.len(), preview.status);
+let spy = ib.qualify(Contract::stock("SPY"))?;
+let bars = ib.bars(&spy, "2 D", "1 hour")?;
+let done = ib.place(&spy, &Order::limit("BUY", 100.0, 42.50))?;
+println!("{} bars, order {}", bars.len(), done.status);
 ```
 
-A subscribed contract's quote can be read from any thread without waiting on
-the callback loop:
+A subscribed contract's quote is held as state, so it can be read from any
+thread without waiting on the callback loop:
 
 ```rust
-client.req_mkt_data(1, &spy, "", false, false)?;
+let stream = ib.watch(&spy)?;
+if let Some(q) = ib.quote_of(&spy) {
+    // q.bid, q.ask, q.last — fixed point, 10^-8
+}
+ib.cancel_mkt_data(stream)?;
+```
 
-if let Some(instrument) = client.instrument_of(spy.con_id) {
-    let quote = client.shared_state().market.quote(instrument);
-    // quote.bid, quote.ask, quote.last — fixed point, 10^-8
+What the session pushes — trades printed, orders filled, the transport lost and
+regained — arrives on a channel rather than a callback:
+
+```rust
+let (ib, events) = Client::connect_with_events(&config, 1024)?;
+ib.req_tick_by_tick_data(1, &spy, "Last", 0, false)?;
+
+for trade in events.trades() {
+    println!("{} at {}", trade.size, trade.price);
 }
 ```
+
+### Inside an async runtime
+
+The engine is a thread of its own, so a blocking call holds the thread that
+made it and nothing else. Inside a runtime that thread is one of a shared pool,
+so the `async` feature moves each question onto a thread that may wait:
+
+```toml
+ibx = { git = "https://github.com/userFRM/ibx", features = ["async"] }
+```
+
+```rust
+let ib = AsyncClient::connect(config).await?;
+let spy = ib.qualify(Contract::stock("SPY")).await?;
+
+// Neither holds the runtime while the venue thinks about it.
+let (bars, summary) = tokio::join!(ib.bars(&spy, "2 D", "1 hour"), ib.summary());
+```
+
+Every method on it has the same name and the same answer as the blocking one it
+stands in front of, and a test holds them to it. There is no second engine and
+no second session: `ib.blocking()` reaches the same client for anything the
+async surface does not cover.
 
 ## Running an existing program
 
