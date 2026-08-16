@@ -224,7 +224,8 @@ impl Connection {
         self.read_iv = read_iv;
     }
 
-    /// Pre-load data into the read buffer (e.g. init burst bytes read before Connection was created).
+    /// Pre-load data into the read buffer (e.g. init burst bytes read before Connection
+    /// was created).
     pub fn seed_buffer(&mut self, data: &[u8]) {
         self.buf.extend_from_slice(data);
     }
@@ -463,8 +464,8 @@ impl Connection {
     /// Tracks how much of the frame reached the socket, because that is what
     /// separates a transport that can carry on from one that cannot: a frame
     /// sent in part leaves the signature chain desynchronised and the first
-    /// such failure is final, while a write that moved nothing can be retried
- ///. Once final, every later send fails fast rather than putting
+    /// such failure is final, while a write that moved nothing can be retried. Once
+    /// final, every later send fails fast rather than putting
     /// more frames on a wire the peer can no longer verify.
     fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()> {
         if self.write_failed {
@@ -636,7 +637,8 @@ mod tests {
 
     #[test]
     fn binary_msg_length_incomplete() {
-        // binary_msg_length returns the expected total, caller checks buf.len() >= total
+        // binary_msg_length returns the expected total, caller checks buf.len() >=
+        // total
         let msg = b"8=O\x019=50\x01short";
         let expected_total = binary_msg_length(msg).unwrap();
         assert!(msg.len() < expected_total); // data too short → incomplete

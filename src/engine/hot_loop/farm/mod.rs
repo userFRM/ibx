@@ -67,7 +67,8 @@ fn build_conid_subscribe_tags(
     tags
 }
 
-/// Option resub info: (instrument, symbol, exchange, sec_type, last_trade_date, strike, right, multiplier, mode_9887).
+/// Option resub info: (instrument, symbol, exchange, sec_type, last_trade_date, strike,
+/// right, multiplier, mode_9887).
 type MdResubInfo = (InstrumentId, String, String, String, String, f64, String, String, i32);
 
 /// `MdResubInfo` with the instrument's resolved con_id spliced in behind it.
@@ -109,11 +110,13 @@ pub(crate) struct FarmState {
     /// unattributed, and a caller was handed one book with no way to tell
     /// which venue any of it was on.
     pub(crate) depth_fanout_exchange: Vec<(u32, String)>,
-    /// Maps server_tag → (depth_req_id, is_smart_depth, min_tick) for active depth subscriptions.
+    /// Maps server_tag → (depth_req_id, is_smart_depth, min_tick) for active depth
+    /// subscriptions.
     pub(crate) depth_tag_to_req: Vec<(u32, u32, bool, f64, f64, String)>,
     /// SmartDepth fan-out: maps internal sub_req → user's original req_id.
     depth_fanout_map: Vec<(u32, u32)>,
-    /// Primary depth subscription params for reconnect: (req_id, con_id, exchange, sec_type, num_rows, is_smart_depth).
+    /// Primary depth subscription params for reconnect: (req_id, con_id, exchange,
+    /// sec_type, num_rows, is_smart_depth).
     depth_resub_info: Vec<(u32, i64, String, String, String, i32, bool)>,
     md_resub_info: Vec<MdResubInfo>,
     /// The option-model subscriptions and what they were taken out on, so one
@@ -1482,9 +1485,11 @@ impl FarmState {
         shared.market.note_unread_wire(kind, hex);
     }
 
-    /// Parse 35=P depth entries (byte-aligned: [00][3B stag][field tags...][58 terminator]).
+    /// Parse 35=P depth entries (byte-aligned: [00][3B stag][field tags...][58
+    /// terminator]).
     /// SmartDepth entries may contain multiple price+size pairs (bid then ask).
-    /// Field tag encoding: bit 5(0x20)=size, bit 3(0x08)=ask, bit 2(0x04)=snapshot, bit 0(0x01)=2-byte.
+    /// Field tag encoding: bit 5(0x20)=size, bit 3(0x08)=ask, bit 2(0x04)=snapshot, bit
+    /// 0(0x01)=2-byte.
     fn handle_depth_35p(&self, body: &[u8], shared: &SharedState) {
         self.note_depth_wire("depth-35p", body, shared);
         log::debug!("book frame, {} bytes", body.len());
@@ -1516,7 +1521,8 @@ impl FarmState {
             // min_tick is what it counts its prices in. Stating none means
             // whole ones.
             let counted_in = if size_tick > 0.0 { size_tick } else { 1.0 };
-            // Parse field tags, pushing a depth update on each complete price+size pair.
+            // Parse field tags, pushing a depth update on each complete price+size
+            // pair.
             let mut price: f64 = 0.0;
             let mut size: f64 = 0.0;
             let mut side: i32 = 1;
@@ -1627,7 +1633,8 @@ impl FarmState {
     ///   Snapshot entry: [C4|44][4B market_maker][1B position][field_tags...]
     ///   Compact entry:  [80|00][1B position][field_tags...]
     ///     C4/80 = continuation, 44/00 = terminal (last entry for this stag section).
-    /// Field tag encoding: bit 7=size, bit 5=ask, bit 2=snapshot, bits 0-1=value_len (00=1B,01=2B,10=3B).
+    /// Field tag encoding: bit 7=size, bit 5=ask, bit 2=snapshot, bits 0-1=value_len
+    /// (00=1B,01=2B,10=3B).
     fn handle_depth_35y(&self, msg: &[u8], shared: &SharedState) {
         self.note_depth_wire("depth-35y", msg, shared);
         use crate::types::DepthUpdate;
@@ -1726,7 +1733,8 @@ impl FarmState {
             if (b == 0x80 || b == 0x00) && pos + 2 < body.len() {
                 let candidate_pos = body[pos + 1];
                 let candidate_tag = body[pos + 2];
-                // Valid field tags: only bits 7,5,2,1,0 set (mask 0xAF). Reject bits 6,4,3.
+                // Valid field tags: only bits 7,5,2,1,0 set (mask 0xAF). Reject bits
+                // 6,4,3.
                 if candidate_pos < 30 && candidate_tag & 0x50 == 0 && candidate_tag & 0x08 == 0 {
                     pos += 1;
                     let book_position = body[pos] as i32;
@@ -1774,7 +1782,8 @@ impl FarmState {
             .map(|(_, r, sm, mt, st, ex)| (*r, *sm, *mt, *st, ex.clone()))
     }
 
-    /// Parse one price + one size field tag pair. Returns (price, size, side, is_snapshot).
+    /// Parse one price + one size field tag pair. Returns (price, size, side,
+    /// is_snapshot).
     /// Advances `pos` past consumed bytes.
     fn parse_depth_fields(&self, body: &[u8], pos: &mut usize, min_tick: f64, size_tick: f64) -> Option<(f64, f64, i32, bool)> {
         let mut price: f64 = 0.0;
@@ -1864,7 +1873,8 @@ impl FarmState {
         self.generic_tick_tags.clear();
         context.market.clear_server_tags();
         context.market.zero_all_quotes();
-        // Don't emit Event::Disconnected — auto-reconnect handles farm drops transparently.
+        // Don't emit Event::Disconnected — auto-reconnect handles farm drops
+        // transparently.
         // Python is only notified if reconnect exhausts retries.
     }
 

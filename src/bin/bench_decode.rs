@@ -55,7 +55,8 @@ fn main() {
         ]),
     ]);
 
-    // Build a full FIX-framed 35=P message for find_body_after_tag + fix_parse benchmarks
+    // Build a full FIX-framed 35=P message for find_body_after_tag + fix_parse
+    // benchmarks
     let fix_framed = build_fix_framed_35p(&payload_typical);
 
     println!("========================================");

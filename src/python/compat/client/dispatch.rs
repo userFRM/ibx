@@ -19,7 +19,8 @@ use super::super::tick_types::*;
 use super::super::super::types::PRICE_SCALE_F;
 
 /// Call a Python wrapper method, catching and logging an ordinary exception instead of
-/// propagating it so one bad callback cannot kill the dispatch loop. `KeyboardInterrupt`,
+/// propagating it so one bad callback cannot kill the dispatch loop.
+/// `KeyboardInterrupt`,
 /// `SystemExit`, and any other exception deriving from `BaseException` rather than
 /// `Exception` are re-raised so Ctrl-C during a callback still stops `run()` and a
 /// callback-raised `SystemExit` still terminates it, matching ibapi.
@@ -41,7 +42,8 @@ macro_rules! call_wrapper {
 }
 
 impl EClient {
-    /// Single iteration of event dispatch: drain all shared queues and fire Python callbacks.
+    /// Single iteration of event dispatch: drain all shared queues and fire Python
+    /// callbacks.
     pub(crate) fn dispatch_once(&self, py: Python<'_>, shared: &Arc<SharedState>) -> PyResult<()> {
         // Drain engine events — surface disconnects as error callbacks.
         //
@@ -417,7 +419,8 @@ impl EClient {
             }
         }
 
-        // Drain what-if responses -> open_order(contract, order, OrderState) + order_status
+        // Drain what-if responses -> open_order(contract, order, OrderState) +
+        // order_status
         // (iso with official ibapi: server delivers margin via openOrder.orderState)
         let what_ifs = shared.orders.drain_what_if_responses();
         for wi in what_ifs {
@@ -466,7 +469,8 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "error", (req_id as i64, code as i64, msg.as_str(), ""));
         }
 
-        // Drain historical data -> historicalData + historicalDataEnd / historicalDataUpdate
+        // Drain historical data -> historicalData + historicalDataEnd /
+        // historicalDataUpdate
         let hist_data = shared.reference.drain_historical_data_for_dispatch();
         for (req_id, response) in hist_data {
             let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
@@ -678,7 +682,8 @@ impl EClient {
             }
         }
 
-        // Drain real-time bars -> real_time_bar or historical_data_update (keepUpToDate)
+        // Drain real-time bars -> real_time_bar or historical_data_update
+        // (keepUpToDate)
         let rtbars = shared.market.drain_real_time_bars();
         for (req_id, bar) in rtbars {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {

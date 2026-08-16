@@ -2026,7 +2026,7 @@ fn req_global_cancel_no_instruments_no_commands() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Order validation — aux_price guards (issue #115)
+//  Order validation — aux_price guards
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
@@ -2148,7 +2148,7 @@ fn lit_order_with_zero_aux_price_is_rejected() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Order validation — non-finite / out-of-range numerics (issue #263)
+//  Order validation — non-finite and out-of-range numbers
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
@@ -2382,8 +2382,8 @@ fn req_historical_data_sends_fetch_historical() {
             assert_eq!(what_to_show, "TRADES");
             assert!(use_rth);
             // The contract's own fields have to leave the client, or the
-            // engine has nothing but the old constants to fall back on
- //. `spy()` states a destination and no security type, so
+            // engine has nothing but the old constants to fall back on. `spy()` states
+            // a destination and no security type, so
             // the destination arrives as given and the type arrives empty for
             // the engine to substitute — tested at its source.
             assert_eq!(sec_type, "");
@@ -3127,7 +3127,8 @@ fn process_msgs_dispatches_all_quote_fields() {
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
 
-    // Should have tick_price for: bid(1), ask(2), last(4), high(6), low(7), close(9), open(14)
+    // Should have tick_price for: bid(1), ask(2), last(4), high(6), low(7), close(9),
+    // open(14)
     assert!(w.events.iter().any(|e| e.starts_with("tick_price:1:1:")));   // bid
     assert!(w.events.iter().any(|e| e.starts_with("tick_price:1:2:")));   // ask
     assert!(w.events.iter().any(|e| e.starts_with("tick_price:1:4:")));   // last

@@ -7,7 +7,8 @@ pub(crate) mod retry;
 
 /// How fast a reconnect may put its subscriptions back.
 ///
-/// Taken from the caller's [`ReconnectConfig`](crate::api::reliability::ReconnectConfig).
+/// Taken from the caller's
+/// [`ReconnectConfig`](crate::api::reliability::ReconnectConfig).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReplayPacing {
     pub burst: usize,
@@ -134,8 +135,8 @@ pub struct HotLoop {
     hmds_next_attempt_at: Option<Instant>,
 }
 
-/// Consecutive HMDS reconnect failures before the loss is logged as an error
-///. Retries do not stop there: the servers go down for maintenance
+/// Consecutive HMDS reconnect failures before the loss is logged as an error. Retries
+/// do not stop there: the servers go down for maintenance
 /// nightly and come back on their own, and a client that gave up after ~2
 /// minutes would stay dark until someone restarted the process — the same
 /// failure the gateway has when its restart token is unset. Attempts continue
@@ -342,7 +343,8 @@ impl HotLoop {
         self.running
     }
 
-    /// Build a HotLoop with connections and control channel, without requiring a Gateway.
+    /// Build a HotLoop with connections and control channel, without requiring a
+    /// Gateway.
     pub fn with_connections(
         shared: Arc<SharedState>,
         event_tx: Option<SyncSender<Event>>,
@@ -362,14 +364,11 @@ impl HotLoop {
         (hl, tx)
     }
 
-    /// Run the hot loop under `catch_unwind`. On panic, log the payload and
-    /// emit `Event::Disconnected` so consumers see the dead engine without
-    /// having to wait for the next outbound call to fail. Use this from the
-    /// engine-spawn site instead of `run()` directly.
-    /// try_register + full-table rejection. On a full table the
-    /// reply channel gets an Err — the caller's request fails loudly and the
-    /// hot loop keeps running. Previously this was an assert! that killed
-    /// the engine for the rest of the process.
+    /// Register a contract, or say why it could not be.
+    ///
+    /// A full table sends the caller an `Err` on the reply channel rather than
+    /// ending the engine: the request that could not be served fails, and
+    /// every subscription already running keeps running.
     fn register_or_reject(
         &mut self,
         con_id: i64,
@@ -476,6 +475,12 @@ impl HotLoop {
         }
     }
 
+    /// Run the hot loop under `catch_unwind`.
+    ///
+    /// On a panic, the payload is logged and `Event::Disconnected` is emitted,
+    /// so a consumer sees a dead engine at once rather than on whichever
+    /// outbound call fails next. This is what the engine-spawn site calls,
+    /// rather than `run` directly.
     pub fn run_with_panic_recovery(mut self) {
         let event_tx = self.event_tx.clone();
         let shared = self.shared.clone();
@@ -535,7 +540,8 @@ impl HotLoop {
             }
 
             // 2. Drain pending orders → build → sign → send to auth
-            //    Skip if CCP is disconnected — orders stay in buffer for retry after reconnect.
+            //    Skip if CCP is disconnected — orders stay in buffer for retry after
+            // reconnect.
             order_builder::drain_and_send_orders(
                 &mut self.ccp_conn, &mut self.context, &self.account_id, &mut self.hb,
                 self.ccp.disconnected, &self.shared,
@@ -1084,7 +1090,8 @@ impl HotLoop {
                         &mut self.farm_conn,
                         &mut self.hb,
                     );
-                    // Purge any already-buffered depth updates so callers never see stale data
+                    // Purge any already-buffered depth updates so callers never see
+                    // stale data
                     self.shared.market.purge_depth_updates(req_id);
                 }
                 ControlCommand::SubscribePnl { req_id, account } => {
@@ -1296,7 +1303,8 @@ impl HotLoop {
         self.farm.drive_replay(replay, &mut self.farm_conn, &mut self.hb);
     }
 
-    /// Replace the farm connection (after reconnection) and re-subscribe to all instruments.
+    /// Replace the farm connection (after reconnection) and re-subscribe to all
+    /// instruments.
     pub fn reconnect_farm(&mut self, conn: Connection) {
         let replay = ReplayPacing {
             burst: self.reconnect_cfg.replay_burst,
@@ -1446,8 +1454,8 @@ impl HotLoop {
     }
 
 
-    /// Schedule-then-spawn farm reconnects on the jittered backoff ladder
- ///. Called every loop iteration; no-op while connected or an
+    /// Schedule-then-spawn farm reconnects on the jittered backoff ladder. Called every
+    /// loop iteration; no-op while connected or an
     /// attempt is in flight.
     fn maybe_spawn_farm_reconnect(&mut self) {
         if !self.farm.disconnected || self.pending_farm_reconnect.is_some() {
@@ -3238,8 +3246,7 @@ mod tests {
     /// cancelled, but `try_reclaim_instrument` was the only path that dropped
     /// them and it returns early while an open order, a tick-by-tick or a news
     /// subscription pins the slot. Every subscribe/unsubscribe cycle on a
-    /// pinned instrument then left one behind until the next farm drop
- ///.
+    /// pinned instrument then left one behind until the next farm drop.
     #[test]
     fn an_l1_unsubscribe_hands_back_its_tags_on_a_pinned_instrument() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);

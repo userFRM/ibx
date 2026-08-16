@@ -93,7 +93,8 @@ impl<'a> BitReader<'a> {
             };
             let hi = load_be(byte_idx);
             let lo = load_be(byte_idx + 8);
-            // Combine: take (64 - bit_offset) bits from hi, then (n - (64 - bit_offset)) from lo
+            // Combine: take (64 - bit_offset) bits from hi, then (n - (64 -
+            // bit_offset)) from lo
             let hi_bits = 64 - bit_offset; // bits available in hi after discarding offset
             let lo_bits = n - hi_bits;
             let result = ((hi << bit_offset) >> (64 - n)) | (lo >> (64 - lo_bits));
@@ -123,8 +124,7 @@ pub const O_HIGH_PRICE: u64 = 8;
 /// Tick type 9 on the wire: the low price.
 pub const O_LOW_PRICE: u64 = 9;
 /// Cumulative session volume. Measured: 228 samples, zero decreases across 227
-/// transitions, increments of 1..6 matching the per-trade sizes on type 6
-///. Previously read as a timestamp.
+/// transitions, increments of 1..6 matching the per-trade sizes on type 6.
 pub const O_VOLUME: u64 = 10;
 /// Trade timestamp, in two parts: 20 carries a Unix-seconds base (measured
 /// 1785325554) and 21 an offset advancing by exactly 1 per wall-clock second
@@ -156,8 +156,7 @@ pub const O_ASK_EXCH: u64 = 17;
 pub const O_UNVERIFIED_18: u64 = 18;
 /// Previous session's close. Settled against the authoritative daily bars for
 /// the same contract: the wire carried 27922.00 while the current session's
-/// bar closed at 27913.75 and the prior session's closed at exactly 27922.00
-///.
+/// bar closed at 27913.75 and the prior session's closed at exactly 27922.00.
 pub const O_CLOSE_PRICE: u64 = 3;
 /// Current session's open — 27962.25 on the wire against a daily-bar open of
 /// exactly 27962.25.

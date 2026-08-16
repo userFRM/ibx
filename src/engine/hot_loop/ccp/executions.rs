@@ -21,7 +21,8 @@ use super::{HeartbeatState, emit, parse_price_tag, decode_tif};
 /// still reactivate.
 const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
 
-/// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a stable i64 permId.
+/// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a
+/// stable i64 permId.
 /// Uses FNV-1a hash of the first 3 dot-segments (the stable prefix) so that permId
 /// remains constant across modifications (the last segment increments on each modify).
 /// Extract the value of a single FIX tag from a raw message.
@@ -917,8 +918,8 @@ impl CcpState {
 
         // Dedup key. An execution with no ExecID skipped the window entirely,
         // so a replayed copy booked a second time — and an absent tag 17 is the
-        // shape a replay takes, which is precisely when the window matters
- //. Falling back to the fields that identify an execution
+        // shape a replay takes, which is precisely when the window matters. Falling
+        // back to the fields that identify an execution
         // dedups it on its content instead of trusting it.
         //
         // CumQty is what separates two otherwise identical slices: it advances
@@ -1398,8 +1399,7 @@ impl CcpState {
                 // pointed at it, and a late fill would move the wrong position.
                 //
                 // A fill that races the rejection is not lost with the order:
-                // the untracked-fill path books it and moves the position
- //.
+                // the untracked-fill path books it and moves the position.
                 context.set_order_status_forced(oid, crate::types::OrderStatus::Cancelled);
                 context.retire_order(oid);
             } else {

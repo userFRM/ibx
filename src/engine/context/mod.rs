@@ -75,7 +75,8 @@ pub struct Context {
     /// server is entitled to drop — which is exactly the case a retry exists
     /// for. Counts so each attempt is a new name.
     pub(crate) cancel_attempts: HashMap<OrderId, u32>,
-    /// Timestamp when the last farm socket recv returned data (for decode latency measurement).
+    /// Timestamp when the last farm socket recv returned data (for decode latency
+    /// measurement).
     pub(crate) recv_at: Instant,
     /// Total hot loop iterations since start.
     pub(crate) loop_iterations: u64,
@@ -448,7 +449,8 @@ impl Context {
         self.cancel_attempts.remove(&order_id);
     }
 
-    /// Mark all live open orders as Uncertain (auth disconnect — status may have changed).
+    /// Mark all live open orders as Uncertain (auth disconnect — status may have
+    /// changed).
     ///
     /// The engine stops believing these statuses at this point and the API
     /// layer went on reporting them, so `req_open_orders` kept asserting a

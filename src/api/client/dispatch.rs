@@ -158,7 +158,8 @@ impl EClient {
             wrapper.error(order_id as i64, code as i64, &msg, "");
         }
 
-        // What-if → open_order(contract, order, OrderState) + order_status (iso with ibapi)
+        // What-if → open_order(contract, order, OrderState) + order_status (iso with
+        // ibapi)
         for wi in self.shared.orders.drain_what_if_responses() {
             let state = OrderState::from(&wi);
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
@@ -556,7 +557,8 @@ impl EClient {
             }
         }
 
-        // Account summary → account_summary + account_summary_end (one-shot via ClientCore)
+        // Account summary → account_summary + account_summary_end (one-shot via
+        // ClientCore)
         if let Some(batch) = self.core.prepare_account_summary(&self.shared, &self.account_id) {
             for entry in &batch.entries {
                 wrapper.account_summary(batch.req_id, &self.account_id, entry.tag, &entry.value, &entry.currency);

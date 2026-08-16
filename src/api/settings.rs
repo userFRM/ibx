@@ -132,9 +132,9 @@ impl GatewaySettings {
     /// Settle every setting: what the caller stated, else what the environment
     /// holds, else the default.
     ///
-    /// The one place the environment is read. Called on the caller's thread as
-    /// the session opens, before any thread of the engine's exists, so nothing
-    /// downstream reads a setting that can still change.
+    /// The one place a session's settings read the environment. Called on the
+    /// caller's thread as the session opens, before any thread of the engine's
+    /// exists, so nothing downstream reads a setting that can still change.
     pub fn resolve(&self) -> SessionSettings {
         fn stated(caller: Option<&String>, variable: &str) -> Option<String> {
             caller

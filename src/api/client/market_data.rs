@@ -35,13 +35,15 @@ impl EClient {
         self.req_mkt_data_ex(req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, mode)
     }
 
-    /// Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via
+    /// Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode
+    /// per-request via
     /// FIX field 9887, allowing parallel realtime + frozen subscriptions for
     /// the same contract:
     ///
     /// | `mode_9887` | mode             | wire shape |
     /// |-------------|------------------|---|
-    /// | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 |
+    /// | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no
+    /// 9887 |
     /// | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` |
     /// | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` |
     /// | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` |

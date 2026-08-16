@@ -189,7 +189,8 @@ pub struct EClientConfig {
 ///
 /// When the engine stops — connection lost, reconnect exhausted, or the hot
 /// loop panicked — the next [`process_msgs()`](EClient::process_msgs) call
-/// fires [`connection_closed`](crate::api::wrapper::Wrapper::connection_closed) once and
+/// fires [`connection_closed`](crate::api::wrapper::Wrapper::connection_closed) once
+/// and
 /// [`is_connected()`](EClient::is_connected) turns false. No error callback is
 /// raised for this: the connectivity error codes are pushed by the server, not
 /// synthesized locally.

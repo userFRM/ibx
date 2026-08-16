@@ -190,7 +190,7 @@ fn render_exchange_mask_unknown_bit_skipped() {
     assert_eq!(render_exchange_mask(0b100000, &s), "");
 }
 
-// ── poll_pnl regression tests (#166) ──
+// ── what a P&L poll reports ──
 
 fn seed_pnl_position(
     core: &ClientCore,
@@ -381,7 +381,7 @@ fn a_seed_without_a_quantity_is_not_read_as_opened_today() {
 
 #[test]
 fn poll_pnl_intraday_opened_position_fires_callback() {
-    // #166: flat-at-midnight account opens an intraday position.
+    // An account flat at midnight that opens a position during the day.
     // Before fix: poll_pnl early-returned on empty seeds → no callback.
     // After fix: position iterated, money_traded synthesized, daily P&L = unrealized.
     let core = ClientCore::new();
@@ -465,7 +465,7 @@ fn poll_pnl_change_detection_suppresses_duplicate() {
 
 #[test]
 fn poll_pnl_falls_back_to_account_level_without_market_data() {
-    // #239: a req_pnl-only client never subscribes to market data, so no
+    // A client that asks only for P&L never subscribes to market data, so no
     // position has a live quote (con_id_to_instrument is empty and every
     // position hits `continue`). poll_pnl must then emit the gateway's
     // account-level P&L instead of returning None forever.
@@ -637,7 +637,7 @@ fn poll_pnl_prefers_quotes_over_account_level_when_priced() {
     assert!((update.unrealized_pnl - 1.0).abs() < 1e-6, "unreal={}", update.unrealized_pnl);
 }
 
-// ── poll_pnl_single regression tests (#168) ──
+// ── what a single-position P&L poll reports ──
 
 #[test]
 fn poll_pnl_single_routes_quote_by_con_id() {

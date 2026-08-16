@@ -63,7 +63,8 @@ pub fn srp_compute_k(s: &BigUint) -> BigUint {
     BigUint::from_bytes_be(&h)
 }
 
-/// M1 = SHA1(XOR(SHA1(N), SHA1(g)) || SHA1(username) || strip(s) || strip(A) || strip(B) || strip(K))
+/// M1 = SHA1(XOR(SHA1(N), SHA1(g)) || SHA1(username) || strip(s) || strip(A) ||
+/// strip(B) || strip(K))
 pub fn srp_compute_m1(
     n: &BigUint,
     g: &BigUint,

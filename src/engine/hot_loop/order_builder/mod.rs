@@ -21,7 +21,8 @@ pub(crate) fn drain_and_send_orders(
     recovery_pending: bool,
     event_tx: &Option<std::sync::mpsc::SyncSender<crate::bridge::Event>>,
 ) {
-    // If CCP is disconnected, leave orders in the pending buffer for retry after reconnect.
+    // If CCP is disconnected, leave orders in the pending buffer for retry after
+    // reconnect.
     if disconnected {
         return;
     }
@@ -81,8 +82,8 @@ pub(crate) fn drain_and_send_orders(
             OrderRequest::Modify { .. } => None,
             _ => None,
         };
-        // Snap every price to the contract's tick grid before encoding
- //. The tick comes from the market-data subscription ack;
+        // Snap every price to the contract's tick grid before encoding. The tick comes
+        // from the market-data subscription ack;
         // without one it is 0 and prices pass through unchanged.
         if let Some(instrument) = order_req.instrument() {
             order_req.snap_prices(context.market.min_tick_scaled(instrument));
@@ -674,8 +675,7 @@ fn synthesize_pending_cancel(
 }
 
 /// Map the OCA type code (1..=4) to its tag 6209 wire label. 0/unset and
-/// out-of-range coerce to 3 (ReduceOnFillNonBlock), the gateway default
-///.
+/// out-of-range coerce to 3 (ReduceOnFillNonBlock), the gateway default.
 /// Unit a trailing amount is expressed in, on tag 6268: percent, as against
 /// an absolute amount (0) or ticks (1).
 const TRAIL_UNIT_PERCENT: u32 = 100;
@@ -1650,8 +1650,7 @@ fn push_order_attrs(
         if *adjusted_stop_limit_price > 0 {
             fields.push((6262, format_price(*adjusted_stop_limit_price).to_string()));
         }
-        // Trailing amount + unit for a Trail/TrailLimit conversion
- //.
+        // Trailing amount + unit for a Trail/TrailLimit conversion.
         if matches!(
             adjusted_order_type,
             crate::types::AdjustedOrderType::Trail | crate::types::AdjustedOrderType::TrailLimit

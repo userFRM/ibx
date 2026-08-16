@@ -97,7 +97,8 @@ fn main() {
     {
         use hmac::{Hmac, Mac};
         use sha1::Sha1;
-        // Pure HMAC-SHA1: key init + update + finalize (no XOR, no sig compare, no alloc)
+        // Pure HMAC-SHA1: key init + update + finalize (no XOR, no sig compare, no
+        // alloc)
         let body = &signed_msg[..]; // use full msg as body stand-in
         bench("HMAC-SHA1 compute only (80B body)", ITERATIONS, || {
             let mut mac = Hmac::<Sha1>::new_from_slice(&MAC_KEY).unwrap();

@@ -228,7 +228,8 @@ impl EClient {
         })
     }
 
-    /// Request a news article by provider and article ID. Matches `reqNewsArticle` in C++.
+    /// Request a news article by provider and article ID. Matches `reqNewsArticle` in
+    /// C++.
     pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchNewsArticle {
             req_id: wire_req_id(req_id)?,
@@ -239,7 +240,8 @@ impl EClient {
 
     // ── Fundamental Data ──
 
-    /// Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary). Matches `reqFundamentalData` in C++.
+    /// Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary). Matches
+    /// `reqFundamentalData` in C++.
     pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchFundamentalData {
             req_id: wire_req_id(req_id)?,

@@ -270,7 +270,8 @@ mod tests {
 
     #[test]
     fn parse_misc_prefix_lowercase() {
-        // "misc" in lowercase — to_uppercase converts to "MISC", so it should still strip.
+        // "misc" in lowercase — to_uppercase converts to "MISC", so it should still
+        // strip.
         let payload = b"misc38;529;val;";
         let (version, msg_type, fields) = ns_parse(payload).unwrap();
         assert_eq!(version, 38);

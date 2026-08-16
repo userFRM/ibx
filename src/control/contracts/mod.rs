@@ -171,10 +171,11 @@ pub enum SecurityType {
 }
 
 impl SecurityType {
-    /// Official API string ("STK", "OPT", ...). THE single mapping for
-    /// everything user-visible — the callbacks previously reported a Debug
-    /// derive ("Stock"), which no request path accepts, so a returned
-    /// Contract could not be fed back into another call.
+    /// The official API string: `STK`, `OPT`, and so on.
+    ///
+    /// The one mapping everything user-visible reads, so a contract a callback
+    /// hands back can be fed straight into another call. A name no request
+    /// path accepts would make the returned contract unusable.
     /// `Other` maps to "" on purpose: an instrument the engine could not
     /// classify must not masquerade as a stock — the order path is
     /// STK-only and that one wrong guess would not be caught downstream.

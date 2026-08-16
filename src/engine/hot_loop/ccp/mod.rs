@@ -35,7 +35,8 @@ const SECDEF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// after a reconnect burst still hits the window.
 const EXEC_ID_WINDOW: usize = 1024;
 
-/// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a stable i64 permId.
+/// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a
+/// stable i64 permId.
 /// Uses FNV-1a hash of the first 3 dot-segments (the stable prefix) so that permId
 /// remains constant across modifications (the last segment increments on each modify).
 /// Extract the value of a single FIX tag from a raw message.
@@ -306,7 +307,8 @@ pub(crate) struct CcpState {
     pub(crate) kut_min_tick: std::collections::HashMap<u32, f64>,
     /// HMAC signing key for XML-carrying CCP messages (selective signing).
     pub(crate) ccp_sign_key: Vec<u8>,
-    /// HMAC signing IV — advances only for signed messages, independent of unsigned ones.
+    /// HMAC signing IV — advances only for signed messages, independent of unsigned
+    /// ones.
     pub(crate) ccp_sign_iv: std::sync::Mutex<Vec<u8>>,
     /// Secdef replies awaiting paired schedule reply (joined by tag 6256).
     pub(crate) pending_schedule_pair: Vec<PendingSchedulePair>,
@@ -384,9 +386,12 @@ pub(crate) struct PendingFanout {
     pub api_req_id: u32,
     pub fanout_req_ids: Vec<String>,
     pub received: usize,
-    /// Idle deadline, refreshed on every per-exchange reply. One lost or
-    /// unparseable fan-out reply out of ~27 previously left the counter
-    /// short forever and contract_details_end never fired.
+    /// Idle deadline, refreshed on every per-exchange reply.
+    ///
+    /// A fan-out asks about twenty-seven exchanges and counts the answers.
+    /// One reply lost or unreadable leaves the count short for good, so what
+    /// ends the request is the silence after the last answer rather than the
+    /// count reaching its total.
     pub deadline: Instant,
 }
 
@@ -515,7 +520,8 @@ impl CcpState {
                 if let Some(comm) = parsed.get(&6040) {
                     match comm.as_str() {
                         "75" => {
-                            // Position + market price feed (init burst + after each fill)
+                            // Position + market price feed (init burst + after each
+                            // fill)
                             self.handle_position_feed(msg, ccp_conn, context, shared, event_tx, hb);
                             shared.portfolio.set_account_download_complete();
                         }
@@ -524,7 +530,8 @@ impl CcpState {
                             shared.portfolio.set_account_download_complete();
                         }
                         "143" => {
-                            // P&L midnight seed — store for client-side daily P&L computation
+                            // P&L midnight seed — store for client-side daily P&L
+                            // computation
                             positions::handle_pnl_response(msg, shared);
                         }
                         "152" => handle_pnl_prices(msg, shared),
@@ -1266,7 +1273,8 @@ impl CcpState {
         }
     }
 
-    /// Match a 6040=107 schedule reply to a pending secdef pair and emit merged details.
+    /// Match a 6040=107 schedule reply to a pending secdef pair and emit merged
+    /// details.
     fn handle_schedule_reply(
         &mut self,
         msg: &[u8],
@@ -1606,8 +1614,7 @@ impl CcpState {
             ];
             if identifier_lookup {
                 // Identifier lookup: the identifier and its source replace the
-                // symbol/secType/filters; exchange and currency still ride
- //.
+                // symbol/secType/filters; exchange and currency still ride.
                 fields.push((22, sec_id_source));
                 fields.push((48, &filters.sec_id));
             } else {
@@ -1842,8 +1849,10 @@ impl CcpState {
     }
 
     pub(crate) fn send_mkt_depth_exchanges_request(&mut self, _ccp_conn: &mut Option<Connection>, _hb: &mut HeartbeatState, shared: &SharedState) {
-        // Depth exchanges are derived from the 6040=102 exchange list received during init.
-        // No separate server request needed — just signal the shared state to deliver cached data.
+        // Depth exchanges are derived from the 6040=102 exchange list received during
+        // init.
+        // No separate server request needed — just signal the shared state to deliver
+        // cached data.
         shared.reference.notify_depth_exchanges();
     }
 
@@ -1919,7 +1928,8 @@ impl CcpState {
             shared.orders.push_order_update(update);
             emit(event_tx, Event::OrderUpdate(update));
         }
-        // Don't emit Event::Disconnected — auto-reconnect handles CCP drops transparently.
+        // Don't emit Event::Disconnected — auto-reconnect handles CCP drops
+        // transparently.
         // Python is only notified if reconnect exhausts retries.
     }
 
@@ -1977,7 +1987,8 @@ impl CcpState {
         if let Some(conn) = ccp_conn.as_mut() {
             let ts = chrono_free_timestamp();
 
-            // Re-subscribe to account/position data so server pushes fresh UP/UT/UM messages.
+            // Re-subscribe to account/position data so server pushes fresh UP/UT/UM
+            // messages.
             let _ = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"), (fix::TAG_SENDING_TIME, &ts),
                 (6040, "91"), (1, account_id), (6556, "DR.1"), (6712, "1"),
@@ -2075,14 +2086,19 @@ fn handle_pnl_prices(msg: &[u8], shared: &SharedState) {
 }
 
 /// Handle 6040=75 position + market price feed.
-/// Fires at init and after each fill. Contains repeating group: 146=count × (6008=conId, 6064=qty, 6101=avgCost).
-/// The wire only carries conId/qty/avgCost — no symbol/secType. For any held conId not yet in the
-/// reference cache, an internal secdef request goes out so the wrapper-facing Contract is
+/// Fires at init and after each fill. Contains repeating group: 146=count ×
+/// (6008=conId, 6064=qty, 6101=avgCost).
+/// The wire only carries conId/qty/avgCost — no symbol/secType. For any held conId not
+/// yet in the
+/// reference cache, an internal secdef request goes out so the wrapper-facing Contract
+/// is
 /// populated by the time `req_positions` is called.
 impl CcpState {
 
-    /// Issue an internal secdef request for `con_id` where the reference cache is cold and
-    /// none has been auto-fetched this session. The reply path populates the cache through
+    /// Issue an internal secdef request for `con_id` where the reference cache is cold
+    /// and
+    /// none has been auto-fetched this session. The reply path populates the cache
+    /// through
     /// the existing 35=d handler; the response is not tracked.
     fn auto_fetch_secdef_if_cold(
         &mut self,
@@ -2100,9 +2116,12 @@ impl CcpState {
         self.send_secdef_request(req_id, con_id, ccp_conn, hb);
     }
 
-    /// Park a scanner result and dispatch concurrent secdef requests for every cache-miss
-    /// con_id. Once all replies arrive (via `try_release_scanner_enrichments`) the result
-    /// is pushed to the dispatch queue with the now-warm cache. Mirrors what the gateway
+    /// Park a scanner result and dispatch concurrent secdef requests for every cache-
+    /// miss
+    /// con_id. Once all replies arrive (via `try_release_scanner_enrichments`) the
+    /// result
+    /// is pushed to the dispatch queue with the now-warm cache. Mirrors what the
+    /// gateway
     /// does internally for binary-API scanner clients.
     pub(crate) fn start_scanner_enrichment(
         &mut self,

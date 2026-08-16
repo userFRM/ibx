@@ -1428,9 +1428,8 @@ pub struct BarData {
     pub wap: f64,
     /// How many trades made it.
     pub bar_count: i32,
-    /// Timezone of `date` as reported by the reply — previously
-    /// parsed and then discarded, leaving the bare timestamp string as the
-    /// only (unverifiable) evidence of what the bar times mean. Empty on
+    /// Which timezone `date` is stated in, as the reply states it. Without
+    /// it the timestamp says nothing about what the bar times mean. Empty on
     /// streaming updates, which carry no timezone of their own.
     pub timezone: String,
 }
