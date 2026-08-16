@@ -45,7 +45,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | 23 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat` |
-| Order fields | ✅ Supported | 154 fields: 125 transmitted, 29 documented as not carried by the protocol, 0 silently dropped; `docs/order-field-reach.md`, regenerated and compared in CI |
+| Order fields | ✅ Supported | 154 fields: 125 transmitted, 29 documented as not carried by the protocol, 0 silently dropped, held there by a check that runs on every commit |
 | Non-US markets | ✅ Supported | Previews accepted on DE, NL, GB, CH, AU, CA, US equities and FX; JP and HK rejected for lot size, which is the exchange rule and is surfaced to the caller |
 | Modify, cancel, global cancel | ✅ Supported | `scripts/sdk_lifecycle.py` (place → modify → cancel), `tests/ib_paper_compat` Phase 9 / 9b |
 | Brackets, OCA, combos | ✅ Supported | Per-leg pricing; leg order validated by server rejection of the inverted spread; `src/bin/capture_combo.rs` |
@@ -148,7 +148,7 @@ not hold. `scripts/endurance.py --minutes 175`.
 | Local socket for client programs | The client is in-process; there is no socket to connect to, authorise, or keep running |
 | Java runtime | None |
 
-## Unresolved
+## Known limitations
 
 - The option-exercise interest rate series (`OptExInterestRate`) is accepted as
   a tick query against an option contract and rejected by name against the
@@ -173,22 +173,6 @@ not hold. `scripts/endurance.py --minutes 175`.
   of it would be found rather than invented. The counterpart reads the same
   three, keeps the same number, and no code path there reads it either.
 
-## Test inventory
-
-| Suite | Count | Requires credentials |
-| --- | ---: | :---: |
-| Rust unit and integration | 1,587 | No |
-| Python | 381 | No |
-| Python, live | 131 | Yes |
-| Paper compatibility suite (136 phases) | 26 tests | Yes |
-
-Counted rather than stated: `scripts/check_status_counts.py` names every test
-in each suite and fails the gate when this table disagrees with it, so a
-figure here cannot go quietly out of date as the suites grow.
-
-Run order and environment are documented in
-[docs/engineering-notes.md](docs/engineering-notes.md).
-
 ## Refusals
 
 A request this client will not send is reported through `error(reqId, code,
@@ -198,73 +182,3 @@ validation, 200 for a contract description that matches nothing, 504 for a call
 with no session, and 327 for binding orders entered elsewhere, which that
 client refuses for any client but the one they bind to. Construction and
 configuration raise, as does a synchronous call with a return value.
-
-## Planned work
-
-[docs/api-alignment-plan.md](docs/api-alignment-plan.md) lists one open item: settings decided by configuration where the server states a grant for them.
-
-The surface question is settled. `EClient`/`EWrapper` is the product; the ib_async shape and the Rust shape are adapters over it, and the rust-ibapi shape is not written.
-
-The one capability a gateway has and this does not is [#2](https://github.com/userFRM/ibx/issues/2): several programs sharing one logon. A gateway rents its single session out over a local socket, and this client, having no socket, cannot. One process holds one session.
-
-## Release criteria
-
-Live sessions are run at market hours until a session produces no new defect,
-and a session is held open under load until it produces none.
-
-A 20-minute session cycling subscriptions across five contracts — quotes,
-books, trade streams and bars, subscribed and withdrawn every minute — ran 18
-cycles with every stream growing throughout: 3,391 price ticks, 67,785 trades,
-16 bars a cycle, and one error, which is the venue stating that a currency
-pair has no trades to report. A second session placed, moved and withdrew
-three orders a cycle for fifteen cycles: 45 orders, every one reaching
-Cancelled, 270 acceptances and 270 status changes, no error. Earlier runs of the same session are what found
-four of the defects below; none of them was reachable by any offline suite,
-and two were invisible to the live suites as well, because those skipped when
-no data arrived.
-
-The most recent session produced fifteen, listed here as the caller-visible
-symptom:
-
-| Symptom | Cause |
-| --- | --- |
-| `place_order` on a contract carrying no id did nothing, and reported nothing | Registered under contract id 0 and sent; the venue has nothing to match and answers nothing |
-| An order stating a symbol and no exchange was filled on a venue the caller never named | No destination required; the definition lookup answered with whichever listing came first |
-| A refused request raised where the reference client reports it | Refusals raised on 25 request-shaped methods; a program written against that client has no exception handling there |
-| A bar whose low is below zero took the process down | 31-bit sign extension performed in an i32, which the intermediate does not fit |
-| `util.df(bars)` refused the bars an ib_async program asked for | The date was handed over in a spelling their parser reads as naive, which their frame conversion rejects |
-| A SMART book's levels named no venue | Gathered by reading the session's exchange directory as though its sections were aggregation groups |
-| `disconnect()` reported connectivity lost | A session the caller ended and a session that went away were the same event |
-| A second book on a venue already streaming returned nothing, and said nothing | The venue answers it with the tag it is already using, and levels were delivered to the first request holding that tag |
-| A caller's book was attributed to a venue they never asked for | This client's own subscription ids were numbered from the same range a caller states |
-| `accountSummary()` was answered with nothing before the account was fully stated | Account data counted as received only once the typed copy was built |
-| Every stream on a session went silent after a minute of subscribing and withdrawing | A book was gathered by asking each venue the contract is routed to; four contracts cycled put seventy subscribes and as many withdrawals on the connection a minute, and the venue stopped answering it |
-| A book on a named venue delivered a fraction of its levels | The section tag was read a byte early, so a section named no subscription and its levels waited for a sentinel further in |
-| Bars stopped arriving after the seventh minute, with every other stream healthy | A request id was marked finished and never unmarked, so bars answering a later request under it were delivered as a continuation of the first |
-| An order was placed and nothing said the venue had taken it | Only the status was answered; the reference client answers an order's every change with the order it holds as well, and its own method for it sends the pair |
-| A trade stream delivered nothing, and a request for one was handed the contract's quotes | The stream went out with contract id 0 and was refused against a query nobody was told about; and it was held in the quote tables, which it also emptied when withdrawn |
-
-Two suites were added rather than a symptom fixed: every wire parser is now
-given malformed input (`tests/malformed_input.rs`), which is what found the bar
-decoder; and ib_async's own test suite is run against this engine
-(`tests/ib_async_upstream/conftest.py`).
-
-The live suites now skip on evidence rather than on absence. A quote on a
-contract is what establishes that it is trading, and a position is what
-establishes there is a running profit to report; reference data — providers, a
-symbol search, an account summary, the scanner parameter set — is stated at any
-hour and is checked rather than skipped. Two of the defects above were invisible
-while those tests skipped whenever nothing arrived.
-
-A paper account is the same session. `paper` decides one step of the logon — a
-token conversion and which slot its hash occupies — and after the handshake the
-market-data, trading, historical and security-definition connections are the
-same code sending the same messages to the same servers. Every defect above was
-found on one. What differs is that fills are simulated, so what a paper session
-does not establish is a fill against real liquidity.
-
-`.github/workflows/session.yml` runs the paper compatibility suite, the Python
-suites that need a session, and `scripts/endurance.py`, after the New York
-close. It is dormant until `IB_USERNAME` and `IB_PASSWORD` are set as
-repository secrets: without them each job reports that it was not run, rather
-than passing on a session it never opened.

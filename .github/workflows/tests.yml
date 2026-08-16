@@ -174,9 +174,9 @@ jobs:
           python scripts/gen_arg_reach.py
           # Staged, so a page a generator has only just started producing
           # counts as a difference rather than as an untracked file nobody sees.
-          git add -A docs/
-          git diff --cached --exit-code docs/ || {
-            echo "::error::generated docs are stale — run the scripts under scripts/ and commit the result"
+          git add -A docs/ .gates/
+          git diff --cached --exit-code docs/ .gates/ || {
+            echo "::error::a generated file is stale — run the scripts under scripts/ and commit the result"
             exit 1
           }
 

@@ -19,7 +19,7 @@ Every caller-facing request falls into one of five kinds:
 the venue pushes account and position data on login, and answering from that is
 what the counterpart does too.
 
-Writes docs/generated/wire-reach.md. CI re-runs this and compares, so the number cannot
+Writes .gates/wire-reach.md. CI re-runs this and compares, so the number cannot
 drift away from the code.
 """
 
@@ -30,7 +30,7 @@ from collections import Counter
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CLIENT = ROOT / "src/python/compat/client"
-OUT = ROOT / "docs/generated/wire-reach.md"
+OUT = ROOT / ".gates/wire-reach.md"
 
 REQUEST = re.compile(
     r"^(req_|cancel_|place_|exercise_|replace_|request_|calculate_|query_|"
