@@ -57,7 +57,7 @@ def toolchain():
 
 def steps(suites):
     return [
-        (["cargo", "clippy", "--lib", "--all-targets", "--", "-D", "warnings"], {}),
+        (["cargo", "clippy", "--lib", "--all-targets", "--features", "dev-tools", "--", "-D", "warnings"], {}),
         (["cargo", "clippy", "--lib", "--all-targets", "--features", "python",
           "--", "-D", "warnings"], {}),
         (["cargo", "test", "--lib"], {}),

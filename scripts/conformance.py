@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Ask the venue the same questions from the Python client as the Rust one.
 
-`cargo run --bin capture_conformance` prints one block; this prints the other.
+`cargo run --features dev-tools --bin capture_conformance` prints one block;
+this prints the other.
 Run with `--compare` and it runs both and reports where they differ, which is
 the only way to catch the two clients agreeing offline and answering
 differently in front of a real server.

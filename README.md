@@ -236,7 +236,8 @@ socket poll → verify → decompress → decode → publish quote → drain out
 orders. Ticks are delivered in-process, without a localhost round trip, a JVM,
 or a garbage collector.
 
-Measured with `cargo run --release --bin bench_replay` and `bench_decode`,
+Measured with `cargo run --release --features dev-tools --bin bench_replay`
+and `bench_decode`,
 1,000,000 iterations after 100,000 warm-up, no network I/O, on an Intel
 i7-10700K with rustc 1.97:
 

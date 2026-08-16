@@ -2,17 +2,26 @@
 name = "ibx"
 version = "0.7.1"
 edition = "2024"
+description = "Direct connection engine for Interactive Brokers. No Java gateway required."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/userFRM/ibx"
+keywords = ["interactive-brokers", "trading", "fix", "market-data", "brokerage"]
+categories = ["api-bindings", "finance", "network-programming"]
+# Every binary is named below, because the tools under `src/bin` are for
+# developing this library rather than for using it, and a caller who installs
+# the crate should not be handed twenty-five of them.
+autobins = false
 
 [lib]
 name = "ibx"
 crate-type = ["lib", "cdylib"]
 
-[[bin]]
-name = "ibx"
-path = "src/main.rs"
-
 [features]
 default = []
+# The measurement and capture tools under `src/bin`. Off by default: they are
+# how this library is developed, not how it is used, and most of them read
+# credentials.
+dev-tools = []
 python = ["pyo3"]
 # Split out so a test binary can link libpython. `extension-module` tells PyO3
 # not to link it, which is right for the wheel and wrong for `cargo test`: the
@@ -20,6 +29,131 @@ python = ["pyo3"]
 # under this feature has ever run (ibx#381). The wheel build asks for both.
 extension-module = ["pyo3/extension-module"]
 compat = []
+
+[[bin]]
+name = "bench_decode"
+path = "src/bin/bench_decode.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_first_tick"
+path = "src/bin/bench_first_tick.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_limit_order"
+path = "src/bin/bench_limit_order.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_market_order"
+path = "src/bin/bench_market_order.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_multi_instrument"
+path = "src/bin/bench_multi_instrument.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_order_burst"
+path = "src/bin/bench_order_burst.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_order_modify"
+path = "src/bin/bench_order_modify.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_replay"
+path = "src/bin/bench_replay.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_tbt"
+path = "src/bin/bench_tbt.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "bench_ticks"
+path = "src/bin/bench_ticks.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_calendar"
+path = "src/bin/capture_calendar.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_combo"
+path = "src/bin/capture_combo.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_conformance"
+path = "src/bin/capture_conformance.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_definitions"
+path = "src/bin/capture_definitions.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_depth"
+path = "src/bin/capture_depth.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_executions"
+path = "src/bin/capture_executions.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_farm_logon"
+path = "src/bin/capture_farm_logon.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_global"
+path = "src/bin/capture_global.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_option_model"
+path = "src/bin/capture_option_model.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_reference"
+path = "src/bin/capture_reference.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_status"
+path = "src/bin/capture_status.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_ticks"
+path = "src/bin/capture_ticks.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_whatif"
+path = "src/bin/capture_whatif.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "soak_reconnect"
+path = "src/bin/soak_reconnect.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 # Hot loop
