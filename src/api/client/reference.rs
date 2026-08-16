@@ -1,7 +1,7 @@
 //! Reference data: contract details, historical data, scanners, news, fundamentals.
 
 use crate::types::*;
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 
 use super::{wire_req_id, Contract, EClient, TagValue};
 use crate::client_core::ClientCore;

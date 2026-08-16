@@ -21,8 +21,8 @@ pub mod compat;
 /// way whether it is for one session or for the process.
 pub(crate) fn settings_from(
     stated: std::collections::HashMap<String, String>,
-) -> Result<crate::api::settings::SessionSettings, String> {
-    use crate::api::settings::{ExecutionReportScope, GatewaySettings};
+) -> Result<crate::settings::SessionSettings, String> {
+    use crate::settings::{ExecutionReportScope, GatewaySettings};
     let mut settings = GatewaySettings::default();
     for (name, value) in stated {
         match name.as_str() {

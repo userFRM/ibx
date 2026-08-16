@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 use crate::api::types::{ExecutionFilter, PRICE_SCALE_F};
 use crate::api::wrapper::Wrapper;
 use crate::client_core::ClientCore;

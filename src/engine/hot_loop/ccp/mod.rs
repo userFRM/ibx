@@ -1209,7 +1209,7 @@ impl CcpState {
         for req_id in expired {
             let (code, why) = match over {
                 Some(reason) => (
-                    crate::api::error_codes::Refusal::NOT_CONNECTED,
+                    crate::error_codes::Refusal::NOT_CONNECTED,
                     format!("the session is over: {reason}"),
                 ),
                 None => (

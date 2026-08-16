@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use crate::api::types::{
     ExecutionFilter,
 };
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 use crate::client_core::ClientCore;
 use crate::types::*;
 use super::EClient;
@@ -353,7 +353,7 @@ impl EClient {
             crate::python::compat::client::stubs::report_unserviceable_with(
                 self,
                 -1,
-                crate::api::error_codes::Refusal::AUTO_BIND_NOT_THIS_CLIENT,
+                crate::error_codes::Refusal::AUTO_BIND_NOT_THIS_CLIENT,
                 "orders entered elsewhere are bound to the client numbered zero",
             );
         }

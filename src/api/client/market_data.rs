@@ -1,7 +1,7 @@
 //! Market data request/cancel methods and quote accessors.
 
 use crate::types::*;
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 
 use super::{wire_req_id, Contract, EClient};
 

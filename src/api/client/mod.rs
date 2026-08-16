@@ -45,7 +45,7 @@ mod stubs;
 mod tests;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -116,8 +116,8 @@ pub struct EClientConfig {
     /// A gateway is a process configured by a file beside it; this client is a
     /// library, so those settings are stated here instead of in a file nobody
     /// writes. Applied as the session opens, and for the whole process
-    /// [`GatewaySettings`](crate::api::settings::GatewaySettings).
-    pub gateway: crate::api::settings::GatewaySettings,
+    /// [`GatewaySettings`](crate::settings::GatewaySettings).
+    pub gateway: crate::settings::GatewaySettings,
     /// `false` enters the live second-factor approval gate on connect (blocking).
     /// `true` skips it. See the type-level docs.
     pub paper: bool,
@@ -150,8 +150,8 @@ pub struct EClientConfig {
     /// process that must stay up wants and what having no gateway makes this
     /// library's job. Set it to bound the effort, or to be told about a loss
     /// and decide yourself.
-    /// [`ReconnectConfig`](crate::api::reliability::ReconnectConfig).
-    pub reconnect: crate::api::reliability::ReconnectConfig,
+    /// [`ReconnectConfig`](crate::reliability::ReconnectConfig).
+    pub reconnect: crate::reliability::ReconnectConfig,
     /// Keep the session in this file, so a restart can offer it without a
     /// person present.
     ///

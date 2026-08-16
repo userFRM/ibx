@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 use crate::api::types::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
 

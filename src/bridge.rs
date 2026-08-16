@@ -1832,7 +1832,7 @@ pub struct SharedState {
     /// Held here so the engine reads a value rather than the process it runs
     /// in: two sessions in one process have their own, and neither can change
     /// the other's mid-flight.
-    pub settings: std::sync::Mutex<std::sync::Arc<crate::api::settings::SessionSettings>>,
+    pub settings: std::sync::Mutex<std::sync::Arc<crate::settings::SessionSettings>>,
     /// Prices, books and streams.
     pub market: MarketDataState,
     /// Fills, order changes and previews.
@@ -1868,7 +1868,7 @@ impl Default for SharedState {
 
 impl SharedState {
     /// What this session runs under.
-    pub fn settings(&self) -> std::sync::Arc<crate::api::settings::SessionSettings> {
+    pub fn settings(&self) -> std::sync::Arc<crate::settings::SessionSettings> {
         self.settings.lock().unwrap().clone()
     }
 
@@ -1884,7 +1884,7 @@ impl SharedState {
 
     /// Stated once, as the session opens, before the engine's threads start.
     #[doc(hidden)]
-    pub fn set_settings(&self, settings: std::sync::Arc<crate::api::settings::SessionSettings>) {
+    pub fn set_settings(&self, settings: std::sync::Arc<crate::settings::SessionSettings>) {
         *self.settings.lock().unwrap() = settings;
     }
 

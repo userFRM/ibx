@@ -3,7 +3,7 @@
 //! Methods that are not yet supported log a warning.
 
 use crate::api::wrapper::Wrapper;
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 
 use super::EClient;
 

@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use crate::api::error_codes::Refusal;
+use crate::error_codes::Refusal;
 use pyo3::prelude::*;
 
 use std::sync::Arc;
@@ -83,7 +83,7 @@ where
             if let Some(why) = shared.reference.session_over() {
                 return Err(format!(
                     "the session is over: {why} ({})",
-                    crate::api::error_codes::Refusal::NOT_CONNECTED,
+                    crate::error_codes::Refusal::NOT_CONNECTED,
                 ));
             }
             if Instant::now() >= deadline {
