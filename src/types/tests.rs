@@ -438,9 +438,9 @@ fn account_state_copy() {
 
 #[test]
 fn control_command_subscribe() {
-    let cmd = ControlCommand::Subscribe { con_id: 265598, symbol: "AAPL".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None };
+    let cmd = ControlCommand::Subscribe { contract: ContractRef { con_id: 265598, symbol: "AAPL".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None };
     match cmd {
-        ControlCommand::Subscribe { con_id, .. } => assert_eq!(con_id, 265598),
+        ControlCommand::Subscribe { contract: ContractRef { con_id, .. }, .. } => assert_eq!(con_id, 265598),
         _ => panic!("wrong variant"),
     }
 }
@@ -468,10 +468,10 @@ fn control_command_update_param() {
 
 #[test]
 fn control_command_clone() {
-    let cmd = ControlCommand::Subscribe { con_id: 42, symbol: "TEST".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None };
+    let cmd = ControlCommand::Subscribe { contract: ContractRef { con_id: 42, symbol: "TEST".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None };
     let cmd2 = cmd.clone();
     match cmd2 {
-        ControlCommand::Subscribe { con_id, .. } => assert_eq!(con_id, 42),
+        ControlCommand::Subscribe { contract: ContractRef { con_id, .. }, .. } => assert_eq!(con_id, 42),
         _ => panic!("wrong variant"),
     }
 }

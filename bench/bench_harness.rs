@@ -131,15 +131,11 @@ impl BenchSession {
     pub fn subscribe(&self, con_id: i64, symbol: &str) {
         self.control_tx
             .send(ControlCommand::Subscribe {
-                con_id,
-                symbol: symbol.to_string(),
-                exchange: String::new(),
-                sec_type: String::new(),
-                currency: String::new(),
-                last_trade_date: String::new(),
-                strike: 0.0,
-                right: String::new(),
-                multiplier: String::new(),
+                contract: ibx::types::ContractRef {
+                    con_id,
+                    symbol: symbol.to_string(),
+                    ..Default::default()
+                },
                 mode_9887: 0,
                 reply_tx: None,
             })
@@ -150,10 +146,13 @@ impl BenchSession {
         self.control_tx
             .send(ControlCommand::SubscribeTbt {
                 req_id: 1,
-                con_id,
-                symbol: symbol.to_string(),
-                sec_type: sec_type.to_string(),
-                exchange: exchange.to_string(),
+                contract: ibx::types::ContractRef {
+                    con_id,
+                    symbol: symbol.to_string(),
+                    sec_type: sec_type.to_string(),
+                    exchange: exchange.to_string(),
+                    ..Default::default()
+                },
                 tbt_type,
                 reply_tx: None,
             })

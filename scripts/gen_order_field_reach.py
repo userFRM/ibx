@@ -24,19 +24,11 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from _paths import module  # noqa: E402
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "docs/order-field-reach.md"
-
-def module(name: str) -> pathlib.Path:
-    """A module by name, whichever file it lives in.
-
-    A module is `x.rs` until it grows a folder, and then it is `x/mod.rs`.
-    Naming one form means the count silently drops a builder the day it moves
-    — and a builder that is not read counts every field it carries as lost.
-    """
-    flat = ROOT / f"{name}.rs"
-    return flat if flat.exists() else ROOT / name / "mod.rs"
-
 
 # Where an order is turned into tags. A field that reaches the venue is read in
 # one of these.
@@ -48,7 +40,6 @@ BUILDERS = [
     module("src/engine/hot_loop/order_builder"),
     module("src/engine/hot_loop/ccp"),
     module("src/engine/hot_loop/mod"),
-    module("src/control/orders"),
     module("src/client_core"),
     module("src/types"),
 ]

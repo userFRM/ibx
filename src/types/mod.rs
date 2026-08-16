@@ -1934,6 +1934,52 @@ pub struct SecDefFilters {
     pub sec_id_type: String,
 }
 
+/// The contract a request names.
+///
+/// Every one of these requests names a contract, and each used to carry it as
+/// loose fields — five of them on most, nine on a subscription — copied out of
+/// the caller's contract at seventeen call sites and destructured back at the
+/// other end. One field per request rather than five says the same thing, and
+/// says it the way the reference client does: its calls take a contract too.
+///
+/// The last four tell one option from another on the same underlying. They are
+/// empty on anything without an expiry, which is every share and every
+/// currency pair.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ContractRef { /// The venue's own number for it, or `0` where the caller named it by
+    /// description and the lookup has not answered yet.
+    pub con_id: i64, /// Its ticker.
+    pub symbol: String, /// What kind of contract it is, in the reference client's spelling.
+    pub sec_type: String, /// Where it is to be traded or quoted.
+    pub exchange: String, /// What it is priced in.
+    pub currency: String, /// When it expires.
+    pub last_trade_date: String, /// What it may be exercised at.
+    pub strike: f64, /// Whether it is a call or a put.
+    pub right: String, /// How many of the underlying one contract is.
+    pub multiplier: String }
+
+impl From<&crate::api::types::Contract> for ContractRef {
+    /// Take what identifies the contract, and leave the rest.
+    ///
+    /// A caller's contract carries more than this — a primary exchange, a
+    /// trading class, the fields a lookup filters on. Those travel separately
+    /// where they are needed, because a request that filters is a different
+    /// thing from a request that names.
+    fn from(c: &crate::api::types::Contract) -> Self {
+        Self {
+            con_id: c.con_id,
+            symbol: c.symbol.clone(),
+            sec_type: c.sec_type.clone(),
+            exchange: c.exchange.clone(),
+            currency: c.currency.clone(),
+            last_trade_date: c.last_trade_date_or_contract_month.clone(),
+            strike: c.strike,
+            right: c.right.clone(),
+            multiplier: c.multiplier.clone(),
+        }
+    }
+}
+
 /// Commands sent from the control plane to the hot loop via SPSC channel.
 ///
 /// The submitting command is much larger than the rest, because it carries an
@@ -1952,24 +1998,17 @@ pub enum ControlCommand {
     /// 1 = DELAYED, 2 = FROZEN, 3 = DELAYED_FROZEN (single 264=1 TOP + 9887=N).
     Subscribe {
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker.
-        symbol: String,
         /// Where the subscription is taken from.
-        exchange: String,
         /// What kind of contract it is.
-        sec_type: String,
         /// Stated so a contract named by symbol resolves to one listing: the
         /// same symbol on the same venue exists in more than one currency.
-        currency: String,
         /// An option's expiry or a future's month.
-        last_trade_date: String,
         /// An option's strike.
-        strike: f64,
         /// `C` or `P`.
-        right: String,
         /// How many units one contract is worth.
-        multiplier: String,
         /// Which feed to serve the subscription from: live, delayed or frozen.
         mode_9887: i32,
         /// Where the engine sends the slot it registered, for a caller waiting
@@ -1986,13 +2025,11 @@ pub enum ControlCommand {
         /// The caller's number for the request.
         req_id: i64,
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker.
-        symbol: String,
         /// What kind of contract it is.
-        sec_type: String,
         /// Where the request is directed.
-        exchange: String,
         /// Which stream is wanted.
         tbt_type: TbtType,
         /// Where the engine sends the slot it registered.
@@ -2068,13 +2105,11 @@ pub enum ControlCommand {
     /// order goes out unable to say which strike or contract month it means.
     RegisterInstrument {
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker.
-        symbol: String,
         /// What kind of contract it is.
-        sec_type: String,
         /// Where the request is directed.
-        exchange: String,
         /// What separates this contract from others sharing its symbol.
         identity: String,
         /// Where the engine sends the slot it registered.
@@ -2085,17 +2120,14 @@ pub enum ControlCommand {
         /// The caller's number for the request this answers.
         req_id: u32,
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker, for a request that names one by description.
-        symbol: String,
         /// Security type and exchange from the caller's contract. Hardcoding
         /// these described a stock on SMART regardless of what was asked for,
         /// so anything venue-specific was rejected.
-        sec_type: String,
         /// Where the request is directed, or the contract is listed.
-        exchange: String,
         /// What the contract is priced in.
-        currency: String,
         /// The end of the window asked for. Empty means now.
         end_date_time: String,
         /// How far back from that end the window reaches.
@@ -2126,15 +2158,12 @@ pub enum ControlCommand {
         /// The caller's number for the request this answers.
         req_id: u32,
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker, for a request that names one by description.
-        symbol: String,
         /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        sec_type: String,
         /// Where the request is directed, or the contract is listed.
-        exchange: String,
         /// What the contract is priced in.
-        currency: String,
         /// Which series is wanted: `TRADES`, `MIDPOINT`, `BID`, `ASK`.
         what_to_show: String,
         /// Whether to count only regular trading hours.
@@ -2148,15 +2177,12 @@ pub enum ControlCommand {
         /// The caller's number for the request this answers.
         req_id: u32,
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker, for a request that names one by description.
-        symbol: String,
         /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        sec_type: String,
         /// Where the request is directed, or the contract is listed.
-        exchange: String,
         /// What the contract is priced in.
-        currency: String,
         /// What else narrows the lookup: an expiry, a strike, an identifier.
         filters: SecDefFilters,
     },
@@ -2287,15 +2313,12 @@ pub enum ControlCommand {
         /// The caller's number for the request this answers.
         req_id: u32,
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker, for a request that names one by description.
-        symbol: String,
         /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        sec_type: String,
         /// Where the request is directed, or the contract is listed.
-        exchange: String,
         /// What the contract is priced in.
-        currency: String,
         /// The start of the window asked for.
         start_date_time: String,
         /// The end of the window asked for. Empty means now.
@@ -2315,15 +2338,12 @@ pub enum ControlCommand {
         /// The caller's number for the request this answers.
         req_id: u32,
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker, for a request that names one by description.
-        symbol: String,
         /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        sec_type: String,
         /// Where the request is directed, or the contract is listed.
-        exchange: String,
         /// What the contract is priced in.
-        currency: String,
         /// Which series is wanted: `TRADES`, `MIDPOINT`, `BID`, `ASK`.
         what_to_show: String,
         /// Whether to count only regular trading hours.
@@ -2342,15 +2362,12 @@ pub enum ControlCommand {
         /// The caller's number for the request this answers.
         req_id: u32,
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker, for a request that names one by description.
-        symbol: String,
         /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        sec_type: String,
         /// Where the request is directed, or the contract is listed.
-        exchange: String,
         /// What the contract is priced in.
-        currency: String,
         /// The end of the window asked for. Empty means now.
         end_date_time: String,
         /// How far back from that end the window reaches.
@@ -2366,15 +2383,12 @@ pub enum ControlCommand {
         /// The caller's number for the request this answers.
         req_id: u32,
         /// The venue's id for the contract.
-        con_id: i64,
+        /// The contract this names.
+        contract: ContractRef,
         /// The contract's ticker, for a request that names one by description.
-        symbol: String,
         /// Where the request is directed, or the contract is listed.
-        exchange: String,
         /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        sec_type: String,
         /// What the contract is priced in.
-        currency: String,
         /// How many levels of the book are wanted.
         num_rows: i32,
         /// Whether the book was asked for on no particular venue.

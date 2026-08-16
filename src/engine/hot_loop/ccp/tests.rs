@@ -2111,12 +2111,8 @@ fn secdef_not_found(req_id: &str) -> Vec<u8> {
 fn a_request_naming_a_contract_waits_to_be_given_its_id() {
     let (mut ccp, _context, shared) = u186_test_state();
     let bars = crate::types::ControlCommand::FetchHistorical {
+        contract: crate::types::ContractRef { con_id: 0, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(), ..Default::default() },
         req_id: 7,
-        con_id: 0,
-        symbol: "SPY".into(),
-        sec_type: "STK".into(),
-        exchange: "SMART".into(),
-        currency: "USD".into(),
         end_date_time: String::new(),
         duration: "2 D".into(),
         bar_size: "1 hour".into(),
@@ -2138,19 +2134,14 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
     name_the_contract(&mut held, 756_733);
     let _ = lookup;
     match ccp.hold_until_named(held, &mut None, &mut HeartbeatState::new()) {
-        Some(crate::types::ControlCommand::FetchHistorical { con_id, req_id, .. }) => {
+        Some(crate::types::ControlCommand::FetchHistorical { contract: crate::types::ContractRef { con_id, .. }, req_id, .. }) => {
             assert_eq!((req_id, con_id), (7, 756_733), "sent under the id it was given");
         }
         other => panic!("a named request is handled, not held again: {other:?}"),
     }
 
     // And one the venue never names is reported rather than left waiting.
-    let unnamed = crate::types::ControlCommand::FetchHistorical {
-        req_id: 8, con_id: 0, symbol: "NOSUCH".into(), sec_type: "STK".into(),
-        exchange: "SMART".into(), currency: "USD".into(), end_date_time: String::new(),
-        duration: "1 D".into(), bar_size: "1 hour".into(), what_to_show: "TRADES".into(),
-            use_rth: true, keep_up_to_date: false, filters: Default::default(),
-    };
+    let unnamed = crate::types::ControlCommand::FetchHistorical { contract: crate::types::ContractRef { con_id: 0, symbol: "NOSUCH".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(), ..Default::default() }, end_date_time: String::new(), req_id: 8, duration: "1 D".into(), bar_size: "1 hour".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, filters: Default::default() };
     ccp.hold_until_named(unnamed, &mut None, &mut HeartbeatState::new());
     ccp.pending_named[0].2 -= CcpState::NAMING_TIMEOUT + Duration::from_secs(1);
     ccp.sweep_pending_named(&shared);

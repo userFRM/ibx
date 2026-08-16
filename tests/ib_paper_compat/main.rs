@@ -1215,9 +1215,7 @@ fn snap_to_tick_phase_live() {
     // Subscribe first: the subscribe ack is what populates the engine's
     // per-instrument tick size. Without it the snap is a no-op.
     control_tx.send(ControlCommand::Subscribe {
-        con_id: 756733, symbol: "SPY".into(), exchange: String::new(),
-        sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0,
-        right: String::new(), multiplier: String::new(), mode_9887: 0, reply_tx: None,
+        contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
     }).expect("send subscribe failed");
 
     let join = run_hot_loop(hot_loop);
@@ -1324,36 +1322,20 @@ fn timeout_sweeps_phase_live() {
     };
 
     // 1. By con_id — single record.
-    control_tx.send(ControlCommand::FetchContractDetails {
-        req_id: 6001, con_id: 756733, symbol: String::new(),
-        sec_type: String::new(), exchange: String::new(), currency: String::new(),
-        filters: Default::default(),
-    }).expect("send details by con_id failed");
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 6001, filters: Default::default() }).expect("send details by con_id failed");
     let (rows, end, _) = wait_details(6001, "by-conId SPY");
     assert!(rows >= 1, "by-conId lookup returned no rows");
     assert!(end, "by-conId end never fired — sweep may have eaten the reply");
 
     // 2. By symbol — exercises the fan-out counter and the deferred-end path.
-    control_tx.send(ControlCommand::FetchContractDetails {
-        req_id: 6002, con_id: 0, symbol: "AAPL".into(),
-        sec_type: "STK".into(), exchange: String::new(), currency: "USD".into(),
-        filters: Default::default(),
-    }).expect("send details by symbol failed");
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 0, symbol: "AAPL".into(), sec_type: "STK".into(), exchange: String::new(), currency: "USD".into(), ..Default::default() }, req_id: 6002, filters: Default::default() }).expect("send details by symbol failed");
     let (rows, end, row_after_end) = wait_details(6002, "by-symbol AAPL fan-out");
     assert!(rows >= 1, "by-symbol lookup returned no rows");
     assert!(end, "by-symbol end never fired within 30s");
     assert!(!row_after_end, "a row arrived AFTER end — ordering regression");
 
     // 3. Historical bars — must complete without tripping the idle sweep.
-    control_tx.send(ControlCommand::FetchHistorical {
-        sec_type: "STK".into(),
-        exchange: "SMART".into(),
-        req_id: 6003, con_id: 756733, symbol: "SPY".into(),
-        end_date_time: String::new(), duration: "5 D".into(), bar_size: "1 day".into(),
-        what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false,
-        currency: "".to_string(),
-        filters: Default::default(),
-    }).expect("send historical failed");
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 6003, end_date_time: String::new(), duration: "5 D".into(), bar_size: "1 day".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).expect("send historical failed");
     let deadline = Instant::now() + Duration::from_secs(45);
     let (mut bars, mut complete, mut hist_err) = (0usize, false, None::<String>);
     while Instant::now() < deadline && !complete && hist_err.is_none() {
@@ -1410,9 +1392,7 @@ fn reclaim_and_symbol_search_phase_live() {
     let subscribe = |req: &str| {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::Subscribe {
-            con_id: 756733, symbol: "SPY".into(), exchange: String::new(),
-            sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0,
-            right: String::new(), multiplier: String::new(), mode_9887: 0,
+            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0,
             reply_tx: Some(tx),
         }).expect("send subscribe failed");
         rx.recv_timeout(Duration::from_secs(10))

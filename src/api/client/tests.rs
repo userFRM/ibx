@@ -757,10 +757,10 @@ fn req_mkt_data_sends_register_and_subscribe() {
     let (client, rx, _shared) = test_client();
     let _ = client.req_mkt_data(1, &spy(), "", false, false);
     let cmd1 = rx.try_recv().unwrap();
-    assert!(matches!(cmd1, ControlCommand::RegisterInstrument { con_id: 756733, .. }));
+    assert!(matches!(cmd1, ControlCommand::RegisterInstrument { contract: ContractRef { con_id: 756733, .. }, .. }));
     let cmd2 = rx.try_recv().unwrap();
     match cmd2 {
-        ControlCommand::Subscribe { con_id, symbol, .. } => {
+        ControlCommand::Subscribe { contract: ContractRef { con_id, symbol, .. }, .. } => {
             assert_eq!(con_id, 756733);
             assert_eq!(symbol, "SPY");
         }
@@ -786,7 +786,7 @@ fn req_mkt_data_ex_propagates_mode_9887() {
         let _ = client.req_mkt_data_ex(1, &spy(), "", false, false, mode);
         let _register = rx.try_recv().unwrap();
         match rx.try_recv().unwrap() {
-            ControlCommand::Subscribe { mode_9887, con_id, .. } => {
+            ControlCommand::Subscribe { contract: ContractRef { con_id, .. }, mode_9887, .. } => {
                 assert_eq!(mode_9887, mode);
                 assert_eq!(con_id, 756733);
             }
@@ -848,7 +848,7 @@ fn a_second_symbol_is_not_a_duplicate_of_the_first_con_id_less_contract() {
     let err = client.req_mkt_data(2, &qqq, "", false, false).unwrap_err();
     assert!(!err.message.contains("req_id 1"), "QQQ is not the live contract: {err}");
     match rx.try_recv().expect("the registration reaches the engine") {
-        ControlCommand::RegisterInstrument { con_id, symbol, .. } => {
+        ControlCommand::RegisterInstrument { contract: ContractRef { con_id, symbol, .. }, .. } => {
             assert_eq!((con_id, symbol.as_str()), (0, "QQQ"));
         }
         other => panic!("expected RegisterInstrument, got {other:?}"),
@@ -1841,7 +1841,7 @@ fn an_exercise_it_cannot_serve_is_refused_before_anything_is_sent() {
     // engine to answer the registration, so the call ends there.
     let _ = client.exercise_options(1, &opt, 1, 1, "DU123", false);
     assert!(
-        matches!(rx.try_recv(), Ok(ControlCommand::RegisterInstrument { con_id: 999002, .. })),
+        matches!(rx.try_recv(), Ok(ControlCommand::RegisterInstrument { contract: ContractRef { con_id: 999002, .. }, .. })),
         "a served exercise registers its contract",
     );
 }
@@ -2374,9 +2374,7 @@ fn req_historical_data_sends_fetch_historical() {
     client.req_historical_data(5, &spy(), "20260101 16:00:00", "1 D", "1 hour", "TRADES", true, 1, false).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::FetchHistorical {
-            req_id, con_id, duration, bar_size, what_to_show, use_rth, sec_type, exchange, ..
-        } => {
+        ControlCommand::FetchHistorical { contract: ContractRef { con_id, sec_type, exchange, .. }, req_id, duration, bar_size, what_to_show, use_rth, .. } => {
             assert_eq!(req_id, 5);
             assert_eq!(con_id, 756733);
             assert_eq!(duration, "1 D");
@@ -2407,7 +2405,7 @@ fn req_historical_data_carries_the_contract_s_own_type_and_venue() {
     };
     client.req_historical_data(6, &es, "20260101 16:00:00", "1 D", "1 hour", "TRADES", true, 1, false).unwrap();
     match rx.try_recv().unwrap() {
-        ControlCommand::FetchHistorical { sec_type, exchange, .. } => {
+        ControlCommand::FetchHistorical { contract: ContractRef { sec_type, exchange, .. }, .. } => {
             assert_eq!(sec_type, "FUT");
             assert_eq!(exchange, "CME");
         }
@@ -2536,7 +2534,7 @@ fn req_head_time_stamp_sends_fetch() {
     client.req_head_time_stamp(10, &spy(), "TRADES", true, 1).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::FetchHeadTimestamp { req_id, con_id, what_to_show, use_rth, .. } => {
+        ControlCommand::FetchHeadTimestamp { contract: ContractRef { con_id, .. }, req_id, what_to_show, use_rth, .. } => {
             assert_eq!(req_id, 10);
             assert_eq!(con_id, 756733);
             assert_eq!(what_to_show, "TRADES");
@@ -2556,7 +2554,7 @@ fn req_contract_details_sends_fetch() {
     client.req_contract_details(7, &spy()).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::FetchContractDetails { req_id, con_id, .. } => {
+        ControlCommand::FetchContractDetails { contract: ContractRef { con_id, .. }, req_id, .. } => {
             assert_eq!(req_id, 7);
             assert_eq!(con_id, 756733);
         }
@@ -2584,7 +2582,7 @@ fn req_contract_details_forwards_filter_fields() {
     };
     client.req_contract_details(9, &contract).unwrap();
     match rx.try_recv().unwrap() {
-        ControlCommand::FetchContractDetails { req_id, con_id, filters, .. } => {
+        ControlCommand::FetchContractDetails { contract: ContractRef { con_id, .. }, req_id, filters, .. } => {
             assert_eq!(req_id, 9);
             assert_eq!(con_id, 0);
             assert_eq!(filters.primary_exchange, "NASDAQ");
@@ -2792,7 +2790,7 @@ fn req_historical_ticks_sends_fetch() {
     client.req_historical_ticks(8, &spy(), "20260101 09:30:00", "", 1000, "TRADES", true).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::FetchHistoricalTicks { req_id, con_id, number_of_ticks, what_to_show, .. } => {
+        ControlCommand::FetchHistoricalTicks { contract: ContractRef { con_id, .. }, req_id, number_of_ticks, what_to_show, .. } => {
             assert_eq!(req_id, 8);
             assert_eq!(con_id, 756733);
             assert_eq!(number_of_ticks, 1000);
@@ -2812,7 +2810,7 @@ fn req_real_time_bars_sends_subscribe() {
     client.req_real_time_bars(9, &spy(), 5, "TRADES", true).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::SubscribeRealTimeBar { req_id, con_id, what_to_show, use_rth, .. } => {
+        ControlCommand::SubscribeRealTimeBar { contract: ContractRef { con_id, .. }, req_id, what_to_show, use_rth, .. } => {
             assert_eq!(req_id, 9);
             assert_eq!(con_id, 756733);
             assert_eq!(what_to_show, "TRADES");
@@ -2840,7 +2838,7 @@ fn req_historical_schedule_sends_fetch() {
     client.req_historical_schedule(11, &spy(), "20260101 16:00:00", "1 D", true).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::FetchHistoricalSchedule { req_id, con_id, use_rth, .. } => {
+        ControlCommand::FetchHistoricalSchedule { contract: ContractRef { con_id, .. }, req_id, use_rth, .. } => {
             assert_eq!(req_id, 11);
             assert_eq!(con_id, 756733);
             assert!(use_rth);

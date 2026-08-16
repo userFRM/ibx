@@ -948,8 +948,7 @@ impl ClientCore {
         // Register new — only allocates an InstrumentId slot, does not subscribe to market data.
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::RegisterInstrument {
-            con_id, symbol: symbol.to_string(),
-            sec_type: sec_type.to_string(), exchange: exchange.to_string(),
+            contract: ContractRef { con_id, symbol: symbol.to_string(), sec_type: sec_type.to_string(), exchange: exchange.to_string(), ..Default::default() },
             identity: identity.to_string(),
             reply_tx: Some(reply_tx),
         }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
@@ -1028,21 +1027,12 @@ impl ClientCore {
 
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::RegisterInstrument {
-            con_id, symbol: symbol.to_string(),
-            sec_type: sec_type.to_string(), exchange: exchange.to_string(),
+            contract: ContractRef { con_id, symbol: symbol.to_string(), sec_type: sec_type.to_string(), exchange: exchange.to_string(), ..Default::default() },
             identity: String::new(),
             reply_tx: None,
         }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
         control_tx.send(ControlCommand::Subscribe {
-            con_id,
-            symbol: symbol.to_string(),
-            exchange: exchange.to_string(),
-            sec_type: sec_type.to_string(),
-            currency: currency.to_string(),
-            last_trade_date: last_trade_date.to_string(),
-            strike,
-            right: right.to_string(),
-            multiplier: multiplier.to_string(),
+            contract: ContractRef { con_id, symbol: symbol.to_string(), exchange: exchange.to_string(), sec_type: sec_type.to_string(), currency: currency.to_string(), last_trade_date: last_trade_date.to_string(), strike, right: right.to_string(), multiplier: multiplier.to_string() },
             mode_9887,
             reply_tx: Some(reply_tx),
         }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
@@ -1248,11 +1238,8 @@ impl ClientCore {
     ) -> Result<InstrumentId, Refusal> {
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::SubscribeTbt {
+            contract: ContractRef { con_id, symbol: symbol.to_string(), sec_type: sec_type.to_string(), exchange: exchange.to_string(), ..Default::default() },
             req_id,
-            con_id,
-            symbol: symbol.to_string(),
-            sec_type: sec_type.to_string(),
-            exchange: exchange.to_string(),
             tbt_type,
             reply_tx: Some(reply_tx),
         }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;

@@ -14,6 +14,9 @@ Usage: python scripts/gen_wire_coverage.py
 
 import re
 import sys
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from _paths import module  # noqa: E402
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,9 +51,9 @@ HISTORICAL = SHARED | {
 # Where the dispatch tables live: file, the text that starts the match, and the
 # names to use for what it branches on.
 DISPATCHERS = [
-    ("trading connection", "src/engine/hot_loop/ccp.rs", "match msg_type {", TRADING),
-    ("market data connection", "src/engine/hot_loop/farm.rs", "match msg_type", MARKET_DATA),
-    ("historical connection", "src/engine/hot_loop/hmds.rs", "match msg_type", HISTORICAL),
+    ("trading connection", "src/engine/hot_loop/ccp", "match msg_type {", TRADING),
+    ("market data connection", "src/engine/hot_loop/farm", "match msg_type", MARKET_DATA),
+    ("historical connection", "src/engine/hot_loop/hmds", "match msg_type", HISTORICAL),
 ]
 
 
@@ -136,7 +139,7 @@ def sent_subtypes(srcs: dict) -> list:
 
 
 def dispatch_block(path: str, start: str) -> str:
-    text = without_tests((ROOT / path).read_text(errors="ignore"))
+    text = without_tests(module(path).read_text(errors="ignore"))
     at = text.find(start)
     if at < 0:
         die(f"no dispatch table matching {start!r} in {path}")
@@ -251,7 +254,7 @@ def main() -> None:
     # message type directly, so it is stated rather than extracted.
     logon = sorted(set(re.findall(
         r'msg_type == "([A-Za-z0-9]+)"|== Some\("([A-Za-z0-9]+)"\)',
-        without_tests((ROOT / "src" / "gateway.rs").read_text(errors="ignore")),
+        without_tests(module("src/gateway").read_text(errors="ignore")),
     )))
     logon = sorted({a or b for a, b in logon})
     lines += table(

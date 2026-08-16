@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use ibx::bridge::SharedState;
 use ibx::engine::hot_loop::HotLoop;
 use ibx::gateway::{CallerAuth, Gateway, GatewayConfig, Session};
-use ibx::types::ControlCommand;
+use ibx::types::{ContractRef, ControlCommand};
 
 /// Liquid enough that a quiet minute is the client's fault rather than the
 /// market's, and more than one so a single silent contract cannot pass.
@@ -108,10 +108,13 @@ fn main() {
 
     for (con_id, symbol) in SUBJECTS {
         control_tx.send(ControlCommand::Subscribe {
-            con_id, symbol: symbol.to_string(),
-            exchange: String::new(), sec_type: String::new(), currency: String::new(),
-            last_trade_date: String::new(), strike: 0.0, right: String::new(),
-            multiplier: String::new(), mode_9887: 0, reply_tx: None,
+            contract: ContractRef {
+                con_id,
+                symbol: symbol.to_string(),
+                ..Default::default()
+            },
+            mode_9887: 0,
+            reply_tx: None,
         }).expect("the engine takes the subscription");
     }
 
