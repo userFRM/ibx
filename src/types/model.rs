@@ -2091,3 +2091,204 @@ mod varying_a_ladder_tests {
         assert!(!order.attrs().scale.expect("a ladder").random_percent);
     }
 }
+
+/// Naming a contract without filling a struct.
+///
+/// The venue identifies an instrument by a handful of fields whose defaults are
+/// the same on nearly every request: a US stock routed to SMART in dollars, an
+/// option on the same terms with a strike and an expiry. Written out in full
+/// each time, the fields that matter to a caller are the two that differ from
+/// the ones that do not.
+///
+/// Each of these returns a contract that a request will take as it stands.
+/// Where a venue, a currency or a class is not the usual one, say so:
+///
+/// ```
+/// # use ibx::types::model::Contract;
+/// let spy = Contract::stock("SPY");
+/// let toyota = Contract::stock("7203").on_exchange("TSEJ").in_currency("JPY");
+/// let call = Contract::call("AAPL", 150.0, "20261218");
+/// let eurusd = Contract::forex("EUR", "USD");
+/// ```
+impl Contract {
+    /// A share, routed to SMART and priced in dollars unless told otherwise.
+    pub fn stock(symbol: &str) -> Self {
+        Self {
+            symbol: symbol.into(), sec_type: "STK".into(),
+            exchange: "SMART".into(), currency: "USD".into(),
+            ..Default::default()
+        }
+    }
+
+    /// An option on a stock, by strike and expiry. `expiry` is `YYYYMMDD`, or
+    /// `YYYYMM` for the month's own contract.
+    fn option(symbol: &str, strike: f64, expiry: &str, right: &str) -> Self {
+        Self {
+            symbol: symbol.into(), sec_type: "OPT".into(),
+            exchange: "SMART".into(), currency: "USD".into(),
+            strike, right: right.into(),
+            last_trade_date_or_contract_month: expiry.into(),
+            multiplier: "100".into(),
+            ..Default::default()
+        }
+    }
+
+    /// The right to buy, at `strike`, until `expiry` (`YYYYMMDD`).
+    pub fn call(symbol: &str, strike: f64, expiry: &str) -> Self {
+        Self::option(symbol, strike, expiry, "C")
+    }
+
+    /// The right to sell, at `strike`, until `expiry` (`YYYYMMDD`).
+    pub fn put(symbol: &str, strike: f64, expiry: &str) -> Self {
+        Self::option(symbol, strike, expiry, "P")
+    }
+
+    /// A future, by contract month (`YYYYMM`) or expiry (`YYYYMMDD`). The
+    /// venue is named because futures do not route to SMART.
+    pub fn future(symbol: &str, expiry: &str, exchange: &str) -> Self {
+        Self {
+            symbol: symbol.into(), sec_type: "FUT".into(),
+            exchange: exchange.into(), currency: "USD".into(),
+            last_trade_date_or_contract_month: expiry.into(),
+            ..Default::default()
+        }
+    }
+
+    /// A currency pair, quoted base against quote, on IDEALPRO.
+    pub fn forex(base: &str, quote: &str) -> Self {
+        Self {
+            symbol: base.into(), sec_type: "CASH".into(),
+            exchange: "IDEALPRO".into(), currency: quote.into(),
+            ..Default::default()
+        }
+    }
+
+    /// An index, which is quoted and never traded.
+    pub fn index(symbol: &str, exchange: &str) -> Self {
+        Self {
+            symbol: symbol.into(), sec_type: "IND".into(),
+            exchange: exchange.into(), currency: "USD".into(),
+            ..Default::default()
+        }
+    }
+
+    /// A contract the venue has already named, by its own id. Every other
+    /// field is left empty: an id identifies the contract on its own.
+    pub fn by_id(con_id: i64) -> Self {
+        Self { con_id, ..Default::default() }
+    }
+
+    /// Route somewhere other than the default.
+    #[must_use]
+    pub fn on_exchange(mut self, exchange: &str) -> Self {
+        self.exchange = exchange.into();
+        self
+    }
+
+    /// Price in a currency other than dollars.
+    #[must_use]
+    pub fn in_currency(mut self, currency: &str) -> Self {
+        self.currency = currency.into();
+        self
+    }
+
+    /// State which listing, where a symbol is carried on more than one and the
+    /// venue would otherwise answer with whichever it lists first.
+    #[must_use]
+    pub fn listed_on(mut self, primary_exchange: &str) -> Self {
+        self.primary_exchange = primary_exchange.into();
+        self
+    }
+
+    /// State the venue's own name for this contract, where the symbol is
+    /// ambiguous without it.
+    #[must_use]
+    pub fn named(mut self, local_symbol: &str) -> Self {
+        self.local_symbol = local_symbol.into();
+        self
+    }
+}
+
+/// Stating an order without filling a struct.
+///
+/// An order has a hundred and fifty-four fields and a caller states four of
+/// them: which way, how much, what kind, and at what price. The rest carry the
+/// defaults the venue assumes. Each of these fills those four and leaves the
+/// rest alone, so what a reader sees is the order and not the form it was
+/// written on.
+///
+/// `side` is `"BUY"` or `"SELL"`, the venue's own words. Every one of these is
+/// a plain [`Order`], so a field this shorthand does not reach is set on the
+/// value it returns.
+///
+/// ```
+/// # use ibx::types::model::Order;
+/// let buy = Order::market("BUY", 100.0);
+/// let bid = Order::limit("BUY", 100.0, 42.50);
+/// let out = Order::stop("SELL", 100.0, 41.00);
+/// let good_till_cancelled = Order { tif: "GTC".into(), ..Order::limit("BUY", 1.0, 10.0) };
+/// ```
+impl Order {
+    /// Filled at whatever the market is, immediately.
+    pub fn market(side: &str, quantity: f64) -> Self {
+        Self {
+            action: side.into(), total_quantity: quantity,
+            order_type: "MKT".into(), tif: "DAY".into(),
+            ..Default::default()
+        }
+    }
+
+    /// Filled at `price` or better, or not at all.
+    pub fn limit(side: &str, quantity: f64, price: f64) -> Self {
+        Self {
+            action: side.into(), total_quantity: quantity,
+            order_type: "LMT".into(), lmt_price: price, tif: "DAY".into(),
+            ..Default::default()
+        }
+    }
+
+    /// Becomes a market order once the market reaches `trigger`.
+    pub fn stop(side: &str, quantity: f64, trigger: f64) -> Self {
+        Self {
+            action: side.into(), total_quantity: quantity,
+            order_type: "STP".into(), aux_price: trigger, tif: "DAY".into(),
+            ..Default::default()
+        }
+    }
+
+    /// Becomes a limit order at `limit` once the market reaches `trigger`.
+    ///
+    /// The limit is what stops a stop from filling at any price at all in a
+    /// market that has gapped past the trigger.
+    pub fn stop_limit(side: &str, quantity: f64, trigger: f64, limit: f64) -> Self {
+        Self {
+            action: side.into(), total_quantity: quantity,
+            order_type: "STP LMT".into(), aux_price: trigger, lmt_price: limit,
+            tif: "DAY".into(),
+            ..Default::default()
+        }
+    }
+
+    /// A stop that follows the market by `percent`, and does not follow it back.
+    pub fn trailing_stop(side: &str, quantity: f64, percent: f64) -> Self {
+        Self {
+            action: side.into(), total_quantity: quantity,
+            order_type: "TRAIL".into(), trailing_percent: percent, tif: "DAY".into(),
+            ..Default::default()
+        }
+    }
+
+    /// Stand until cancelled rather than expiring at the close.
+    #[must_use]
+    pub fn good_till_cancelled(mut self) -> Self {
+        self.tif = "GTC".into();
+        self
+    }
+
+    /// Fill in the auction and the session, not only the session.
+    #[must_use]
+    pub fn outside_regular_hours(mut self) -> Self {
+        self.outside_rth = true;
+        self
+    }
+}

@@ -4775,3 +4775,66 @@ fn a_request_gets_its_bar_times_written_the_way_it_asked() {
     client.process_msgs(&mut heard);
     assert_eq!(heard.0[2].1, "20260815-12:00:00", "still the venue's spelling");
 }
+
+/// The shorthand states the order a reader would write out, and nothing else.
+/// A constructor that quietly set a field a caller had not asked for would put
+/// an instruction on the wire that nobody wrote.
+#[test]
+fn the_shorthand_states_the_order_and_nothing_more() {
+    use crate::types::model::Order;
+    let plain = Order::default();
+    for (what, order, kind, lmt, aux) in [
+        ("market", Order::market("BUY", 100.0), "MKT", 0.0, 0.0),
+        ("limit", Order::limit("BUY", 100.0, 42.5), "LMT", 42.5, 0.0),
+        ("stop", Order::stop("SELL", 100.0, 41.0), "STP", 0.0, 41.0),
+        ("stop limit", Order::stop_limit("SELL", 100.0, 41.0, 40.5), "STP LMT", 40.5, 41.0),
+    ] {
+        assert_eq!(order.order_type, kind, "{what}");
+        assert_eq!(order.total_quantity, 100.0, "{what}");
+        assert_eq!(order.lmt_price, lmt, "{what}");
+        assert_eq!(order.aux_price, aux, "{what}");
+        assert_eq!(order.tif, "DAY", "{what}: expires at the close unless said otherwise");
+        // Everything this shorthand does not name is left where it was.
+        assert_eq!(order.hedge_type, plain.hedge_type, "{what}");
+        assert_eq!(order.good_after_time, plain.good_after_time, "{what}");
+        assert_eq!(order.origin, plain.origin, "{what}");
+        assert_eq!(order.transmit, plain.transmit, "{what}");
+    }
+    assert_eq!(Order::limit("BUY", 1.0, 10.0).good_till_cancelled().tif, "GTC");
+    assert!(Order::market("BUY", 1.0).outside_regular_hours().outside_rth);
+}
+
+/// A contract the shorthand names is the one a request would carry. Each of
+/// these was read back off a live definition, so a default that drifted from
+/// what the venue lists would be a lookup answering about something else.
+#[test]
+fn the_shorthand_names_the_contract_a_request_carries() {
+    use crate::types::model::Contract;
+    let spy = Contract::stock("SPY");
+    assert_eq!((spy.sec_type.as_str(), spy.exchange.as_str(), spy.currency.as_str()),
+               ("STK", "SMART", "USD"));
+
+    let call = Contract::call("AAPL", 150.0, "20261218");
+    assert_eq!(call.sec_type, "OPT");
+    assert_eq!((call.right.as_str(), call.strike), ("C", 150.0));
+    assert_eq!(call.last_trade_date_or_contract_month, "20261218");
+    assert_eq!(call.multiplier, "100", "an equity option is a hundred shares");
+    assert_eq!(Contract::put("AAPL", 150.0, "20261218").right, "P");
+
+    let es = Contract::future("ES", "202612", "CME");
+    assert_eq!((es.sec_type.as_str(), es.exchange.as_str()), ("FUT", "CME"));
+
+    let eurusd = Contract::forex("EUR", "USD");
+    assert_eq!((eurusd.sec_type.as_str(), eurusd.symbol.as_str(),
+                eurusd.currency.as_str(), eurusd.exchange.as_str()),
+               ("CASH", "EUR", "USD", "IDEALPRO"));
+
+    // A contract stated by id carries nothing else: a symbol beside an id that
+    // disagreed with it is a description of two different contracts.
+    let by_id = Contract::by_id(756733);
+    assert_eq!(by_id.con_id, 756733);
+    assert!(by_id.symbol.is_empty() && by_id.sec_type.is_empty());
+
+    let toyota = Contract::stock("7203").on_exchange("TSEJ").in_currency("JPY");
+    assert_eq!((toyota.exchange.as_str(), toyota.currency.as_str()), ("TSEJ", "JPY"));
+}
