@@ -1249,7 +1249,6 @@ impl From<&WhatIfResponse> for OrderState {
     }
 }
 
-
 // ── Execution ──
 
 /// ibapi-compatible Execution (used in execDetails callback).

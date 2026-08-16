@@ -522,7 +522,14 @@ impl EClient {
         let symbol_results = shared.reference.drain_matching_symbols_for_dispatch();
         for (req_id, matches) in symbol_results {
             let descriptions: Vec<Py<ContractDescription>> = matches.iter().map(|m| {
-                Py::new(py, ContractDescription::from_api(&m.into())).unwrap()
+                Py::new(py, ContractDescription {
+                    con_id: m.con_id as i64,
+                    symbol: m.symbol.clone(),
+                    sec_type: m.sec_type.to_fix().to_string(),
+                    currency: m.currency.clone(),
+                    primary_exchange: m.primary_exchange.clone(),
+                    derivative_sec_types: m.derivative_types.clone(),
+                }).unwrap()
             }).collect();
             let list = pyo3::types::PyList::new(py, &descriptions)?;
             call_wrapper!(self.wrapper, py, "symbol_samples", (req_id as i64, list.as_any()));

@@ -65,7 +65,6 @@ pub struct FundamentalResponse {
     pub data: Vec<u8>,
 }
 
-
 /// What a fundamentals request calls itself, and what a cancel names to
 /// withdraw it.
 pub const FUNDAMENTALS_QUERY_ID: &str = "COMPANY_FUNDAMENTALS";

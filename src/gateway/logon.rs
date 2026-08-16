@@ -37,6 +37,7 @@ const PRIMING_MESSAGES: usize = 92;
 /// the burst that follows it, because the venue states some of these in one
 /// and some in the other and states a few in both. Every field keeps what it
 /// was told first, so the second reading fills gaps rather than overwriting.
+#[derive(Default)]
 pub(super) struct LogonAck {
     /// The account a caller gets by default.
     pub account_id: String,
@@ -75,32 +76,6 @@ pub(super) struct LogonAck {
     pub trading_port: Option<u16>,
 }
 
-impl Default for LogonAck {
-    fn default() -> Self {
-        Self {
-            account_id: String::new(),
-            accounts: Vec::new(),
-            logged_in_at: String::new(),
-            // What the venue is asked for, until it answers with its own.
-            heartbeat_interval: CCP_HEARTBEAT,
-            server_session_id: String::new(),
-            ccp_token: String::new(),
-            raw_soft_dollar_tiers: String::new(),
-            raw_family_codes: String::new(),
-            raw_news_providers: String::new(),
-            raw_order_permissions: String::new(),
-            enabled_features: String::new(),
-            raw_enabled_features: String::new(),
-            white_branding_id: String::new(),
-            raw_misc_urls: String::new(),
-            trading_route: String::new(),
-            mktdata_route: String::new(),
-            secdef_route: String::new(),
-            trading_port: None,
-        }
-    }
-}
-
 impl LogonAck {
     /// Read the answer to a logon, up to the ACK that ends it.
     ///
@@ -109,7 +84,8 @@ impl LogonAck {
     /// wants a short read timeout so a slow ACK segment from a high-latency
     /// venue is retried against `deadline` rather than being fatal.
     pub fn read(r: &mut impl Read, deadline: Instant) -> io::Result<Self> {
-        let mut ack = Self::default();
+        // What the venue is asked for, until it answers with its own.
+        let mut ack = Self { heartbeat_interval: CCP_HEARTBEAT, ..Self::default() };
         for _ in 0..5 {
             let raw_response = fix_read_deadline(r, deadline)?;
             // The auth-logon ACK arrives as `8=FIXCOMP` with a DEFLATE-
@@ -170,7 +146,7 @@ impl LogonAck {
             if let Some(v) = fields.get(&6386)
                 && ack.ccp_token.is_empty() {
                     ack.ccp_token = v.clone();
-                    log::info!("Auth: captured ack.ccp_token (FIX 6386, len={}, prefix={:?})",
+                    log::info!("Auth: captured ccp_token (FIX 6386, len={}, prefix={:?})",
                         ack.ccp_token.len(),
                         if ack.ccp_token.len() > 16 { &ack.ccp_token[..16] } else { &ack.ccp_token });
                 }
@@ -192,7 +168,7 @@ impl LogonAck {
             }
 
             // Farm routing — server tells us which farms
-            // this account is permissioned for. EU ack.accounts get `eufarm`,
+            // this account is permissioned for. EU accounts get `eufarm`,
             // US get `usfarm`, etc. Read once from whichever auth msg has it.
             if let Some(v) = fields.get(&6145)
                 && ack.trading_route.is_empty() {
@@ -320,9 +296,8 @@ pub(super) fn send_init_sequence(
     scope: ExecutionReportScope,
     account: &str,
     now: &str,
-    seq: u32,
+    mut seq: u32,
 ) -> io::Result<u32> {
-    let mut seq = seq;
     let mut send = |fields: &[(u32, &str)]| -> io::Result<()> {
         seq += 1;
         w.write_all(&fix_build(fields, seq))
@@ -373,9 +348,8 @@ pub(super) fn send_post_burst_grace(
     w: &mut impl Write,
     account: &str,
     now: &str,
-    seq: u32,
+    mut seq: u32,
 ) -> io::Result<u32> {
-    let mut seq = seq;
     let mut send = |fields: &[(u32, &str)]| -> io::Result<()> {
         seq += 1;
         w.write_all(&fix_build(fields, seq))
@@ -412,13 +386,28 @@ mod tests {
         msgs
     }
 
-    /// A logon answer, as bytes on a socket that will not be read past.
-    fn answered_with(msgs: &[&[(u32, &str)]]) -> std::io::Cursor<Vec<u8>> {
-        let mut wire = Vec::new();
-        for (i, fields) in msgs.iter().enumerate() {
-            wire.extend_from_slice(&fix_build(fields, i as u32 + 1));
+    /// A logon answer, one message per read, as a socket delivers it.
+    struct Answer(std::collections::VecDeque<Vec<u8>>);
+
+    impl Read for Answer {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.0.pop_front() {
+                Some(msg) => {
+                    buf[..msg.len()].copy_from_slice(&msg);
+                    Ok(msg.len())
+                }
+                None => Ok(0),
+            }
         }
-        std::io::Cursor::new(wire)
+    }
+
+    fn answered_with(msgs: &[&[(u32, &str)]]) -> Answer {
+        Answer(
+            msgs.iter()
+                .enumerate()
+                .map(|(i, fields)| fix_build(fields, i as u32 + 1))
+                .collect(),
+        )
     }
 
     fn a_minute_from_now() -> Instant {
@@ -463,6 +452,33 @@ mod tests {
         let ack = LogonAck::read(&mut wire, a_minute_from_now()).unwrap();
         assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
         assert!(ack.account_id.is_empty(), "read past the message that ended the logon");
+    }
+
+    /// The ACK is not always the first message the venue sends, and what it
+    /// states is read wherever in the answer it arrives.
+    #[test]
+    fn the_ack_is_read_however_many_messages_precede_it() {
+        let mut wire = answered_with(&[
+            &[(35, "0")],
+            &[(35, "0")],
+            &[(35, "0")],
+            &[(35, "A"), (1, "DU111111"), (6145, "cdc1.ibllc.com/usfarm")],
+        ]);
+        let ack = LogonAck::read(&mut wire, a_minute_from_now()).unwrap();
+        assert_eq!(ack.account_id, "DU111111");
+        assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
+    }
+
+    /// A logout is the venue refusing the logon as much as a reject is, and it
+    /// arrives in place of the ACK rather than after it.
+    #[test]
+    fn a_logout_in_place_of_the_ack_is_a_refusal() {
+        let mut wire = answered_with(&[&[(35, "5"), (58, "Too many sessions")]]);
+        let err = LogonAck::read(&mut wire, a_minute_from_now())
+            .err()
+            .expect("a logout is not an answer to read past");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("Too many sessions"), "{err}");
     }
 
     /// A rejected logon is the venue's answer, not a read to retry, and it

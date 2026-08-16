@@ -102,7 +102,6 @@ pub fn build_scanner_cancel_xml(scan_id: &str) -> String {
     )
 }
 
-
 /// Parse a ScanResponse XML into contract IDs and scan time.
 pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
     if !xml.contains("<ScanResponse>") {

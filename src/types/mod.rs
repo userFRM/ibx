@@ -221,7 +221,6 @@ pub struct Quote {
     pub halted: i64,
 }
 
-
 /// Execution fill report.
 #[derive(Debug, Clone, Copy)]
 pub struct Fill {
@@ -1740,8 +1739,6 @@ pub fn exchange_letter(_exchange: &str) -> &'static str {
     ""
 }
 
-
-
 #[derive(Debug, Clone)]
 /// One venue behind a quote's exchange mask, and the letter it is named by.
 pub struct SmartComponent {
@@ -1946,17 +1943,27 @@ pub struct SecDefFilters {
 /// empty on anything without an expiry, which is every share and every
 /// currency pair.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct ContractRef { /// The venue's own number for it, or `0` where the caller named it by
+pub struct ContractRef {
+    /// The venue's own number for it, or `0` where the caller named it by
     /// description and the lookup has not answered yet.
-    pub con_id: i64, /// Its ticker.
-    pub symbol: String, /// What kind of contract it is, in the reference client's spelling.
-    pub sec_type: String, /// Where it is to be traded or quoted.
-    pub exchange: String, /// What it is priced in.
-    pub currency: String, /// When it expires.
-    pub last_trade_date: String, /// What it may be exercised at.
-    pub strike: f64, /// Whether it is a call or a put.
-    pub right: String, /// How many of the underlying one contract is.
-    pub multiplier: String }
+    pub con_id: i64,
+    /// Its ticker.
+    pub symbol: String,
+    /// What kind of contract it is, in the reference client's spelling.
+    pub sec_type: String,
+    /// Where it is to be traded or quoted.
+    pub exchange: String,
+    /// What it is priced in.
+    pub currency: String,
+    /// When it expires.
+    pub last_trade_date: String,
+    /// What it may be exercised at.
+    pub strike: f64,
+    /// Whether it is a call or a put.
+    pub right: String,
+    /// How many of the underlying one contract is.
+    pub multiplier: String,
+}
 
 impl From<&crate::api::types::Contract> for ContractRef {
     /// Take what identifies the contract, and leave the rest.
@@ -1992,23 +1999,14 @@ impl From<&crate::api::types::Contract> for ContractRef {
 #[derive(Debug, Clone)]
 pub enum ControlCommand {
     /// Subscribe to market data for a contract.
-    /// `exchange` and `sec_type` determine farm routing (empty = UsFarm default).
+    /// The contract's exchange and security type determine farm routing
+    /// (empty = UsFarm default).
     /// `mode_9887` encodes per-request market-data mode via FIX field 9887:
     /// 0 = REALTIME (absent, default fan-out 264=442 BID_ASK + 264=443 LAST),
     /// 1 = DELAYED, 2 = FROZEN, 3 = DELAYED_FROZEN (single 264=1 TOP + 9887=N).
     Subscribe {
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker.
-        /// Where the subscription is taken from.
-        /// What kind of contract it is.
-        /// Stated so a contract named by symbol resolves to one listing: the
-        /// same symbol on the same venue exists in more than one currency.
-        /// An option's expiry or a future's month.
-        /// An option's strike.
-        /// `C` or `P`.
-        /// How many units one contract is worth.
         /// Which feed to serve the subscription from: live, delayed or frozen.
         mode_9887: i32,
         /// Where the engine sends the slot it registered, for a caller waiting
@@ -2024,12 +2022,8 @@ pub enum ControlCommand {
     SubscribeTbt {
         /// The caller's number for the request.
         req_id: i64,
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker.
-        /// What kind of contract it is.
-        /// Where the request is directed.
         /// Which stream is wanted.
         tbt_type: TbtType,
         /// Where the engine sends the slot it registered.
@@ -2104,12 +2098,8 @@ pub enum ControlCommand {
     /// contract by the instrument, so the instrument has to know this or the
     /// order goes out unable to say which strike or contract month it means.
     RegisterInstrument {
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker.
-        /// What kind of contract it is.
-        /// Where the request is directed.
         /// What separates this contract from others sharing its symbol.
         identity: String,
         /// Where the engine sends the slot it registered.
@@ -2119,15 +2109,8 @@ pub enum ControlCommand {
     FetchHistorical {
         /// The caller's number for the request this answers.
         req_id: u32,
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker, for a request that names one by description.
-        /// Security type and exchange from the caller's contract. Hardcoding
-        /// these described a stock on SMART regardless of what was asked for,
-        /// so anything venue-specific was rejected.
-        /// Where the request is directed, or the contract is listed.
-        /// What the contract is priced in.
         /// The end of the window asked for. Empty means now.
         end_date_time: String,
         /// How far back from that end the window reaches.
@@ -2157,13 +2140,8 @@ pub enum ControlCommand {
     FetchHeadTimestamp {
         /// The caller's number for the request this answers.
         req_id: u32,
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker, for a request that names one by description.
-        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        /// Where the request is directed, or the contract is listed.
-        /// What the contract is priced in.
         /// Which series is wanted: `TRADES`, `MIDPOINT`, `BID`, `ASK`.
         what_to_show: String,
         /// Whether to count only regular trading hours.
@@ -2176,13 +2154,8 @@ pub enum ControlCommand {
     FetchContractDetails {
         /// The caller's number for the request this answers.
         req_id: u32,
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker, for a request that names one by description.
-        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        /// Where the request is directed, or the contract is listed.
-        /// What the contract is priced in.
         /// What else narrows the lookup: an expiry, a strike, an identifier.
         filters: SecDefFilters,
     },
@@ -2312,13 +2285,8 @@ pub enum ControlCommand {
     FetchHistoricalTicks {
         /// The caller's number for the request this answers.
         req_id: u32,
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker, for a request that names one by description.
-        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        /// Where the request is directed, or the contract is listed.
-        /// What the contract is priced in.
         /// The start of the window asked for.
         start_date_time: String,
         /// The end of the window asked for. Empty means now.
@@ -2337,13 +2305,8 @@ pub enum ControlCommand {
     SubscribeRealTimeBar {
         /// The caller's number for the request this answers.
         req_id: u32,
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker, for a request that names one by description.
-        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        /// Where the request is directed, or the contract is listed.
-        /// What the contract is priced in.
         /// Which series is wanted: `TRADES`, `MIDPOINT`, `BID`, `ASK`.
         what_to_show: String,
         /// Whether to count only regular trading hours.
@@ -2361,13 +2324,8 @@ pub enum ControlCommand {
     FetchHistoricalSchedule {
         /// The caller's number for the request this answers.
         req_id: u32,
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker, for a request that names one by description.
-        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        /// Where the request is directed, or the contract is listed.
-        /// What the contract is priced in.
         /// The end of the window asked for. Empty means now.
         end_date_time: String,
         /// How far back from that end the window reaches.
@@ -2382,13 +2340,8 @@ pub enum ControlCommand {
     SubscribeDepth {
         /// The caller's number for the request this answers.
         req_id: u32,
-        /// The venue's id for the contract.
         /// The contract this names.
         contract: ContractRef,
-        /// The contract's ticker, for a request that names one by description.
-        /// Where the request is directed, or the contract is listed.
-        /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
-        /// What the contract is priced in.
         /// How many levels of the book are wanted.
         num_rows: i32,
         /// Whether the book was asked for on no particular venue.

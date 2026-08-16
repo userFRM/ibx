@@ -59,7 +59,6 @@ pub struct NewsHeadline {
     pub headline: String,
 }
 
-
 /// URL-encode a string for the `<query>` field.
 fn url_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 2);

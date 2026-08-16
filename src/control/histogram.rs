@@ -77,7 +77,6 @@ pub fn build_histogram_fix_request(req: &HistogramRequest, seq: u32) -> Vec<u8> 
     )
 }
 
-
 /// Parse a histogram XML response into entries.
 ///
 /// The response contains `<Tick>` elements with `<price>` and `<size>` children

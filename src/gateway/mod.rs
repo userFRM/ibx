@@ -76,7 +76,6 @@ pub fn parse_misc_urls(s: &str) -> std::collections::HashMap<String, String> {
 /// Farm name used when the auth server states no trading route.
 pub(crate) const DEFAULT_TRADING_FARM: &str = "usfarm";
 
-
 /// Parse a farm-route string from the auth-server's routing tags.
 ///
 /// Three accepted shapes:
@@ -283,7 +282,6 @@ pub fn build_farm_encrypted_logon(
     wrapper.extend_from_slice(format!("10={cksum}\x01").as_bytes());
     wrapper
 }
-
 
 /// What a farm's logon leaves behind for the connection that follows it.
 pub struct FarmLogon {
@@ -606,7 +604,6 @@ pub struct ReconnectAuth {
     pub secdef_port: Option<u16>,
 }
 
-
 /// Keep the first value the venue sends for a field it sends once, and say so
 /// when it sends a second one that differs. Each of these carries its whole
 /// list in one field, so a second differing value would mean the list arrives
@@ -632,7 +629,6 @@ fn note_account(accounts: &mut Vec<String>, account: &str) {
         accounts.push(account.to_string());
     }
 }
-
 
 /// Another session already logged in on this account when this one connected.
 ///
@@ -737,7 +733,6 @@ pub fn parse_competing_session(frame: &str) -> Option<CompetingSession> {
         })
     })
 }
-
 
 /// Full gateway connection.
 pub struct Gateway {
@@ -1098,7 +1093,6 @@ pub fn connect_farm(
     Ok(conn)
 }
 
-
 /// The hosts left to try, given every host this session reached the venue
 /// through and the one being reconnected to now.
 ///
@@ -1456,7 +1450,6 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     conn.logged_in_at = Some(logged_in_at);
     Ok(conn)
 }
-
 
 /// SOFT_TOKEN challenge-response over the TLS/NS channel (for CCP reconnect).
 fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &BigUint) -> io::Result<()> {
@@ -1935,15 +1928,14 @@ fn authenticate(
     // default only ever matches the profile it was captured from; every
     // other account has its SWCR_TOKEN rejected and the socket closed
     // before a challenge is issued.
-    let (server_token_type, server_token_sub_type) =
-        parse_auth_start_token(&auth_start_text(auth_start)?);
+    let auth_text = auth_start_text(auth_start)?;
+    let (server_token_type, server_token_sub_type) = parse_auth_start_token(&auth_text);
 
     // Field 5 of AUTH_START says which of the two the server will accept.
     // It answers 2 only when the request named a session it still holds, so
     // a resume that is stale, or for another account, or simply older than
     // the server keeps, comes back asking for the handshake — and gets it,
     // rather than an error the caller has to know how to retry.
-    let auth_text = auth_start_text(auth_start)?;
     let auth_mode: u32 = auth_text
         .split(';')
         .nth(5)
