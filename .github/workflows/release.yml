@@ -1,0 +1,127 @@
+name: release
+
+# A tag is a promise, so everything that decides whether the promise holds runs
+# again here rather than being trusted from the commit it points at. A release
+# runs the workflow as it exists at the tag, so a fix to this file has to land
+# before the tag is cut, not after.
+on:
+  push:
+    tags: ["v*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Nothing is built for a release until what is being released passes. The
+  # test workflow runs on every push; this runs it again against the tag,
+  # because a tag can point at a commit that was green before its neighbour
+  # landed.
+  gate:
+    name: everything the tag has to pass
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tzdata
+        run: sudo apt-get update && sudo apt-get install -y tzdata
+
+      - name: Lint
+        run: |
+          cargo clippy --lib --all-targets --features dev-tools -- -D warnings
+          cargo clippy --lib --all-targets --features python -- -D warnings
+
+      - name: Test
+        run: |
+          cargo test --lib
+          cargo test --lib --features python
+
+      - name: The suites that need no session
+        env:
+          IBX_REGISTRATION_TIMEOUT_MS: "20"
+        run: |
+          cargo test --test control_plane --test depth_wire_test \
+            --test error_edge_concurrency --test hot_loop_lifecycle \
+            --test malformed_input --test protocol_vectors --test scenarios
+          IBX_ALLOW_SKIP_NO_CREDS=1 cargo test --test ib_paper_compat
+
+      - name: The published surface still resolves
+        run: cargo test --test public_surface
+
+      - name: Documentation builds
+        run: cargo doc --no-deps --lib
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: The crate would publish
+        run: cargo publish --dry-run
+
+  # One wheel per platform a caller runs on. Built from the tag, so what is
+  # attached to the release is what the tag says and not what a developer had
+  # on their machine.
+  wheels:
+    name: wheel (${{ matrix.os }})
+    needs: gate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist
+          # The wheel asks for both features: `extension-module` tells PyO3 not
+          # to link libpython, which is right for a wheel and wrong for a test
+          # binary.
+          sccache: "true"
+
+      - name: The wheel imports what it says it does
+        if: matrix.os != 'windows-latest'
+        run: |
+          python -m venv /tmp/check
+          /tmp/check/bin/pip install --find-links dist --no-index ibx
+          /tmp/check/bin/python -c "import ibx; print(ibx.__name__, 'imports')"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: dist/*.whl
+
+  # Attached to the release rather than published to an index: pushing to PyPI
+  # or crates.io is a decision with a token behind it, and this workflow holds
+  # neither.
+  attach:
+    name: attach the wheels to the release
+    needs: wheels
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.whl --clobber
