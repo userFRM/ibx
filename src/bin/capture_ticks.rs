@@ -7,7 +7,7 @@
 //!
 //! Reads only. It places nothing.
 //!
-//!     IB_USERNAME=… IB_PASSWORD=… IBX_CAPTURE_WIRE=1 cargo run --bin capture_ticks
+//!     IB_USERNAME=… IB_PASSWORD=… IBX_CAPTURE_WIRE=1 cargo run --features dev-tools --bin capture_ticks
 
 #[path = "support/window.rs"]
 mod window;

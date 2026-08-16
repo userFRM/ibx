@@ -11,7 +11,7 @@
 //! nothing is a failure: the connection coming back is not the point.
 //!
 //! ```text
-//! IB_USERNAME=… IB_PASSWORD=… cargo run --release --bin soak_reconnect -- --cycles 5
+//! IB_USERNAME=… IB_PASSWORD=… cargo run --release --features dev-tools --bin soak_reconnect -- --cycles 5
 //! ```
 //!
 //! Reads only. Places no orders.

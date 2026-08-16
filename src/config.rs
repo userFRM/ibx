@@ -84,3 +84,11 @@ pub const TIMEOUT_FARM_CONNECT: u64 = 8;
 pub const NS_VERSION: u32 = 50;
 /// The oldest name-service version this client speaks.
 pub const NS_VERSION_MIN: u32 = 38;
+
+// The venue's date format moved to `protocol::datetime` when it stopped being
+// a constant and started being a codec. Reachable here because that is the
+// path a program written against this client already names.
+pub use crate::protocol::datetime::{
+    IbExpiry, TimestampBuf, chrono_free_timestamp, days_to_ymd, ib_datetime_to_unix,
+    midnight_days_ago, parse_ib_expiry, unix_to_ib_datetime, unix_to_ib_utc_dash,
+};

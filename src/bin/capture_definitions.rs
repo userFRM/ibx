@@ -8,7 +8,7 @@
 //!
 //! Reads only. It places nothing and cancels nothing.
 //!
-//!     IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_definitions
+//!     IB_USERNAME=… IB_PASSWORD=… cargo run --features dev-tools --bin capture_definitions
 
 #[path = "support/window.rs"]
 mod window;

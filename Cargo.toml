@@ -3,13 +3,13 @@ name = "ibx"
 version = "0.7.1"
 edition = "2024"
 description = "Direct connection engine for Interactive Brokers. No Java gateway required."
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-only"
 repository = "https://github.com/userFRM/ibx"
 keywords = ["interactive-brokers", "trading", "fix", "market-data", "brokerage"]
 categories = ["api-bindings", "finance", "network-programming"]
 # Every binary is named below, because the tools under `src/bin` are for
 # developing this library rather than for using it, and a caller who installs
-# the crate should not be handed twenty-five of them.
+# the crate should not be handed 30 of them.
 autobins = false
 
 [lib]

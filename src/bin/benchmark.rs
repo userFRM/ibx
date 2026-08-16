@@ -6,7 +6,7 @@
 //! 3. Order round-trip (submit → fill)
 //!
 //! Usage:
-//!   IB_USERNAME=xxx IB_PASSWORD=xxx cargo run --release --bin benchmark
+//!   IB_USERNAME=xxx IB_PASSWORD=xxx cargo run --release --features dev-tools --bin benchmark
 //!
 //! Optional env vars:
 //!   BENCH_CON_ID   - contract ID to subscribe (default: 756733 = SPY)

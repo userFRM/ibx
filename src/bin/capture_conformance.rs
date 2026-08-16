@@ -9,7 +9,7 @@
 //!
 //! Run this and `scripts/conformance.py` in turn and compare the two blocks.
 //!
-//!     IB_USERNAME=… IB_PASSWORD=… cargo run --bin capture_conformance
+//!     IB_USERNAME=… IB_PASSWORD=… cargo run --features dev-tools --bin capture_conformance
 
 use ibx::api::client::{EClient, EClientConfig};
 use ibx::api::types::{Contract, Order};

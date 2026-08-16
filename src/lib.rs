@@ -56,14 +56,12 @@
 /// Documented in full, and required to stay so by `deny(missing_docs)`.
 pub mod api;
 
-/// What a caller configures about the session, and what it is told when a
-/// request is refused.
+// Each of these documents itself. A second doc comment here would be
+// concatenated with the module's own and resolved in this file's scope, where
+// the names it links to are not.
 pub mod error_codes;
-/// How the client stays connected, and what a caller gets to say about it.
 pub mod reliability;
-/// What a session announces itself as.
 pub mod settings;
-/// The types a caller works in, and the model both surfaces present.
 pub mod types;
 
 // ── Not the surface ─────────────────────────────────────────────────────────

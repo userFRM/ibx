@@ -16,16 +16,28 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
-def _fields(path: str, struct: str) -> set[str]:
-    text = (ROOT / path).read_text()
-    at = text.index(f"pub struct {struct} ")
-    end = text.index("\n}", at)
-    return set(re.findall(r"^\s*pub (\w+):", text[at:end], re.M))
+def _fields(where: str, struct: str) -> set[str]:
+    """The fields of a struct, wherever in a module it is written.
+
+    Named by module rather than by file: a struct that moves to a sibling file
+    during a refactor otherwise takes its parity check with it, and a check
+    that raises is better than one that quietly compares nothing.
+    """
+    root = ROOT / where
+    files = [root] if root.is_file() else sorted(root.rglob("*.rs"))
+    for f in files:
+        text = f.read_text()
+        at = text.find(f"pub struct {struct} ")
+        if at < 0:
+            continue
+        end = text.index("\n}", at)
+        return set(re.findall(r"^\s*pub (\w+):", text[at:end], re.M))
+    raise AssertionError(f"no `pub struct {struct}` anywhere under {where}")
 
 
 def test_both_clients_carry_the_same_order():
-    rust = _fields("src/api/types.rs", "Order")
-    python = _fields("src/python/compat/contract.rs", "Order")
+    rust = _fields("src/types", "Order")
+    python = _fields("src/python/compat", "Order")
     assert rust == python, (
         "an order field exists on one client and not the other: "
         f"rust only={sorted(rust - python)} python only={sorted(python - rust)}"
@@ -50,9 +62,9 @@ _BEYOND_THE_REFERENCE = {
 
 
 def test_both_clients_carry_the_same_contract_details():
-    rust = _fields("src/api/types.rs", "ContractDetails")
+    rust = _fields("src/types", "ContractDetails")
     python = (
-        _fields("src/python/compat/contract.rs", "ContractDetails")
+        _fields("src/python/compat", "ContractDetails")
         - _ON_THE_CONTRACT
         - _BEYOND_THE_REFERENCE
     )

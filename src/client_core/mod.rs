@@ -5,7 +5,10 @@
 //! intermediate structs. Language-specific EClient adapters convert these into their
 //! respective callback formats (Rust `Wrapper` trait calls or PyO3 `call_method`).
 
-use crate::types::order_status::{is_open_or_reactivatable, is_open_status, order_status_str};
+// The order-status vocabulary moved to the types it describes. Public here
+// because that is the path a program written against this client already
+// names, and used here for the same reason it was written.
+pub use crate::types::order_status::{is_open_or_reactivatable, is_open_status, order_status_str};
 use std::collections::{HashMap, HashSet};
 use crate::error_codes::Refusal;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -1640,6 +1643,19 @@ impl ClientCore {
             .map(|info| (info.order.perm_id, info.order.parent_id))
             .unwrap_or((0, 0));
         (perm_id, self.tracked_parent_id(order_id).unwrap_or(engine_parent))
+    }
+
+    /// What tells two contracts on one underlying apart.
+    ///
+    /// Written on the model now, since it is derived from a contract and needs
+    /// nothing of this client's. Kept here because it is the name a program
+    /// written against this client already calls.
+    pub fn contract_identity(
+        last_trade_date: &str, strike: f64, right: &str, multiplier: &str, currency: &str,
+    ) -> String {
+        crate::types::model::contract_identity(
+            last_trade_date, strike, right, multiplier, currency,
+        )
     }
 
     /// Retire the client's record of an order the venue rejected as unknown,

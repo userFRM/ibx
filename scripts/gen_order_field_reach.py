@@ -84,7 +84,11 @@ def where_fields_are_read() -> str:
         if not path.exists():
             continue
         text = path.read_text()
-        if path.name == "types.rs" and "pub struct Order " in text:
+        # Whichever file holds it, not whichever file held it once: keyed on
+        # a filename, this went quiet the day the model moved and reported
+        # every field as carried by its own declaration. That is the fourth
+        # time a moved file has silently disabled a check here.
+        if "pub struct Order " in text:
             at = text.index("pub struct Order ")
             end = text.index("\n}", at)
             declaration = text[at:end]
