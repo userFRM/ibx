@@ -740,7 +740,6 @@ fn currency_for(
 /// `OrderAttrs` block are emitted identically for all kinds.
 /// `SubmitLimitEx`, `SubmitTrailingStopPctEx` and `SubmitEx` all route
 /// through here so the attrs emission cannot drift between order types.
-#[allow(clippy::too_many_arguments)]
 /// Restate the contract identity on an order for anything a symbol does not
 /// name on its own. Without these an option order says nothing about which
 /// strike, right or expiry it means and a future says nothing about its

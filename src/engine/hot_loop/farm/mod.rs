@@ -1271,7 +1271,6 @@ impl FarmState {
     /// is that venue's; empty or smart-routed, and the venue aggregates one.
     /// Either way it is one subscription, asked for under an id of this
     /// client's own and mapped back to the caller's.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn send_depth_subscribe(
         &mut self,
         req_id: u32,
@@ -1892,7 +1891,6 @@ impl FarmState {
             .collect()
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn reconnect(
         &mut self,
         conn: Connection,

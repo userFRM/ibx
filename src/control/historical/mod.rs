@@ -603,7 +603,6 @@ pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
 /// Build the XML query for a historical ticks request.
 ///
 /// Uses `<type>TickData</type>`, `<step>ticks</step>`, `<timeLength>{N} t</timeLength>`.
-#[allow(clippy::too_many_arguments)]
 pub fn build_tick_query_xml(
     query_id: &str, con_id: i64, start_date_time: &str, end_date_time: &str,
     number_of_ticks: u32, what_to_show: &str, use_rth: bool,

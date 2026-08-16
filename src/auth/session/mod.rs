@@ -51,38 +51,6 @@ impl AuthResult {
     }
 }
 
-/// Authenticated auth session.
-pub struct AuthSession {
-    /// The socket it runs on.
-    pub stream: TcpStream,
-    /// The cipher both ends agreed.
-    pub channel: SecureChannel,
-    /// What the login answered.
-    pub auth_result: AuthResult,
-    /// What this machine identified itself as.
-    pub hw_info: String,
-    /// What the client string encoded to.
-    pub encoded: String,
-}
-
-/// Authenticated farm session.
-pub struct FarmSession {
-    /// The socket it runs on.
-    pub stream: TcpStream,
-    /// The cipher both ends agreed.
-    pub channel: SecureChannel,
-    /// What the login answered.
-    pub auth_result: AuthResult,
-    /// What this machine identified itself as.
-    pub hw_info: String,
-    /// What the client string encoded to.
-    pub encoded: String,
-    /// Which farm this connection is to.
-    pub farm_name: String,
-    /// Which name-service version the venue speaks.
-    pub server_ns_version: u32,
-}
-
 // CONNECT_REQUEST flags
 /// Farm flag 1: ok to redirect.
 pub const FLAG_OK_TO_REDIRECT: u32 = 1;

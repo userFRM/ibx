@@ -993,7 +993,6 @@ impl Order {
         algo_strategy="".to_string(), what_if=false, cash_qty=0.0, parent_id=0,
         transmit=true, **keywords
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         order_id: i64,
         action: String,

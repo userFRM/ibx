@@ -11,15 +11,15 @@ use super::*;
 #[test]
 fn submit_limit_returns_incrementing_ids() {
     let mut ctx = Context::new();
-    let id1 = ctx.submit_limit(0, Side::Buy, 100, 150 * PRICE_SCALE);
-    let id2 = ctx.submit_limit(0, Side::Sell, 50, 151 * PRICE_SCALE);
+    let id1 = ctx.submit(0, Side::Buy, 100, OrderKind::Limit { price: 150 * PRICE_SCALE }, b'0', OrderAttrs::default());
+    let id2 = ctx.submit(0, Side::Sell, 50, OrderKind::Limit { price: 151 * PRICE_SCALE }, b'0', OrderAttrs::default());
     assert_eq!(id2, id1 + 1, "IDs should be sequential");
 }
 
 #[test]
 fn submit_limit_drains_correctly() {
     let mut ctx = Context::new();
-    ctx.submit_limit(0, Side::Buy, 100, 150 * PRICE_SCALE);
+    ctx.submit(0, Side::Buy, 100, OrderKind::Limit { price: 150 * PRICE_SCALE }, b'0', OrderAttrs::default());
 
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
@@ -40,7 +40,7 @@ fn submit_limit_drains_correctly() {
 #[test]
 fn submit_market_drains_correctly() {
     let mut ctx = Context::new();
-    ctx.submit_market(1, Side::Sell, 200);
+    ctx.submit(1, Side::Sell, 200, OrderKind::Market, b'0', OrderAttrs::default());
 
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
@@ -105,7 +105,7 @@ fn modify_drains_correctly() {
 #[test]
 fn drain_clears_buffer() {
     let mut ctx = Context::new();
-    ctx.submit_limit(0, Side::Buy, 100, 150 * PRICE_SCALE);
+    ctx.submit(0, Side::Buy, 100, OrderKind::Limit { price: 150 * PRICE_SCALE }, b'0', OrderAttrs::default());
     let _: Vec<_> = ctx.drain_pending_orders().collect();
     // Second drain should be empty
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
@@ -115,8 +115,8 @@ fn drain_clears_buffer() {
 #[test]
 fn multiple_orders_per_tick() {
     let mut ctx = Context::new();
-    ctx.submit_limit(0, Side::Buy, 100, 150 * PRICE_SCALE);
-    ctx.submit_limit(0, Side::Sell, 50, 152 * PRICE_SCALE);
+    ctx.submit(0, Side::Buy, 100, OrderKind::Limit { price: 150 * PRICE_SCALE }, b'0', OrderAttrs::default());
+    ctx.submit(0, Side::Sell, 50, OrderKind::Limit { price: 152 * PRICE_SCALE }, b'0', OrderAttrs::default());
     ctx.cancel(99);
 
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
@@ -373,7 +373,7 @@ fn submit_limit_uses_current_bid() {
     ctx.market.register(265598);
     ctx.market.quote_mut(0).bid = 150 * PRICE_SCALE;
 
-    ctx.submit_limit(0, Side::Buy, 100, ctx.bid(0));
+    ctx.submit(0, Side::Buy, 100, OrderKind::Limit { price: ctx.bid(0) }, b'0', OrderAttrs::default());
 
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
@@ -531,7 +531,7 @@ fn remove_order_nonexistent_no_panic() {
 #[test]
 fn submit_stop_returns_id_and_drains() {
     let mut ctx = Context::new();
-    let id = ctx.submit_stop(0, Side::Sell, 50, 140 * PRICE_SCALE);
+    let id = ctx.submit(0, Side::Sell, 50, OrderKind::Stop { stop_price: 140 * PRICE_SCALE }, b'0', OrderAttrs::default());
 
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
@@ -610,7 +610,8 @@ fn open_orders_for_includes_pending_and_partial() {
 #[test]
 fn submit_limit_auc_drains_correctly() {
     let mut ctx = Context::new();
-    let id = ctx.submit_limit_auc(0, Side::Buy, 100, 150 * PRICE_SCALE);
+    let id = ctx.submit(0, Side::Buy, 100, OrderKind::Limit { price: 150 * PRICE_SCALE }, b'8',
+        OrderAttrs { outside_rth: false, ..Default::default() });
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
     match &orders[0] {
@@ -628,7 +629,8 @@ fn submit_limit_auc_drains_correctly() {
 #[test]
 fn submit_mtl_auc_drains_correctly() {
     let mut ctx = Context::new();
-    let id = ctx.submit_mtl_auc(0, Side::Buy, 100);
+    let id = ctx.submit(0, Side::Buy, 100, OrderKind::Mtl, b'8',
+        OrderAttrs { outside_rth: false, ..Default::default() });
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
     match &orders[0] {
@@ -645,7 +647,7 @@ fn submit_mtl_auc_drains_correctly() {
 #[test]
 fn submit_box_top_reuses_mtl() {
     let mut ctx = Context::new();
-    let id = ctx.submit_box_top(0, Side::Buy, 100);
+    let id = ctx.submit(0, Side::Buy, 100, OrderKind::Mtl, b'0', OrderAttrs::default());
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
     match &orders[0] {
@@ -665,7 +667,7 @@ fn submit_box_top_reuses_mtl() {
 #[test]
 fn submit_what_if_drains_correctly() {
     let mut ctx = Context::new();
-    let id = ctx.submit_what_if(0, Side::Buy, 100, 25620 * (PRICE_SCALE / 100),
+    let id = ctx.submit(0, Side::Buy, 100, OrderKind::WhatIf { price: 25620 * (PRICE_SCALE / 100), ord_type: b'2' },
         b'0', OrderAttrs::default());
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
@@ -704,16 +706,19 @@ fn submit_limit_fractional_drains_correctly() {
 #[test]
 fn submit_adjustable_stop_drains_correctly() {
     let mut ctx = Context::new();
-    let id = ctx.submit_adjustable_stop(
+    let id = ctx.submit(
         0, Side::Sell, 1,
-        25120 * (PRICE_SCALE / 100), // stop_price
-        25620 * (PRICE_SCALE / 100), // trigger_price
-        AdjustedOrderType::StopLimit,
-        25320 * (PRICE_SCALE / 100), // adjusted_stop
-        25220 * (PRICE_SCALE / 100), // adjusted_limit
-        0,                             // adjusted_trailing_amount (StopLimit: unused)
-        0,                             // adjustable_trailing_unit
-        b'1',                          // GTC
+        OrderKind::AdjustableStop {
+            stop_price: 25120 * (PRICE_SCALE / 100),
+            trigger_price: 25620 * (PRICE_SCALE / 100),
+            adjusted_order_type: AdjustedOrderType::StopLimit,
+            adjusted_stop_price: 25320 * (PRICE_SCALE / 100),
+            adjusted_stop_limit_price: 25220 * (PRICE_SCALE / 100),
+            // A stop limit adjusts to a price, not by an amount.
+            adjusted_trailing_amount: 0,
+            adjustable_trailing_unit: 0,
+        },
+        b'1',   // GTC
         OrderAttrs { parent_id: 9, ..Default::default() },
     );
     let orders: Vec<_> = ctx.drain_pending_orders().collect();

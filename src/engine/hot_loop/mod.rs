@@ -31,7 +31,7 @@ use crate::config::chrono_free_timestamp;
 use crate::gateway::{connect_farm, reconnect_ccp, Farm, ReconnectAuth};
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
-use crate::types::{ContractRef, ControlCommand, Fill, InstrumentId, Price, Qty, TbtQuote, TbtTrade, PRICE_SCALE, QTY_SCALE};
+use crate::types::{ContractRef, ControlCommand, Fill, InstrumentId, Price, Qty, PRICE_SCALE, QTY_SCALE};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 
 use farm::FarmState;
@@ -1287,11 +1287,6 @@ impl HotLoop {
         self.farm.disconnected
     }
 
-    /// Whether the auth connection has been lost.
-    pub fn is_ccp_disconnected(&self) -> bool {
-        self.ccp.disconnected
-    }
-
     /// Put back as much of a reconnect's subscription book as the pacing allows.
     fn drive_replay(&mut self) {
         let replay = ReplayPacing {
@@ -1956,30 +1951,9 @@ impl HotLoop {
         &mut self.hb
     }
 
-    /// Inject a raw farm message for testing. Processes it through the full decode pipeline.
-    pub fn inject_farm_message(&mut self, msg: &[u8]) {
-        self.farm.process_farm_message(msg, &mut self.farm_conn, &mut self.context, &self.shared, &self.event_tx, &mut self.hb);
-    }
-
     /// Inject a raw auth message for testing. Processes execution reports, etc.
     pub fn inject_ccp_message(&mut self, msg: &[u8]) {
         self.ccp.process_ccp_message(msg, &mut self.ccp_conn, &mut self.context, &self.shared, &self.event_tx, &mut self.hb, &self.account_id);
-    }
-
-    /// Inject a raw HMDS message for testing. Processes historical data, news, etc.
-    pub fn inject_hmds_message(&mut self, msg: &[u8]) {
-        self.hmds.process_hmds_message(msg, &mut self.hmds_conn, &self.shared, &self.event_tx, &mut self.hb);
-    }
-
-    /// Inject a TBT trade for testing. Pushes to SharedState and emits event.
-    pub fn inject_tbt_trade(&mut self, trade: &TbtTrade) {
-        self.shared.market.push_tbt_trade(trade.clone());
-        emit(&self.event_tx, Event::TbtTrade(trade.clone()));
-    }
-
-    /// Inject a TBT quote for testing. Pushes to SharedState.
-    pub fn inject_tbt_quote(&mut self, quote: &TbtQuote) {
-        self.shared.market.push_tbt_quote(*quote);
     }
 
     /// Inject a simulated tick for testing.

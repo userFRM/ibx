@@ -1861,7 +1861,6 @@ fn dial_auth_server(
 /// Only the trading farm is required. Everything else works without the other
 /// two, and a session that refused to open because one farm was down would be
 /// worse than one that says which farm it has.
-#[allow(clippy::too_many_arguments)]
 fn connect_farms(
     config: &GatewayConfig,
     session_id: &str,

@@ -1,10 +1,11 @@
-//! Reading the venue's XML replies.
+//! Reading and writing the venue's XML.
 //!
 //! Several of the venue's answers arrive as small XML documents — a
 //! fundamentals report, a histogram, a scanner result, a news article, a bar
 //! query's own envelope. They are read by name rather than parsed, because
 //! what is wanted from each is a handful of known tags and a parser would be a
-//! dependency and a shape to keep in step with the venue's.
+//! dependency and a shape to keep in step with the venue's. The one document
+//! this client writes is here for the same reason.
 
 /// The text between `<tag>` and `</tag>`, or nothing where the pair is absent.
 ///
@@ -20,6 +21,20 @@ pub fn tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     let start = xml.find(&open)? + open.len();
     let end = xml[start..].find(&close)? + start;
     Some(&xml[start..end])
+}
+
+/// Withdraw a query the venue is still answering, by the id it was asked under.
+///
+/// The venue takes the same document for every kind of query — fundamentals,
+/// corporate actions — because what it cancels is the query, not the subject.
+pub fn cancel_query(query_id: &str) -> String {
+    format!(
+        "<ListOfCancelQueries>\
+         <CancelQuery>\
+         <id>{query_id}</id>\
+         </CancelQuery>\
+         </ListOfCancelQueries>",
+    )
 }
 
 #[cfg(test)]

@@ -50,16 +50,6 @@ impl AdjustmentKind {
         })
     }
 
-    /// How many values the action states. A cash dividend states the most; a
-    /// rollover states none at all.
-    pub fn field_count(self) -> usize {
-        match self {
-            Self::CashDividend => 8,
-            Self::StockDividend => 6,
-            Self::Split | Self::SpinOff | Self::RightsOffer => 4,
-            Self::FutureRollover => 0,
-        }
-    }
 }
 
 /// One corporate action.
@@ -130,18 +120,6 @@ pub fn build_adjustments_request_xml(req: &AdjustmentRequest) -> String {
         sec_type = req.sec_type,
         start = req.start_date,
         end = req.end_date,
-    )
-}
-
-/// Withdraw the subscription, which is named by the id it was asked under and
-/// by nothing else — not the contract, not the range.
-pub fn build_adjustments_cancel_xml(query_id: &str) -> String {
-    format!(
-        "<ListOfCancelQueries>\
-         <CancelQuery>\
-         <id>{query_id}</id>\
-         </CancelQuery>\
-         </ListOfCancelQueries>",
     )
 }
 
@@ -238,15 +216,6 @@ mod tests {
         assert!(xml.contains("<startDate>20240101</startDate>"));
         assert!(xml.contains("<endDate>20241231</endDate>"));
         assert!(xml.contains("<divRequestType>T</divRequestType>"));
-    }
-
-    /// The withdrawal names the request and nothing else.
-    #[test]
-    fn a_cancel_carries_only_the_id_it_was_asked_under() {
-        let xml = build_adjustments_cancel_xml("ADJ.1");
-        assert!(xml.contains("<id>ADJ.1</id>"));
-        assert!(!xml.contains("contractID"));
-        assert!(!xml.contains("startDate"));
     }
 
     /// Each kind states a different number of values, in one order, and the
