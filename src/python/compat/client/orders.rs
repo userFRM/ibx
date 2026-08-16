@@ -36,8 +36,17 @@ impl EClient {
         api_order.conditions = order.convert_conditions(py);
         // The three fields whose Python value is an object: the conversion
         // cannot read one without the interpreter, so they are filled here.
-        api_order.order_combo_legs = order.convert_order_combo_legs(py);
-        api_order.order_misc_options = order.convert_misc_options(py);
+        // An object this client cannot read is a refusal, not an empty value:
+        // read as absent, a leg goes out unpriced and a tag the protocol does
+        // not carry stops being refused for stating it.
+        api_order.order_combo_legs = match order.convert_order_combo_legs(py) {
+            Ok(legs) => legs,
+            Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
+        };
+        api_order.order_misc_options = match order.convert_misc_options(py) {
+            Ok(options) => options,
+            Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
+        };
         // What the order path reads off a contract: where it is listed, its
         // legs, and the contract it hedges against. The legs and the hedge are
         // Python objects, so reading them needs the interpreter.

@@ -203,6 +203,9 @@ pub struct SharedState {
     /// Last measured auth-connection round-trip time in nanoseconds
     /// (0 = never measured). Sampled from the test-request/echo cycle —
     /// see `HotLoop` liveness and `ControlCommand::Ping`.
+    /// How many events this session discarded because nobody read far enough.
+    ///
+
     ccp_rtt_ns: AtomicU64,
     /// Set by the hot loop when the session is over (connection lost, engine
     /// stopped, or reconnect exhausted). Read-and-clear by the client so the

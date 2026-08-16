@@ -10,9 +10,8 @@ use crate::protocol::fixcomp;
 use crate::types::{
     CompletedOrder, Fill, InstrumentId, Price, Side, PRICE_SCALE,
 };
-use std::sync::mpsc::SyncSender;
 
-use super::{HeartbeatState, emit, parse_price_tag, decode_tif};
+use super::{HeartbeatState, emit, parse_price_tag, decode_tif, EventSink};
 
 /// Synthetic ibapi error code for a parked (39=I) order's reason, delivered
 /// through `Wrapper::error` since ibapi has no callback dedicated to an order
@@ -218,7 +217,7 @@ fn take_what_if(
     clord_id: u64,
     context: &mut Context,
     shared: &SharedState,
-    event_tx: &Option<SyncSender<Event>>,
+    event_tx: &Option<EventSink>,
 ) -> bool {
         const MARGIN_TAGS: [u32; 6] = [6826, 6827, 6828, 6092, 6093, 6094];
         let is_data_frame = MARGIN_TAGS.iter().any(|tag| {
@@ -337,7 +336,7 @@ impl CcpState {
         order_avg_px: f64,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         // A fill can arrive for an order this session does not track: one
         // that raced its own cancel-ack out of the book, one placed from
@@ -589,7 +588,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
         account_id: &str,
     ) {
@@ -671,7 +670,7 @@ impl CcpState {
         raw: &[u8],
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         account_id: &str,
     ) {
         // CCP recovery push format A (, captured against live):
@@ -1360,7 +1359,7 @@ impl CcpState {
         parsed: &std::collections::HashMap<u32, String>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         // Match handle_exec_report's tag-11 parsing: strip the gateway's
         // "C" prefix and any ".0/.1/.2" modify-chain suffix.

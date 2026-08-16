@@ -702,7 +702,7 @@ fn cross_session_recovery_phase_live() {
         let shared = std::sync::Arc::new(SharedState::new());
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
         let (mut hot_loop, control_tx) = HotLoop::with_connections(
-            shared, Some(event_tx), account_id.clone(),
+            shared, Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
             farm_a, ccp_a, hmds_a, None,
         );
         let inst_id = hot_loop.context_mut().register_instrument(756733);
@@ -753,7 +753,7 @@ fn cross_session_recovery_phase_live() {
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared, Some(event_tx), account_id.clone(),
+        shared, Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
         farm_b, ccp_b, hmds_b, None,
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
@@ -969,7 +969,7 @@ fn cancel_by_perm_id_phase_live() {
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(),
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
         farm, ccp, hmds, None,
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
@@ -1091,7 +1091,7 @@ fn submit_ex_bracket_child_phase_live() {
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(),
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
         farm, ccp, hmds, None,
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
@@ -1206,7 +1206,7 @@ fn snap_to_tick_phase_live() {
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(),
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
         farm, ccp, hmds, None,
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
@@ -1296,7 +1296,7 @@ fn timeout_sweeps_phase_live() {
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (mut hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(),
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
         farm, ccp, hmds, None,
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
@@ -1384,7 +1384,7 @@ fn reclaim_and_symbol_search_phase_live() {
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(),
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
         farm, ccp, hmds, None,
     );
     let join = run_hot_loop(hot_loop);
@@ -1471,7 +1471,7 @@ fn rtt_ping_phase_live() {
     let shared = std::sync::Arc::new(SharedState::new());
     let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(), Some(event_tx), account_id.clone(),
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
         farm, ccp, hmds, None,
     );
     let join = run_hot_loop(hot_loop);

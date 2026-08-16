@@ -8,9 +8,8 @@ use crate::protocol::fix;
 use crate::protocol::fixcomp;
 use crate::protocol::tick_decoder;
 use crate::types::{qty_from_counted, InstrumentId};
-use std::sync::mpsc::SyncSender;
 
-use super::{HeartbeatState, ReplayPacing, emit, fast_extract_msg_type, find_body_after_tag};
+use super::{HeartbeatState, ReplayPacing, emit, fast_extract_msg_type, find_body_after_tag, EventSink};
 
 /// Build the 35=V subscribe tag list for a contract whose conId is known.
 ///
@@ -510,7 +509,7 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) {
         if self.disconnected {
@@ -595,7 +594,7 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) {
         let msg_type = match fast_extract_msg_type(msg) {
@@ -665,7 +664,7 @@ impl FarmState {
         }
     }
 
-    fn handle_tick_data(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
+    fn handle_tick_data(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState, event_tx: &Option<EventSink>) {
         let body = match find_body_after_tag(msg, b"35=P\x01") {
             Some(b) => b,
             None => return,
@@ -1842,7 +1841,7 @@ impl FarmState {
         if has_price || has_size { Some((price, size, side, is_snapshot)) } else { None }
     }
 
-    pub(crate) fn handle_disconnect(&mut self, context: &mut Context, _event_tx: &Option<SyncSender<Event>>) {
+    pub(crate) fn handle_disconnect(&mut self, context: &mut Context, _event_tx: &Option<EventSink>) {
         self.disconnected = true;
         // Anything the replay had not reached goes back where the next
         // reconnect looks for it. A subscription that was sent is recorded
@@ -1985,7 +1984,7 @@ impl FarmState {
             (!self.replay_queue.is_empty()).then(|| now + replay.pace);
     }
 
-    fn handle_generic_tick(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState, event_tx: &Option<SyncSender<Event>>) {
+    fn handle_generic_tick(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState, event_tx: &Option<EventSink>) {
         let body = match find_body_after_tag(msg, b"35=G\x01") {
             Some(b) => b,
             None => return,
@@ -2070,7 +2069,7 @@ impl FarmState {
         instrument: InstrumentId,
         body: &[u8],
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         if body.len() < 4 { return; }
         let batch_count = u32::from_be_bytes([body[0], body[1], body[2], body[3]]) as usize;

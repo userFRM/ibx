@@ -136,6 +136,23 @@ def test_every_order_field_reaches_the_rust_order():
     assert not missing, f"set from Python and never reaching the order sent: {missing}"
 
 
+def test_what_cannot_be_read_is_refused_rather_than_emptied():
+    """The three the caller fills carry Python objects, and an object this
+    client cannot read is a refusal.
+
+    Read as absent, a combination leg goes out unpriced and a tag the protocol
+    does not carry stops being refused for stating it — the silent transform
+    these gates exist to prevent, reintroduced by the code that fills them.
+    """
+    source = (ROOT / "src/python/compat/class_orders.rs").read_text()
+    for converter in ("convert_order_combo_legs", "convert_misc_options"):
+        at = source.index(f"pub fn {converter}(")
+        body = source[at:source.index("\n    }\n", at)]
+        assert "Result<" in body.split("{", 1)[0], f"{converter} cannot report a failure"
+        for silent in ("unwrap_or", "filter_map", "unwrap_or_default", ".ok()?"):
+            assert silent not in body, f"{converter} turns an unreadable value into {silent}"
+
+
 def test_what_the_caller_fills_is_filled_by_the_caller():
     """The three the conversion leaves empty are filled where it says they are.
 

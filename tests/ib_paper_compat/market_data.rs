@@ -14,7 +14,7 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -83,7 +83,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -170,7 +170,7 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared,
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -211,7 +211,7 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
     let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -308,7 +308,7 @@ pub(super) fn phase_news_ticks(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -358,7 +358,7 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -433,7 +433,7 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -579,7 +579,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         ccp,
@@ -655,7 +655,7 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -715,7 +715,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -752,7 +752,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
     let (event_tx2, event_rx2) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop2, control_tx2) = HotLoop::with_connections(
         shared2.clone(),
-        Some(event_tx2),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx2, Default::default())),
         conns1.account_id.clone(),
         conns1.farm,
         conns1.ccp,
@@ -802,7 +802,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -901,7 +901,7 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -996,7 +996,7 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,
@@ -1102,7 +1102,7 @@ pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared.clone(),
-        Some(event_tx),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
         conns.ccp,

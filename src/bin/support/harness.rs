@@ -102,7 +102,7 @@ impl BenchSession {
         let shared = Arc::new(SharedState::new());
         let (event_tx, event_rx) = sync_channel::<Event>(65536);
         let (mut hot_loop, control_tx) =
-            ibx::engine::hot_loop::HotLoop::for_session(gw, shared.clone(), Some(event_tx), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
+            ibx::engine::hot_loop::HotLoop::for_session(gw, shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), farm_conn, ccp_conn, hmds_conn, secdef_conn, None,
                 ibx::gateway::CallerAuth {
                     settings: gw_config.settings.clone(),
                     host: gw_config.host.clone(),

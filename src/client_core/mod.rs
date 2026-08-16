@@ -2470,7 +2470,7 @@ impl ClientCore {
             delta_neutral_clearing_intent, delta_neutral_designated_location,
             delta_neutral_open_close, delta_neutral_settling_firm,
             delta_neutral_short_sale, delta_neutral_short_sale_slot,
-            dont_use_auto_price_for_hedge, opt_out_smart_routing,
+            dont_use_auto_price_for_hedge, model_code, opt_out_smart_routing,
             order_misc_options, origin, override_percentage_constraints,
             parent_perm_id, pt_order_id, pt_order_type, randomize_price,
             scale_init_fill_qty, scale_table, shareholder, sl_order_id,

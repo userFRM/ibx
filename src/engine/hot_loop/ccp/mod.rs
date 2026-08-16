@@ -19,9 +19,8 @@ use crate::types::{
     InstrumentId, NewsBulletin,
     PositionInfo,
 };
-use std::sync::mpsc::SyncSender;
 
-use super::{HeartbeatState, emit, clone_for_event, parse_price_tag, decode_tif};
+use super::{HeartbeatState, emit, clone_for_event, parse_price_tag, decode_tif, EventSink};
 
 /// Bound for an in-flight contract-details request (secdef reply or
 /// per-exchange fan-out). Refreshed on fan-out activity; on expiry the
@@ -458,7 +457,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
         account_id: &str,
     ) {
@@ -1161,7 +1160,7 @@ impl CcpState {
     pub(crate) fn sweep_contract_details(
         &mut self,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         // A schedule pairing delivers after the lookup that asked for it has
         // been retired, so the record of what a request was already handed has
@@ -1227,7 +1226,7 @@ impl CcpState {
     pub(crate) fn sweep_pending_schedule_pairs(
         &mut self,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         let now = Instant::now();
         let mut emit_now: Vec<PendingSchedulePair> = Vec::new();
@@ -1279,7 +1278,7 @@ impl CcpState {
         &mut self,
         msg: &[u8],
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         // Extract 6256 from the reply to locate the matching pair.
         let join_key = match extract_tag_value(msg, b"6256=") {
@@ -1915,7 +1914,7 @@ impl CcpState {
         &mut self,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         self.disconnected = true;
         self.recovery_sweep_at = None;
@@ -1945,7 +1944,7 @@ impl CcpState {
         &mut self,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<SyncSender<Event>>,
+        event_tx: &Option<EventSink>,
     ) {
         match self.recovery_sweep_at {
             Some(at) if Instant::now() >= at => self.recovery_sweep_at = None,

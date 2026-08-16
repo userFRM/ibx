@@ -92,9 +92,14 @@ impl EClient {
     /// To place without waiting, or to choose the id,
     /// [`place_order`](EClient::place_order) takes both.
     pub fn place(&self, contract: &Contract, order: &Order) -> Result<OrderReport, Refusal> {
+        // The turn is taken before the order is sent and held until it settles.
+        // Taken only for the waiting, a question starting between the two would
+        // pump this order's reply into its own collector and discard it, and
+        // the order would be reported unanswered although the venue answered.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         let order_id = self.next_order_id();
         self.place_order(order_id, contract, order)?;
-        self.await_order(order_id, SETTLE)
+        self.await_order_holding_the_turn(order_id, SETTLE)
     }
 
     /// Start a market-data subscription, and hand back the id that withdraws it.
