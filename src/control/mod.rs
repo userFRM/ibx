@@ -20,3 +20,4 @@ pub mod historical;
 pub mod news;
 pub mod option_model;
 pub mod scanner;
+pub mod xml;

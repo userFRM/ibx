@@ -591,9 +591,9 @@ impl HmdsState {
                         // Gateway rejected the query (e.g. "Invalid time length").
                         // Without this branch the pending entry leaks forever and the
                         // consumer sees no completion or error event.
-                        let query_id = crate::control::historical::extract_xml_tag(xml_tag, "id")
+                        let query_id = crate::control::xml::tag(xml_tag, "id")
                             .map(|s| s.to_string());
-                        let error_msg = crate::control::historical::extract_xml_tag(xml_tag, "error")
+                        let error_msg = crate::control::xml::tag(xml_tag, "error")
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| "unknown".to_string());
                         // IB canonical error code for HMDS-side validation/rejection.

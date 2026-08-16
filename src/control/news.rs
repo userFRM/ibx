@@ -59,14 +59,6 @@ pub struct NewsHeadline {
     pub headline: String,
 }
 
-/// Extract a simple XML tag value: `<tag>value</tag>` -> `value`.
-fn extract_xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = xml.find(&open)? + open.len();
-    let end = xml[start..].find(&close)? + start;
-    Some(&xml[start..end])
-}
 
 /// URL-encode a string for the `<query>` field.
 fn url_encode(s: &str) -> String {
@@ -181,7 +173,7 @@ pub fn build_article_request_xml(req: &NewsArticleRequest) -> String {
 
 /// Extract the query ID from a news response XML (tag 6118).
 pub fn parse_news_response_id(xml: &str) -> Option<String> {
-    extract_xml_tag(xml, "id").map(|s| s.to_string())
+    crate::control::xml::tag(xml, "id").map(|s| s.to_string())
 }
 
 /// Extract the first file from a ZIP archive embedded in raw bytes.
@@ -446,13 +438,6 @@ mod tests {
             Some("1-history;;NewsQuery;;0;;true;;0;;U".to_string())
         );
         assert_eq!(parse_news_response_id("<other>no id here</other>"), None);
-    }
-
-    #[test]
-    fn extract_xml_tag_basic() {
-        assert_eq!(extract_xml_tag("<a>hello</a>", "a"), Some("hello"));
-        assert_eq!(extract_xml_tag("<x>123</x>", "x"), Some("123"));
-        assert_eq!(extract_xml_tag("<x>123</x>", "y"), None);
     }
 
     #[test]
