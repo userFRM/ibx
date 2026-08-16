@@ -218,6 +218,16 @@ pub struct EClient {
     pub(crate) next_order_id: AtomicU64,
     /// Where the last id handed out is kept, and under which key.
     pub(crate) order_id_store: Option<(std::path::PathBuf, String)>,
+    /// One question at a time.
+    ///
+    /// A question drives the message pump itself, and the pump hands every
+    /// message it drains to the collector that is running. A collector keeps
+    /// what carries its own request id and discards the rest, so a second
+    /// question asked while the first is pumping has its answer read and thrown
+    /// away by the first, and waits out its timeout for a reply that already
+    /// came. Held across the sending too, so the second question is not on the
+    /// wire while the first is listening.
+    pub(crate) asking: Mutex<()>,
     pub(crate) core: ClientCore,
     pub(crate) session_token_bytes: Vec<u8>,
     pub(crate) session: crate::auth::resume::ResumableSession,
@@ -389,6 +399,7 @@ impl EClient {
             close_notified: AtomicBool::new(false),
             next_order_id: AtomicU64::new(start_id),
             order_id_store,
+            asking: Mutex::new(()),
             core,
             session_token_bytes,
             session,
@@ -419,6 +430,7 @@ impl EClient {
             next_order_id: AtomicU64::new(start_id),
             // Built from parts, so nothing is remembered anywhere.
             order_id_store: None,
+            asking: Mutex::new(()),
             core: ClientCore::new(),
             session_token_bytes: Vec::new(),
             session: Default::default(),

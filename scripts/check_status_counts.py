@@ -195,7 +195,7 @@ def main() -> int:
         if key not in said:
             wrong.append(f"{key}: nothing published, {n} exist")
         elif said[key] != n:
-            wrong.append(f"{key}: docs/capabilities.md says {said[key]:,}, {n:,} exist")
+            wrong.append(f"{key}: docs/engineering-notes.md says {said[key]:,}, {n:,} exist")
         else:
             print(f"{key}: {n:,}")
     if wrong:

@@ -200,6 +200,8 @@ impl EClient {
         &self, contract: &Contract, end_date_time: &str, duration: &str,
         bar_size: &str, what_to_show: &str, use_rth: bool,
     ) -> Result<Vec<BarData>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Bars { req_id: i64, state: Arc<Mutex<Pending<BarData>>> }
         impl Wrapper for Bars {
             fn historical_data(&mut self, req_id: i64, bar: &BarData) {
@@ -236,6 +238,8 @@ impl EClient {
     pub fn option_chain(
         &self, underlying: &Contract,
     ) -> Result<Vec<OptionChain>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Chain { req_id: i64, state: Arc<Mutex<Pending<OptionChain>>> }
         impl Wrapper for Chain {
             fn security_definition_option_parameter(
@@ -288,6 +292,8 @@ impl EClient {
     pub fn head_timestamp(
         &self, contract: &Contract, what_to_show: &str, use_rth: bool,
     ) -> Result<String, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Head { req_id: i64, state: Arc<Mutex<Pending<String>>> }
         impl Wrapper for Head {
             fn head_timestamp(&mut self, req_id: i64, head_timestamp: &str) {
@@ -317,6 +323,8 @@ impl EClient {
     pub fn matching_symbols(
         &self, pattern: &str,
     ) -> Result<Vec<crate::types::model::ContractDescription>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Matches {
             req_id: i64,
             state: Arc<Mutex<Pending<crate::types::model::ContractDescription>>>,
@@ -354,6 +362,8 @@ impl EClient {
         &self, con_id: i64, provider_codes: &str,
         start_date_time: &str, end_date_time: &str, total_results: i32,
     ) -> Result<Vec<Headline>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Headlines { req_id: i64, state: Arc<Mutex<Pending<Headline>>> }
         impl Wrapper for Headlines {
             fn historical_news(
@@ -396,6 +406,8 @@ impl EClient {
     pub fn histogram_data(
         &self, contract: &Contract, use_rth: bool, period: &str,
     ) -> Result<Vec<(f64, i64)>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Histogram { req_id: i64, state: Arc<Mutex<Pending<(f64, i64)>>> }
         impl Wrapper for Histogram {
             fn histogram_data(&mut self, req_id: i64, items: &[(f64, i64)]) {
@@ -425,6 +437,8 @@ impl EClient {
     pub fn fundamental_data(
         &self, contract: &Contract, report_type: &str,
     ) -> Result<String, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Document { req_id: i64, state: Arc<Mutex<Pending<String>>> }
         impl Wrapper for Document {
             fn fundamental_data(&mut self, req_id: i64, data: &str) {
@@ -457,6 +471,8 @@ impl EClient {
     pub fn what_if_order(
         &self, contract: &Contract, order: &crate::types::model::Order,
     ) -> Result<crate::types::model::OrderState, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Preview {
             order_id: i64,
             state: Arc<Mutex<Pending<crate::types::model::OrderState>>>,
@@ -491,6 +507,8 @@ impl EClient {
 
     /// Every holding in the account.
     pub fn positions(&self) -> Result<Vec<PositionRow>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Held { state: Arc<Mutex<Pending<PositionRow>>> }
         impl Wrapper for Held {
             fn position(&mut self, account: &str, contract: &Contract, position: f64, avg_cost: f64) {
@@ -514,6 +532,8 @@ impl EClient {
     /// The account values named by `tags`, as `req_account_summary` asks for
     /// them. `tags` is a comma-separated list, or `All`.
     pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Values { req_id: i64, state: Arc<Mutex<Pending<AccountValue>>> }
         impl Wrapper for Values {
             fn account_summary(&mut self, req_id: i64, account: &str, tag: &str, value: &str, currency: &str) {
@@ -561,6 +581,8 @@ impl EClient {
     pub fn await_order(
         &self, order_id: i64, timeout: Duration,
     ) -> Result<OrderReport, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Watch { order_id: i64, report: Arc<Mutex<Option<OrderReport>>>, done: Arc<Mutex<bool>> }
         impl Wrapper for Watch {
             fn order_status(
@@ -634,6 +656,8 @@ impl EClient {
     /// The same question `req_contract_details` asks, answered here instead of
     /// on a callback.
     pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         let req_id = ask_id();
         let answer = Arc::new(Mutex::new(Answer::default()));
         let mut collector = Collector { req_id, answer: Arc::clone(&answer) };
@@ -673,6 +697,9 @@ impl EClient {
     /// venue exists in more than one currency, and picking one silently is how
     /// an order ends up on the wrong one.
     pub fn qualify_contract(&self, contract: &Contract) -> Result<Contract, Refusal> {
+        // No turn taken here: this asks nothing itself, and `contract_details`
+        // takes one. Taking a second would wait on the first for ever — the
+        // lock is not re-entrant, which is what makes it a lock.
         let mut found = self.contract_details(contract)?;
         match found.len() {
             0 => Err(Refusal::no_definition(format!(

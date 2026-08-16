@@ -1934,9 +1934,6 @@ mod tests {
             ("min_qty", |o| o.min_qty = 50),
             ("hidden", |o| o.hidden = true),
             ("outside_rth", |o| o.outside_rth = true),
-            // Named by the predicate and deliberately not carried: this
-            // protocol has no field for it, so the entry pins the routing
-            // rather than an emitted tag.
             ("good_after_time", |o| o.good_after_time = "20260311 09:30:00".into()),
             ("good_till_date", |o| o.good_till_date = "20260311 16:00:00".into()),
             ("oca_group", |o| o.oca_group = "G1".into()),
@@ -2101,7 +2098,11 @@ mod varying_a_ladder_tests {
 /// the ones that do not.
 ///
 /// Each of these returns a contract that a request will take as it stands.
-/// Where a venue, a currency or a class is not the usual one, say so:
+/// They state what the kind of instrument requires and what does not vary; a
+/// field that identifies one listing from another — a currency on a future, a
+/// multiplier on an option — is left for the venue to answer with, because a
+/// value assumed there asks about a contract the caller did not name. Where a
+/// venue, a currency or a class is not the usual one, say so:
 ///
 /// ```
 /// # use ibx::types::model::Contract;
@@ -2122,13 +2123,19 @@ impl Contract {
 
     /// An option on a stock, by strike and expiry. `expiry` is `YYYYMMDD`, or
     /// `YYYYMM` for the month's own contract.
+    ///
+    /// No multiplier is stated. It is a hundred shares on nearly every listed
+    /// option and something else on one adjusted by a split or a special
+    /// dividend, and it is sent as part of what identifies the contract — so
+    /// stating the usual one would ask about a contract that is not the one a
+    /// caller with an adjusted option means. Left out, the venue answers with
+    /// what it lists, and a description matching more than one is refused.
     fn option(symbol: &str, strike: f64, expiry: &str, right: &str) -> Self {
         Self {
             symbol: symbol.into(), sec_type: "OPT".into(),
             exchange: "SMART".into(), currency: "USD".into(),
             strike, right: right.into(),
             last_trade_date_or_contract_month: expiry.into(),
-            multiplier: "100".into(),
             ..Default::default()
         }
     }
@@ -2145,10 +2152,16 @@ impl Contract {
 
     /// A future, by contract month (`YYYYMM`) or expiry (`YYYYMMDD`). The
     /// venue is named because futures do not route to SMART.
+    ///
+    /// No currency is stated: a future is quoted in whatever its venue quotes
+    /// in, and currency identifies the contract. Assuming dollars would ask
+    /// about a contract that does not exist on Eurex. State one with
+    /// [`in_currency`](Contract::in_currency) where the venue lists the same
+    /// symbol in more than one.
     pub fn future(symbol: &str, expiry: &str, exchange: &str) -> Self {
         Self {
             symbol: symbol.into(), sec_type: "FUT".into(),
-            exchange: exchange.into(), currency: "USD".into(),
+            exchange: exchange.into(),
             last_trade_date_or_contract_month: expiry.into(),
             ..Default::default()
         }
@@ -2164,10 +2177,13 @@ impl Contract {
     }
 
     /// An index, which is quoted and never traded.
+    ///
+    /// No currency is stated, for the reason [`future`](Contract::future) does
+    /// not state one.
     pub fn index(symbol: &str, exchange: &str) -> Self {
         Self {
             symbol: symbol.into(), sec_type: "IND".into(),
-            exchange: exchange.into(), currency: "USD".into(),
+            exchange: exchange.into(),
             ..Default::default()
         }
     }

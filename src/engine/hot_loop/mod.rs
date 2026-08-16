@@ -23,6 +23,7 @@ impl Default for ReplayPacing {
 }
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use std::io;
 
@@ -2099,11 +2100,23 @@ pub(crate) fn format_uint(val: u64) -> StackStr {
     s
 }
 
-/// Emit an event to the channel (if connected). Non-blocking — drops event if full.
+/// How many events were discarded because nobody had read far enough.
+///
+/// A full channel is a reader that fell behind, and the engine drops rather
+/// than waits — a session that stalled on a slow reader would stop carrying
+/// market data. Dropping is right; dropping silently is not, because a program
+/// that acted on every fill it saw cannot tell that from every fill there was.
+/// Counted here and reported by `Events::lost`.
+pub(crate) static EVENTS_LOST: AtomicU64 = AtomicU64::new(0);
+
+/// Emit an event to the channel (if connected). Non-blocking — counts and
+/// drops the event if the reader has fallen a whole channel behind.
 #[inline]
 pub(crate) fn emit(event_tx: &Option<SyncSender<Event>>, event: Event) {
-    if let Some(tx) = event_tx {
-        let _ = tx.try_send(event);
+    if let Some(tx) = event_tx
+        && tx.try_send(event).is_err()
+    {
+        EVENTS_LOST.fetch_add(1, Ordering::Relaxed);
     }
 }
 

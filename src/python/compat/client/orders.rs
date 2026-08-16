@@ -34,6 +34,10 @@ impl EClient {
         // Convert and validate order params first (fail fast, no connection needed)
         let mut api_order = order.to_api();
         api_order.conditions = order.convert_conditions(py);
+        // The three fields whose Python value is an object: the conversion
+        // cannot read one without the interpreter, so they are filled here.
+        api_order.order_combo_legs = order.convert_order_combo_legs(py);
+        api_order.order_misc_options = order.convert_misc_options(py);
         // What the order path reads off a contract: where it is listed, its
         // legs, and the contract it hedges against. The legs and the hedge are
         // Python objects, so reading them needs the interpreter.

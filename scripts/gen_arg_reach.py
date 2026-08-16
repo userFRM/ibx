@@ -21,7 +21,8 @@ Every argument of every call falls into one of three kinds:
 caller can set and nothing reads is the argument form of a silent call: the
 request goes out, the answer comes back, and what was asked for is gone.
 
-Writes target/gates/arg-reach.md. CI re-runs this and compares.
+Writes target/gates/arg-reach.md, which is a report and not the gate: this
+exits non-zero on its own findings.
 """
 
 import pathlib

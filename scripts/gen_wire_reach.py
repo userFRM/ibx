@@ -19,7 +19,9 @@ Every caller-facing request falls into one of five kinds:
 the venue pushes account and position data on login, and answering from that is
 what the counterpart does too.
 
-Writes target/gates/wire-reach.md. CI re-runs this and compares, so the number cannot
+Writes target/gates/wire-reach.md, which is a report and not the gate: this
+exits non-zero on its own findings, and on a total the capability matrix
+publishes that no longer matches. The number cannot
 drift away from the code.
 """
 
@@ -117,6 +119,20 @@ def classify(name: str, all_bodies: dict[str, str], seen: set[str] | None = None
     return "silent"
 
 
+def published(pattern: str) -> list[int]:
+    """The figures the capability matrix states, read back out of the sentence.
+
+    A number in a shipped document is a claim. This one was stated once and
+    then drifted, and the check that was supposed to hold it compared a
+    generated report against its own committed copy — which is regenerated and
+    committed by the same commit that moves the figure, so it never failed.
+    Compare against the published prose instead.
+    """
+    text = (ROOT / "docs/capabilities.md").read_text()
+    m = re.search(pattern, text)
+    return [int(g.replace(",", "")) for g in m.groups()] if m else []
+
+
 def main() -> int:
     all_bodies = bodies()
     calls = {n: classify(n, all_bodies) for n in all_bodies if REQUEST.match(n)}
@@ -163,6 +179,10 @@ def main() -> int:
     silent = sorted(n for n, v in calls.items() if v == "silent")
     if silent:
         print("a call returns as though it acted and did not:", ", ".join(silent))
+        return 1
+    stated = published(r"\| Requests \| ([\d,]+)\.")
+    if stated and stated != [len(calls)]:
+        print(f"docs/capabilities.md publishes {stated[0]} requests, {len(calls)} exist")
         return 1
     print(f"{len(calls)} requests: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     return 0

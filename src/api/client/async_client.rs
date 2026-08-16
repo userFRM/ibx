@@ -32,6 +32,13 @@
 //! There is no second engine and no second session behind this: it holds the
 //! same [`EClient`], reachable through [`blocking`](AsyncClient::blocking) for
 //! anything not covered here.
+//!
+//! Questions are answered one at a time. A question drives the message pump
+//! itself and the pump hands what it drains to whichever collector is running,
+//! so two at once would read each other's replies. What this surface removes is
+//! a runtime thread held for the length of a round trip — not the ordering.
+//! `join!` over several is correct and finishes in their sum, not their
+//! maximum.
 
 use std::sync::Arc;
 

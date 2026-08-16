@@ -16,10 +16,7 @@ autobins = false
 # gates, the live suites and the engineering notes, none of which a dependency
 # has any use for.
 exclude = [
-    ".gates/",
     ".github/",
-    "assets/",
-    "bench/",
     "docs/",
     "notebooks/",
     "scripts/",
