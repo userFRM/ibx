@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::bridge::SharedState;
-use crate::config::{chrono_free_timestamp, unix_to_ib_datetime, unix_to_ib_utc_dash};
+use crate::protocol::datetime::{chrono_free_timestamp, unix_to_ib_datetime, unix_to_ib_utc_dash};
 use crate::engine::context::Context;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;

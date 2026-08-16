@@ -28,7 +28,7 @@ use std::io;
 
 use crate::bridge::{Event, SharedState};
 use crate::engine::context::Context;
-use crate::config::chrono_free_timestamp;
+use crate::protocol::datetime::chrono_free_timestamp;
 use crate::gateway::{connect_farm, reconnect_ccp, Farm, ReconnectAuth};
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;

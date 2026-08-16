@@ -11,6 +11,8 @@
 //! that way. This module is the engine underneath it, exported because the
 //! binaries, benchmarks and integration tests in this repository reach it.
 
+/// The venue's own way of writing a date and a time.
+pub mod datetime;
 pub mod connection;
 pub mod fix;
 pub mod tbt_stream;

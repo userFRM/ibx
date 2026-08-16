@@ -848,10 +848,10 @@ impl Order {
         // expiry — the order then surfaces a visible gateway rejection rather
         // than silently carrying a wrong expiry.
         let (good_till, good_till_date_ymd) =
-            match crate::config::parse_ib_expiry(&self.good_till_date) {
+            match crate::protocol::datetime::parse_ib_expiry(&self.good_till_date) {
                 Ok(None) => (0, 0),
-                Ok(Some(crate::config::IbExpiry::Instant(secs))) => (secs, 0),
-                Ok(Some(crate::config::IbExpiry::DateOnly(ymd))) => (0, ymd),
+                Ok(Some(crate::protocol::datetime::IbExpiry::Instant(secs))) => (secs, 0),
+                Ok(Some(crate::protocol::datetime::IbExpiry::DateOnly(ymd))) => (0, ymd),
                 Err(e) => {
                     log::warn!("dropping good_till_date: {e}");
                     (0, 0)

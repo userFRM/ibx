@@ -163,7 +163,7 @@ impl EClient {
             .unwrap()
             .as_ref()
             .and_then(|s| s.market.venue_time())
-            .and_then(|stamped| crate::config::ib_datetime_to_unix(&stamped));
+            .and_then(|stamped| crate::protocol::datetime::ib_datetime_to_unix(&stamped));
 
         let seconds = match from_venue {
             Some(secs) => secs,

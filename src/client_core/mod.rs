@@ -2518,7 +2518,7 @@ impl ClientCore {
         if !self.epoch_dates_by_req.lock().unwrap().contains(&req_id) {
             return stated.to_string();
         }
-        crate::config::ib_datetime_to_unix(stated)
+        crate::protocol::datetime::ib_datetime_to_unix(stated)
             .map(|secs| secs.to_string())
             .unwrap_or_else(|| stated.to_string())
     }

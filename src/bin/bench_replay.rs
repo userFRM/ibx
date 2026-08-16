@@ -292,13 +292,13 @@ fn main() {
         });
 
         bench("chrono_free_timestamp", ITERATIONS, || {
-            let _ = ibx::config::chrono_free_timestamp();
+            let _ = ibx::protocol::datetime::chrono_free_timestamp();
         });
 
         // Isolated: fix_build (FIX message construction)
         let clord = "12345";
         let account = "DU0000000";
-        let now = ibx::config::chrono_free_timestamp();
+        let now = ibx::protocol::datetime::chrono_free_timestamp();
         let price_str = "150.25";
         let fields: Vec<(u32, &str)> = vec![
             (35, "D"), (52, &now), (11, clord), (1, account),
@@ -318,7 +318,7 @@ fn main() {
 
         // Full limit order: timestamp + build + sign
         bench("full: limit order (16 fields) build+sign", ITERATIONS, || {
-            let now = ibx::config::chrono_free_timestamp();
+            let now = ibx::protocol::datetime::chrono_free_timestamp();
             let fields: Vec<(u32, &str)> = vec![
                 (35, "D"), (52, &now), (11, "12345"), (1, "DU0000000"),
                 (21, "2"), (55, "SPY"), (54, "1"), (38, "100"),
@@ -331,7 +331,7 @@ fn main() {
 
         // Full market order (fewer fields, no price)
         bench("full: market order (14 fields) build+sign", ITERATIONS, || {
-            let now = ibx::config::chrono_free_timestamp();
+            let now = ibx::protocol::datetime::chrono_free_timestamp();
             let fields: Vec<(u32, &str)> = vec![
                 (35, "D"), (52, &now), (11, "12345"), (1, "DU0000000"),
                 (21, "2"), (55, "SPY"), (54, "1"), (38, "1"),
@@ -344,7 +344,7 @@ fn main() {
 
         // Cancel order (5 fields, lightweight)
         bench("full: cancel order (5 fields) build+sign", ITERATIONS, || {
-            let now = ibx::config::chrono_free_timestamp();
+            let now = ibx::protocol::datetime::chrono_free_timestamp();
             let fields: Vec<(u32, &str)> = vec![
                 (35, "F"), (52, &now), (11, "C12345"), (41, "12345"), (60, &now),
             ];
@@ -354,7 +354,7 @@ fn main() {
 
         // Modify order (16+ fields, same as limit but replace msg type)
         bench("full: modify order (16 fields) build+sign", ITERATIONS, || {
-            let now = ibx::config::chrono_free_timestamp();
+            let now = ibx::protocol::datetime::chrono_free_timestamp();
             let fields: Vec<(u32, &str)> = vec![
                 (35, "G"), (52, &now), (11, "12346"), (41, "12345"),
                 (1, "DU0000000"), (21, "2"), (55, "SPY"), (54, "1"),

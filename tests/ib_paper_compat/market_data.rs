@@ -520,7 +520,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
     println!("--- Phase 107: Forex Market Data Ticks (EUR.USD — session-independent) ---");
 
     // Look up EUR.USD con_id first
-    let now = ibx::config::chrono_free_timestamp();
+    let now = ibx::protocol::datetime::chrono_free_timestamp();
     let mut ccp = conns.ccp;
     ccp.send_fix(&[
         (fix::TAG_MSG_TYPE, "c"),

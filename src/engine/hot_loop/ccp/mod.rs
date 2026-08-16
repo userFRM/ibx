@@ -12,7 +12,7 @@ const OPTION_CHAIN_TIMEOUT: Duration = Duration::from_secs(60);
 use crate::bridge::{Event, SharedState};
 use crate::types::model as api;
 use crate::engine::context::Context;
-use crate::config::chrono_free_timestamp;
+use crate::protocol::datetime::chrono_free_timestamp;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
 use crate::types::{

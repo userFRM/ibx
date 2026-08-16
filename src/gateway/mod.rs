@@ -18,6 +18,7 @@ use crate::auth::crypto::strip_leading_zeros;
 use crate::auth::dh::SecureChannel;
 use crate::auth::session::{self, do_srp, do_soft_token};
 use crate::config::*;
+use crate::protocol::datetime::*;
 use crate::bridge::SharedState;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix::{self, fix_build, fix_parse, fix_read_deadline, SOH};

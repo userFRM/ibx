@@ -14,7 +14,7 @@ use std::sync::mpsc::SyncSender;
 use std::time::Instant;
 
 use crate::bridge::{Event, SharedState};
-use crate::config::chrono_free_timestamp;
+use crate::protocol::datetime::chrono_free_timestamp;
 use crate::control::calendar as cal;
 use crate::protocol::connection::{Connection, Frame};
 use crate::protocol::fix;
