@@ -1868,29 +1868,6 @@ impl Gateway {
         }));
     }
 
-    /// Hand the open connections to the loop that will run them.
-    ///
-    /// The loop is built by the engine now, since a logon knows nothing about
-    /// one. Kept because it is the name a program written against this client
-    /// already calls.
-    #[allow(clippy::too_many_arguments)]
-    pub fn into_hot_loop(
-        self,
-        shared: std::sync::Arc<SharedState>,
-        event_tx: Option<std::sync::mpsc::SyncSender<crate::bridge::Event>>,
-        farm_conn: Connection,
-        ccp_conn: Connection,
-        hmds_conn: Option<Connection>,
-        secdef_conn: Option<Connection>,
-        core_id: Option<usize>,
-        caller: CallerAuth,
-    ) -> (crate::engine::hot_loop::HotLoop, std::sync::mpsc::SyncSender<crate::types::ControlCommand>) {
-        crate::engine::hot_loop::HotLoop::for_session(
-            self, shared, event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn,
-            core_id, caller,
-        )
-    }
-
     /// The credentials and session a reconnect needs, from this gateway plus
     /// what the caller supplied.
     ///
