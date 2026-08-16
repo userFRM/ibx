@@ -632,10 +632,10 @@ impl FarmState {
                 }
             }
             b"L" => self.handle_ticker_setup(msg, context),
-            b"UT" | b"UM" | b"RL" => super::ccp::handle_account_update(msg, context, shared),
+            b"UT" | b"UM" | b"RL" => super::ccp::positions::handle_account_update(msg, context, shared),
             b"UP" => {
                 let parsed = fix::fix_parse(msg);
-                super::ccp::handle_position_update(&parsed, context, shared, event_tx);
+                super::ccp::positions::handle_position_update(&parsed, context, shared, event_tx);
             }
             // The venue refusing a subscription it was asked for, naming the
             // request that asked. Dropped, a caller that asked for depth on a

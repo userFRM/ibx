@@ -25,7 +25,7 @@ import re
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from _paths import module  # noqa: E402
+from _paths import module, module_files  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "docs/order-field-reach.md"
@@ -36,12 +36,12 @@ BUILDERS = [
     # Where a caller's order becomes the engine's, which is as much a part of
     # reaching the venue as the encoder is: a field the conversion drops never
     # gets as far as a tag. Leaving this out counted a carried field as lost.
-    module("src/api/types"),
-    module("src/engine/hot_loop/order_builder"),
-    module("src/engine/hot_loop/ccp"),
-    module("src/engine/hot_loop/mod"),
-    module("src/client_core"),
-    module("src/types"),
+    *module_files("src/api/types"),
+    *module_files("src/engine/hot_loop/order_builder"),
+    *module_files("src/engine/hot_loop/ccp"),
+    *module_files("src/engine/hot_loop/mod"),
+    *module_files("src/client_core"),
+    *module_files("src/types"),
 ]
 
 

@@ -5,6 +5,8 @@
 //! file belongs to.
 
 use super::*;
+use crate::bridge::RichOrderInfo;
+use crate::types::{PositionInfo, Price, Side, PRICE_SCALE};
 
 /// `Uncertain` promises the caller a reconciliation when the reconnect
 /// completes. Nothing completed it, so an order the recovery push left out
@@ -65,7 +67,7 @@ fn a_frame_without_an_average_cost_keeps_the_stored_one() {
     };
 
     // A frame stating both.
-    handle_position_update(
+    positions::handle_position_update(
         &frame(&[(6008, "756733"), (6064, "100"), (6101, "150.00"), (6068, "SPY")]),
         &mut context, &shared, &None,
     );
@@ -73,7 +75,7 @@ fn a_frame_without_an_average_cost_keeps_the_stored_one() {
     assert_eq!(stored, 150 * PRICE_SCALE);
 
     // A later frame stating the quantity but not the cost.
-    handle_position_update(
+    positions::handle_position_update(
         &frame(&[(6008, "756733"), (6064, "120"), (6068, "SPY")]),
         &mut context, &shared, &None,
     );
@@ -91,12 +93,12 @@ fn marks_only_frame_does_not_flatten_a_live_position() {
     let instrument = context.register_instrument(265598);
     let shared = SharedState::new();
 
-    handle_position_update(&position_frame(&[(6064, "100"), (6101, "150.0")]),
+    positions::handle_position_update(&position_frame(&[(6064, "100"), (6101, "150.0")]),
         &mut context, &shared, &None);
     assert_eq!(context.position(instrument), 100.0);
 
     // Marks move, no 6064 on the frame.
-    handle_position_update(&position_frame(&[(6065, "151.0"), (6100, "100.0")]),
+    positions::handle_position_update(&position_frame(&[(6065, "151.0"), (6100, "100.0")]),
         &mut context, &shared, &None);
     assert_eq!(context.position(instrument), 100.0,
         "a marks-only frame must not flatten the position");
@@ -111,7 +113,7 @@ fn marks_only_frame_does_not_flatten_a_live_position() {
         "a marks-only frame must still update the marks");
 
     // A frame that really does carry a flat quantity still flattens it.
-    handle_position_update(&position_frame(&[(6064, "0")]), &mut context, &shared, &None);
+    positions::handle_position_update(&position_frame(&[(6064, "0")]), &mut context, &shared, &None);
     assert_eq!(context.position(instrument), 0.0);
 }
 
@@ -126,13 +128,13 @@ fn a_non_finite_quantity_is_treated_as_no_quantity() {
     for bad in ["NaN", "inf", "-inf"] {
         let mut context = Context::new();
         let shared = SharedState::new();
-        handle_position_update(
+        positions::handle_position_update(
             &position_frame(&[(6064, "100"), (6101, "150.0")]), &mut context, &shared, &None);
         assert_eq!(
             shared.portfolio.position_info(265598).map(|p| p.position), Some(100.0),
             "seed must establish a live position");
 
-        handle_position_update(
+        positions::handle_position_update(
             &position_frame(&[(6064, bad), (6101, "151.0")]), &mut context, &shared, &None);
         assert_eq!(
             shared.portfolio.position_info(265598).map(|p| p.position), Some(100.0),
@@ -144,7 +146,7 @@ fn a_non_finite_quantity_is_treated_as_no_quantity() {
 fn marks_only_frame_for_an_unknown_contract_creates_no_row() {
     let mut context = Context::new();
     let shared = SharedState::new();
-    handle_position_update(&position_frame(&[(6065, "151.0"), (6100, "100.0")]),
+    positions::handle_position_update(&position_frame(&[(6065, "151.0"), (6100, "100.0")]),
         &mut context, &shared, &None);
     assert!(shared.portfolio.position_infos().iter().all(|p| p.con_id != 265598),
         "no position row may be fabricated from a marks-only frame");
@@ -394,7 +396,7 @@ fn a_midnight_seed_without_a_quantity_is_not_seeded_flat() {
         "6008=756733", "6064=100", "6822=-50.0", "6099=7.5",
         "6008=265598", "6822=-10.0", "6099=2.5",
     ].join("\x01");
-    handle_pnl_response(body.as_bytes(), &shared);
+    positions::handle_pnl_response(body.as_bytes(), &shared);
 
     let mut seeds = shared.portfolio.midnight_seeds();
     seeds.sort_by_key(|s| s.con_id);
@@ -416,7 +418,7 @@ fn a_midnight_seed_without_a_quantity_is_not_seeded_flat() {
 fn a_fractional_midnight_quantity_survives_the_wire() {
     let shared = SharedState::new();
     let body = ["6008=756733", "6064=0.5", "6822=-1.0"].join("\x01");
-    handle_pnl_response(body.as_bytes(), &shared);
+    positions::handle_pnl_response(body.as_bytes(), &shared);
 
     let seeds = shared.portfolio.midnight_seeds();
     let seed = seeds.iter().find(|s| s.con_id == 756733).expect("the row");
@@ -441,7 +443,7 @@ fn the_venue_states_what_a_position_was_worth_at_midnight() {
         "8058=1",
         "8020=SPY 26JUN CALENDAR", "6064=9", "8233=999999.0", "6822=888888.0", "6099=777777.0",
     ].join("\x01");
-    handle_pnl_response(body.as_bytes(), &shared);
+    positions::handle_pnl_response(body.as_bytes(), &shared);
 
     let seeds = shared.portfolio.midnight_seeds();
     assert_eq!(seeds.len(), 2, "the combo bucket is not a contract");
@@ -471,7 +473,7 @@ fn a_pnl_body_that_reports_a_problem_states_no_seeds() {
         "58=No security definition has been found",
         "6008=756733", "6064=100", "8233=44000.5", "6099=7.5",
     ].join("\x01");
-    handle_pnl_response(body.as_bytes(), &shared);
+    positions::handle_pnl_response(body.as_bytes(), &shared);
     assert!(shared.portfolio.midnight_seeds().is_empty(), "a problem is not a figure");
 }
 
@@ -481,11 +483,11 @@ fn a_pnl_body_that_reports_a_problem_states_no_seeds() {
 fn the_reference_id_names_the_request_the_seeds_answer() {
     let shared = SharedState::new();
     let both = ["6529=PLR.2", "8292=PLR.1", "6008=756733", "6064=1"].join("\x01");
-    handle_pnl_response(both.as_bytes(), &shared);
+    positions::handle_pnl_response(both.as_bytes(), &shared);
     assert_eq!(shared.portfolio.pnl_request_key(), "PLR.1");
 
     let neither = ["6529=PLR.2", "8292=", "6008=756733", "6064=1"].join("\x01");
-    handle_pnl_response(neither.as_bytes(), &shared);
+    positions::handle_pnl_response(neither.as_bytes(), &shared);
     assert_eq!(shared.portfolio.pnl_request_key(), "PLR.2");
 }
 
@@ -1986,7 +1988,7 @@ fn position_update_maps_marks_and_avg_cost_from_correct_tags() {
     m.insert(6067u32, "1102.50".to_string());   // marketValue
     m.insert(6100u32, "97.50".to_string());     // unrealizedPNL
     m.insert(6099u32, "5.00".to_string());      // realizedPNL
-    handle_position_update(&m, &mut context, &shared, &None);
+    positions::handle_position_update(&m, &mut context, &shared, &None);
 
     let pi = shared.portfolio.position_info(756733).expect("position stored");
     assert_eq!(pi.position, 10.0);
@@ -3029,7 +3031,7 @@ fn a_holding_the_account_does_not_hold_is_kept_apart() {
     row.insert(6064u32, "100".to_string());
     row.insert(6101u32, "150.0".to_string());
 
-    super::handle_position_elsewhere(&row, &shared, crate::types::HeldElsewhere::Away);
+    super::positions::handle_position_elsewhere(&row, &shared, crate::types::HeldElsewhere::Away);
     let held = shared.portfolio.positions_elsewhere();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].con_id, 265598);
@@ -3043,14 +3045,14 @@ fn a_holding_the_account_does_not_hold_is_kept_apart() {
 
     // The venue restates a row rather than withdrawing it.
     row.insert(6064u32, "50".to_string());
-    super::handle_position_elsewhere(&row, &shared, crate::types::HeldElsewhere::DisplayOnly);
+    super::positions::handle_position_elsewhere(&row, &shared, crate::types::HeldElsewhere::DisplayOnly);
     let held = shared.portfolio.positions_elsewhere();
     assert_eq!(held.len(), 1, "restated, not added again");
     assert_eq!(held[0].position, 50.0);
     assert_eq!(held[0].held, crate::types::HeldElsewhere::DisplayOnly);
 
     // A row naming no contract names nothing.
-    super::handle_position_elsewhere(
+    super::positions::handle_position_elsewhere(
         &std::collections::HashMap::new(), &shared, crate::types::HeldElsewhere::Away,
     );
     assert_eq!(shared.portfolio.positions_elsewhere().len(), 1);
@@ -3081,14 +3083,13 @@ fn figures_for_other_holdings_stay_out_of_the_account() {
     );
 }
 mod unnamed_execution_tests {
-    use super::super::*;
 
     /// A report carries far more than any one client reads. What is not read
     /// is kept, so a fact the venue stated about a fill remains reachable.
     #[test]
     fn a_field_a_report_states_and_nothing_names_is_kept() {
         let frame = b"35=8\x0117=E1\x0132=100\x019997=something\x019998=42\x01";
-        let kept = unnamed_execution_fields(frame);
+        let kept = super::executions::unnamed_execution_fields(frame);
         let tags: Vec<u32> = kept.iter().map(|(t, _)| *t).collect();
         assert!(tags.contains(&9997));
         assert!(tags.contains(&9998));
@@ -3100,7 +3101,7 @@ mod unnamed_execution_tests {
     #[test]
     fn what_is_read_and_what_belongs_to_the_message_are_both_excluded() {
         let frame = b"35=8\x0117=E1\x0152=20260101-00:00:00\x01";
-        let tags: Vec<u32> = unnamed_execution_fields(frame).iter().map(|(t, _)| *t).collect();
+        let tags: Vec<u32> = super::executions::unnamed_execution_fields(frame).iter().map(|(t, _)| *t).collect();
         assert!(!tags.contains(&17), "the execution id is read");
         assert!(!tags.contains(&35), "the message type belongs to the message");
         assert!(!tags.contains(&52), "the sending time belongs to the message");
@@ -3110,7 +3111,7 @@ mod unnamed_execution_tests {
     /// tiny — which would make everything look unread.
     #[test]
     fn the_tags_the_handler_reads_are_derived_from_the_handler() {
-        let read = tags_read_from_an_execution();
+        let read = super::executions::tags_read_from_an_execution();
         assert!(read.len() > 30, "only {} tags reported as read", read.len());
         assert!(read.contains(&17), "the execution id is read");
     }
