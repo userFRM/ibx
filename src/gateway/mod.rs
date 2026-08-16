@@ -1,5 +1,7 @@
 //! Gateway: orchestrates auth + data connections into a running HotLoop.
 
+mod logon;
+
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -2238,252 +2240,24 @@ impl Gateway {
         // high-latency gateway is retried, not fatal.
         tls.get_ref().set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
         let ack_deadline = std::time::Instant::now() + Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
-        let mut account_id = String::new();
-        // Empty until the venue's answer states it, and empty is the careful
-        // reading: every session the venue names then counts as another
-        // client, so this one gives the account up rather than taking it.
-        let mut logged_in_at = String::new();
-        let mut accounts: Vec<String> = Vec::new();
-        let mut heartbeat_interval = CCP_HEARTBEAT;
-        let mut server_session_id = String::new();
-        let mut ccp_token = String::new();
-        let mut raw_soft_dollar_tiers = String::new();
-        let mut raw_family_codes = String::new();
-        let mut raw_news_providers = String::new();
-        let mut raw_order_permissions = String::new();
-        let mut enabled_features = String::new();
-        let mut raw_enabled_features = String::new();
-        let mut white_branding_id = String::new();
-        let mut raw_misc_urls = String::new();
-        // The auth-logon ACK states which farms this account is routed to.
-        // `usfarm`/`ushmds` are US names; an EU account is routed to
-        // eufarm/euhmds/secdefeu, and so on for every other region.
-        // Each route reads "<host>/<farm>" or "<host>/<farm>/<port>".
-        let mut trading_route = String::new();    // tag 6145
-        let mut mktdata_route = String::new();    // tag 6171
-        let mut secdef_route  = String::new();    // tag 8008
-        // The trading port, stated on its own tag. Where it is stated it wins
-        // over the one in the route, which is the order the counterpart reads
-        // them in.
-        let mut trading_port: Option<u16> = None;
-
-        for _ in 0..5 {
-            let raw_response = fix_read_deadline(&mut tls, ack_deadline)?;
-            // The auth-logon ACK arrives as `8=FIXCOMP` with a DEFLATE-
-            // compressed inner body containing the per-account routing tags
-            // (6145/6171/8008) and other init data. Inflate before parsing.
-            // (See + #129.)
-            let mut response = raw_response.clone();
-            if raw_response.starts_with(b"8=FIXCOMP\x01") {
-                let inflated_msgs = fixcomp::fixcomp_decompress(&raw_response)?;
-                let total: usize = inflated_msgs.iter().map(|m| m.len()).sum();
-                log::info!("Auth FIXCOMP envelope: {} bytes compressed → {} inner messages, ~{} inflated bytes",
-                    raw_response.len(), inflated_msgs.len(), total);
-                // Concatenate all inner messages so a single fix_parse pass
-                // sees every tag.
-                response.clear();
-                for inner in inflated_msgs {
-                    response.extend_from_slice(&inner);
-                    response.push(b'\x01');
-                }
-            }
-            let fields = fix_parse(&response);
-            let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("");
-            log::info!("Auth msg type={} ({} bytes raw / {} bytes parsed)",
-                msg_type, raw_response.len(), response.len());
-            for tag in [6144u32, 6145, 6146, 6147, 6171, 6172, 8008, 8009, 6160, 6161] {
-                if let Some(v) = fields.get(&tag) {
-                    log::info!("Auth msg type={msg_type} tag={tag}: {v:?}");
-                }
-            }
-
-            match msg_type {
-                "3" | "5" => {
-                    let reason = fields.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        format!("FIX Logon rejected: {reason}"),
-                    ));
-                }
-                _ => {}
-            }
-
-            // When the venue says this logon happened, by its own clock. The
-            // competing session it names carries a stamp from the same clock,
-            // and one clock's readings are comparable where two are not.
-            if let Some(v) = fields.get(&52)
-                && logged_in_at.is_empty()
-            {
-                logged_in_at = v.clone();
-                log::info!("the venue stamps this logon {logged_in_at}");
-            }
-
-            if let Some(v) = fields.get(&1) {
-                if account_id.is_empty() { account_id = v.clone(); }
-                note_account(&mut accounts, v);
-            }
-            if let Some(v) = fields.get(&108)
-                && let Ok(hb) = v.parse() { heartbeat_interval = hb; }
-            if let Some(v) = fields.get(&6386)
-                && ccp_token.is_empty() {
-                    ccp_token = v.clone();
-                    log::info!("Auth: captured ccp_token (FIX 6386, len={}, prefix={:?})",
-                        ccp_token.len(),
-                        if ccp_token.len() > 16 { &ccp_token[..16] } else { &ccp_token });
-                }
-            // Tag 8035: try parsed fields first, then raw byte search
-            if server_session_id.is_empty() {
-                if let Some(v) = fields.get(&8035) {
-                    server_session_id = v.clone();
-                } else {
-                    let marker = b"\x018035=";
-                    if let Some(pos) = response.windows(marker.len()).position(|w| w == marker) {
-                        let val_start = pos + marker.len();
-                        if let Some(end) = response[val_start..].iter().position(|&b| b == SOH) {
-                            server_session_id = String::from_utf8_lossy(
-                                &response[val_start..val_start + end],
-                            ).to_string();
-                        }
-                    }
-                }
-            }
-
-            // Farm routing — server tells us which farms
-            // this account is permissioned for. EU accounts get `eufarm`,
-            // US get `usfarm`, etc. Read once from whichever auth msg has it.
-            if let Some(v) = fields.get(&6145)
-                && trading_route.is_empty() {
-                    trading_route = v.clone();
-                    log::info!("Auth: trading farm route = {trading_route}");
-                }
-            if let Some(v) = fields.get(&6146)
-                && trading_port.is_none()
-                && let Ok(p) = v.trim().parse::<u16>() {
-                    trading_port = Some(p);
-                    log::info!("Auth: trading farm port = {p}");
-                }
-            if let Some(v) = fields.get(&6171)
-                && mktdata_route.is_empty() {
-                    mktdata_route = v.clone();
-                    log::info!("Auth: market-data farm route = {mktdata_route}");
-                }
-            if let Some(v) = fields.get(&8008)
-                && secdef_route.is_empty() {
-                    secdef_route = v.clone();
-                    log::info!("Auth: secdef farm route = {secdef_route}");
-                }
-
-            // Gateway-local init data from logon response
-            if let Some(v) = fields.get(&6560) { keep_first(&mut raw_soft_dollar_tiers, v, "6560"); }
-            if let Some(v) = fields.get(&6823) { keep_first(&mut raw_family_codes, v, "6823"); }
-            if let Some(v) = fields.get(&6830) { keep_first(&mut raw_news_providers, v, "6830"); }
-            if let Some(v) = fields.get(&6652) { keep_first(&mut raw_order_permissions, v, "6652"); }
-            if let Some(v) = fields.get(&6542) {
-                keep_first(&mut enabled_features, v, "6542");
-                log::info!("Enabled features: {v}");
-            }
-            if let Some(v) = fields.get(&6542) { keep_first(&mut raw_enabled_features, v, "6542"); }
-            if let Some(v) = fields.get(&6571) { keep_first(&mut white_branding_id, v, "6571"); }
-            // Tag 6321: PRIV_LAB_MISC_URLS — try parsed fields first, then raw byte search.
-            // Mirrors the 8035 defensive scan because the value can carry `|` separators
-            // that confuse downstream parsers if a chunk is fragmented.
-            if raw_misc_urls.is_empty() {
-                if let Some(v) = fields.get(&6321) {
-                    raw_misc_urls = v.clone();
-                    log::info!("Found misc URLs from logon ACK ({} bytes)", raw_misc_urls.len());
-                } else {
-                    let marker = b"\x016321=";
-                    if let Some(pos) = response.windows(marker.len()).position(|w| w == marker) {
-                        let val_start = pos + marker.len();
-                        if let Some(end) = response[val_start..].iter().position(|&b| b == SOH) {
-                            raw_misc_urls = String::from_utf8_lossy(
-                                &response[val_start..val_start + end],
-                            ).to_string();
-                            log::info!("Found misc URLs from logon ACK byte scan ({} bytes)", raw_misc_urls.len());
-                        }
-                    }
-                }
-            }
-
-            // Stop on the logon ACK or the server config message
-            if msg_type == "A" || msg_type == "U" {
-                break;
-            }
-        }
+        let mut ack = logon::LogonAck::read(&mut tls, ack_deadline)?;
         tls.get_ref().set_read_timeout(None)?;
 
         // Fall back to the auth session_id where the server states none
-        if server_session_id.is_empty() {
-            server_session_id = session_id.clone();
+        if ack.server_session_id.is_empty() {
+            ack.server_session_id = session_id.clone();
         }
 
         log::info!(
-            "Auth logon: account={account_id} session_id={server_session_id} hb={heartbeat_interval}s"
+            "Auth logon: account={} session_id={} hb={}s",
+            ack.account_id, ack.server_session_id, ack.heartbeat_interval,
         );
 
         // --- Post-logon init sequence ---
-        let account = if account_id.is_empty() { config.username.clone() } else { account_id.clone() };
-        let mut ccp_seq: u32 = 1; // logon was seq 1
+        let account = if ack.account_id.is_empty() { config.username.clone() } else { ack.account_id.clone() };
         let now = chrono_free_timestamp();
-        let today_start = format!("{}-00:00:00", &now[..8]);
-        /// How far back a session asks for executions when it asks for every
-        /// one the venue holds.
-        ///
-        /// The venue answers a window starting within seven days of now and
-        /// rejects one starting earlier ("Invalid value in field # 6536"),
-        /// which is the whole message and so the whole request. Midnight six
-        /// days ago is inside that window at any hour of the day.
-        const EXECUTIONS_REACH_BACK_DAYS: u64 = 6;
-
-        // Helper: send_ib_msg builds 35=U with 6040=<comm_type> + extra tags
-        let mut send_init = |fields: &[(u32, &str)]| -> io::Result<()> {
-            ccp_seq += 1;
-            let msg = fix_build(fields, ccp_seq);
-            tls.write_all(&msg)?;
-            Ok(())
-        };
-
-        send_init(&[(35, "U"), (52, &now), (6040, "91"), (1, &account), (6556, "DR.1"), (6712, "1")])?;
-        send_init(&[(35, "U"), (52, &now), (6040, "193"), (6556, "OPR.2"), (8166, "L"), (8176, "1")])?;
-        send_init(&[(35, "U"), (52, &now), (6040, "101")])?;
-        send_init(&[(35, "U"), (52, &now), (6040, "209"), (1, &account), (6556, "AcctConfig3")])?;
-        // Which executions a session opens with. The counterpart asks for
-        // every one the venue still holds; asking only for today's leaves a
-        // caller that had history under the counterpart with none here.
-        //
-        // The window is what narrows it: stated, the venue answers within it;
-        // left off, it answers with what it has. The counterpart writes the
-        // window only under its own condition, so leaving it off is a path the
-        // venue takes rather than one invented here.
-        //
-        // The window is not optional: without it the venue rejects the whole
-        // message ("Message must contain field # 6536") and the session opens
-        // with no executions at all — which is what asking for every one used
-        // to do. Asking for every one means naming a start far enough back to
-        // cover what the venue still holds.
-        let executions_today_only =
-            config.settings.execution_reports
-                == crate::api::settings::ExecutionReportScope::Today;
-        let window_start = if executions_today_only {
-            today_start.clone()
-        } else {
-            crate::config::midnight_days_ago(EXECUTIONS_REACH_BACK_DAYS).to_string()
-        };
-        send_init(&[(35, "U"), (52, &now), (6040, "72"), (6536, &window_start), (6537, &now), (6556, "today4")])?;
-        send_init(&[(35, "U"), (52, &now), (6040, "74"), (1, ""), (6544, "2")])?;
-        send_init(&[(35, "U"), (52, &now), (6040, "76"), (1, ""), (6565, "1")])?;
-        // Ninety-two of these, which is what the counterpart sends and not a
-        // number the venue states anywhere. Transcribed from its own opening
-        // burst rather than derived, so it is a constant here for the same
-        // reason it is one there. What would settle it is a session opened
-        // with fewer and a comparison of what the venue sends back; until
-        // someone does that, sending what the counterpart sends is the answer
-        // with evidence behind it.
-        const PRIMING_MESSAGES: usize = 92;
-        for _ in 0..PRIMING_MESSAGES {
-            send_init(&[(35, "U"), (52, &now), (6040, "80")])?;
-        }
-        tls.flush()?;
+        let mut ccp_seq =
+            logon::send_init_sequence(&mut tls, config.settings.execution_reports, &account, &now, 1)?;
         // Counted, not stated: the burst above has been edited before, and a
         // number typed beside it does not follow.
         log::info!("Init sequence sent ({} messages, seq now {})", ccp_seq - 1, ccp_seq);
@@ -2520,136 +2294,38 @@ impl Gateway {
             init_data.len(), read_start.elapsed(),
         );
 
-        let scan_data = init_scan_buffer(&init_data);
+        ack.scan_init(&init_data, &config.username);
+        let logon::LogonAck {
+            account_id,
+            mut accounts,
+            mut logged_in_at,
+            heartbeat_interval,
+            server_session_id,
+            ccp_token,
+            raw_soft_dollar_tiers,
+            raw_family_codes,
+            raw_news_providers,
+            raw_order_permissions,
+            enabled_features,
+            raw_enabled_features,
+            white_branding_id,
+            raw_misc_urls,
+            trading_route,
+            mktdata_route,
+            secdef_route,
+            trading_port,
+        } = ack;
 
-        // Scan init response for account ID and gateway-local init tags
-        let init_str = String::from_utf8_lossy(&scan_data);
-        // Log every part naming "farm" or "hmds", which is where the routing
-        // tags sit.
-        for part in init_str.split('\x01') {
-            if part.contains("farm") || part.contains("hmds") || part.contains("secdef") {
-                log::info!("Init scan: routing-shaped part = {part:?}");
-            }
-        }
-        for part in init_str.split('\x01') {
-            if part.starts_with("1=") && part.len() > 2 {
-                let val = &part[2..];
-                if val.starts_with("DU") || val.starts_with("DF") || val.starts_with("U") {
-                    note_account(&mut accounts, val);
-                    if account_id.is_empty() || account_id == config.username {
-                        account_id = val.to_string();
-                        log::info!("Found account ID from init response: {account_id}");
-                    }
-                }
-            } else if part.starts_with("6560=") && raw_soft_dollar_tiers.is_empty() {
-                raw_soft_dollar_tiers = part[5..].to_string();
-                log::info!("Found soft dollar tiers from init response ({} bytes)", raw_soft_dollar_tiers.len());
-            } else if part.starts_with("6823=") && raw_family_codes.is_empty() {
-                raw_family_codes = part[5..].to_string();
-                log::info!("Found family codes from init response ({} bytes)", raw_family_codes.len());
-            } else if part.starts_with("6830=") && raw_news_providers.is_empty() {
-                raw_news_providers = part[5..].to_string();
-                log::info!("Found news providers from init response ({} bytes)", raw_news_providers.len());
-            } else if part.starts_with("6571=") && white_branding_id.is_empty() {
-                white_branding_id = part[5..].to_string();
-                log::info!("Found white branding ID from init response");
-            } else if part.starts_with("6321=") && raw_misc_urls.is_empty() {
-                raw_misc_urls = part[5..].to_string();
-                log::info!("Found misc URLs from init response ({} bytes)", raw_misc_urls.len());
-            } else if part.starts_with("6145=") && trading_route.is_empty() {
-                trading_route = part[5..].to_string();
-                log::info!("Found trading farm route in init response: {trading_route}");
-            } else if part.starts_with("6171=") && mktdata_route.is_empty() {
-                mktdata_route = part[5..].to_string();
-                log::info!("Found market-data farm route in init response: {mktdata_route}");
-            } else if part.starts_with("8008=") && secdef_route.is_empty() {
-                secdef_route = part[5..].to_string();
-                log::info!("Found secdef farm route in init response: {secdef_route}");
-            }
-        }
-
-        // CCP server FINs the connection ~12s after the
-        // init-burst response if no application-level traffic arrives in the
-        // grace window — heartbeats alone do not satisfy "client alive".
-        // Send Account-Register (35=U|6040=6, account in tag 6095) followed
-        // by a wildcard OrderStatusRequest (35=H|11=*|55=*|54=*) right after
-        // the inbound burst-end, before farm logons begin. Both are sent in
-        // plain FIX over TLS (the CCP socket has no AES/HMAC envelope at
-        // this stage; encryption is set up only after `Connection::new`).
+        // Sent in plain FIX over TLS: the CCP socket has no AES/HMAC envelope
+        // at this stage, as encryption is set up only after `Connection::new`.
         let post_burst_account = if account_id.is_empty() {
             config.username.clone()
         } else {
             account_id.clone()
         };
-        let post_burst_now = chrono_free_timestamp();
-        ccp_seq += 1;
-        let ar_msg = fix_build(
-            &[
-                (35, "U"),
-                (52, &post_burst_now),
-                (6040, "6"),
-                (6036, "1"),
-                (6529, "AR.1"),
-                (6095, &post_burst_account),
-            ],
-            ccp_seq,
-        );
-        tls.write_all(&ar_msg)?;
-        ccp_seq += 1;
-        let osr_msg = fix_build(
-            &[
-                (35, "H"),
-                (52, &post_burst_now),
-                (11, "*"),
-                (55, "*"),
-                (54, "*"),
-            ],
-            ccp_seq,
-        );
-        tls.write_all(&osr_msg)?;
-        ccp_seq += 1;
-        // PortfolioLoginRequest — third post-burst app message in the Java
-        // capture (tag34=104). Account goes in tag 1 here, not 6095.
-        let plr_msg = fix_build(
-            &[
-                (35, "U"),
-                (52, &post_burst_now),
-                (6040, "142"),
-                (6529, "PLR.1"),
-                (1, &post_burst_account),
-            ],
-            ccp_seq,
-        );
-        tls.write_all(&plr_msg)?;
-        ccp_seq += 1;
-        // DataRequest — Java tag34=105: `1={acc}|6712=1|6556=DR.{N}`
-        let dr_msg = fix_build(
-            &[
-                (35, "U"),
-                (52, &post_burst_now),
-                (6040, "91"),
-                (1, &post_burst_account),
-                (6712, "1"),
-                (6556, "DR.2"),
-            ],
-            ccp_seq,
-        );
-        tls.write_all(&dr_msg)?;
-        ccp_seq += 1;
-        // 6040=74 — Java tag34=106: `1={acc}|6700=Core|6544=2`
-        let core_msg = fix_build(
-            &[
-                (35, "U"),
-                (52, &post_burst_now),
-                (6040, "74"),
-                (1, &post_burst_account),
-                (6700, "Core"),
-                (6544, "2"),
-            ],
-            ccp_seq,
-        );
-        tls.write_all(&core_msg)?;
-        tls.flush()?;
+        ccp_seq = logon::send_post_burst_grace(
+            &mut tls, &post_burst_account, &chrono_free_timestamp(), ccp_seq,
+        )?;
         log::info!(
             "CCP post-burst grace messages sent (AR+H+PLR+DR+74), seq now {ccp_seq}"
         );
