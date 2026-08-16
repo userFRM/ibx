@@ -151,8 +151,33 @@ path = "src/bin/capture_whatif.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "premarket_marketable_axti"
+path = "src/bin/premarket_marketable_axti.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "seed_spy_position"
+path = "src/bin/seed_spy_position.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "soak_reconnect"
 path = "src/bin/soak_reconnect.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "srp_fallback"
+path = "src/bin/srp_fallback.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "validate_cold_start_positions"
+path = "src/bin/validate_cold_start_positions.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "wire_repro"
+path = "src/bin/wire_repro.rs"
 required-features = ["dev-tools"]
 
 [dependencies]

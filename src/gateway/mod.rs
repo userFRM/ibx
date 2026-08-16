@@ -1170,7 +1170,7 @@ fn dial_auth_server(
 ///
 /// Each logon is about six seconds sequentially, and both servers accept
 /// concurrent logons with the same credentials, so running them together
-/// halves the phase — see examples/ex_parallel_farm_logon.rs. Validated
+/// halves the phase — see the parallel farm logon example. Validated
 /// against paper and live.
 ///
 /// Only the trading farm is required. Everything else works without the other
