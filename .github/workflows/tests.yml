@@ -40,7 +40,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --lib --all-targets
+        run: cargo build --lib --all-targets --features dev-tools
 
       - name: Test
         run: cargo test --lib
@@ -113,8 +113,12 @@ jobs:
       # Binaries, examples and tests were linted by nobody. A break in test
       # code compiles nowhere else and so reaches main unseen. This covers the
       # library too, so it is the only pass needed.
+      # `dev-tools` names the measurement and capture binaries, which are off
+      # by default so that installing the crate does not hand a caller
+      # twenty-five of them. Lint them anyway: a tool nobody compiles is a
+      # tool nobody can run when it is needed.
       - name: Lint everything that builds
-        run: cargo clippy --lib --all-targets -- -D warnings
+        run: cargo clippy --lib --all-targets --features dev-tools -- -D warnings
 
       # A feature that is not the default is compiled by nobody until it breaks
       # somebody. Both configurations are lint-clean and stay that way.
