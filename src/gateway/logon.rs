@@ -334,7 +334,7 @@ pub(super) fn send_init_sequence(
     // the venue still holds.
     let window_start = match scope {
         ExecutionReportScope::Today => format!("{}-00:00:00", &now[..8]),
-        _ => crate::config::midnight_days_ago(EXECUTIONS_REACH_BACK_DAYS).to_string(),
+        _ => crate::protocol::datetime::midnight_days_ago(EXECUTIONS_REACH_BACK_DAYS).to_string(),
     };
     send(&[(35, "U"), (52, now), (6040, "72"), (6536, &window_start), (6537, now), (6556, "today4")])?;
     send(&[(35, "U"), (52, now), (6040, "74"), (1, ""), (6544, "2")])?;

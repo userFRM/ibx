@@ -642,7 +642,7 @@ impl EClient {
             // The venue states the moment as it spells it; the reference client
             // states it in seconds. One that cannot be read back is handed over
             // as nothing rather than as an instant in 1970.
-            let at = |stated: &str| crate::config::ib_datetime_to_unix(stated).unwrap_or(0);
+            let at = |stated: &str| crate::protocol::datetime::ib_datetime_to_unix(stated).unwrap_or(0);
             match data {
                 crate::types::HistoricalTickData::Midpoint(ticks) => {
                     let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTick> = ticks.iter().map(|t| crate::python::compat::tick_types::HistoricalTick {

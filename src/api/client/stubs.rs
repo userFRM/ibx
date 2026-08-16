@@ -44,7 +44,7 @@ impl EClient {
     pub fn req_current_time(&self, wrapper: &mut impl Wrapper) {
         let stated = self.shared.market.venue_time()
             .as_deref()
-            .and_then(crate::config::ib_datetime_to_unix);
+            .and_then(crate::protocol::datetime::ib_datetime_to_unix);
         let now = stated.unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

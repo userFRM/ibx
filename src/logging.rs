@@ -12,7 +12,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::EnvFilter;
 
-use crate::config::days_to_ymd;
+use crate::protocol::datetime::days_to_ymd;
 
 /// Logging configuration.
 pub struct LogConfig {

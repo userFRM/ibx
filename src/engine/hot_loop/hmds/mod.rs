@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crate::bridge::{Event, SharedState};
-use crate::config::chrono_free_timestamp;
+use crate::protocol::datetime::chrono_free_timestamp;
 use crate::protocol::connection::{Connection, Frame};
 use crate::protocol::fix;
 use crate::protocol::fixcomp;
@@ -1066,7 +1066,7 @@ impl HmdsState {
         let duration = crate::control::historical::normalize_duration(duration);
         let duration = duration.as_str();
         let end_date_time = if end_date_time.is_empty() {
-            crate::config::chrono_free_timestamp().to_string()
+            crate::protocol::datetime::chrono_free_timestamp().to_string()
         } else {
             end_date_time.to_string()
         };
@@ -1154,7 +1154,7 @@ impl HmdsState {
         // Reuse the same request builder but with keep_up_to_date=true
         let duration = crate::control::historical::normalize_duration(duration);
         let end_date_time = if end_date_time.is_empty() {
-            crate::config::chrono_free_timestamp().to_string()
+            crate::protocol::datetime::chrono_free_timestamp().to_string()
         } else {
             end_date_time.to_string()
         };
