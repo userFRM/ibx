@@ -1,0 +1,778 @@
+//! What the venue has answered about contracts, history and news.
+
+use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::collections::HashMap;
+use crate::control::historical::{HistoricalResponse, HeadTimestampResponse};
+use crate::control::contracts::{ContractDefinition, OptionChainScope, SymbolMatch};
+use crate::control::scanner::ScannerResult;
+use crate::control::news::NewsHeadline;
+use crate::control::histogram::HistogramEntry;
+use crate::control::contracts::MarketRule;
+use crate::types::*;
+use crate::types::model as api;
+
+/// Historical data, contract definitions, scanners, news archives, market rules,
+/// contract cache.
+pub struct ReferenceState {
+    historical_data: Mutex<Vec<(u32, HistoricalResponse)>>,
+    head_timestamps: Mutex<Vec<(u32, HeadTimestampResponse)>>,
+    /// Set while the smart-component table is this client's own rather than
+    /// the venue's.
+    smart_components_provisional: AtomicBool,
+    contract_details: Mutex<Vec<(u32, ContractDefinition)>>,
+    contract_details_end: Mutex<Vec<u32>>,
+    matching_symbols: Mutex<Vec<(u32, Vec<SymbolMatch>)>>,
+    /// The calendar's answers, as the venue wrote them. Two shapes on one
+    /// envelope — what event types exist, and the events themselves — kept
+    /// apart so a caller waiting on one is not handed the other.
+    calendar_meta_data: Mutex<Vec<(u32, String)>>,
+    calendar_events: Mutex<Vec<(u32, String)>>,
+    /// A whole option chain answer: the underlying's conId, and one entry per
+    /// scope the venue listed. The list is what the dispatcher reports before
+    /// ending the request, so an empty one still ends it.
+    option_params: Mutex<Vec<(u32, i64, Vec<OptionChainScope>)>>,
+    scanner_params: Mutex<Vec<String>>,
+    scanner_data: Mutex<Vec<(u32, ScannerResult)>>,
+    historical_news: Mutex<Vec<(u32, Vec<NewsHeadline>, bool)>>,
+    news_articles: Mutex<Vec<(u32, i32, String)>>,
+    fundamental_data: Mutex<Vec<(u32, String)>>,
+    histogram_data: Mutex<Vec<(u32, Vec<HistogramEntry>)>>,
+    historical_ticks: Mutex<Vec<(u32, HistoricalTickData, String, bool)>>,
+    historical_schedules: Mutex<Vec<(u32, HistoricalScheduleResponse)>>,
+    /// Errors surfaced by HMDS for in-flight reference queries (req_id, code, message).
+    /// Drained by the dispatcher and forwarded to `Wrapper::error`.
+    historical_errors: Mutex<Vec<(u32, i32, String)>>,
+    market_rules: Mutex<Vec<MarketRule>>,
+    depth_exchanges_cache: Mutex<Vec<DepthMktDataDescription>>,
+    depth_exchanges_pending: Mutex<bool>,
+    /// Contract cache from CCP exec reports (con_id -> api::Contract).
+    contract_cache: Mutex<HashMap<i64, api::Contract>>,
+    /// Gateway-local init data (populated during connection, read-only after).
+    smart_components: Mutex<Vec<crate::types::SmartComponent>>,
+    news_providers: Mutex<Vec<crate::types::NewsProvider>>,
+    soft_dollar_tiers: Mutex<Vec<crate::types::SoftDollarTier>>,
+    family_codes: Mutex<Vec<crate::types::FamilyCode>>,
+    white_branding_id: Mutex<String>,
+    /// Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
+    ccp_session_id: Mutex<String>,
+    /// Logical-name → host URL map pushed by the gateway during logon.
+    misc_urls: Mutex<HashMap<String, String>>,
+    /// Another session already on this account at connect: address, login time,
+    /// and whether this one is held to reading only.
+    competing_session: Mutex<Option<(String, String, bool)>>,
+    /// Why this session ended, once it has ended for good.
+    session_over: Mutex<Option<&'static str>>,
+    /// Security type → the order types the venue permits for it, from logon tag 6652.
+    order_permissions: Mutex<HashMap<String, Vec<String>>>,
+    /// Feature tokens the venue enables for this account, from logon tag 6542
+    /// and from the account configuration that follows it.
+    enabled_features: Mutex<Vec<String>>,
+    /// Whether the venue granted the older spelling of Nasdaq. Settled when
+    /// the grants are, because a contract definition is parsed under it and a
+    /// lock and a scan per definition is not what that path is for.
+    island_granted: AtomicBool,
+    /// Which algorithms the venue offers, by provider and security type.
+    algorithms: Mutex<HashMap<String, Vec<String>>>,
+}
+
+impl ReferenceState {
+    pub(super) fn new() -> Self {
+        Self {
+            historical_data: Mutex::new(Vec::with_capacity(16)),
+            head_timestamps: Mutex::new(Vec::with_capacity(8)),
+            smart_components_provisional: AtomicBool::new(false),
+            contract_details: Mutex::new(Vec::with_capacity(16)),
+            contract_details_end: Mutex::new(Vec::with_capacity(8)),
+            matching_symbols: Mutex::new(Vec::with_capacity(8)),
+            calendar_meta_data: Mutex::new(Vec::new()),
+            calendar_events: Mutex::new(Vec::new()),
+            option_params: Mutex::new(Vec::with_capacity(4)),
+            scanner_params: Mutex::new(Vec::new()),
+            scanner_data: Mutex::new(Vec::with_capacity(8)),
+            historical_news: Mutex::new(Vec::with_capacity(8)),
+            news_articles: Mutex::new(Vec::with_capacity(8)),
+            fundamental_data: Mutex::new(Vec::with_capacity(4)),
+            histogram_data: Mutex::new(Vec::with_capacity(4)),
+            historical_ticks: Mutex::new(Vec::with_capacity(4)),
+            historical_schedules: Mutex::new(Vec::with_capacity(4)),
+            historical_errors: Mutex::new(Vec::with_capacity(4)),
+            market_rules: Mutex::new(Vec::new()),
+            depth_exchanges_cache: Mutex::new(Vec::new()),
+            depth_exchanges_pending: Mutex::new(false),
+            contract_cache: Mutex::new(HashMap::new()),
+            smart_components: Mutex::new(Vec::new()),
+            news_providers: Mutex::new(Vec::new()),
+            soft_dollar_tiers: Mutex::new(Vec::new()),
+            family_codes: Mutex::new(Vec::new()),
+            white_branding_id: Mutex::new(String::new()),
+            ccp_session_id: Mutex::new(String::new()),
+            misc_urls: Mutex::new(HashMap::new()),
+            competing_session: Mutex::new(None),
+            session_over: Mutex::new(None),
+            order_permissions: Mutex::new(HashMap::new()),
+            enabled_features: Mutex::new(Vec::new()),
+            island_granted: AtomicBool::new(false),
+            algorithms: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Take every historical data waiting, leaving none.
+    pub fn drain_historical_data(&self) -> Vec<(u32, HistoricalResponse)> {
+        self.historical_data.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every head timestamps waiting, leaving none.
+    pub fn drain_head_timestamps(&self) -> Vec<(u32, HeadTimestampResponse)> {
+        self.head_timestamps.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every contract details waiting, leaving none.
+    pub fn drain_contract_details(&self) -> Vec<(u32, ContractDefinition)> {
+        self.contract_details.lock().unwrap().drain(..).collect()
+    }
+
+    /// Whether the smart-component table came from the venue or is this
+    /// client's own list.
+    ///
+    /// The bit numbers in it decide which exchange a quote's bid, ask and last
+    /// are attributed to. The venue assigns them; a list written here can only
+    /// guess, and a guess that renders confidently is indistinguishable from
+    /// knowledge.
+    pub fn smart_components_are_provisional(&self) -> bool {
+        self.smart_components_provisional.load(Ordering::Relaxed)
+    }
+
+    /// Whether the venue map held is this client's guess or
+    /// the venue's own statement.
+    pub fn note_smart_components_provisional(&self, provisional: bool) {
+        self.smart_components_provisional
+            .store(provisional, Ordering::Relaxed);
+    }
+
+    /// The definitions a dispatch loop should deliver, leaving an answering
+    /// call's own where that call will find them.
+    pub fn drain_contract_details_for_dispatch(&self) -> Vec<(u32, ContractDefinition)> {
+        Self::drain_dispatchable(&self.contract_details)
+    }
+
+    /// Take every historical data a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_historical_data_for_dispatch(&self) -> Vec<(u32, HistoricalResponse)> {
+        Self::drain_dispatchable(&self.historical_data)
+    }
+
+    /// Take every head timestamps a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_head_timestamps_for_dispatch(&self) -> Vec<(u32, HeadTimestampResponse)> {
+        Self::drain_dispatchable(&self.head_timestamps)
+    }
+
+    /// Take every calendar meta data a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_calendar_meta_data_for_dispatch(&self) -> Vec<(u32, String)> {
+        Self::drain_dispatchable(&self.calendar_meta_data)
+    }
+
+    /// Take every calendar events a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_calendar_events_for_dispatch(&self) -> Vec<(u32, String)> {
+        Self::drain_dispatchable(&self.calendar_events)
+    }
+
+    /// Take every matching symbols a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_matching_symbols_for_dispatch(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
+        Self::drain_dispatchable(&self.matching_symbols)
+    }
+
+    /// Take every histogram data a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_histogram_data_for_dispatch(&self) -> Vec<(u32, Vec<HistogramEntry>)> {
+        Self::drain_dispatchable(&self.histogram_data)
+    }
+
+    /// Take every fundamental data a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_fundamental_data_for_dispatch(&self) -> Vec<(u32, String)> {
+        Self::drain_dispatchable(&self.fundamental_data)
+    }
+
+    /// Take every historical schedules a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_historical_schedules_for_dispatch(&self) -> Vec<(u32, HistoricalScheduleResponse)> {
+        Self::drain_dispatchable(&self.historical_schedules)
+    }
+
+    /// Take every contract details end a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_contract_details_end_for_dispatch(&self) -> Vec<u32> {
+        let mut g = self.contract_details_end.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < g.len() {
+            if Self::is_ask_id(g[i]) { i += 1; } else { out.push(g.remove(i)); }
+        }
+        out
+    }
+
+    /// Take every historical errors a dispatch loop should deliver, leaving behind
+    /// what a waiting answering call will take.
+    pub fn drain_historical_errors_for_dispatch(&self) -> Vec<(u32, i32, String)> {
+        let mut g = self.historical_errors.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < g.len() {
+            if Self::is_ask_id(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
+        }
+        out
+    }
+
+    /// The first id this client's own answering calls ask under.
+    ///
+    /// Far above what a caller is likely to use, so an answer to one of these
+    /// is never mistaken for an answer to theirs — and, more importantly, so a
+    /// dispatch loop can tell them apart from a caller's own requests and leave
+    /// them where the waiting call will find them.
+    pub const ASK_ID_BASE: u32 = 0x3000_0000;
+
+    /// Whether a request id belongs to one of this client's answering calls.
+    pub fn is_ask_id(req_id: u32) -> bool {
+        req_id >= Self::ASK_ID_BASE
+    }
+
+    /// Drain what a dispatch loop should deliver, leaving behind what a waiting
+    /// answering call is going to take.
+    ///
+    /// Only for a dispatch loop whose answering calls take their replies out of
+    /// these queues by id. A dispatch loop that *is* how its answering calls
+    /// receive must use the plain drain, or it withholds from itself — which is
+    /// what happened, and no offline test could see it, because the queues were
+    /// filled by hand rather than by a venue.
+    pub fn drain_dispatchable<T>(q: &Mutex<Vec<(u32, T)>>) -> Vec<(u32, T)> {
+        let mut g = q.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < g.len() {
+            if Self::is_ask_id(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
+        }
+        out
+    }
+
+    /// Take the one answer belonging to a request, leaving the rest.
+    fn take_one<T>(q: &Mutex<Vec<(u32, T)>>, req_id: u32) -> Option<T> {
+        let mut g = q.lock().unwrap();
+        let at = g.iter().position(|(id, _)| *id == req_id)?;
+        Some(g.remove(at).1)
+    }
+
+    /// Bars answering one request. The venue may answer in several parts, so
+    /// this takes every part waiting and the caller stops on the one that says
+    /// it is the last.
+    pub fn take_historical_for(&self, req_id: u32) -> Vec<HistoricalResponse> {
+        let mut q = self.historical_data.lock().unwrap();
+        let mut mine = Vec::new();
+        let mut i = 0;
+        while i < q.len() {
+            if q[i].0 == req_id { mine.push(q.remove(i).1); } else { i += 1; }
+        }
+        mine
+    }
+
+    /// Take the head timestamp answering one request, leaving the rest.
+    pub fn take_head_timestamp_for(&self, req_id: u32) -> Option<HeadTimestampResponse> {
+        Self::take_one(&self.head_timestamps, req_id)
+    }
+
+    /// Take the matching symbols answering one request, leaving the rest.
+    pub fn take_matching_symbols_for(&self, req_id: u32) -> Option<Vec<SymbolMatch>> {
+        Self::take_one(&self.matching_symbols, req_id)
+    }
+
+    /// The option chains answered for one request.
+    pub fn take_option_params_for(&self, req_id: u32) -> Option<(i64, Vec<OptionChainScope>)> {
+        let mut held = self.option_params.lock().unwrap();
+        let at = held.iter().position(|(id, ..)| *id == req_id)?;
+        let (_, underlying, scopes) = held.remove(at);
+        Some((underlying, scopes))
+    }
+
+    /// Take the histogram answering one request, leaving the rest.
+    pub fn take_histogram_for(&self, req_id: u32) -> Option<Vec<HistogramEntry>> {
+        Self::take_one(&self.histogram_data, req_id)
+    }
+
+    /// Take the fundamental answering one request, leaving the rest.
+    pub fn take_fundamental_for(&self, req_id: u32) -> Option<String> {
+        Self::take_one(&self.fundamental_data, req_id)
+    }
+
+    /// Take the historical schedule answering one request, leaving the rest.
+    pub fn take_historical_schedule_for(&self, req_id: u32) -> Option<HistoricalScheduleResponse> {
+        Self::take_one(&self.historical_schedules, req_id)
+    }
+
+    /// Take only the definitions answering one request, leaving every other
+    /// request's alone.
+    ///
+    /// The plain drain empties the queue for whoever calls it first. A caller
+    /// asking one question needs its own answer without swallowing the answers
+    /// belonging to a dispatch loop running beside it.
+    pub fn take_contract_details_for(&self, req_id: u32) -> Vec<ContractDefinition> {
+        let mut q = self.contract_details.lock().unwrap();
+        let mut mine = Vec::new();
+        q.retain(|(id, def)| {
+            if *id == req_id { mine.push(def.clone()); false } else { true }
+        });
+        mine
+    }
+
+    /// Whether the venue has said it has no more to say about one request.
+    pub fn take_contract_details_end_for(&self, req_id: u32) -> bool {
+        let mut q = self.contract_details_end.lock().unwrap();
+        let before = q.len();
+        q.retain(|id| *id != req_id);
+        q.len() != before
+    }
+
+    /// The venue's own words about one request, if it refused it.
+    pub fn take_error_for(&self, req_id: u32) -> Option<(i32, String)> {
+        let mut q = self.historical_errors.lock().unwrap();
+        let at = q.iter().position(|(id, _, _)| *id == req_id)?;
+        let (_, code, msg) = q.remove(at);
+        Some((code, msg))
+    }
+
+    /// Take every contract details end waiting, leaving none.
+    pub fn drain_contract_details_end(&self) -> Vec<u32> {
+        self.contract_details_end.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every calendar meta data waiting, leaving none.
+    pub fn drain_calendar_meta_data(&self) -> Vec<(u32, String)> {
+        self.calendar_meta_data.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every calendar events waiting, leaving none.
+    pub fn drain_calendar_events(&self) -> Vec<(u32, String)> {
+        self.calendar_events.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every matching symbols waiting, leaving none.
+    pub fn drain_matching_symbols(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
+        self.matching_symbols.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every option params waiting, leaving none.
+    pub fn drain_option_params(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
+        self.option_params.lock().unwrap().drain(..).collect()
+    }
+
+    /// The chains meant for a callback, leaving those a caller is waiting on.
+    ///
+    /// Draining everything hands an answering call's own answer to the
+    /// callback pump instead, and the call then waits out its timeout for
+    /// something that has already been delivered somewhere else.
+    pub fn drain_option_params_for_dispatch(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
+        let mut held = self.option_params.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < held.len() {
+            if Self::is_ask_id(held[i].0) {
+                i += 1;
+            } else {
+                out.push(held.remove(i));
+            }
+        }
+        out
+    }
+
+    /// Take every scanner params waiting, leaving none.
+    pub fn drain_scanner_params(&self) -> Vec<String> {
+        self.scanner_params.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every scanner data waiting, leaving none.
+    pub fn drain_scanner_data(&self) -> Vec<(u32, ScannerResult)> {
+        self.scanner_data.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every historical news waiting, leaving none.
+    pub fn drain_historical_news(&self) -> Vec<(u32, Vec<NewsHeadline>, bool)> {
+        self.historical_news.lock().unwrap().drain(..).collect()
+    }
+
+    /// The headlines answering one request, leaving anything a dispatch loop
+    /// is going to deliver where it is.
+    pub fn take_historical_news_for(&self, req_id: u32) -> Option<(Vec<NewsHeadline>, bool)> {
+        let mut held = self.historical_news.lock().unwrap();
+        let at = held.iter().position(|(id, ..)| *id == req_id)?;
+        let (_, headlines, has_more) = held.remove(at);
+        Some((headlines, has_more))
+    }
+
+    /// What a dispatch loop should deliver, leaving what an answering call is
+    /// waiting to take.
+    pub fn drain_historical_news_for_dispatch(&self) -> Vec<(u32, Vec<NewsHeadline>, bool)> {
+        let mut held = self.historical_news.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < held.len() {
+            if Self::is_ask_id(held[i].0) {
+                i += 1;
+            } else {
+                out.push(held.remove(i));
+            }
+        }
+        out
+    }
+
+    /// Take every news articles waiting, leaving none.
+    pub fn drain_news_articles(&self) -> Vec<(u32, i32, String)> {
+        self.news_articles.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every fundamental data waiting, leaving none.
+    pub fn drain_fundamental_data(&self) -> Vec<(u32, String)> {
+        self.fundamental_data.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every histogram data waiting, leaving none.
+    pub fn drain_histogram_data(&self) -> Vec<(u32, Vec<HistogramEntry>)> {
+        self.histogram_data.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every historical ticks waiting, leaving none.
+    pub fn drain_historical_ticks(&self) -> Vec<(u32, HistoricalTickData, String, bool)> {
+        self.historical_ticks.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every historical schedules waiting, leaving none.
+    pub fn drain_historical_schedules(&self) -> Vec<(u32, HistoricalScheduleResponse)> {
+        self.historical_schedules.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every historical errors waiting, leaving none.
+    pub fn drain_historical_errors(&self) -> Vec<(u32, i32, String)> {
+        self.historical_errors.lock().unwrap().drain(..).collect()
+    }
+
+    /// Get cached market rules.
+    pub fn market_rules(&self) -> Vec<MarketRule> {
+        self.market_rules.lock().unwrap().clone()
+    }
+
+    /// Get a market rule by ID.
+    pub fn market_rule(&self, rule_id: i32) -> Option<MarketRule> {
+        self.market_rules.lock().unwrap().iter().find(|r| r.rule_id == rule_id).cloned()
+    }
+
+    /// Get cached contract by con_id.
+    pub fn get_contract(&self, con_id: i64) -> Option<api::Contract> {
+        self.contract_cache.lock().unwrap().get(&con_id).cloned()
+    }
+
+    // ── Hot-loop-side writers ──
+
+    #[doc(hidden)] pub fn push_historical_data(&self, req_id: u32, response: HistoricalResponse) {
+        self.historical_data.lock().unwrap().push((req_id, response));
+    }
+
+    #[doc(hidden)] pub fn push_head_timestamp(&self, req_id: u32, response: HeadTimestampResponse) {
+        self.head_timestamps.lock().unwrap().push((req_id, response));
+    }
+
+    #[doc(hidden)] pub fn push_contract_details(&self, req_id: u32, def: ContractDefinition) {
+        self.contract_details.lock().unwrap().push((req_id, def));
+    }
+
+    #[doc(hidden)] pub fn push_contract_details_end(&self, req_id: u32) {
+        self.contract_details_end.lock().unwrap().push(req_id);
+    }
+
+    #[doc(hidden)] pub fn push_calendar_meta_data(&self, req_id: u32, json: String) {
+        self.calendar_meta_data.lock().unwrap().push((req_id, json));
+    }
+
+    #[doc(hidden)] pub fn push_calendar_events(&self, req_id: u32, json: String) {
+        self.calendar_events.lock().unwrap().push((req_id, json));
+    }
+
+    #[doc(hidden)] pub fn push_matching_symbols(&self, req_id: u32, matches: Vec<SymbolMatch>) {
+        self.matching_symbols.lock().unwrap().push((req_id, matches));
+    }
+
+    #[doc(hidden)] pub fn push_option_params(&self, req_id: u32, underlying_con_id: i64, scopes: Vec<OptionChainScope>) {
+        self.option_params.lock().unwrap().push((req_id, underlying_con_id, scopes));
+    }
+
+    #[doc(hidden)] pub fn push_scanner_params(&self, xml: String) {
+        self.scanner_params.lock().unwrap().push(xml);
+    }
+
+    #[doc(hidden)] pub fn push_scanner_data(&self, req_id: u32, result: ScannerResult) {
+        self.scanner_data.lock().unwrap().push((req_id, result));
+    }
+
+    #[doc(hidden)] pub fn push_historical_news(&self, req_id: u32, headlines: Vec<NewsHeadline>, has_more: bool) {
+        self.historical_news.lock().unwrap().push((req_id, headlines, has_more));
+    }
+
+    #[doc(hidden)] pub fn push_news_article(&self, req_id: u32, article_type: i32, article_text: String) {
+        self.news_articles.lock().unwrap().push((req_id, article_type, article_text));
+    }
+
+    #[doc(hidden)] pub fn push_fundamental_data(&self, req_id: u32, data: String) {
+        self.fundamental_data.lock().unwrap().push((req_id, data));
+    }
+
+    #[doc(hidden)] pub fn push_histogram_data(&self, req_id: u32, entries: Vec<HistogramEntry>) {
+        self.histogram_data.lock().unwrap().push((req_id, entries));
+    }
+
+    #[doc(hidden)] pub fn push_historical_ticks(&self, req_id: u32, data: HistoricalTickData, what_to_show: String, done: bool) {
+        self.historical_ticks.lock().unwrap().push((req_id, data, what_to_show, done));
+    }
+
+    #[doc(hidden)] pub fn push_historical_schedule(&self, req_id: u32, response: HistoricalScheduleResponse) {
+        self.historical_schedules.lock().unwrap().push((req_id, response));
+    }
+
+    #[doc(hidden)] pub fn push_historical_error(&self, req_id: u32, code: i32, message: String) {
+        self.historical_errors.lock().unwrap().push((req_id, code, message));
+    }
+
+    #[doc(hidden)] pub fn push_market_rules(&self, rules: Vec<MarketRule>) {
+        let mut lock = self.market_rules.lock().unwrap();
+        for rule in rules {
+            if !lock.iter().any(|r| r.rule_id == rule.rule_id) {
+                lock.push(rule);
+            }
+        }
+    }
+
+    /// Take every depth exchanges waiting, leaving none.
+    pub fn drain_depth_exchanges(&self) -> Vec<DepthMktDataDescription> {
+        let mut pending = self.depth_exchanges_pending.lock().unwrap();
+        if *pending {
+            *pending = false;
+            self.depth_exchanges_cache.lock().unwrap().clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Every exchange the venue named at logon, as it named them.
+    ///
+    /// Read rather than drained: a caller reading the list must not empty it.
+    pub fn depth_exchanges(&self) -> Vec<DepthMktDataDescription> {
+        self.depth_exchanges_cache.lock().unwrap().clone()
+    }
+
+    #[doc(hidden)] pub fn push_depth_exchanges(&self, descs: Vec<DepthMktDataDescription>) {
+        self.depth_exchanges_cache.lock().unwrap().extend(descs);
+    }
+
+    #[doc(hidden)] pub fn notify_depth_exchanges(&self) {
+        *self.depth_exchanges_pending.lock().unwrap() = true;
+    }
+
+    #[doc(hidden)] pub fn cache_contract(&self, con_id: i64, contract: api::Contract) {
+        let mut cache = self.contract_cache.lock().unwrap();
+        if let Some(existing) = cache.get_mut(&con_id) {
+            // Merge: only overwrite fields that are non-empty in the new contract
+            if !contract.symbol.is_empty() { existing.symbol = contract.symbol; }
+            if !contract.sec_type.is_empty() { existing.sec_type = contract.sec_type; }
+            if !contract.exchange.is_empty() { existing.exchange = contract.exchange; }
+            if !contract.currency.is_empty() { existing.currency = contract.currency; }
+            if !contract.local_symbol.is_empty() { existing.local_symbol = contract.local_symbol; }
+            if !contract.primary_exchange.is_empty() { existing.primary_exchange = contract.primary_exchange; }
+            if !contract.trading_class.is_empty() { existing.trading_class = contract.trading_class; }
+        } else {
+            cache.insert(con_id, contract);
+        }
+    }
+
+    // ── Gateway-local init data ──
+
+    /// Which venue each bit of a quote's exchange mask refers to.
+    pub fn smart_components(&self) -> Vec<crate::types::SmartComponent> {
+        self.smart_components.lock().unwrap().clone()
+    }
+
+    /// Every provider this account may read.
+    pub fn news_providers(&self) -> Vec<crate::types::NewsProvider> {
+        self.news_providers.lock().unwrap().clone()
+    }
+
+    /// Every soft dollar tier it may direct commission to.
+    pub fn soft_dollar_tiers(&self) -> Vec<crate::types::SoftDollarTier> {
+        self.soft_dollar_tiers.lock().unwrap().clone()
+    }
+
+    /// Every account family this login belongs to.
+    pub fn family_codes(&self) -> Vec<crate::types::FamilyCode> {
+        self.family_codes.lock().unwrap().clone()
+    }
+
+    /// How the venue brands this login.
+    pub fn white_branding_id(&self) -> String {
+        self.white_branding_id.lock().unwrap().clone()
+    }
+
+    /// Session ID surfaced to webapp REST clients as the `x-ccp-session-id` header.
+    /// Empty until gateway logon completes.
+    pub fn ccp_session_id(&self) -> String {
+        self.ccp_session_id.lock().unwrap().clone()
+    }
+
+    /// Logical-name → host URL map pushed by the gateway during logon. Empty when
+    /// no URL set was pushed; consumers should fall back to a documented literal
+    /// (e.g. `api.ibkr.com` for `region_dam`).
+    pub fn misc_urls(&self) -> HashMap<String, String> {
+        self.misc_urls.lock().unwrap().clone()
+    }
+
+    /// Single lookup against the URL map. Returns `None` when missing.
+    pub fn misc_url(&self, key: &str) -> Option<String> {
+        self.misc_urls.lock().unwrap().get(key).cloned()
+    }
+
+    /// Security type → the order types the venue permits for it. Stated by the
+    /// venue at logon; empty until logon completes.
+    pub fn order_permissions(&self) -> HashMap<String, Vec<String>> {
+        self.order_permissions.lock().unwrap().clone()
+    }
+
+    /// The order types permitted for one security type, or `None` when the venue
+    /// does not permit the type at all. A combination is named `COMB`.
+    pub fn permitted_order_types(&self, sec_type: &str) -> Option<Vec<String>> {
+        let key = if matches!(sec_type, "BAG" | "COMBO") { "COMB" } else { sec_type };
+        self.order_permissions.lock().unwrap().get(key).cloned()
+    }
+
+    /// Feature tokens the venue enables for this account.
+    pub fn enabled_features(&self) -> Vec<String> {
+        self.enabled_features.lock().unwrap().clone()
+    }
+
+    /// Which algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
+    ///
+    /// The venue states this on the session; it is not a property of a
+    /// contract. An algorithm absent here is one this account may not use.
+    pub fn algorithms(&self) -> HashMap<String, Vec<String>> {
+        self.algorithms.lock().unwrap().clone()
+    }
+
+    /// The algorithms offered for one security type, across every provider.
+    pub fn algorithms_for(&self, sec_type: &str) -> Vec<String> {
+        let want = format!("/{}", sec_type.to_ascii_uppercase());
+        let mut out: Vec<String> = self.algorithms.lock().unwrap()
+            .iter()
+            .filter(|(k, _)| k.to_ascii_uppercase().ends_with(&want))
+            .flat_map(|(_, v)| v.iter().cloned())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    #[doc(hidden)] pub fn set_algorithms(&self, algorithms: HashMap<String, Vec<String>>) {
+        *self.algorithms.lock().unwrap() = algorithms;
+    }
+
+    /// Add feature tokens the venue states after logon. What logon already
+    /// stated is kept; this only ever adds.
+    #[doc(hidden)] pub fn add_enabled_features(&self, more: Vec<String>) {
+        let mut have = self.enabled_features.lock().unwrap();
+        for token in more {
+            if !have.contains(&token) {
+                have.push(token);
+            }
+        }
+        self.settle_island_grant(&have);
+    }
+
+    /// The token that grants the older spelling of Nasdaq, as the counterpart
+    /// reads it: off the granted list at logon, held on its own from then on.
+    fn settle_island_grant(&self, granted: &[String]) {
+        self.island_granted.store(
+            granted.iter().any(|t| t == ISLAND_FOR_NASDAQ_GRANT),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Whether the venue grants the older spelling of Nasdaq to this account.
+    pub fn island_granted(&self) -> bool {
+        self.island_granted.load(Ordering::Relaxed)
+    }
+
+    #[doc(hidden)] pub fn set_order_permissions(&self, perms: HashMap<String, Vec<String>>) {
+        *self.order_permissions.lock().unwrap() = perms;
+    }
+
+    #[doc(hidden)] pub fn set_enabled_features(&self, features: Vec<String>) {
+        self.settle_island_grant(&features);
+        *self.enabled_features.lock().unwrap() = features;
+    }
+
+    #[doc(hidden)] pub fn set_smart_components(&self, components: Vec<crate::types::SmartComponent>) {
+        *self.smart_components.lock().unwrap() = components;
+    }
+
+    #[doc(hidden)] pub fn set_news_providers(&self, providers: Vec<crate::types::NewsProvider>) {
+        *self.news_providers.lock().unwrap() = providers;
+    }
+
+    #[doc(hidden)] pub fn set_soft_dollar_tiers(&self, tiers: Vec<crate::types::SoftDollarTier>) {
+        *self.soft_dollar_tiers.lock().unwrap() = tiers;
+    }
+
+    #[doc(hidden)] pub fn set_family_codes(&self, codes: Vec<crate::types::FamilyCode>) {
+        *self.family_codes.lock().unwrap() = codes;
+    }
+
+    #[doc(hidden)] pub fn set_white_branding_id(&self, id: String) {
+        *self.white_branding_id.lock().unwrap() = id;
+    }
+
+    #[doc(hidden)] pub fn set_ccp_session_id(&self, id: String) {
+        *self.ccp_session_id.lock().unwrap() = id;
+    }
+
+    /// Another session that already held this account when this one connected,
+    /// as the venue named it: where it connected from, when it logged in, and
+    /// whether this session may look but not trade.
+    ///
+    /// `None` when this session is alone. The venue permits one logon at a time
+    /// and takes the account from the older session without saying which it
+    /// dropped, so a caller that wants to know before it starts work asks here.
+    pub fn competing_session(&self) -> Option<(String, String, bool)> {
+        self.competing_session.lock().unwrap().clone()
+    }
+
+    /// Why this session ended, if it has. `Some` means no request can be
+    /// answered any more: the transports are down and nothing is trying to
+    /// bring them back, so a caller that keeps asking is waiting out a timeout
+    /// per call for an answer that cannot arrive.
+    pub fn session_over(&self) -> Option<&'static str> {
+        *self.session_over.lock().unwrap()
+    }
+
+    #[doc(hidden)] pub fn set_session_over(&self, why: &'static str) {
+        *self.session_over.lock().unwrap() = Some(why);
+    }
+
+    #[doc(hidden)] pub fn clear_session_over(&self) {
+        *self.session_over.lock().unwrap() = None;
+    }
+
+    #[doc(hidden)] pub fn set_competing_session(&self, other: Option<(String, String, bool)>) {
+        *self.competing_session.lock().unwrap() = other;
+    }
+
+    #[doc(hidden)] pub fn set_misc_urls(&self, urls: HashMap<String, String>) {
+        *self.misc_urls.lock().unwrap() = urls;
+    }
+}
