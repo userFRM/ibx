@@ -1666,6 +1666,341 @@ pub(crate) struct SecondFactor<'a> {
     pub default_sub_type: &'a str,
 }
 
+/// What the venue says between authentication and the data start.
+enum PostAuth {
+    /// The data start arrived, naming whoever else was already logged in when
+    /// this session got here — where the venue named one.
+    Ready(Option<CompetingSession>),
+    /// The venue sent this session somewhere else before it got that far.
+    Redirect(String, u16),
+}
+
+/// Wait for the data-farm start, answering what the venue asks for on the way.
+///
+/// A transient stall here must not be fatal: a single read timeout does not
+/// end the wait while the data start is still pending, and keepalive chatter
+/// does not exhaust a fixed iteration budget before it arrives. So this
+/// retries within an overall deadline and ignores intervening messages,
+/// mirroring the CCP-reconnect path.
+fn wait_for_data_start(
+    tls: &mut native_tls::TlsStream<TcpStream>,
+    channel: &mut SecureChannel,
+    port: u16,
+) -> io::Result<PostAuth> {
+    // Receive post-auth messages (encrypted via 534) and wait for the
+    // data-farm start (NS_FIX_START). A transient stall here must not be
+    // fatal. A single read timeout does not end the wait while the data
+    // start is still pending, and keepalive chatter does not exhaust a
+    // fixed iteration budget before it arrives.
+    // Retry within an overall deadline and ignore intervening messages,
+    // mirroring the CCP-reconnect path.
+    tls.get_ref().set_read_timeout(Some(Duration::from_secs_f64(TIMEOUT_FIX_LOGON)))?;
+    let fix_deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs_f64(TIMEOUT_FIX_LOGON * 2.0);
+    let mut fix_ready = false;
+    // Whoever was already here when this session arrived, as the venue
+    // said so in its answer to the connect.
+    let mut competing: Option<CompetingSession> = None;
+    while std::time::Instant::now() < fix_deadline {
+        let (payload, _) = match ns::ns_recv(&mut *tls) {
+            Ok(r) => r,
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                log::warn!("Post-auth recv timeout, retrying until deadline: {e}");
+                continue;
+            }
+            Err(e) => {
+                log::warn!("Post-auth recv error: {e}");
+                break;
+            }
+        };
+        let text = String::from_utf8_lossy(&payload);
+        let parts: Vec<&str> = text.split(';').collect();
+        let raw_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        // Decrypt if encrypted, otherwise use raw
+        let inner = if raw_type == ns::NS_SECURE_MESSAGE {
+            let ct = B64.decode(parts[2])
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            channel.decrypt(&ct)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+        } else if raw_type == ns::NS_SECURE_ERROR {
+            return Err(io::Error::other(
+                format!("Post-auth secure error: {}", parts[2..].join(";")),
+            ));
+        } else if raw_type == ns::NS_REDIRECT {
+            let target = parts.get(2).unwrap_or(&"");
+            let (redirect_host, redirect_port) = host_and_port(target, port);
+            log::info!("Post-auth redirect to {redirect_host}:{redirect_port}");
+            return Ok(PostAuth::Redirect(redirect_host.to_string(), redirect_port));
+        } else {
+            payload
+        };
+
+        let inner_text = String::from_utf8_lossy(&inner);
+        let inner_parts: Vec<&str> = inner_text.split(';').collect();
+        let msg_type: u32 = inner_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        if msg_type == ns::NS_CONNECT_RESPONSE {
+            log::info!("NS_CONNECT_RESPONSE: {inner_text}");
+            competing = parse_competing_session(&inner_text);
+            if let Some(other) = &competing {
+                log::warn!(
+                    "another session was already logged in from {} at {}{}",
+                    other.ip, other.since,
+                    if other.read_only { ", and this one may not trade" } else { "" },
+                );
+            }
+            // Send port type change (required before data start)
+            let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
+            session::send_secure(tls, channel, newcomm.as_bytes())?;
+            log::info!("Port type change sent");
+        } else if msg_type == ns::NS_FIX_START {
+            log::info!("Data start: {inner_text}");
+            fix_ready = true;
+            break;
+        } else if msg_type == ns::NS_ERROR_RESPONSE {
+            return Err(io::Error::other(
+                format!("Post-auth error: {}", inner_parts[2..].join(";")),
+            ));
+        } else {
+            log::info!("Post-auth msg type={msg_type}: {inner_text}");
+        }
+    }
+    if !fix_ready {
+        // TimedOut (not Other) so callers can distinguish a transient
+        // post-auth handshake miss — which is retryable — from a genuine
+        // auth failure.
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Never received data start after auth",
+        ));
+    }
+    Ok(PostAuth::Ready(competing))
+}
+
+/// Dial the auth server and agree a key with it.
+///
+/// Returns the stream and the channel every message after this is encrypted
+/// with. The port a redirect named travels with the redirect for the record;
+/// what is dialled is the auth port, for the reason stated below.
+fn dial_auth_server(
+    config: &GatewayConfig,
+    host: &str,
+    port: u16,
+) -> io::Result<(native_tls::TlsStream<TcpStream>, SecureChannel)> {
+    // --- Phase 1: TLS + auth ---
+    //
+    // On the auth port, not the port the redirect named. The venue does
+    // state one — a redirect to this host carries 4000 — and it is not
+    // where the logon is answered: connecting there is accepted at the
+    // socket and then reset, and the session only completes on 4001.
+    // Measured on a live account, both ports, every redirect in the chain.
+    // So the port travels with the redirect for the record, and the auth
+    // port is what is dialled.
+    if port != AUTH_PORT {
+        log::debug!("redirect named port {port}; auth is answered on {AUTH_PORT}");
+    }
+    log::info!("Connecting to auth server {host}:{AUTH_PORT}");
+    let addr = format!("{host}:{AUTH_PORT}")
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
+    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH))?;
+    // Bounded from the moment it is open, as the farm connection is. A
+    // peer that accepts the socket and then says nothing would otherwise
+    // hold the key exchange below for as long as it stays open, and the
+    // caller's connect with it.
+    tcp.set_read_timeout(Some(Duration::from_secs(TIMEOUT_SSL_AUTH)))?;
+    tcp.set_write_timeout(Some(Duration::from_secs(TIMEOUT_SSL_AUTH)))?;
+
+    let connector = TlsConnector::builder()
+        .danger_accept_invalid_certs(config.accept_invalid_certs)
+        .build()
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let mut tls = connector
+        .connect(host, tcp)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+
+    // Key exchange
+    let mut channel = SecureChannel::new();
+    let dh_msg = channel.build_secure_connect(NS_VERSION, NS_VERSION);
+    tls.write_all(&dh_msg)?;
+
+    let (payload, _) = ns::ns_recv(&mut tls)?;
+    let text = String::from_utf8_lossy(&payload);
+    let parts: Vec<&str> = text.split(';').collect();
+    let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    if msg_type == ns::NS_SECURE_ERROR {
+        return Err(io::Error::other(
+            format!("DH error: {}", parts[2..].join(";")),
+        ));
+    }
+    if msg_type != ns::NS_SECURE_CONNECTION_START {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Expected 533, got {msg_type}"),
+        ));
+    }
+    channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
+    log::info!("Auth key exchange complete");
+    Ok((tls, channel))
+}
+
+/// Open the farm connections this login is routed to, all at once.
+///
+/// Each logon is about six seconds sequentially, and both servers accept
+/// concurrent logons with the same credentials, so running them together
+/// halves the phase — see examples/ex_parallel_farm_logon.rs. Validated
+/// against paper and live.
+///
+/// Only the trading farm is required. Everything else works without the other
+/// two, and a session that refused to open because one farm was down would be
+/// worse than one that says which farm it has.
+#[allow(clippy::too_many_arguments)]
+fn connect_farms(
+    config: &GatewayConfig,
+    session_id: &str,
+    token: &BigUint,
+    hw_info: &str,
+    encoded: &str,
+    trading: (&str, &str, Option<u16>),
+    mktdata: (&str, &str, Option<u16>),
+    secdef: Option<(&str, &str, Option<u16>)>,
+) -> io::Result<(Connection, Option<Connection>, Option<Connection>)> {
+    let (farm_conn, hmds_conn, secdef_conn) = std::thread::scope(|scope| {
+        let username = &config.username;
+        let password = &*config.password;
+        let paper = config.paper;
+        let settings = config.settings.as_ref();
+        let trading_handle = scope.spawn(move || {
+            connect_farm(settings, trading.0, trading.1, username, password,
+                paper, session_id, token, hw_info, encoded, Farm::MarketData, trading.2)
+        });
+        let mktdata_handle = scope.spawn(move || {
+            connect_farm(settings, mktdata.0, mktdata.1, username, password,
+                paper, session_id, token, hw_info, encoded, Farm::Historical, mktdata.2)
+        });
+        let secdef_handle = secdef.map(|(host, farm, port)| {
+            scope.spawn(move || {
+                connect_farm(settings, host, farm, username, password,
+                    paper, session_id, token, hw_info, encoded, Farm::SecurityDefinition, port)
+            })
+        });
+        let trading = trading_handle.join().expect("trading farm thread panicked");
+        let mktdata = mktdata_handle.join().expect("mktdata farm thread panicked");
+        let secdef = secdef_handle
+            .map(|h| h.join().expect("secdef farm thread panicked"));
+        (trading, mktdata, secdef)
+    });
+    let farm_conn = farm_conn?;
+    let hmds_conn = match hmds_conn {
+        Ok(c) => { log::info!("Historical data farm connected"); Some(c) }
+        Err(e) => { log::warn!("Historical data farm connection failed (non-fatal): {e}"); None }
+    };
+    let secdef_conn = match secdef_conn {
+        Some(Ok(c)) => { log::info!("Security definition farm connected"); Some(c) }
+        Some(Err(e)) => {
+            log::warn!("Security definition farm connection failed (non-fatal): {e}");
+            None
+        }
+        None => {
+            log::info!("No security definition farm route was stated at logon");
+            None
+        }
+    };
+    Ok((farm_conn, hmds_conn, secdef_conn))
+}
+
+/// The key this session signs with, and the token it hands to the farms.
+///
+/// Two ways in, and the venue has already said which one it will take: it
+/// answers a request that named a session it still holds with a challenge over
+/// that session, and every other request with a handshake. So this reads the
+/// answer rather than deciding, and a resume that is stale, or for another
+/// account, or simply older than the venue keeps, logs on with the password
+/// instead of failing with an error the caller would have to know how to
+/// retry.
+fn authenticate(
+    tls: &mut native_tls::TlsStream<TcpStream>,
+    config: &GatewayConfig,
+    auth_start: &[u8],
+    resume_key: Option<BigUint>,
+) -> io::Result<(BigUint, Option<BigUint>)> {
+    // AUTH_START field 4 names the second-factor token type and its
+    // per-session subtype, e.g. "5.2i" = tokenType 5 (IBKey), subtype "2i".
+    // The subtype is account- and session-specific, so the compiled-in
+    // default only ever matches the profile it was captured from; every
+    // other account has its SWCR_TOKEN rejected and the socket closed
+    // before a challenge is issued.
+    let (server_token_type, server_token_sub_type) =
+        parse_auth_start_token(&auth_start_text(auth_start)?);
+
+    // Field 5 of AUTH_START says which of the two the server will accept.
+    // It answers 2 only when the request named a session it still holds, so
+    // a resume that is stale, or for another account, or simply older than
+    // the server keeps, comes back asking for the handshake — and gets it,
+    // rather than an error the caller has to know how to retry.
+    let auth_text = auth_start_text(auth_start)?;
+    let auth_mode: u32 = auth_text
+        .split(';')
+        .nth(5)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let key = match (resume_key, auth_mode) {
+        (Some(key), 2) => {
+            log::info!("Resuming the session for {} — no handshake", config.username);
+            do_ccp_soft_token(tls, &key)?;
+            // AUTH_FINISH follows the challenge exactly as it follows a
+            // handshake, and carries nothing this needs.
+            match session::recv_msg(tls) {
+                Ok(session::RecvMsg::Xyz { state, .. }) => {
+                    log::info!("Resume AUTH_FINISH: state={state}");
+                }
+                Ok(session::RecvMsg::Ns { msg_type, .. }) => {
+                    log::info!("Resume post-auth NS type={msg_type}");
+                }
+                Err(e) => log::warn!("Resume AUTH_FINISH recv: {e}"),
+            }
+            // The stored token is the session key, so the farm logons that
+            // follow have what they need without a second factor: the
+            // approval that made this session is the one being resumed.
+            (key, None)
+        }
+        (resume_key, _) => {
+            if resume_key.is_some() {
+                log::info!(
+                    "The session offered was not accepted (mode {auth_mode}) — logging on with the password",
+                );
+            }
+            log::info!("Starting auth for {}", config.username);
+            let session_key = do_srp(tls, &config.username, &config.password)?;
+            log::info!("Auth complete");
+
+            // Per-session second-factor approval gate (IBKey / seamless push).
+            // Skipped on paper logins; live logins enter a wait state if the
+            // account has a second factor configured server-side.
+            // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
+            // that body carries none, so this stays `None` on both
+            // live paths and the farm logon falls back to the SRP session key.
+            let soft_token = run_second_factor(tls, SecondFactor {
+                paper: config.paper,
+                username: &config.username,
+                token_type: server_token_type,
+                token_sub_type: server_token_sub_type,
+                code_provider: config.code_provider.as_ref(),
+                timeout_secs: config.ib_key_timeout_secs,
+                default_sub_type: &config.ib_key_token_sub_type,
+            })?;
+            (session_key, soft_token)
+        }
+    };
+    Ok(key)
+}
+
 /// Run the per-session second-factor gate after SRP. Returns the SOFT token
 /// when the gate issued one.
 ///
@@ -1949,61 +2284,7 @@ impl Gateway {
             None => config.settings.encoded.clone(),
         };
 
-        // --- Phase 1: TLS + auth ---
-        //
-        // On the auth port, not the port the redirect named. The venue does
-        // state one — a redirect to this host carries 4000 — and it is not
-        // where the logon is answered: connecting there is accepted at the
-        // socket and then reset, and the session only completes on 4001.
-        // Measured on a live account, both ports, every redirect in the chain.
-        // So the port travels with the redirect for the record, and the auth
-        // port is what is dialled.
-        if port != AUTH_PORT {
-            log::debug!("redirect named port {port}; auth is answered on {AUTH_PORT}");
-        }
-        log::info!("Connecting to auth server {host}:{AUTH_PORT}");
-        let addr = format!("{host}:{AUTH_PORT}")
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
-        let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH))?;
-        // Bounded from the moment it is open, as the farm connection is. A
-        // peer that accepts the socket and then says nothing would otherwise
-        // hold the key exchange below for as long as it stays open, and the
-        // caller's connect with it.
-        tcp.set_read_timeout(Some(Duration::from_secs(TIMEOUT_SSL_AUTH)))?;
-        tcp.set_write_timeout(Some(Duration::from_secs(TIMEOUT_SSL_AUTH)))?;
-
-        let connector = TlsConnector::builder()
-            .danger_accept_invalid_certs(config.accept_invalid_certs)
-            .build()
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        let mut tls = connector
-            .connect(host, tcp)
-            .map_err(|e| io::Error::other(e.to_string()))?;
-
-        // Key exchange
-        let mut channel = SecureChannel::new();
-        let dh_msg = channel.build_secure_connect(NS_VERSION, NS_VERSION);
-        tls.write_all(&dh_msg)?;
-
-        let (payload, _) = ns::ns_recv(&mut tls)?;
-        let text = String::from_utf8_lossy(&payload);
-        let parts: Vec<&str> = text.split(';').collect();
-        let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        if msg_type == ns::NS_SECURE_ERROR {
-            return Err(io::Error::other(
-                format!("DH error: {}", parts[2..].join(";")),
-            ));
-        }
-        if msg_type != ns::NS_SECURE_CONNECTION_START {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Expected 533, got {msg_type}"),
-            ));
-        }
-        channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
-        log::info!("Auth key exchange complete");
+        let (mut tls, mut channel) = dial_auth_server(config, host, port)?;
 
         // Send CONNECT_REQUEST (encrypted)
         let flags = session::FLAG_OK_TO_REDIRECT
@@ -2064,170 +2345,18 @@ impl Gateway {
             Err(e) => return Err(e),
         };
 
-        // AUTH_START field 4 names the second-factor token type and its
-        // per-session subtype, e.g. "5.2i" = tokenType 5 (IBKey), subtype "2i".
-        // The subtype is account- and session-specific, so the compiled-in
-        // default only ever matches the profile it was captured from; every
-        // other account has its SWCR_TOKEN rejected and the socket closed
-        // before a challenge is issued.
-        let (server_token_type, server_token_sub_type) =
-            parse_auth_start_token(&auth_start_text(&auth_start)?);
+        let (session_key, soft_token) = authenticate(&mut tls, config, &auth_start, resume_key)?;
 
-        // Field 5 of AUTH_START says which of the two the server will accept.
-        // It answers 2 only when the request named a session it still holds, so
-        // a resume that is stale, or for another account, or simply older than
-        // the server keeps, comes back asking for the handshake — and gets it,
-        // rather than an error the caller has to know how to retry.
-        let auth_text = auth_start_text(&auth_start)?;
-        let auth_mode: u32 = auth_text
-            .split(';')
-            .nth(5)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-
-        let (session_key, soft_token) = match (resume_key, auth_mode) {
-            (Some(key), 2) => {
-                log::info!("Resuming the session for {} — no handshake", config.username);
-                do_ccp_soft_token(&mut tls, &key)?;
-                // AUTH_FINISH follows the challenge exactly as it follows a
-                // handshake, and carries nothing this needs.
-                match session::recv_msg(&mut tls) {
-                    Ok(session::RecvMsg::Xyz { state, .. }) => {
-                        log::info!("Resume AUTH_FINISH: state={state}");
-                    }
-                    Ok(session::RecvMsg::Ns { msg_type, .. }) => {
-                        log::info!("Resume post-auth NS type={msg_type}");
-                    }
-                    Err(e) => log::warn!("Resume AUTH_FINISH recv: {e}"),
-                }
-                // The stored token is the session key, so the farm logons that
-                // follow have what they need without a second factor: the
-                // approval that made this session is the one being resumed.
-                (key, None)
-            }
-            (resume_key, _) => {
-                if resume_key.is_some() {
-                    log::info!(
-                        "The session offered was not accepted (mode {auth_mode}) — logging on with the password",
-                    );
-                }
-                log::info!("Starting auth for {}", config.username);
-                let session_key = do_srp(&mut tls, &config.username, &config.password)?;
-                log::info!("Auth complete");
-
-                // Per-session second-factor approval gate (IBKey / seamless push).
-                // Skipped on paper logins; live logins enter a wait state if the
-                // account has a second factor configured server-side.
-                // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
-                // that body carries none, so this stays `None` on both
-                // live paths and the farm logon falls back to the SRP session key.
-                let soft_token = run_second_factor(&mut tls, SecondFactor {
-                    paper: config.paper,
-                    username: &config.username,
-                    token_type: server_token_type,
-                    token_sub_type: server_token_sub_type,
-                    code_provider: config.code_provider.as_ref(),
-                    timeout_secs: config.ib_key_timeout_secs,
-                    default_sub_type: &config.ib_key_token_sub_type,
-                })?;
-                (session_key, soft_token)
-            }
-        };
-
-        // Receive post-auth messages (encrypted via 534) and wait for the
-        // data-farm start (NS_FIX_START). A transient stall here must not be
-        // fatal. A single read timeout does not end the wait while the data
-        // start is still pending, and keepalive chatter does not exhaust a
-        // fixed iteration budget before it arrives.
-        // Retry within an overall deadline and ignore intervening messages,
-        // mirroring the CCP-reconnect path.
-        tls.get_ref().set_read_timeout(Some(Duration::from_secs_f64(TIMEOUT_FIX_LOGON)))?;
-        let fix_deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs_f64(TIMEOUT_FIX_LOGON * 2.0);
-        let mut fix_ready = false;
-        // Whoever was already here when this session arrived, as the venue
-        // said so in its answer to the connect.
-        let mut competing: Option<CompetingSession> = None;
-        while std::time::Instant::now() < fix_deadline {
-            let (payload, _) = match ns::ns_recv(&mut tls) {
-                Ok(r) => r,
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
-                {
-                    log::warn!("Post-auth recv timeout, retrying until deadline: {e}");
-                    continue;
-                }
-                Err(e) => {
-                    log::warn!("Post-auth recv error: {e}");
-                    break;
-                }
-            };
-            let text = String::from_utf8_lossy(&payload);
-            let parts: Vec<&str> = text.split(';').collect();
-            let raw_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-            // Decrypt if encrypted, otherwise use raw
-            let inner = if raw_type == ns::NS_SECURE_MESSAGE {
-                let ct = B64.decode(parts[2])
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-                channel.decrypt(&ct)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-            } else if raw_type == ns::NS_SECURE_ERROR {
-                return Err(io::Error::other(
-                    format!("Post-auth secure error: {}", parts[2..].join(";")),
-                ));
-            } else if raw_type == ns::NS_REDIRECT {
-                let target = parts.get(2).unwrap_or(&"");
-                let (redirect_host, redirect_port) = host_and_port(target, port);
-                log::info!("Post-auth redirect to {redirect_host}:{redirect_port}, reconnecting...");
+        let competing = match wait_for_data_start(&mut tls, &mut channel, port)? {
+            PostAuth::Ready(competing) => competing,
+            PostAuth::Redirect(redirect_host, redirect_port) => {
+                log::info!("Reconnecting to {redirect_host}:{redirect_port}");
                 drop(tls);
                 return Self::connect_to_host(
-                    config, redirect_host, redirect_port, redirect_depth + 1,
+                    config, &redirect_host, redirect_port, redirect_depth + 1,
                 );
-            } else {
-                payload
-            };
-
-            let inner_text = String::from_utf8_lossy(&inner);
-            let inner_parts: Vec<&str> = inner_text.split(';').collect();
-            let msg_type: u32 = inner_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-            if msg_type == ns::NS_CONNECT_RESPONSE {
-                log::info!("NS_CONNECT_RESPONSE: {inner_text}");
-                competing = parse_competing_session(&inner_text);
-                if let Some(other) = &competing {
-                    log::warn!(
-                        "another session was already logged in from {} at {}{}",
-                        other.ip, other.since,
-                        if other.read_only { ", and this one may not trade" } else { "" },
-                    );
-                }
-                // Send port type change (required before data start)
-                let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
-                session::send_secure(&mut tls, &mut channel, newcomm.as_bytes())?;
-                log::info!("Port type change sent");
-            } else if msg_type == ns::NS_FIX_START {
-                log::info!("Data start: {inner_text}");
-                fix_ready = true;
-                break;
-            } else if msg_type == ns::NS_ERROR_RESPONSE {
-                return Err(io::Error::other(
-                    format!("Post-auth error: {}", inner_parts[2..].join(";")),
-                ));
-            } else {
-                log::info!("Post-auth msg type={msg_type}: {inner_text}");
             }
-        }
-        if !fix_ready {
-            // TimedOut (not Other) so callers can distinguish a transient
-            // post-auth handshake miss — which is retryable — from a genuine
-            // auth failure.
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Never received data start after auth",
-            ));
-        }
+        };
 
         // --- Phase 2: Auth server logon (over TLS) ---
         let logon_msg = build_ccp_logon(&config.settings, &hw_info, &encoded, CCP_HEARTBEAT, 1);
@@ -2409,58 +2538,16 @@ impl Gateway {
         let (trading_host_for_gw, trading_farm_for_gw, _) =
             parsed_trading.unwrap_or_default();
 
-        // Parallel farm logons: validated against paper and live (each farm
-        // logon is ~6 s sequentially; running them in parallel halves the
-        // farm-logon phase). Both servers accept concurrent logons with the
-        // same credentials — see examples/ex_parallel_farm_logon.rs.
-        let (farm_conn, hmds_conn, secdef_conn) = std::thread::scope(|scope| {
-            let username = &config.username;
-            let password = &*config.password;
-            let paper = config.paper;
-            let ssid = &server_session_id;
-            let token = &farm_token;
-            let hw = &hw_info;
-            let enc = &encoded;
-            let settings = config.settings.as_ref();
-            let trading_handle = scope.spawn(move || {
-                connect_farm(settings, &trading_host, &trading_farm, username, password,
-                    paper, ssid, token, hw, enc, Farm::MarketData, trading_port)
-            });
-            let mktdata_handle = scope.spawn(move || {
-                connect_farm(settings, &mktdata_host, &mktdata_farm, username, password,
-                    paper, ssid, token, hw, enc, Farm::Historical, mktdata_port)
-            });
-            let secdef_handle = secdef.as_ref().map(|(secdef_host, secdef_farm, secdef_port)| {
-                scope.spawn(move || {
-                    connect_farm(settings, secdef_host, secdef_farm, username, password,
-                        paper, ssid, token, hw, enc, Farm::SecurityDefinition, *secdef_port)
-                })
-            });
-            let trading = trading_handle.join().expect("trading farm thread panicked");
-            let mktdata = mktdata_handle.join().expect("mktdata farm thread panicked");
-            let secdef = secdef_handle
-                .map(|h| h.join().expect("secdef farm thread panicked"));
-            (trading, mktdata, secdef)
-        });
-        let farm_conn = farm_conn?;
-        let hmds_conn = match hmds_conn {
-            Ok(c) => { log::info!("Historical data farm connected"); Some(c) }
-            Err(e) => { log::warn!("Historical data farm connection failed (non-fatal): {e}"); None }
-        };
-        // Not fatal either: everything else works without it, and a session
-        // that refused to open because one farm was down would be worse than
-        // one that says which farm it has.
-        let secdef_conn = match secdef_conn {
-            Some(Ok(c)) => { log::info!("Security definition farm connected"); Some(c) }
-            Some(Err(e)) => {
-                log::warn!("Security definition farm connection failed (non-fatal): {e}");
-                None
-            }
-            None => {
-                log::info!("No security definition farm route was stated at logon");
-                None
-            }
-        };
+        let (farm_conn, hmds_conn, secdef_conn) = connect_farms(
+            config,
+            &server_session_id,
+            &farm_token,
+            &hw_info,
+            &encoded,
+            (&trading_host, &trading_farm, trading_port),
+            (&mktdata_host, &mktdata_farm, mktdata_port),
+            secdef.as_ref().map(|(h, f, p)| (h.as_str(), f.as_str(), *p)),
+        )?;
 
         // A family names the accounts linked to this login, which are accounts
         // this login may trade, so they belong in the list a caller asks for.
