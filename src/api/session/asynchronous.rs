@@ -129,6 +129,29 @@ impl AsyncClient {
         self.inner.bulletins()
     }
 
+    /// Every five-second bar this session has been sent.
+    pub fn live_bars(&self) -> Vec<super::LiveBar> {
+        self.inner.live_bars()
+    }
+
+    /// Every headline this session has been sent.
+    pub fn news(&self) -> Vec<super::NewsTick> {
+        self.inner.news()
+    }
+
+    /// Five-second bars on a contract, as the venue closes them.
+    ///
+    /// Not moved off the reactor: subscribing sends and returns. Reading the
+    /// stream blocks, so read it from a task of its own.
+    pub fn live_bar_stream(&self, contract: &Contract) -> Result<super::LiveBars, Refusal> {
+        self.inner.live_bar_stream(contract)
+    }
+
+    /// Every headline the session is subscribed to, as it is published.
+    pub fn news_stream(&self) -> super::News {
+        self.inner.news_stream()
+    }
+
     /// One quote each for several contracts, now.
     pub async fn quotes(
         &self, contracts: &[Contract], timeout: Duration,

@@ -245,3 +245,41 @@ fn profit_is_the_latest_word_and_notices_accumulate() {
     kept.update_news_bulletin(2, 1, "second", "NYSE");
     assert_eq!(kept.bulletins().len(), 2, "a notice does not replace the one before");
 }
+
+/// Bars reach the caller who asked for that contract, and are kept for one who
+/// subscribed and then looked instead of iterating.
+#[test]
+fn live_bars_are_streamed_to_their_own_reader_and_kept_for_everyone() {
+    use crate::api::wrapper::Wrapper;
+    let mut kept = LiveState::default();
+    let (mine, mine_rx) = std::sync::mpsc::sync_channel(8);
+    let (theirs, theirs_rx) = std::sync::mpsc::sync_channel(8);
+    kept.stream_bars(11, mine);
+    kept.stream_bars(22, theirs);
+
+    kept.real_time_bar(11, 1_000, 1.0, 2.0, 0.5, 1.5, 100.0, 1.2, 7);
+    kept.real_time_bar(22, 1_005, 9.0, 9.0, 9.0, 9.0, 1.0, 9.0, 1);
+
+    let ours: Vec<_> = std::iter::from_fn(|| mine_rx.try_recv().ok()).collect();
+    assert_eq!(ours.len(), 1, "the one on this subscription");
+    assert_eq!(ours[0].close, 1.5);
+    assert_eq!(theirs_rx.try_recv().map(|b| b.close).unwrap(), 9.0, "and theirs on theirs");
+    assert_eq!(kept.live_bars().len(), 2, "both kept, whoever was listening");
+}
+
+/// A headline reaches every reader and is kept, because a session subscribes
+/// to news once and more than one part of a program may care.
+#[test]
+fn news_reaches_every_reader_and_is_kept() {
+    use crate::api::wrapper::Wrapper;
+    let mut kept = LiveState::default();
+    let (a, a_rx) = std::sync::mpsc::sync_channel(4);
+    let (b, b_rx) = std::sync::mpsc::sync_channel(4);
+    kept.stream_news(a);
+    kept.stream_news(b);
+
+    kept.tick_news(3, 1_700, "BRFG", "BRFG$1", "something happened", "");
+    assert_eq!(a_rx.try_recv().unwrap().headline, "something happened");
+    assert_eq!(b_rx.try_recv().unwrap().provider, "BRFG");
+    assert_eq!(kept.news().len(), 1);
+}
