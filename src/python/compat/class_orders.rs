@@ -1357,10 +1357,19 @@ impl Order {
     /// no fallback, so one added to either side fails to compile rather than
     /// quietly defaulting.
     ///
-    /// The three that hold Python objects are the exception: an engine order
-    /// has none to give back, and `Clone` leaves them empty for the same
-    /// reason.
-    pub(crate) fn from_api(a: &crate::types::model::Order) -> Self {
+    /// The three that hold Python objects are the exception, and they come
+    /// back empty: the engine holds what they meant, not the objects they were
+    /// read from, and there is nothing here to build one out of — the leg
+    /// prices have no class on this surface at all, and the conditions have
+    /// classes with no way back from what the engine keeps. So an order read
+    /// back and placed again is placed without its conditions and without a
+    /// price per leg. Hold the order that was placed, or state them again.
+    /// `under` is the number this session connected under. The reference
+    /// client keys a trade by it with the order id, so an order reported under
+    /// a client that did not place it is a second trade the caller never sees
+    /// updated — and the engine order carries whatever the caller set, which is
+    /// nothing at all on an order they did not place.
+    pub(crate) fn from_api(a: &crate::types::model::Order, under: i32) -> Self {
         Self {
             order_id: a.order_id,
             action: a.action.clone(),
@@ -1418,7 +1427,7 @@ impl Order {
             bond_accrued_interest: a.bond_accrued_interest.clone(),
             clearing_account: a.clearing_account.clone(),
             clearing_intent: a.clearing_intent.clone(),
-            client_id: a.client_id,
+            client_id: under,
             compete_against_best_offset: a.compete_against_best_offset,
             continuous_update: a.continuous_update,
             customer_account: a.customer_account.clone(),
