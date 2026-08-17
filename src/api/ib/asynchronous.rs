@@ -206,6 +206,24 @@ impl AsyncIB {
         off_the_reactor!(self, |ib| ib.place_order(&contract, &order))
     }
 
+    /// An entry and the two exits that close it, placed as one instruction.
+    pub async fn place_bracket(
+        &self, contract: &Contract, side: &str, quantity: f64,
+        entry: f64, take_profit: f64, stop_loss: f64,
+    ) -> Result<[i64; 3], Refusal> {
+        let (contract, side) = (contract.clone(), side.to_string());
+        off_the_reactor!(self, |ib| ib.place_bracket(
+            &contract, &side, quantity, entry, take_profit, stop_loss
+        ))
+    }
+
+    /// Link orders so that a fill on one withdraws the rest.
+    ///
+    /// Not moved off the reactor: this writes two fields and sends nothing.
+    pub fn one_cancels_all(orders: &mut [Order], group: &str, kind: i32) {
+        IB::one_cancels_all(orders, group, kind);
+    }
+
     /// Withdraw an order.
     pub fn cancel_order(&self, order_id: i64) -> Result<(), Refusal> {
         self.inner.cancel_order(order_id)

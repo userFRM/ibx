@@ -171,6 +171,30 @@ impl LiveState {
         self.changed();
     }
 
+    /// Take what another record was told.
+    ///
+    /// For an answer collected outside this one — a subscription asked for as
+    /// the session opens, whose reply arrives before anything is reading.
+    pub(crate) fn absorb(&mut self, other: Self) {
+        for held in other.positions {
+            if !self.positions.iter().any(|p| {
+                p.account == held.account && p.contract.con_id == held.contract.con_id
+            }) {
+                self.positions.push(held);
+            }
+        }
+        for (key, value) in other.values {
+            self.values.entry(key).or_insert(value);
+        }
+        for (id, trade) in other.trades {
+            self.trades.entry(id).or_insert(trade);
+        }
+        if self.accounts.is_empty() {
+            self.accounts = other.accounts;
+        }
+        self.changed();
+    }
+
     fn changed(&mut self) {
         self.changes = self.changes.wrapping_add(1);
     }

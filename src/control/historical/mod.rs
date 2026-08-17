@@ -65,10 +65,16 @@ impl BarDataType {
     }
 
     /// The name the venue knows this by.
+    ///
+    /// Not the name the reference client uses, and not always the obvious
+    /// casing: the midpoint is `MidPoint`, and sent as `Midpoint` the venue
+    /// answers "no historical market data" — which reads as a series that does
+    /// not exist rather than a name it does not know. Asked and answered
+    /// against a session; see `probe_midpoint`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Trades => "Last",
-            Self::Midpoint => "Midpoint",
+            Self::Midpoint => "MidPoint",
             Self::Bid => "Bid",
             Self::Ask => "Ask",
             Self::BidAsk => "BidAsk",
@@ -207,6 +213,12 @@ impl BarSize {
     }
 
     /// The name the venue knows this by.
+    ///
+    /// Not the name the reference client uses, and not always the obvious
+    /// casing: the midpoint is `MidPoint`, and sent as `Midpoint` the venue
+    /// answers "no historical market data" — which reads as a series that does
+    /// not exist rather than a name it does not know. Asked and answered
+    /// against a session; see `probe_midpoint`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Sec1 => "1 secs",
@@ -735,12 +747,14 @@ pub fn build_realtime_bar_xml(
     let exchange = if exchange.is_empty() { "BEST" } else { exchange };
     let sec_type = if sec_type.is_empty() { "CS" } else { sec_type };
     let rth = if use_rth { "true" } else { "false" };
-    let data = match what_to_show.to_uppercase().as_str() {
-        "MIDPOINT" => "Midpoint",
-        "BID" => "Bid",
-        "ASK" => "Ask",
-        _ => "Last",
-    };
+    // Through the one place that knows these names. Spelled out again here,
+    // the midpoint was "Midpoint" in two of the three and "MidPoint" in the
+    // third — and the venue, which only takes the third, answered the other
+    // two with "no historical market data", which reads as a series that does
+    // not exist rather than a name that is misspelled.
+    let data = BarDataType::from_api_str(what_to_show)
+        .map(|kind| kind.as_str())
+        .unwrap_or("Last");
 
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\

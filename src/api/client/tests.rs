@@ -5017,3 +5017,59 @@ fn an_impossible_order_is_refused_before_the_venue_is_asked() {
     );
     assert!(rx.try_recv().is_err(), "nothing reaches the wire");
 }
+
+/// A bracket whose exits sit the wrong side of its entry is refused before it
+/// is sent.
+///
+/// Placed, it opens a position and closes it in the same breath: a take-profit
+/// below the entry is already profitable, and a stop above it is already
+/// triggered. The venue is not the right place to find that out.
+#[test]
+fn a_bracket_that_closes_itself_is_refused() {
+    let (client, rx, _shared) = test_client();
+    for (what, side, entry, take_profit, stop_loss) in [
+        ("a buy taking profit below its entry", "BUY", 100.0, 90.0, 95.0),
+        ("a buy stopping out above its entry", "BUY", 100.0, 110.0, 105.0),
+        ("a sell taking profit above its entry", "SELL", 100.0, 110.0, 105.0),
+    ] {
+        let err = client
+            .place_bracket(&spy(), side, 1.0, entry, take_profit, stop_loss)
+            .expect_err(what);
+        assert!(err.message.contains("wrong side"), "{what}: {err}");
+        assert!(rx.try_recv().is_err(), "{what}: nothing reaches the wire");
+    }
+
+    // And one stated the right way round is sent, under three consecutive
+    // numbers — the venue reads the children's as the parent's plus one and two.
+    let ids = client
+        .place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 95.0)
+        .expect("a bracket the right way round is placed");
+    assert_eq!(ids[1], ids[0] + 1);
+    assert_eq!(ids[2], ids[0] + 2);
+    assert_eq!(client.next_order_id(), ids[0] + 3, "the next order does not reuse a child's");
+}
+
+/// Bars are asked for as trades, except where the instrument has none.
+///
+/// A currency pair does not trade on an exchange, so the venue holds no trade
+/// history for one and answers a request for it with "No historical market
+/// data" — which is what this call did against a live session until it stopped
+/// asking for trades there.
+#[test]
+fn bars_ask_for_what_the_instrument_has() {
+    let (client, rx, _shared) = test_client();
+    for (sec_type, wanted) in [("STK", "TRADES"), ("CASH", "MIDPOINT"), ("CFD", "MIDPOINT")] {
+        let contract = Contract {
+            con_id: 12087792, symbol: "EUR".into(), sec_type: sec_type.into(),
+            exchange: "IDEALPRO".into(), currency: "USD".into(), ..Default::default()
+        };
+        let _ = client.bars(&contract, "1 D", "1 hour");
+        let asked = std::iter::from_fn(|| rx.try_recv().ok())
+            .find_map(|c| match c {
+                crate::types::ControlCommand::FetchHistorical { what_to_show, .. } => Some(what_to_show),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{sec_type}: a request reaches the engine"));
+        assert_eq!(asked, wanted, "{sec_type} bars");
+    }
+}

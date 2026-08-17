@@ -108,6 +108,28 @@ impl IB {
             reader: Arc::new(Mutex::new(None)),
         };
         ib.start_reading();
+        // Asked for as the session opens, the way the reference client's own
+        // wrapper does. Without it the account is silent until something asks,
+        // and `positions()` and `account_values()` return empty lists — which
+        // read as an account holding nothing rather than as nobody having
+        // asked. Both are subscriptions: they answer once and then keep
+        // answering, so this is the only place they are asked for.
+        ib.client.req_account_updates(true, "");
+
+        // Into a record of its own and merged after, not straight into the
+        // session's. The reader takes the session's turn and then the state;
+        // filling the state here would take them the other way round, and two
+        // locks taken in two orders is a session that stops at the first
+        // moment both are wanted.
+        let mut answered = LiveState::default();
+        ib.client.req_positions(&mut answered);
+        // And what this account already has working, which may have been
+        // placed by another session or on another day. Without asking, the
+        // session knows only the orders it placed itself — and `open_trades()`
+        // answers "none", which reads as an account with nothing working
+        // rather than as nobody having asked.
+        ib.client.req_all_open_orders(&mut answered);
+        ib.kept().absorb(answered);
         Ok(ib)
     }
 
@@ -325,6 +347,30 @@ impl IB {
         // rather than told there is no such order.
         self.kept().remember(order_id, trade.clone());
         Ok(trade)
+    }
+
+    /// An entry and the two exits that close it, placed as one instruction.
+    ///
+    /// The venue links them: whichever child fills withdraws the other, and
+    /// neither reaches the market before the parent has a position for it to
+    /// work against. Returns the three numbers, parent first — read each with
+    /// [`trade`](IB::trade).
+    pub fn place_bracket(
+        &self, contract: &Contract, side: &str, quantity: f64,
+        entry: f64, take_profit: f64, stop_loss: f64,
+    ) -> Result<[i64; 3], Refusal> {
+        self.client.place_bracket(contract, side, quantity, entry, take_profit, stop_loss)
+    }
+
+    /// Link orders so that a fill on one withdraws the rest.
+    ///
+    /// Stated on the orders, not sent: place them afterwards and the venue
+    /// links them by the name they share.
+    pub fn one_cancels_all(orders: &mut [Order], group: &str, kind: i32) {
+        for order in orders {
+            order.oca_group = group.to_string();
+            order.oca_type = kind;
+        }
     }
 
     /// Withdraw an order.
