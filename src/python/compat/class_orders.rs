@@ -1271,17 +1271,27 @@ impl Order {
 
 impl Order {
     /// Convert Py<PyAny> conditions to internal OrderCondition list.
-    pub fn convert_conditions(&self, py: Python<'_>) -> Vec<OrderCondition> {
-        self.conditions.iter().filter_map(|obj| {
+    /// The conditions an order is held under.
+    ///
+    /// A condition this client does not know is refused rather than dropped:
+    /// dropped, the order goes live at once and the caller is told nothing,
+    /// which is the opposite of what a condition is for. The six the venue
+    /// carries are price, time, margin, execution, volume and percent change.
+    pub fn convert_conditions(&self, py: Python<'_>) -> Result<Vec<OrderCondition>, String> {
+        self.conditions.iter().enumerate().map(|(at, obj)| {
             let any = obj.bind(py);
-            if let Ok(c) = any.cast::<PriceCondition>() { return Some(c.borrow().to_internal()); }
-            if let Ok(c) = any.cast::<TimeCondition>() { return Some(c.borrow().to_internal()); }
-            if let Ok(c) = any.cast::<MarginCondition>() { return Some(c.borrow().to_internal()); }
-            if let Ok(c) = any.cast::<ExecutionCondition>() { return Some(c.borrow().to_internal()); }
-            if let Ok(c) = any.cast::<VolumeCondition>() { return Some(c.borrow().to_internal()); }
-            if let Ok(c) = any.cast::<PercentChangeCondition>() { return Some(c.borrow().to_internal()); }
-            log::warn!("Unknown order condition type, skipping");
-            None
+            if let Ok(c) = any.cast::<PriceCondition>() { return Ok(c.borrow().to_internal()); }
+            if let Ok(c) = any.cast::<TimeCondition>() { return Ok(c.borrow().to_internal()); }
+            if let Ok(c) = any.cast::<MarginCondition>() { return Ok(c.borrow().to_internal()); }
+            if let Ok(c) = any.cast::<ExecutionCondition>() { return Ok(c.borrow().to_internal()); }
+            if let Ok(c) = any.cast::<VolumeCondition>() { return Ok(c.borrow().to_internal()); }
+            if let Ok(c) = any.cast::<PercentChangeCondition>() { return Ok(c.borrow().to_internal()); }
+            Err(format!(
+                "condition {at} is of a kind this client does not carry. It is \
+                 one of PriceCondition, TimeCondition, MarginCondition, \
+                 ExecutionCondition, VolumeCondition or PercentChangeCondition \
+                 — dropped, the order would go live at once with nothing said"
+            ))
         }).collect()
     }
 

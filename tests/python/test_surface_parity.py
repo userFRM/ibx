@@ -145,7 +145,8 @@ def test_what_cannot_be_read_is_refused_rather_than_emptied():
     these gates exist to prevent, reintroduced by the code that fills them.
     """
     source = (ROOT / "src/python/compat/class_orders.rs").read_text()
-    for converter in ("convert_order_combo_legs", "convert_misc_options"):
+    for converter in ("convert_order_combo_legs", "convert_misc_options",
+                      "convert_conditions"):
         at = source.index(f"pub fn {converter}(")
         body = source[at:source.index("\n    }\n", at)]
         assert "Result<" in body.split("{", 1)[0], f"{converter} cannot report a failure"

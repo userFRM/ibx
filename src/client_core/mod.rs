@@ -2393,21 +2393,6 @@ impl ClientCore {
             return Err(format!("parent_id must not be negative, got {}", order.parent_id));
         }
 
-        // transmit=false cannot be honoured: every order is sent to the
-        // broker immediately when place_order is called; there is no
-        // staging concept. Accepting it would send a "staged" bracket
-        // parent live on its own, so reject loudly at the call instead.
-        if !order.transmit {
-            return Err(
-                "transmit=false is not supported: orders are transmitted \
-                 immediately on place_order; there is no staging concept, so \
-                 the order would go live despite transmit=false. Place child \
-                 orders with parent_id/oca_group set and keep transmit=true \
-                 (the engine links them server-side)."
-                    .into(),
-            );
-        }
-
         // A time in force this client does not know becomes DAY, and a DAY
         // order dies at the close. A caller who wrote "gtc" and meant GTC gets
         // an order that quietly stops existing, so the spelling is checked
@@ -2450,17 +2435,24 @@ impl ClientCore {
         // its note here cannot drift from the note itself.
         static UNCARRIED: LazyLock<ApiOrder> = LazyLock::new(ApiOrder::default);
         macro_rules! refuse_if_stated {
-            ($($field:ident),+ $(,)?) => {
+            // A field with something of its own to say says it. The rest share
+            // the sentence below, and both are one list, so the registry the
+            // reach check reads stays whole.
+            ($($field:ident $(: $why:expr)?),+ $(,)?) => {
                 $(if order.$field != UNCARRIED.$field {
-                    return Err(format!(
-                        "{} is not carried by this protocol: there is no field \
-                         to send it under, so the order would go out without \
-                         it and do something other than what was asked. It is \
-                         documented on the field with what is known about the \
-                         absence. Leave it at its default to place the order \
-                         without it.",
-                        stringify!($field),
-                    ));
+                    let stated: Option<&str> = None $(.or(Some($why)))?;
+                    return Err(match stated {
+                        Some(why) => why.to_string(),
+                        None => format!(
+                            "{} is not carried by this protocol: there is no \
+                             field to send it under, so the order would go out \
+                             without it and do something other than what was \
+                             asked. It is documented on the field with what is \
+                             known about the absence. Leave it at its default \
+                             to place the order without it.",
+                            stringify!($field),
+                        ),
+                    });
                 })+
             };
         }
@@ -2471,6 +2463,11 @@ impl ClientCore {
             delta_neutral_open_close, delta_neutral_settling_firm,
             delta_neutral_short_sale, delta_neutral_short_sale_slot,
             dont_use_auto_price_for_hedge, model_code, opt_out_smart_routing,
+            transmit: "transmit=false is not supported: orders are transmitted \
+                       immediately on place_order; there is no staging concept, \
+                       so the order would go live despite transmit=false. Place \
+                       child orders with parent_id/oca_group set and keep \
+                       transmit=true (the engine links them server-side).",
             order_misc_options, origin, override_percentage_constraints,
             parent_perm_id, pt_order_id, pt_order_type, randomize_price,
             scale_init_fill_qty, scale_table, shareholder, sl_order_id,

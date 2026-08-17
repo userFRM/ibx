@@ -82,7 +82,16 @@ def what_the_call_refuses() -> set[str]:
     text = module("src/client_core").read_text()
     at = text.index("refuse_if_stated!(")
     end = text.index(");", at)
-    return set(re.findall(r"\b([a-z_]+)\b", text[at + len("refuse_if_stated!("):end]))
+    listed = text[at + len("refuse_if_stated!("):end]
+    # A field may carry its own sentence, and a sentence is full of words that
+    # look like field names. Read the names, not the prose.
+    listed = re.sub(r'"(?:[^"\\]|\\.)*"', "", listed, flags=re.S)
+    named = set()
+    for entry in listed.split(","):
+        name = entry.split(":")[0].strip()
+        if re.fullmatch(r"[a-z_][a-z_0-9]*", name):
+            named.add(name)
+    return named
 
 
 def without_tests(text: str) -> str:
@@ -94,6 +103,29 @@ def without_tests(text: str) -> str:
     """
     at = text.find("#[cfg(test)]")
     return text if at < 0 else text[:at]
+
+
+def without_validation(text: str) -> str:
+    """The file with its refusals, and the prose beside them, removed.
+
+    Refusing a field is not carrying it. A validator names the field it is
+    refusing, and the comment above it names it again, so a field whose
+    conversion had been deleted still counted as reaching the venue on the
+    strength of the code that stops it from doing so.
+    """
+    out, at = [], 0
+    while True:
+        start = text.find("fn validate_", at)
+        if start < 0:
+            out.append(text[at:])
+            break
+        end = text.find("\n    }", start)
+        if end < 0:
+            out.append(text[at:])
+            break
+        out.append(text[at:start])
+        at = end + 6
+    return re.sub(r"^\s*(//|///).*$", "", "".join(out), flags=re.M)
 
 
 def without_declarations(text: str) -> str:
@@ -177,7 +209,7 @@ def where_fields_are_read() -> str:
     for path in BUILDERS:
         if not path.exists():
             continue
-        text = without_declarations(without_tests(path.read_text()))
+        text = without_validation(without_declarations(without_tests(path.read_text())))
         # Whichever file holds it, not whichever file held it once: keyed on
         # a filename, this went quiet the day the model moved and reported
         # every field as carried by its own declaration. That is the fourth
@@ -313,11 +345,16 @@ def main() -> int:
         return 1
 
     have = [len(fields), len(carried), len(says_so)]
-    for pattern in (r"\| Order fields \| ([\d,]+)\. ([\d,]+) are sent; the other ([\d,]+) ",
-                    r"An order has ([\d,]+) fields\. ([\d,]+) are sent\. The other ([\d,]+) "):
+    for pattern, want in (
+        (r"\| Order fields \| ([\d,]+)\. ([\d,]+) are sent; the other ([\d,]+) ", have),
+        (r"An order has ([\d,]+) fields\. ([\d,]+) are sent\. The other ([\d,]+) ", have),
+        (r"\| ([\d,]+) order fields, none dropped \|", [len(fields)]),
+        (r"\*\*([\d,]+) order fields are not transmitted\.\*\*", [len(says_so)]),
+    ):
         for stated in published(pattern):
-            if stated != have:
-                print(f"docs/capabilities.md publishes {stated}, {have} exist")
+            if stated != want:
+                print(f"docs/capabilities.md publishes {stated} where {want} is "
+                      f"what exists ({pattern})")
                 return 1
     print(f"{len(fields)} order fields: carried={len(carried)} "
           f"refused={len(says_so)} dropped={len(dropped)}")
