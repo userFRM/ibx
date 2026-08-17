@@ -106,6 +106,14 @@ pub use api::{EClient, EClientConfig, Wrapper};
 /// for a program that is.
 pub use api::EClient as Client;
 
+/// A session you look at rather than interrogate: what it has been told stays,
+/// and a position, an order, a fill and a quote are things to read.
+pub use api::ib::IB;
+
 /// The same session, for a program already running an asynchronous runtime.
 #[cfg(feature = "async")]
 pub use api::client::AsyncClient;
+
+/// [`IB`] for a program already running an asynchronous runtime.
+#[cfg(feature = "async")]
+pub use api::ib::AsyncIB;

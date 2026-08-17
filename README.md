@@ -76,9 +76,6 @@ spy = ibx.Contract(symbol="SPY", secType="STK", exchange="SMART", currency="USD"
 (ticker,) = ib.reqTickers(spy)
 print(ticker.bid, ticker.ask)
 
-bars = ib.reqHistoricalData(spy, "", "2 D", "1 hour", "TRADES", useRTH=True)
-print(len(bars), "bars")
-
 order = ibx.Order(action="BUY", orderType="LMT", totalQuantity=1, lmtPrice=1.00)
 trade = ib.placeOrder(spy, order)
 ib.sleep(2)
@@ -91,13 +88,13 @@ ib.disconnect()
 A contract does not need to be qualified first: a request carrying a contract
 rather than a contract id is resolved before transmission.
 
-In Rust:
+In Rust, the same shape:
 
 ```rust
 use ibx::types::model::{Contract, Order};
-use ibx::{Client, EClientConfig};
+use ibx::{EClientConfig, IB};
 
-let ib = Client::connect(&EClientConfig {
+let ib = IB::connect(&EClientConfig {
     username: "your_user".into(),
     password: "your_pass".into(),
     paper: true,
@@ -105,58 +102,71 @@ let ib = Client::connect(&EClientConfig {
 })?;
 
 let spy = ib.qualify(Contract::stock("SPY"))?;
-let bars = ib.bars(&spy, "2 D", "1 hour")?;
-let done = ib.place(&spy, &Order::limit("BUY", 100.0, 42.50))?;
-println!("{} bars, order {}", bars.len(), done.status);
+
+// A quote updates itself once something is watching it.
+ib.watch(&spy)?;
+ib.wait_on_update(Duration::from_secs(5));
+if let Some(quote) = ib.ticker(&spy) {
+    println!("bid {} ask {}", quote.bid, quote.ask);
+}
+
+let trade = ib.place_order(&spy, &Order::limit("BUY", 100.0, 42.50))?;
+ib.loop_until(Duration::from_secs(10), |ib| {
+    ib.trade(trade.order.order_id).is_some_and(|t| t.is_done())
+});
+
+// What the session holds, without asking for any of it.
+for position in ib.positions() { /* ... */ }
+for value in ib.account_values() { /* ... */ }
+println!("{} orders, {} fills", ib.trades().len(), ib.fills().len());
 ```
 
-A subscribed contract's quote is held as state, so it can be read from any
-thread without waiting on the callback loop:
+One thread reads the session and keeps what arrives, so a position, an order, a
+fill and a quote are things you look at rather than questions you ask. The
+callback client is the same session underneath — `ib.client()` reaches it.
+
+To be told as it happens rather than asking afterwards, hand it a handler:
 
 ```rust
-let stream = ib.watch(&spy)?;
-if let Some(q) = ib.quote_of(&spy) {
-    // q.bid, q.ask, q.last — fixed point, 10^-8
+struct Printer;
+impl Handler for Printer {
+    fn exec_details(&mut self, _: i64, contract: &Contract, execution: &Execution) {
+        println!("{} {} at {}", contract.symbol, execution.shares, execution.price);
+    }
 }
-ib.cancel_mkt_data(stream)?;
+ib.on_event(Printer);
 ```
 
-What the session pushes — trades printed, orders filled, the transport lost and
-regained — arrives on a channel rather than a callback:
-
-```rust
-let (ib, events) = Client::connect_with_events(&config, 1024)?;
-ib.req_tick_by_tick_data(1, &spy, "Last", 0, false)?;
-
-for trade in events.trades() {
-    println!("{} at {}", trade.size, trade.price);
-}
-```
+Handlers are called on the thread that reads the session, with the message
+rather than a copy of it. Every handler is told everything: nothing is queued,
+so nothing fills, nothing is dropped, and no reader is the only one. Implement
+the calls you want — the rest do nothing.
 
 ### Inside an async runtime
 
 The engine is a thread of its own, so a blocking call holds the thread that
 made it and nothing else. Inside a runtime that thread is one of a shared pool,
-so the `async` feature moves each question onto a thread that may wait:
+so the `async` feature moves each question onto a thread that may wait. What
+does not wait — reading what the session holds — is not awaited:
 
 ```toml
 ibx = { git = "https://github.com/userFRM/ibx", features = ["async"] }
 ```
 
 ```rust
-let ib = AsyncClient::connect(config).await?;
+let ib = AsyncIB::connect(config).await?;
 let spy = ib.qualify(Contract::stock("SPY")).await?;
 
-// Neither holds a runtime thread while the venue thinks about it. They are
-// answered one after the other: a question drives the message pump, and two
-// pumping at once would read each other's replies.
-let (bars, summary) = tokio::join!(ib.bars(&spy, "2 D", "1 hour"), ib.summary());
+ib.watch(&spy)?;                                   // sends, does not wait
+ib.wait_on_update(Duration::from_secs(5)).await;
+let quote = ib.ticker(&spy);                       // a memory read
+
+let preview = ib.what_if(&spy, &Order::limit("BUY", 1.0, 1.0)).await?;
 ```
 
-Every method on it has the same name and the same answer as the blocking one it
-stands in front of, and a test holds them to it. There is no second engine and
-no second session: `ib.blocking()` reaches the same client for anything the
-async surface does not cover.
+Every method on it has the same name and the same answer as the blocking one,
+and a test fails if either grows a name the other does not have. There is no
+second engine and no second session: `ib.blocking()` reaches the same one.
 
 ## Running an existing program
 

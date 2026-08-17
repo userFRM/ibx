@@ -50,6 +50,10 @@ compat = []
 name = "hello_async"
 required-features = ["async"]
 
+[[example]]
+name = "hello_ib_async"
+required-features = ["async"]
+
 [[bin]]
 name = "bench_decode"
 path = "src/bin/bench_decode.rs"
@@ -233,7 +237,7 @@ zeroize = "1"
 
 # Only for the asynchronous surface, and only the parts of it that surface
 # uses: somewhere to put a question that is allowed to wait.
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"], optional = true }
 
 
 # Logging

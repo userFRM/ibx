@@ -36,9 +36,7 @@ mod ask;
 mod simple;
 #[cfg(feature = "async")]
 mod async_client;
-mod stream;
 pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow};
-pub use stream::{Ended, Events};
 #[cfg(feature = "async")]
 pub use async_client::AsyncClient;
 mod market_data;
@@ -56,12 +54,12 @@ use crate::error_codes::Refusal;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{Receiver, SyncSender};
 
 use crate::types::model::{
     Contract as ApiContract, Order as ApiOrder, TagValue as ApiTagValue,
 };
-use crate::bridge::SharedState;
+use crate::bridge::{Event, SharedState};
 use crate::engine::hot_loop::EventSink;
 use crate::client_core::ClientCore;
 use crate::gateway::{Gateway, GatewayConfig, Session};
@@ -229,6 +227,8 @@ pub struct EClient {
     /// came. Held across the sending too, so the second question is not on the
     /// wire while the first is listening.
     pub(crate) asking: Mutex<()>,
+    /// How many events the channel above discarded, if one is attached.
+    pub(crate) discarded: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub(crate) core: ClientCore,
     pub(crate) session_token_bytes: Vec<u8>,
     pub(crate) session: crate::auth::resume::ResumableSession,
@@ -306,9 +306,19 @@ impl EClient {
         Self::connect_inner(config, None)
     }
 
-    /// Connect to IB and start the engine with an [`Events`] channel attached.
+    /// Connect to IB and start the engine with an event channel attached.
     ///
-    /// Returns the client plus the stream of everything the engine pushes. This is a second, optional delivery path that runs alongside
+    /// A second, optional delivery path for a program that would rather own a
+    /// queue than be called back. It is bounded, and an event arriving at a
+    /// full one is discarded rather than made to wait — a session that stalled
+    /// on a slow reader would stop carrying market data. Read
+    /// [`events_lost`](EClient::events_lost) to learn whether that happened.
+    ///
+    /// One reader, and it is told what it drains and nothing else. For a
+    /// program that wants more than one thing told about a message, or wants
+    /// none of it dropped, hand a handler to [`IB`](crate::IB) instead: a
+    /// handler is called with the message rather than sent a copy of it, so
+    /// there is no queue to fill and no reader to be the only one. This is a second, optional delivery path that runs alongside
     /// [`process_msgs()`](EClient::process_msgs) — it does not replace it, and
     /// nothing is removed from the wrapper callbacks when it is in use.
     ///
@@ -324,14 +334,13 @@ impl EClient {
     pub fn connect_with_events(
         config: &EClientConfig,
         capacity: usize,
-    ) -> Result<(Self, Events), Box<dyn std::error::Error>> {
+    ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>> {
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(capacity.max(1));
-        // The count of what this channel discards travels with the channel, so
-        // a reader learns about its own losses and not another session's.
         let lost = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let client =
+        let mut client =
             Self::connect_inner(config, Some(EventSink::new(event_tx, std::sync::Arc::clone(&lost))))?;
-        Ok((client, Events::new(event_rx, lost)))
+        client.discarded = lost;
+        Ok((client, event_rx))
     }
 
     fn connect_inner(
@@ -404,6 +413,7 @@ impl EClient {
             next_order_id: AtomicU64::new(start_id),
             order_id_store,
             asking: Mutex::new(()),
+            discarded: Default::default(),
             core,
             session_token_bytes,
             session,
@@ -435,6 +445,7 @@ impl EClient {
             // Built from parts, so nothing is remembered anywhere.
             order_id_store: None,
             asking: Mutex::new(()),
+            discarded: Default::default(),
             core: ClientCore::new(),
             session_token_bytes: Vec::new(),
             session: Default::default(),
@@ -476,6 +487,18 @@ impl EClient {
     }
 
     // ── Connection ──
+
+    /// How many events the channel from
+    /// [`connect_with_events`](EClient::connect_with_events) discarded.
+    ///
+    /// The engine never waits on a reader — a session that stalled on one
+    /// would stop carrying market data — so an event arriving at a full
+    /// channel is dropped. A program that acted on every fill it saw needs to
+    /// know the difference between that and every fill there was. Zero for a
+    /// session with no channel attached, and for one whose reader kept up.
+    pub fn events_lost(&self) -> u64 {
+        self.discarded.load(Ordering::Relaxed)
+    }
 
     /// False after [`disconnect()`](EClient::disconnect), and after a
     /// `process_msgs()` call that observed the engine stopping.

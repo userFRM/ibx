@@ -192,6 +192,9 @@ jobs:
           # not, so that kind of call cannot be added without someone deciding
           # to add it.
           python scripts/gen_wire_reach.py
+          # Written from the trait it fans out: a call added to the trait and
+          # not to the fan-out is a message no handler is told about.
+          python scripts/gen_fanout.py
           # And what of an order reaches it. A call can reach the venue while
           # most of what a caller put in it does not.
           python scripts/gen_order_field_reach.py
