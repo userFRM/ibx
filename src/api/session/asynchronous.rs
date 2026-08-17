@@ -246,6 +246,33 @@ impl AsyncClient {
         self.inner.cancel_all()
     }
 
+    /// Run a scan and hand back what it found.
+    pub async fn scan(
+        &self, instrument: &str, location: &str, scan_code: &str, most: u32,
+    ) -> Result<Vec<crate::api::client::ScanRow>, Refusal> {
+        let (instrument, location, scan_code) =
+            (instrument.to_string(), location.to_string(), scan_code.to_string());
+        off_the_reactor!(self, |client| client.scan(&instrument, &location, &scan_code, most))
+    }
+
+    /// When a contract trades, over a window ending now.
+    pub async fn schedule(
+        &self, contract: &Contract, duration: &str,
+    ) -> Result<crate::api::client::Schedule, Refusal> {
+        let (contract, duration) = (contract.clone(), duration.to_string());
+        off_the_reactor!(self, |client| client.schedule(&contract, &duration))
+    }
+
+    /// What the corporate-events calendar says it carries.
+    pub async fn calendar_schema(&self) -> Result<String, Refusal> {
+        off_the_reactor!(self, |client| client.calendar_schema())
+    }
+
+    /// The calendar's events for one contract.
+    pub async fn calendar_events(&self, con_id: i64) -> Result<String, Refusal> {
+        off_the_reactor!(self, |client| client.calendar_events(con_id))
+    }
+
     /// What an order would cost and what it would do to the margin, without
     /// placing it.
     pub async fn what_if(&self, contract: &Contract, order: &Order) -> Result<OrderState, Refusal> {
@@ -292,9 +319,28 @@ mod tests {
         let mine: BTreeSet<String> = names(&here, "impl AsyncClient {")
             .difference(&not_on_both)
             .cloned().collect();
-        let theirs: BTreeSet<String> = names(&there, "impl Client {")
-            .difference(&BTreeSet::from(["client".to_string()]))
-            .cloned().collect();
+        // What the blocking session reaches, not only what it names: it
+        // dereferences to the client, so a question answered there is answered
+        // on it. This surface has no such fall-through on purpose — a blocking
+        // call reached by accident from a runtime is the bug the surface
+        // exists to prevent — so it names everything, and this is what holds
+        // the two to the same set.
+        let mut theirs = names(&there, "impl Client {");
+        for entry in std::fs::read_dir(root.parent().expect("api").join("client")).expect("the client") {
+            let path = entry.expect("a readable entry").path();
+            if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "tests.rs") {
+                let text = std::fs::read_to_string(&path).expect("a readable file");
+                theirs.extend(
+                    text.lines()
+                        .filter_map(|l| l.trim().strip_prefix("pub fn "))
+                        .filter_map(|l| l.split('(').next())
+                        .map(str::to_string),
+                );
+            }
+        }
+        let missing: Vec<_> = mine.difference(&theirs).collect();
+        assert!(missing.is_empty(), "asked on this session and reachable on neither: {missing:?}");
+        let theirs: BTreeSet<String> = theirs.intersection(&mine).cloned().collect();
         assert!(mine.len() >= 15, "the reader found the methods: {mine:?}");
         assert_eq!(mine, theirs, "asked on one session and not the other");
     }

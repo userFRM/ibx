@@ -34,7 +34,7 @@
 
 pub(crate) mod ask;
 mod simple;
-pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow};
+pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow, ScanRow, Schedule};
 mod market_data;
 mod orders;
 mod account;
