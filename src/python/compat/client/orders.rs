@@ -33,7 +33,10 @@ impl EClient {
 
         // Convert and validate order params first (fail fast, no connection needed)
         let mut api_order = order.to_api();
-        api_order.conditions = order.convert_conditions(py);
+        api_order.conditions = match order.convert_conditions(py) {
+            Ok(conditions) => conditions,
+            Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
+        };
         // The three fields whose Python value is an object: the conversion
         // cannot read one without the interpreter, so they are filled here.
         // An object this client cannot read is a refusal, not an empty value:

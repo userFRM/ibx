@@ -92,6 +92,18 @@ impl EClient {
     /// To place without waiting, or to choose the id,
     /// [`place_order`](EClient::place_order) takes both.
     pub fn place(&self, contract: &Contract, order: &Order) -> Result<OrderReport, Refusal> {
+        // Resolved before the turn is taken, not during it. `place_order` looks
+        // a contract up when it carries no id, and a lookup is a question of
+        // its own — asked while this held the turn, it would wait on a turn
+        // this call is not going to give up, and the order would never be sent.
+        let named;
+        let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
+            named = self.qualify_contract(contract)?;
+            &named
+        } else {
+            contract
+        };
+
         // The turn is taken before the order is sent and held until it settles.
         // Taken only for the waiting, a question starting between the two would
         // pump this order's reply into its own collector and discard it, and

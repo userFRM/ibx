@@ -15,9 +15,9 @@ Verification runs against a paper account on IBKR production servers, and the or
 | | |
 | --- | --- |
 | Requests | 78. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
-| Order fields | 154. 124 are sent; the other 30 have no field in the protocol to carry them, and the call says so rather than dropping them |
+| Order fields | 154. 123 are sent; the other 31 have no field in the protocol to carry them, and the call says so rather than dropping them |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 1,982 offline, and 157 more that only run against a broker session |
+| Tests | 1,983 offline, and 157 more that only run against a broker session |
 
 45 of the 46 capabilities are verified against IBKR production servers; the
 remaining one, advisor configuration, reaches the server and needs an advisor
@@ -58,7 +58,7 @@ Every figure above is measured on each commit, and the build fails if one moves.
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | 23 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat` |
-| Order fields | ✅ Supported | An order has 154 fields. 124 are sent. The other 30 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. A check on every commit fails if a field starts being dropped |
+| Order fields | ✅ Supported | An order has 154 fields. 123 are sent. The other 31 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. A check on every commit fails if a field starts being dropped |
 | Non-US markets | ✅ Supported | Previews accepted on DE, NL, GB, CH, AU, CA, US equities and FX; JP and HK rejected for lot size, which is the exchange rule and is surfaced to the caller |
 | Modify, cancel, global cancel | ✅ Supported | `scripts/sdk_lifecycle.py` (place → modify → cancel), `tests/ib_paper_compat` Phase 9 / 9b |
 | Brackets, OCA, combos | ✅ Supported | Per-leg pricing; leg order validated by server rejection of the inverted spread; `src/bin/capture_combo.rs` |
@@ -112,7 +112,7 @@ at all (`tests/malformed_input.rs`).
 These are properties of the IBKR protocol, not of this implementation. The
 official gateway behaves the same way.
 
-- **29 order fields are not transmitted.** For each, the reference client
+- **31 order fields are not transmitted.** For each, the reference client
   either declares no tag or declares one the server rejects by name
   (`algo_id` → *Invalid value in field # 8016*; `scale_init_fill_qty` →
   *Can not contain field # 6486*). Each field retains the caller's value so an

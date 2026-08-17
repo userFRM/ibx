@@ -4943,3 +4943,39 @@ fn a_question_takes_its_turn_before_it_sends() {
     let send = body.find("self.place_order(").expect("place sends the order");
     assert!(turn < send, "the order is sent before the turn is taken");
 }
+
+/// Placing an order for a contract the venue has not named yet does not wait
+/// on itself.
+///
+/// The order is sent under a turn, so that nothing else pumps its reply away.
+/// A contract with no id is looked up before it is sent, and a lookup is a
+/// question that takes a turn of its own — asked from inside the placing turn,
+/// it waits on a turn that is not going to be given up, and the order is never
+/// sent at all. Run on a thread so a regression fails the suite instead of
+/// hanging it.
+#[test]
+fn placing_an_unnamed_contract_does_not_wait_on_itself() {
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&done);
+    std::thread::spawn(move || {
+        let (client, _rx, _shared) = test_client();
+        // No engine answers, so the lookup fails or times out — either way it
+        // returns. What must not happen is that it never returns at all.
+        let unnamed = Contract {
+            symbol: "SPY".into(), sec_type: "STK".into(),
+            exchange: "SMART".into(), currency: "USD".into(),
+            ..Default::default()
+        };
+        let _ = client.place(&unnamed, &Order::limit("BUY", 1.0, 1.0));
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        if done.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("placing an unnamed contract never returned: it is waiting on its own turn");
+}
