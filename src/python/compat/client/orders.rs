@@ -103,6 +103,11 @@ impl EClient {
         ) {
             return self.report_refusal(py, order_id, why.into());
         }
+        for (at, leg) in api_contract.combo_legs.iter().enumerate() {
+            if let Err(why) = ClientCore::validate_leg(at, leg) {
+                return self.report_refusal(py, order_id, Refusal::validation(why));
+            }
+        }
         if let Err(why) = ClientCore::validate_order_contract(
             contract.con_id,
             &contract.sec_type,

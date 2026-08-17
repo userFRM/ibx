@@ -130,7 +130,18 @@ impl Contract {
             macro_rules! read {
                 ($name:literal, $default:expr) => {
                     match obj.getattr(py, $name) {
-                        Err(_) => $default,
+                        // Absent is the default the reference client would have
+                        // used. Anything else — a property that raised, an
+                        // object that refuses attribute access — is a value the
+                        // caller has and this could not read, and guessing at
+                        // it puts a leg on the wire nobody described.
+                        Err(e) if e.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => {
+                            let _ = e;
+                            $default
+                        }
+                        Err(e) => {
+                            return Err(format!("combo leg {i} states a {} that cannot be read: {e}", $name))
+                        }
                         Ok(v) => v.extract(py).map_err(|e| {
                             format!("combo leg {i} states a {} that cannot be read: {e}", $name)
                         })?,

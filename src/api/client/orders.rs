@@ -88,6 +88,9 @@ impl EClient {
         ClientCore::validate_order(order, &self.account_id)?;
         ClientCore::validate_supported_instructions(order)?;
         ClientCore::validate_combo_legs(&contract.sec_type, contract.combo_legs.len())?;
+        for (at, leg) in contract.combo_legs.iter().enumerate() {
+            ClientCore::validate_leg(at, leg)?;
+        }
         ClientCore::validate_order_contract(
             contract.con_id,
             &contract.sec_type,

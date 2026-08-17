@@ -192,6 +192,25 @@ def the_conversion(text: str) -> str:
     return "\n".join(out)
 
 
+def reported() -> dict[str, str]:
+    """Fields the venue fills on the way back, which an order does not carry out.
+
+    Neither sent nor refused: a caller holding one is holding what the venue
+    told them, and an order read back and placed again would be refused for
+    carrying it. Counted apart from the fields nothing carries, because the
+    reason is different and so is what a caller should do about it.
+    """
+    text = module("src/types/model").read_text()
+    at = text.index("pub struct Order ")
+    end = text.index("\n}", at)
+    out = {}
+    for m in re.finditer(r"((?:^\s*///.*\n)+)\s*pub (\w+):", text[at:end], re.M):
+        doc = " ".join(line.strip(" /") for line in m.group(1).strip().splitlines())
+        if "reported by the venue" in doc.lower():
+            out[m.group(2)] = doc
+    return out
+
+
 def where_fields_are_read() -> str:
     """Everything that reads an order, with the order's own definition removed.
 
@@ -279,9 +298,10 @@ def main() -> int:
     says_so = refused()
     read = where_fields_are_read()
 
+    echoed = reported()
     carried, dropped = [], []
     for field in fields:
-        if field in says_so:
+        if field in says_so or field in echoed:
             continue
         if re.search(rf"\b{field}\b", read):
             carried.append(field)
@@ -301,6 +321,7 @@ def main() -> int:
         "| --- | ---: | --- |",
         f"| carried | {len(carried)} | goes out under a tag |",
         f"| refused | {len(says_so)} | this protocol does not carry it, and the field says so |",
+        f"| reported | {len(echoed)} | the venue fills it on the way back; an order does not carry it out |",
         f"| dropped | {len(dropped)} | a caller can set it and nothing reads it |",
         "",
         "`dropped` is the order-field form of `silent`: the call returns, the",
@@ -310,6 +331,8 @@ def main() -> int:
         "",
     ]
     lines.append(", ".join(f"`{f}`" for f in sorted(dropped)) if dropped else "None.")
+    lines += ["", "## Reported by the venue, not sent", ""]
+    lines.append(", ".join(f"`{f}`" for f in sorted(echoed)) if echoed else "None.")
     lines += ["", "## Not carried by this protocol", ""]
     lines.append(
         "\n".join(f"- `{f}` — {why}" for f, why in sorted(says_so.items()))
@@ -348,8 +371,10 @@ def main() -> int:
 
     have = [len(fields), len(carried), len(says_so)]
     for pattern, want in (
-        (r"\| Order fields \| ([\d,]+)\. ([\d,]+) are sent; the other ([\d,]+) ", have),
-        (r"An order has ([\d,]+) fields\. ([\d,]+) are sent\. The other ([\d,]+) ", have),
+        (r"\| Order fields \| ([\d,]+)\. ([\d,]+) are sent; ([\d,]+) have no field .*?; ([\d,]+) are what",
+         have + [len(echoed)]),
+        (r"An order has ([\d,]+) fields\. ([\d,]+) are sent\. ([\d,]+) have no field .*?\. ([\d,]+) more are",
+         have + [len(echoed)]),
         (r"\| ([\d,]+) order fields, none dropped \|", [len(fields)]),
         (r"\*\*([\d,]+) order fields are not transmitted\.\*\*", [len(says_so)]),
     ):
@@ -358,8 +383,16 @@ def main() -> int:
                 print(f"docs/capabilities.md publishes {stated} where {want} is "
                       f"what exists ({pattern})")
                 return 1
+    both = sorted(set(echoed) & set(refuses))
+    if both:
+        print("reported by the venue and refused by the call, which cannot both")
+        print("be right — an order read back and placed again would be refused:")
+        for f in both:
+            print(f"  {f}")
+        return 1
+
     print(f"{len(fields)} order fields: carried={len(carried)} "
-          f"refused={len(says_so)} dropped={len(dropped)}")
+          f"refused={len(says_so)} reported={len(echoed)} dropped={len(dropped)}")
     return 0
 
 
