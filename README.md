@@ -125,22 +125,22 @@ fill and a quote are things you look at rather than questions you ask. The
 account, its holdings and anything already working are asked for as the session
 opens, so they are there to read the moment it returns.
 
-To be told as it happens rather than reading afterwards, hand it a handler:
+To be told as it happens rather than reading afterwards, take a stream. Both
+are iterators, so they read the way anything else in Rust reads:
 
 ```rust
-struct Printer;
-impl Handler for Printer {
-    fn exec_details(&mut self, _: i64, contract: &Contract, execution: &Execution) {
-        println!("{} {} at {}", contract.symbol, execution.shares, execution.price);
-    }
+for tick in client.ticks(&spy)? {
+    println!("{} at {}", tick.size, tick.price);
 }
-client.on_event(Printer);
+
+for event in client.order_events() {
+    println!("order {} is {}", event.order_id, event.status);
+}
 ```
 
-Handlers are called on the thread that reads the session, with the message
-rather than a copy of it. Every handler is told everything: nothing is queued,
-so nothing fills, nothing is dropped, and no reader is the only one. Implement
-the calls you want — the rest do nothing.
+`ticks` subscribes and hands back the stream in one, and only that contract's
+ticks arrive on it — a caller watching one thing does not filter out the rest.
+Dropping the stream withdraws the subscription.
 
 ### Inside an async runtime
 

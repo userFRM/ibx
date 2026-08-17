@@ -32,7 +32,7 @@
 //! }
 //! ```
 
-mod ask;
+pub(crate) mod ask;
 mod simple;
 pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow};
 mod market_data;

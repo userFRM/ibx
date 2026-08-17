@@ -11,6 +11,7 @@
 //! quote are things a program looks at, not questions it asks.
 
 use std::collections::BTreeMap;
+use std::sync::mpsc::SyncSender;
 
 use crate::api::wrapper::Wrapper;
 use crate::types::model::{Contract, Execution, Order, OrderState};
@@ -80,6 +81,34 @@ impl Trade {
     }
 }
 
+/// One trade printed on a contract being watched tick by tick.
+#[derive(Debug, Clone)]
+pub struct Tick {
+    /// When it printed, in nanoseconds since the epoch.
+    pub time: i64,
+    /// What it printed at.
+    pub price: f64,
+    /// How much printed.
+    pub size: f64,
+    /// Which venue printed it.
+    pub exchange: String,
+}
+
+/// Something that happened to an order.
+#[derive(Debug, Clone)]
+pub struct OrderEvent {
+    /// The order it happened to.
+    pub order_id: i64,
+    /// Where it stands now.
+    pub status: String,
+    /// How much has filled.
+    pub filled: f64,
+    /// How much has not.
+    pub remaining: f64,
+    /// The trade, where this event is one. A status change carries none.
+    pub fill: Option<Fill>,
+}
+
 /// A holding.
 ///
 /// A futures position arrives carrying the venue's id for the contract and
@@ -127,6 +156,11 @@ pub struct LiveState {
     /// Bumped whenever anything below changes, so a caller can wait for the
     /// next change rather than for a length of time.
     changes: u64,
+    /// Where a caller asked for the ticks on one contract to be sent, by the
+    /// request the subscription was asked for under.
+    tick_streams: Vec<(i64, SyncSender<Tick>)>,
+    /// Where a caller asked for what happens to orders to be sent.
+    order_streams: Vec<SyncSender<OrderEvent>>,
 }
 
 impl LiveState {
@@ -205,6 +239,23 @@ impl LiveState {
         self.changed();
     }
 
+    /// Send the ticks on one subscription to a caller who asked for them.
+    pub(crate) fn stream_ticks(&mut self, req_id: i64, to: SyncSender<Tick>) {
+        self.tick_streams.push((req_id, to));
+    }
+
+    /// Send what happens to orders to a caller who asked for it.
+    pub(crate) fn stream_order_events(&mut self, to: SyncSender<OrderEvent>) {
+        self.order_streams.push(to);
+    }
+
+    /// Hand an event to everyone still listening, and forget the ones who
+    /// stopped: a caller who dropped their stream is not a caller to keep
+    /// sending to, and a send that fails is how that is known.
+    fn tell<T: Clone>(streams: &mut Vec<SyncSender<T>>, what: &T) {
+        streams.retain(|to| to.try_send(what.clone()).is_ok());
+    }
+
     fn changed(&mut self) {
         self.changes = self.changes.wrapping_add(1);
     }
@@ -253,11 +304,38 @@ impl Wrapper for LiveState {
             perm_id,
             why_held: why_held.to_string(),
         };
+        Self::tell(&mut self.order_streams, &OrderEvent {
+            order_id, status: status.to_string(), filled, remaining, fill: None,
+        });
         self.changed();
+    }
+
+    fn tick_by_tick_all_last(
+        &mut self, req_id: i64, _tick_type: i32, time: i64, price: f64, size: f64,
+        _attrib: &crate::types::model::TickAttribLast, exchange: &str, _conditions: &str,
+    ) {
+        let tick = Tick { time, price, size, exchange: exchange.to_string() };
+        // Only to whoever asked for this contract's ticks. Everyone gets
+        // everyone else's otherwise, and a caller watching one thing has to
+        // filter out the rest.
+        self.tick_streams
+            .retain(|(id, to)| *id != req_id || to.try_send(tick.clone()).is_ok());
     }
 
     fn exec_details(&mut self, _req_id: i64, contract: &Contract, execution: &Execution) {
         let fill = Fill { contract: contract.clone(), execution: execution.clone() };
+        let (status, filled, remaining) = self
+            .trades
+            .get(&execution.order_id)
+            .map(|t| (t.status.status.clone(), t.status.filled, t.status.remaining))
+            .unwrap_or_default();
+        Self::tell(&mut self.order_streams, &OrderEvent {
+            order_id: execution.order_id,
+            status,
+            filled,
+            remaining,
+            fill: Some(fill.clone()),
+        });
         // Against the order it belongs to as well as the session's own list,
         // so a caller holding one trade sees its fills without matching them
         // up themselves.

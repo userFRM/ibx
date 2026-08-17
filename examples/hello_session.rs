@@ -26,6 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("bid {} ask {}", quote.bid, quote.ask);
     }
 
+    // Or take the trades as they print. An iterator, and only this contract's.
+    for tick in client.ticks(&spy)?.take(3) {
+        println!("printed {} at {}", tick.size, tick.price);
+    }
+
     // The order is the thing you hold. Its number is bookkeeping this keeps.
     let order = client.place(&spy, &Order::limit("BUY", 1.0, 1.00))?;
     order.wait_done(Duration::from_secs(10));

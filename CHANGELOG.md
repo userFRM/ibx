@@ -22,9 +22,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`PlacedOrder`**, returned by `place`. It knows its own number, so that is
   not bookkeeping a caller keeps, and it answers about itself as of the moment
   it is asked: `status`, `is_done`, `fills`, `wait_done`, `cancel`.
-- **`Client::on_event`**, a handler called with each message as the session is
-  told it. Every handler is told everything, so nothing is queued, nothing
-  fills, nothing is dropped and no reader is the only one.
+- **`Client::ticks`** and **`Client::order_events`**, the two things that
+  genuinely need telling as they happen. Both are iterators, read the way
+  anything else in Rust is read. `ticks` subscribes and hands back the stream
+  in one, carries only that contract's, and withdraws the subscription when the
+  stream is dropped. Everything else about a session is a read, so it needs no
+  stream at all.
 - **`place_bracket`**, an entry and the two exits that close it, sent as the one
   instruction the engine has for it. The venue links them, so neither child
   reaches the market before the parent has a position to work against. Refused
