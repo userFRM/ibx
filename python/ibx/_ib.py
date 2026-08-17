@@ -704,21 +704,24 @@ class IB:
     # -- what has not been carried across yet ----------------------------
 
     def __getattr__(self, name: str):
-        """Say plainly that a call is not carried yet.
+        """Everything this does not name itself is the client's own.
 
-        The wrapper this follows has ninety methods. A name it has and this does
-        not raises where it is called, naming itself — rather than resolving to
-        something that quietly returns nothing.
+        A session is the reference client with what it has been told kept
+        beside it, so every request that client carries is a request this one
+        carries. Reached this way it has the client's own shape — a request id
+        to state, an answer arriving on a callback — because that is what it
+        is; the calls named on this class are the ones with a shape of their
+        own worth having.
+
+        Python looks here only after failing to find the name on this class, so
+        nothing defined above can be hidden by it.
         """
-        if name in _NOT_YET:
-            def unavailable(*args, **kwargs):
-                raise NotImplementedError(
-                    f"IB.{name}() is not carried on this client yet; "
-                    f"EClient carries the request under the reference client's name"
-                )
-
-            return unavailable
-        raise AttributeError(f"'IB' object has no attribute '{name}'")
+        try:
+            return getattr(self.client, name)
+        except AttributeError:
+            raise AttributeError(
+                f"neither this session nor the client underneath has {name!r}"
+            ) from None
 
 
 #: Every method the wrapper this follows has, that this facade does not carry

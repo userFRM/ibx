@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         paper: true,
         ..Default::default()
     })?;
-    println!("connected, account {}", client.client().account_id);
+    println!("connected, account {}", client.account_id);
 
     let spy = client.qualify(Contract::stock("SPY"))?;
     println!("[ok] qualify -> con_id {}", spy.con_id);
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. The new refusals must fire, and must not fire on an ordinary order.
     let mut bad_tif = Order::limit("BUY", 1.0, 1.00);
     bad_tif.tif = "gtc".into();
-    match client.client().place_order(9_000_001, &spy, &bad_tif) {
+    match client.place_order(9_000_001, &spy, &bad_tif) {
         Err(why) if why.message.contains("tif") => println!("[ok] a misspelled tif is refused here, not sent"),
         other => println!("[!!] a misspelled tif was not refused: {other:?}"),
     }

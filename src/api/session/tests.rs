@@ -157,3 +157,51 @@ fn order_events_carry_both_kinds_and_forget_a_reader_that_left() {
     kept.order_status(7, "Filled", 100.0, 0.0, 42.5, 0, 0, 0.0, 1, "", 0.0);
     assert_eq!(kept.trade(7).unwrap().status.status, "Filled", "the session still keeps it");
 }
+
+/// The names a session defines over the client it dereferences to are the ones
+/// it means to define.
+///
+/// An inherent method is found before a dereferenced one, so any name written
+/// on the session hides the client's. Where that is intended it is an
+/// improvement — reading what is already held instead of asking again, handing
+/// back the order instead of a snapshot. Where it is not, a caller silently
+/// gets a different method from the one they read about, and nothing says so.
+#[test]
+fn shadowed_deliberately() {
+    use std::collections::BTreeSet;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let names = |text: &str| -> BTreeSet<String> {
+        text.lines()
+            .filter_map(|l| l.trim().strip_prefix("pub fn "))
+            .filter_map(|l| l.split('(').next())
+            .map(str::to_string)
+            .collect()
+    };
+    let session = {
+        let text = std::fs::read_to_string(root.join("src/api/session/mod.rs")).expect("the session");
+        let at = text.find("impl Client {").expect("the session's own methods");
+        names(&text[at..text[at..].find("\n}\n").map_or(text.len(), |e| at + e)])
+    };
+    let mut client = BTreeSet::new();
+    for entry in std::fs::read_dir(root.join("src/api/client")).expect("the client") {
+        let path = entry.expect("a readable entry").path();
+        if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "tests.rs") {
+            client.extend(names(&std::fs::read_to_string(&path).expect("a readable file")));
+        }
+    }
+
+    /// Written on the session on purpose, each because the session's answer is
+    /// the better one. Anything else shadowing is an accident.
+    const ON_PURPOSE: [&str; 12] = [
+        "bars", "cancel_order", "connect", "disconnect", "is_connected", "is_done",
+        "lookup", "place", "place_bracket", "positions", "qualify", "watch",
+    ];
+    let shadowing: Vec<_> = session
+        .intersection(&client)
+        .filter(|n| !ON_PURPOSE.contains(&n.as_str()))
+        .collect();
+    assert!(
+        shadowing.is_empty(),
+        "these hide a method of the client's and nobody said they meant to: {shadowing:?}",
+    );
+}
