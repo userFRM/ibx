@@ -227,27 +227,10 @@ impl EClient {
             let tracked = self.core.open_orders.lock().unwrap().get(&update.order_id).cloned();
             if let Some(tracked) = tracked {
                 let contract_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
-                let order_py = Py::new(py, Order {
-                    // The number this session connected under. The reference
-                    // client keys a trade by it with the order id, so an order
-                    // reported under a client that did not place it is a second
-                    // trade the caller never sees updated.
-                    client_id: self.client_id.load(Ordering::Acquire),
-                    order_id: tracked.order.order_id,
-                    action: tracked.order.action.clone(),
-                    total_quantity: tracked.order.total_quantity,
-                    order_type: tracked.order.order_type.clone(),
-                    lmt_price: tracked.order.lmt_price,
-                    aux_price: tracked.order.aux_price,
-                    tif: tracked.order.tif.clone(),
-                    account: tracked.order.account.clone(),
-                    perm_id: tracked.order.perm_id,
-                    oca_type: tracked.order.oca_type,
-                    use_price_mgmt_algo: tracked.order.use_price_mgmt_algo,
-                    trail_stop_price: tracked.order.trail_stop_price,
-                    algo_strategy: tracked.order.algo_strategy.clone(),
-                    ..Default::default()
-                })?.into_any();
+                let order_py = Py::new(
+                    py,
+                    Order::from_api(&tracked.order, self.client_id.load(Ordering::Acquire)),
+                )?.into_any();
                 let state_py = Py::new(py, OrderState {
                     status: status.to_string(),
                     ..Default::default()
@@ -429,7 +412,7 @@ impl EClient {
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {
                 let c = Contract::from_api(&t.contract);
-                let o = Order::from_api(&t.order);
+                let o = Order::from_api(&t.order, self.client_id.load(Ordering::Acquire));
                 (Py::new(py, c)?.into_any(), Py::new(py, o)?.into_any())
             } else {
                 (Py::new(py, Contract::default())?.into_any(),

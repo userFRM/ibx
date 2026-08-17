@@ -104,6 +104,12 @@ def test_both_clients_refuse_the_same_arguments():
 #: Filled at the call site instead of in the conversion, because the Python
 #: value is an object and reading one needs the interpreter the conversion does
 #: not hold. Named here so that adding to the list stays a decision.
+#:
+#: The same three come back empty from `from_api`, which is a real gap and not
+#: a shrug: an order read back and placed again loses its conditions and its
+#: price per leg. Closing it needs a class for a leg price, which this surface
+#: does not have, and a way back from what the engine keeps to the condition
+#: classes, which have only the way in.
 _FILLED_BY_THE_CALLER = {"conditions", "order_combo_legs", "order_misc_options"}
 
 
@@ -145,7 +151,7 @@ def test_every_order_field_comes_back_from_the_engine():
     conversion above, and it went wrong the same way.
     """
     source = (ROOT / "src/python/compat/class_orders.rs").read_text()
-    at = source.index("pub(crate) fn from_api(a: &crate::types::model::Order)")
+    at = source.index("pub(crate) fn from_api(a: &crate::types::model::Order, under: i32)")
     body = source[at:source.index("\n    }\n", at)]
     assert ".." not in body.split("Self {", 1)[1], (
         "the conversion back ends in a struct-update fallback, so a field "
@@ -157,6 +163,27 @@ def test_every_order_field_comes_back_from_the_engine():
         and not re.search(rf"^\s*{f}:", body, re.M)
     )
     assert not missing, f"held by the engine and not handed back: {missing}"
+
+
+def test_nothing_builds_an_order_for_python_by_hand():
+    """Every order handed back is built by the one conversion.
+
+    The conversion above is exhaustive, and three callbacks were still building
+    an order field by field beside it — so a caller reading an update got one
+    order and a caller reading the snapshot got another. Checking only the
+    conversion missed all three: what matters is that nothing else builds one.
+    """
+    by_hand = []
+    for path in (ROOT / "src/python/compat/client").glob("*.rs"):
+        source = path.read_text()
+        for at in (m.start() for m in re.finditer(r"\bOrder \{", source)):
+            # A literal that names a field of an order held by the engine is a
+            # reconstruction; `Order { ..Default::default() }` in a test is not.
+            head = source[at:at + 400]
+            if re.search(r"\.order\.\w+", head):
+                line = source[:at].count("\n") + 1
+                by_hand.append(f"{path.name}:{line}")
+    assert not by_hand, f"an order built by hand rather than by from_api: {by_hand}"
 
 
 def test_what_cannot_be_read_is_refused_rather_than_emptied():

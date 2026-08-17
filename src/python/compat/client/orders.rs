@@ -327,7 +327,7 @@ impl EClient {
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
             let c_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
-            let o = Order::from_api(&tracked.order);
+            let o = Order::from_api(&tracked.order, self.client_id.load(Ordering::Acquire));
             let o_py = Py::new(py, o)?.into_any();
             let state = super::super::contract::OrderState {
                 status: tracked.status.clone(),
@@ -504,21 +504,7 @@ impl EClient {
 
                 let tracked = self.core.open_orders.lock().unwrap().get(&co.order_id).map(|o| {
                     (Contract::from_api(&o.contract), {
-                        Order {
-                            order_id: o.order.order_id,
-                            action: o.order.action.clone(),
-                            total_quantity: o.order.total_quantity,
-                            order_type: o.order.order_type.clone(),
-                            lmt_price: o.order.lmt_price,
-                            aux_price: o.order.aux_price,
-                            tif: o.order.tif.clone(),
-                            account: o.order.account.clone(),
-                            perm_id: o.order.perm_id,
-                            // The value corrected; without it a completed
-                            // order reads as entirely unfilled on this surface.
-                            filled_quantity: o.order.filled_quantity,
-                            ..Default::default()
-                        }
+                        Order::from_api(&o.order, self.client_id.load(Ordering::Acquire))
                     })
                 });
                 if let Some((c, o)) = tracked {
@@ -527,7 +513,7 @@ impl EClient {
                     self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
                 } else if let Some(info) = rich_info {
                     let c = Contract::from_api(&info.contract);
-                    let o = Order::from_api(&info.order);
+                    let o = Order::from_api(&info.order, self.client_id.load(Ordering::Acquire));
                     let c_py = Py::new(py, c)?.into_any();
                     let o_py = Py::new(py, o)?.into_any();
                     self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
