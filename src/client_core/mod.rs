@@ -2463,7 +2463,6 @@ impl ClientCore {
             delta_neutral_open_close, delta_neutral_settling_firm,
             delta_neutral_short_sale, delta_neutral_short_sale_slot,
             delta, dont_use_auto_price_for_hedge, model_code, opt_out_smart_routing,
-            submitter,
             fa_group: "FA allocation is not supported: fa_group, fa_method and \
                        fa_percentage are not carried on the order, so the full \
                        quantity would fill on the connected account instead of \
@@ -2509,10 +2508,9 @@ impl ClientCore {
         for (what, stated) in [
             ("display_size", i64::from(order.display_size)),
             ("min_qty", i64::from(order.min_qty)),
-            ("volatility_type", i64::from(order.volatility_type)),
-            ("short_sale_slot", i64::from(order.short_sale_slot)),
             ("scale_init_level_size", i64::from(order.scale_init_level_size)),
             ("scale_subs_level_size", i64::from(order.scale_subs_level_size)),
+            ("scale_price_adjust_interval", i64::from(order.scale_price_adjust_interval)),
         ] {
             if stated < 0 {
                 return Err(format!(
@@ -2521,6 +2519,38 @@ impl ClientCore {
                      what was asked.",
                 ));
             }
+        }
+        // These two go out in a single byte, so a value above it is not a
+        // larger one — it arrives as whatever fits.
+        for (what, stated) in [
+            ("volatility_type", order.volatility_type),
+            ("short_sale_slot", order.short_sale_slot),
+        ] {
+            if !(0..=255).contains(&stated) {
+                return Err(format!(
+                    "{what} is {stated}, which does not fit the field it goes \
+                     out in. Sent, it would arrive as a different value.",
+                ));
+            }
+        }
+        // A cash quantity is what to spend, so a negative one buys nothing: the
+        // encoder omits it and the order goes out sized by its quantity alone.
+        if order.cash_qty < 0.0 {
+            return Err(format!(
+                "cash_qty is {}, which is not an amount to spend. Sent, it is \
+                 omitted and the order goes out sized by its quantity instead.",
+                order.cash_qty,
+            ));
+        }
+        // Both halves or neither: a tier named with nothing against it is not
+        // an arrangement, and the encoder writes neither part rather than half.
+        if order.soft_dollar_tier_name.is_empty() != order.soft_dollar_tier_val.is_empty() {
+            return Err(
+                "a soft-dollar arrangement is a tier and what it is worth. \
+                 Stated with one of the two, neither goes out and the \
+                 commission goes wherever the account's default sends it."
+                    .to_string(),
+            );
         }
         // These two carry a sentinel for "not stated", so only a value below it
         // and below zero is a mistake.
@@ -3078,6 +3108,13 @@ impl ClientCore {
             // "The order type Limit is invalid for this combination of
             // exchange and security type" — the venue was refusing an order
             // the caller never asked for.
+            //
+            // Eleven types have a byte here. A type without one is previewed as
+            // a limit, so a trailing stop is answered with the margin on a
+            // limit at the same price rather than on the order asked about.
+            // That is not silent — it is what this says — but it is not right
+            // either, and settling it needs a preview of each such type against
+            // a session to see what the venue answers a byte it was not given.
             let ord_type = match order.ord_type_byte() { 0 => b'2', byte => byte };
             return Ok(ControlCommand::Order(ex(OrderKind::WhatIf { price, ord_type })));
         }

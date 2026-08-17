@@ -468,6 +468,10 @@ impl EClient {
     ///
     /// The order is marked as a question rather than an instruction, so
     /// nothing reaches the market.
+    /// A type this client states no byte for is previewed as a limit at the
+    /// same price: the margin comes back for a limit rather than for the order
+    /// asked about. Eleven types state a byte; the rest — trailing, pegged,
+    /// relative, snap and the touched types — do not.
     pub fn what_if_order(
         &self, contract: &Contract, order: &crate::types::model::Order,
     ) -> Result<crate::types::model::OrderState, Refusal> {
