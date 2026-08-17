@@ -144,6 +144,45 @@ pub struct Pnl {
     pub realized: f64,
 }
 
+/// One five-second bar, as the venue closed it.
+#[derive(Debug, Clone)]
+pub struct LiveBar {
+    /// The request this arrived under, which is what tells one subscription's
+    /// bars from another's.
+    pub req_id: i64,
+    /// When the bar closed, in seconds since the epoch.
+    pub time: i64,
+    /// Where it opened.
+    pub open: f64,
+    /// Its highest.
+    pub high: f64,
+    /// Its lowest.
+    pub low: f64,
+    /// Where it closed.
+    pub close: f64,
+    /// How much traded in it.
+    pub volume: f64,
+    /// The volume-weighted average price across it.
+    pub wap: f64,
+    /// How many trades made it up.
+    pub count: i32,
+}
+
+/// One headline, as it was published.
+#[derive(Debug, Clone)]
+pub struct NewsTick {
+    /// The subscription it arrived on.
+    pub req_id: i64,
+    /// When it was published.
+    pub time: i64,
+    /// Who published it.
+    pub provider: String,
+    /// Their reference for the article, which fetches the body.
+    pub article_id: String,
+    /// What it says.
+    pub headline: String,
+}
+
 /// One notice the venue broadcast to everybody.
 #[derive(Debug, Clone)]
 pub struct Bulletin {
@@ -209,6 +248,10 @@ pub struct LiveState {
     holdings: Vec<Holding>,
     pnl: Option<Pnl>,
     bulletins: Vec<Bulletin>,
+    live_bars: Vec<LiveBar>,
+    news: Vec<NewsTick>,
+    bar_streams: Vec<(i64, SyncSender<LiveBar>)>,
+    news_streams: Vec<SyncSender<NewsTick>>,
     tick_streams: Vec<(i64, SyncSender<Tick>)>,
     /// Where a caller asked for what happens to orders to be sent.
     order_streams: Vec<SyncSender<OrderEvent>>,
@@ -260,6 +303,16 @@ impl LiveState {
         self.bulletins.clone()
     }
 
+    /// Every five-second bar this session has been sent.
+    pub fn live_bars(&self) -> Vec<LiveBar> {
+        self.live_bars.clone()
+    }
+
+    /// Every headline this session has been sent.
+    pub fn news(&self) -> Vec<NewsTick> {
+        self.news.clone()
+    }
+
     /// Every account this login holds.
     pub fn accounts(&self) -> Vec<String> {
         self.accounts.clone()
@@ -308,6 +361,16 @@ impl LiveState {
     /// Send the ticks on one subscription to a caller who asked for them.
     pub(crate) fn stream_ticks(&mut self, req_id: i64, to: SyncSender<Tick>) {
         self.tick_streams.push((req_id, to));
+    }
+
+    /// Send the bars on one subscription to a caller who asked for them.
+    pub(crate) fn stream_bars(&mut self, req_id: i64, to: SyncSender<LiveBar>) {
+        self.bar_streams.push((req_id, to));
+    }
+
+    /// Send the headlines to a caller who asked for them.
+    pub(crate) fn stream_news(&mut self, to: SyncSender<NewsTick>) {
+        self.news_streams.push(to);
     }
 
     /// Send what happens to orders to a caller who asked for it.
@@ -431,6 +494,32 @@ impl Wrapper for LiveState {
         }
         // A holding the venue reports as zero is one the account no longer has.
         self.positions.retain(|p| p.quantity != 0.0);
+        self.changed();
+    }
+
+    fn real_time_bar(
+        &mut self, req_id: i64, time: i64, open: f64, high: f64, low: f64,
+        close: f64, volume: f64, wap: f64, count: i32,
+    ) {
+        let bar = LiveBar { req_id, time, open, high, low, close, volume, wap, count };
+        // Kept as well as streamed: a caller who subscribed and then looked
+        // rather than iterating still finds the bars that arrived.
+        self.live_bars.push(bar.clone());
+        self.bar_streams
+            .retain(|(id, to)| *id != req_id || to.try_send(bar.clone()).is_ok());
+        self.changed();
+    }
+
+    fn tick_news(
+        &mut self, req_id: i64, time: i64, provider: &str, article_id: &str,
+        headline: &str, _extra: &str,
+    ) {
+        let tick = NewsTick {
+            req_id, time, provider: provider.to_string(),
+            article_id: article_id.to_string(), headline: headline.to_string(),
+        };
+        self.news.push(tick.clone());
+        Self::tell(&mut self.news_streams, &tick);
         self.changed();
     }
 

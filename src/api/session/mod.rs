@@ -51,8 +51,8 @@ use super::client::{EClient, EClientConfig};
 
 mod state;
 pub use state::{
-    AccountValue, Bulletin, Fill, Holding, LiveState, OrderEvent, OrderStatus, Pnl, Position,
-    Tick, Trade,
+    AccountValue, Bulletin, Fill, Holding, LiveBar, LiveState, NewsTick, OrderEvent, OrderStatus,
+    Pnl, Position, Tick, Trade,
 };
 
 #[cfg(feature = "async")]
@@ -248,6 +248,19 @@ impl Client {
         self.kept().bulletins()
     }
 
+    /// Every five-second bar this session has been sent.
+    ///
+    /// Kept as well as streamed, so a caller who subscribed and then looked
+    /// rather than iterating still finds what arrived while they were away.
+    pub fn live_bars(&self) -> Vec<LiveBar> {
+        self.kept().live_bars()
+    }
+
+    /// Every headline this session has been sent.
+    pub fn news(&self) -> Vec<NewsTick> {
+        self.kept().news()
+    }
+
     /// The latest bid, ask and last for a contract being watched.
     ///
     /// Read without waiting on anything and without locking anything, so a
@@ -303,6 +316,34 @@ impl Client {
         self.kept().stream_ticks(req_id, tx);
         self.client.req_tick_by_tick_data(req_id, contract, "Last", 0, false)?;
         Ok(Ticks { session: self.clone(), req_id, rx })
+    }
+
+    /// Five-second bars on a contract, as the venue closes them.
+    ///
+    /// Subscribes and hands back the stream in one, and only this contract's
+    /// bars arrive on it. Of trades, except where the instrument has none —
+    /// the same rule [`bars`](EClient::bars) follows. Dropping the stream
+    /// withdraws the subscription.
+    pub fn live_bar_stream(&self, contract: &Contract) -> Result<LiveBars, Refusal> {
+        let req_id = super::client::ask::ask_id();
+        let (tx, rx) = std::sync::mpsc::sync_channel(TICK_BACKLOG);
+        self.kept().stream_bars(req_id, tx);
+        let quoted_not_traded = contract.sec_type.eq_ignore_ascii_case("CASH")
+            || contract.sec_type.eq_ignore_ascii_case("CFD");
+        let what = if quoted_not_traded { "MIDPOINT" } else { "TRADES" };
+        self.client.req_real_time_bars(req_id, contract, 5, what, true)?;
+        Ok(LiveBars { session: self.clone(), req_id, rx })
+    }
+
+    /// Every headline the session is subscribed to, as it is published.
+    ///
+    /// The subscription is a market-data one carrying a news tick type, so ask
+    /// for it with [`req_mkt_data`](EClient::req_mkt_data) naming the provider
+    /// codes wanted. This carries what arrives on any of them.
+    pub fn news_stream(&self) -> News {
+        let (tx, rx) = std::sync::mpsc::sync_channel(ORDER_BACKLOG);
+        self.kept().stream_news(tx);
+        News { rx }
     }
 
     /// Everything that happens to this session's orders, as it happens.
@@ -439,6 +480,40 @@ impl Drop for Ticks {
         // Dropping the stream is how a caller says they have finished, so the
         // subscription goes with it rather than running on unread.
         let _ = self.session.client.cancel_mkt_data(self.req_id);
+    }
+}
+
+/// Five-second bars on one contract, as the venue closes them.
+pub struct LiveBars {
+    session: Client,
+    req_id: i64,
+    rx: std::sync::mpsc::Receiver<LiveBar>,
+}
+
+impl Iterator for LiveBars {
+    type Item = LiveBar;
+
+    fn next(&mut self) -> Option<LiveBar> {
+        self.rx.recv().ok()
+    }
+}
+
+impl Drop for LiveBars {
+    fn drop(&mut self) {
+        let _ = self.session.client.cancel_real_time_bars(self.req_id);
+    }
+}
+
+/// Every headline the session is subscribed to, as it is published.
+pub struct News {
+    rx: std::sync::mpsc::Receiver<NewsTick>,
+}
+
+impl Iterator for News {
+    type Item = NewsTick;
+
+    fn next(&mut self) -> Option<NewsTick> {
+        self.rx.recv().ok()
     }
 }
 

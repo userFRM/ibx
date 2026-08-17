@@ -22,12 +22,20 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`PlacedOrder`**, returned by `place`. It knows its own number, so that is
   not bookkeeping a caller keeps, and it answers about itself as of the moment
   it is asked: `status`, `is_done`, `fills`, `wait_done`, `cancel`.
-- **`Client::ticks`** and **`Client::order_events`**, the two things that
-  genuinely need telling as they happen. Both are iterators, read the way
+- **Streams for what happens as it happens** — `ticks` on a contract,
+  `order_events`, `live_bar_stream` for five-second bars, `news_stream` for
+  headlines. Both are iterators, read the way
   anything else in Rust is read. `ticks` subscribes and hands back the stream
   in one, carries only that contract's, and withdraws the subscription when the
-  stream is dropped. Everything else about a session is a read, so it needs no
-  stream at all.
+  stream is dropped — the same for bars. Bars and headlines are kept as well as
+  streamed, so a caller who subscribed and then looked rather than iterating
+  still finds what arrived.
+- **What the session holds, by name**: `holdings` priced rather than at cost,
+  `pnl`, `bulletins`, `live_bars`, `news`, and `quotes` for one price each
+  across several contracts at once.
+- **Questions that were assemblies**: `scan`, `schedule`, `calendar_schema` and
+  `calendar_events`. Each is one call, and each withdraws what it started — a
+  scan left running keeps answering into a session nobody is reading.
 - **`place_bracket`**, an entry and the two exits that close it, sent as the one
   instruction the engine has for it. The venue links them, so neither child
   reaches the market before the parent has a position to work against. Refused
@@ -78,7 +86,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Client`, `AsyncClient` and `Config` replace `IB`, `AsyncIB`, `EClientConfig`
   on the friendly surface, and the alias of `Client` for `EClient` is gone.
-  Four names, each meaning one thing.
+  Four names, each meaning one thing. Python's session is `Client` too, with
+  `IB` kept as an alias for a program that looks for that name.
+- **One client, not two.** The session dereferences to the client it is built
+  on, so every request the protocol carries is reachable on it — nothing to
+  import and nothing to choose between. Twelve names exist on both and the
+  session's wins, because in each case it is the better answer; a test names
+  those twelve so a thirteenth cannot appear unnoticed.
 - What an order carries is stated as three numbers rather than two: 154 fields,
   of which 114 are sent, 35 have no field in the protocol to carry them and say
   so on themselves, and 5 are what the venue fills on the way back.
