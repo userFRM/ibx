@@ -327,22 +327,7 @@ impl EClient {
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
             let c_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
-            let o = Order {
-                order_id: tracked.order.order_id,
-                action: tracked.order.action.clone(),
-                total_quantity: tracked.order.total_quantity,
-                order_type: tracked.order.order_type.clone(),
-                lmt_price: tracked.order.lmt_price,
-                aux_price: tracked.order.aux_price,
-                tif: tracked.order.tif.clone(),
-                account: tracked.order.account.clone(),
-                perm_id: tracked.order.perm_id,
-                oca_type: tracked.order.oca_type,
-                use_price_mgmt_algo: tracked.order.use_price_mgmt_algo,
-                trail_stop_price: tracked.order.trail_stop_price,
-                algo_strategy: tracked.order.algo_strategy.clone(),
-                ..Default::default()
-            };
+            let o = Order::from_api(&tracked.order);
             let o_py = Py::new(py, o)?.into_any();
             let state = super::super::contract::OrderState {
                 status: tracked.status.clone(),
@@ -542,19 +527,7 @@ impl EClient {
                     self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
                 } else if let Some(info) = rich_info {
                     let c = Contract::from_api(&info.contract);
-                    let o = Order {
-                        order_id: info.order.order_id,
-                        action: info.order.action,
-                        total_quantity: info.order.total_quantity,
-                        order_type: info.order.order_type,
-                        lmt_price: info.order.lmt_price,
-                        aux_price: info.order.aux_price,
-                        tif: info.order.tif,
-                        account: info.order.account,
-                        perm_id: info.order.perm_id,
-                        filled_quantity: info.order.filled_quantity,
-                        ..Default::default()
-                    };
+                    let o = Order::from_api(&info.order);
                     let c_py = Py::new(py, c)?.into_any();
                     let o_py = Py::new(py, o)?.into_any();
                     self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
