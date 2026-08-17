@@ -19,7 +19,7 @@ from ._state import BracketOrder, HistoricalNews, HistoricalSchedule, LiveState,
 from .ibx import Contract, EClient
 
 
-class IB:
+class Client:
     """One session, asked questions directly."""
 
     def __init__(self) -> None:
@@ -750,3 +750,8 @@ _NOT_YET = frozenset({
     
     
 })
+
+#: The session under the name the widely used asynchronous wrapper gives it, so
+#: a program written against that one — and a test written against this one —
+#: finds what it is looking for. The same class either way.
+IB = Client

@@ -752,3 +752,172 @@ impl EClient {
         contracts.iter().map(|c| self.qualify_contract(c)).collect()
     }
 }
+
+/// One row of a scan: where it ranked and what it is.
+#[derive(Debug, Clone)]
+pub struct ScanRow {
+    /// Where it came in the scan.
+    pub rank: i32,
+    /// What the venue says the contract is.
+    pub details: ContractDetails,
+    /// How far it sits from the scan's benchmark, where the scan states one.
+    pub distance: String,
+    /// What that benchmark is.
+    pub benchmark: String,
+    /// What the scan projects, where it projects anything.
+    pub projection: String,
+}
+
+/// When a contract trades, and when it does not.
+#[derive(Debug, Clone)]
+pub struct Schedule {
+    /// The window this covers.
+    pub start: String,
+    /// And its end.
+    pub end: String,
+    /// The zone the times above are stated in.
+    pub time_zone: String,
+    /// Each session: its start, its end, and the day it belongs to.
+    pub sessions: Vec<(String, String, String)>,
+}
+
+impl EClient {
+    /// Run a scan and hand back what it found.
+    ///
+    /// The subscription is withdrawn before this returns: a scan asked for once
+    /// is a question, and left running it keeps answering into a session nobody
+    /// is reading.
+    pub fn scan(
+        &self, instrument: &str, location: &str, scan_code: &str, most: u32,
+    ) -> Result<Vec<ScanRow>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        struct Rows { req_id: i64, state: Arc<Mutex<Pending<ScanRow>>> }
+        impl Wrapper for Rows {
+            fn scanner_data(
+                &mut self, req_id: i64, rank: i32, details: &ContractDetails,
+                distance: &str, benchmark: &str, projection: &str, _legs: &str,
+            ) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().rows.push(ScanRow {
+                        rank, details: details.clone(),
+                        distance: distance.to_string(),
+                        benchmark: benchmark.to_string(),
+                        projection: projection.to_string(),
+                    });
+                }
+            }
+            fn scanner_data_end(&mut self, req_id: i64) {
+                if req_id == self.req_id {
+                    self.state.lock().unwrap().done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(Refusal::stated(code as i32, message));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Rows { req_id, state: Arc::clone(&state) };
+        self.req_scanner_subscription(req_id, instrument, location, scan_code, most, &[])?;
+        let found = self.wait_for(&mut collector, &state, &format!("a {scan_code} scan"));
+        let _ = self.cancel_scanner_subscription(req_id);
+        found
+    }
+
+    /// When a contract trades, over a window ending now.
+    pub fn schedule(&self, contract: &Contract, duration: &str) -> Result<Schedule, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        struct When { req_id: i64, state: Arc<Mutex<Pending<Schedule>>> }
+        impl Wrapper for When {
+            fn historical_schedule(
+                &mut self, req_id: i64, start: &str, end: &str, time_zone: &str,
+                sessions: &[(String, String, String)],
+            ) {
+                if req_id == self.req_id {
+                    let mut s = self.state.lock().unwrap();
+                    s.rows.push(Schedule {
+                        start: start.to_string(), end: end.to_string(),
+                        time_zone: time_zone.to_string(), sessions: sessions.to_vec(),
+                    });
+                    s.done = true;
+                }
+            }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(Refusal::stated(code as i32, message));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = When { req_id, state: Arc::clone(&state) };
+        self.req_historical_schedule(req_id, contract, "", duration, true)?;
+        let found = self.wait_for(&mut collector, &state, "a trading schedule")?;
+        found.into_iter().next().ok_or_else(|| {
+            Refusal::no_answer("the venue stated no schedule for this contract".to_string())
+        })
+    }
+
+    /// What the corporate-events calendar says it carries.
+    ///
+    /// As the venue's own JSON: it states a schema of its own that changes
+    /// without notice, and a shape imposed here would be a shape to keep in
+    /// step with it.
+    pub fn calendar_schema(&self) -> Result<String, Refusal> {
+        self.ask_wsh(None)
+    }
+
+    /// The calendar's events for one contract, as the venue's own JSON.
+    pub fn calendar_events(&self, con_id: i64) -> Result<String, Refusal> {
+        self.ask_wsh(Some(con_id))
+    }
+
+    fn ask_wsh(&self, con_id: Option<i64>) -> Result<String, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        struct Json { req_id: i64, state: Arc<Mutex<Pending<String>>> }
+        impl Json {
+            fn take(&mut self, req_id: i64, data: &str) {
+                if req_id == self.req_id {
+                    let mut s = self.state.lock().unwrap();
+                    s.rows.push(data.to_string());
+                    s.done = true;
+                }
+            }
+        }
+        impl Wrapper for Json {
+            fn wsh_meta_data(&mut self, req_id: i64, data: &str) { self.take(req_id, data) }
+            fn wsh_event_data(&mut self, req_id: i64, data: &str) { self.take(req_id, data) }
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    let mut s = self.state.lock().unwrap();
+                    s.error = Some(Refusal::stated(code as i32, message));
+                    s.done = true;
+                }
+            }
+        }
+        let req_id = ask_id();
+        let state = Arc::new(Mutex::new(Pending::default()));
+        let mut collector = Json { req_id, state: Arc::clone(&state) };
+        match con_id {
+            None => self.req_wsh_meta_data(req_id)?,
+            Some(con_id) => self.req_wsh_event_data(req_id, crate::types::CalendarQuery {
+                con_id: Some(con_id),
+                ..Default::default()
+            })?,
+        }
+        let what = if con_id.is_some() { "calendar events" } else { "the calendar's schema" };
+        self.wait_for(&mut collector, &state, what)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Refusal::no_answer(format!("the venue stated no {what}")))
+    }
+}
