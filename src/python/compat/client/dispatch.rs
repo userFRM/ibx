@@ -429,25 +429,7 @@ impl EClient {
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {
                 let c = Contract::from_api(&t.contract);
-                let o = Order {
-                    order_id: t.order.order_id,
-                    action: t.order.action,
-                    total_quantity: t.order.total_quantity,
-                    order_type: t.order.order_type,
-                    lmt_price: t.order.lmt_price,
-                    aux_price: t.order.aux_price,
-                    tif: t.order.tif,
-                    what_if: t.order.what_if,
-                    // What the child was given. On the order, which is where
-                    // the reference client carries it — a preview is not an
-                    // order, so a status naming its parent is a status for an
-                    // order that was never placed.
-                    parent_id: self.core.tracked_parent_id(wi.order_id).unwrap_or(0),
-                    // As on the update path: the reference client keys a trade
-                    // by the client that placed it.
-                    client_id: self.client_id.load(Ordering::Acquire),
-                    ..Default::default()
-                };
+                let o = Order::from_api(&t.order);
                 (Py::new(py, c)?.into_any(), Py::new(py, o)?.into_any())
             } else {
                 (Py::new(py, Contract::default())?.into_any(),

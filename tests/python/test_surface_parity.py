@@ -136,6 +136,29 @@ def test_every_order_field_reaches_the_rust_order():
     assert not missing, f"set from Python and never reaching the order sent: {missing}"
 
 
+def test_every_order_field_comes_back_from_the_engine():
+    """An order handed back to Python is the order the engine holds.
+
+    A callback used to rebuild one field by field and default the rest, so a
+    caller reading their own open orders got an order missing most of what they
+    placed — and placing it again placed something else. The reverse of the
+    conversion above, and it went wrong the same way.
+    """
+    source = (ROOT / "src/python/compat/class_orders.rs").read_text()
+    at = source.index("pub(crate) fn from_api(a: &crate::types::model::Order)")
+    body = source[at:source.index("\n    }\n", at)]
+    assert ".." not in body.split("Self {", 1)[1], (
+        "the conversion back ends in a struct-update fallback, so a field "
+        "nobody copied is silently defaulted instead of failing to compile"
+    )
+    missing = sorted(
+        f for f in _fields("src/python/compat", "Order")
+        if f not in _FILLED_BY_THE_CALLER
+        and not re.search(rf"^\s*{f}:", body, re.M)
+    )
+    assert not missing, f"held by the engine and not handed back: {missing}"
+
+
 def test_what_cannot_be_read_is_refused_rather_than_emptied():
     """The three the caller fills carry Python objects, and an object this
     client cannot read is a refusal.
