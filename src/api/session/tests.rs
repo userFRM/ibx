@@ -107,39 +107,53 @@ fn a_caller_can_wait_for_the_next_change_rather_than_for_a_while() {
     assert_ne!(kept.changes(), before);
 }
 
-/// Every handler is told everything, and so is the session's own record.
+/// A stream is told about its own contract and nobody else's.
 ///
-/// This is what a queue cannot do: a message taken off a queue is taken off it
-/// for everyone, so a second reader gets the messages the first did not happen
-/// to take. Here each is told, in the order they were added, and the session
-/// keeps its own account regardless of who is listening.
+/// Told about everything, a caller watching one thing filters out the rest —
+/// which is the work this exists to do for them.
 #[test]
-fn every_handler_is_told_and_so_is_the_session() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+fn a_tick_stream_is_told_about_its_own_contract() {
+    use crate::api::wrapper::Wrapper;
+    use crate::types::model::TickAttribLast;
 
-    #[derive(Clone)]
-    struct Counting(Arc<AtomicUsize>);
-    impl crate::api::wrapper::Wrapper for Counting {
-        fn order_status(
-            &mut self, _: i64, _: &str, _: f64, _: f64, _: f64, _: i64, _: i64,
-            _: f64, _: i64, _: &str, _: f64,
-        ) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    let (first, second) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let mut kept = LiveState::default();
-    let mut handlers: Vec<Box<dyn crate::api::session::Handler + Send>> =
-        vec![Box::new(Counting(Arc::clone(&first))), Box::new(Counting(Arc::clone(&second)))];
-    let mut fanout = super::Fanout { kept: &mut kept, handlers: &mut handlers };
+    let (watching, watching_rx) = std::sync::mpsc::sync_channel(8);
+    let (other, other_rx) = std::sync::mpsc::sync_channel(8);
+    kept.stream_ticks(11, watching);
+    kept.stream_ticks(22, other);
 
-    crate::api::wrapper::Wrapper::order_status(
-        &mut fanout, 1, "Submitted", 0.0, 100.0, 0.0, 0, 0, 0.0, 1, "", 0.0,
-    );
+    let attrib = TickAttribLast::default();
+    kept.tick_by_tick_all_last(11, 1, 1_000, 42.5, 100.0, &attrib, "NYSE", "");
+    kept.tick_by_tick_all_last(33, 1, 1_001, 99.0, 1.0, &attrib, "NYSE", "");
 
-    assert_eq!(first.load(Ordering::SeqCst), 1, "the first handler was told");
-    assert_eq!(second.load(Ordering::SeqCst), 1, "and so was the second");
-    assert_eq!(kept.trade(1).unwrap().status.status, "Submitted", "and the session kept it");
+    let mine: Vec<_> = std::iter::from_fn(|| watching_rx.try_recv().ok()).collect();
+    assert_eq!(mine.len(), 1, "the one printed on this contract");
+    assert_eq!(mine[0].price, 42.5);
+    assert_eq!(mine[0].exchange, "NYSE");
+    assert!(other_rx.try_recv().is_err(), "and nothing printed on another");
+}
+
+/// A status change and a fill both reach a caller watching orders, and a
+/// caller who stopped watching is stopped being sent to.
+#[test]
+fn order_events_carry_both_kinds_and_forget_a_reader_that_left() {
+    use crate::api::wrapper::Wrapper;
+
+    let mut kept = LiveState::default();
+    let (to, rx) = std::sync::mpsc::sync_channel(8);
+    kept.stream_order_events(to);
+
+    kept.order_status(7, "Submitted", 0.0, 100.0, 0.0, 0, 0, 0.0, 1, "", 0.0);
+    kept.exec_details(0, &Contract::stock("SPY"),
+                      &crate::types::model::Execution { order_id: 7, ..Default::default() });
+
+    let seen: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(seen.len(), 2, "the status and the fill");
+    assert_eq!(seen[0].status, "Submitted");
+    assert!(seen[0].fill.is_none(), "a status change is not a fill");
+    assert!(seen[1].fill.is_some(), "and a fill is");
+
+    drop(rx);
+    kept.order_status(7, "Filled", 100.0, 0.0, 42.5, 0, 0, 0.0, 1, "", 0.0);
+    assert_eq!(kept.trade(7).unwrap().status.status, "Filled", "the session still keeps it");
 }

@@ -48,9 +48,8 @@ use crate::types::model::{Contract, ContractDetails, Order};
 
 use super::client::{EClient, EClientConfig};
 
-mod fanout;
 mod state;
-pub use state::{AccountValue, Fill, LiveState, OrderStatus, Position, Trade};
+pub use state::{AccountValue, Fill, LiveState, OrderEvent, OrderStatus, Position, Tick, Trade};
 
 #[cfg(feature = "async")]
 mod asynchronous;
@@ -59,13 +58,6 @@ pub use asynchronous::AsyncClient;
 
 #[cfg(test)]
 mod tests;
-
-/// Something a session tells its handlers about.
-///
-/// The same trait the reference client's callbacks arrive on, so a handler
-/// written for one is a handler for the other. Implement the calls you want and
-/// leave the rest: every one has a body that does nothing.
-pub use crate::api::wrapper::Wrapper as Handler;
 
 /// How long the reader waits before looking again when nothing arrived.
 ///
@@ -81,21 +73,10 @@ const BETWEEN_READS: Duration = Duration::from_millis(1);
 pub struct Client {
     client: Arc<EClient>,
     state: Arc<Mutex<LiveState>>,
-    handlers: Arc<Mutex<Vec<Box<dyn Handler + Send>>>>,
     stop: Arc<AtomicBool>,
     reader: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
-/// What the reader hands each message to: the session's own record of it, and
-/// then every handler the caller registered, in the order they were added.
-///
-/// A message reaches all of them. Put on a queue instead, it would reach
-/// whoever drained the queue first and nobody else, and a queue that filled
-/// would drop it — which is why this is not a queue.
-struct Fanout<'a> {
-    kept: &'a mut LiveState,
-    handlers: &'a mut Vec<Box<dyn Handler + Send>>,
-}
 
 impl Client {
     /// Open a session and start reading it.
@@ -103,7 +84,6 @@ impl Client {
         let session = Self {
             client: Arc::new(EClient::connect(config)?),
             state: Arc::new(Mutex::new(LiveState::default())),
-            handlers: Arc::new(Mutex::new(Vec::new())),
             stop: Arc::new(AtomicBool::new(false)),
             reader: Arc::new(Mutex::new(None)),
         };
@@ -148,12 +128,8 @@ impl Client {
     /// somebody else was waiting for and that question would time out on a
     /// reply that had already arrived.
     fn start_reading(&self) {
-        let (client, state, handlers, stop) = (
-            Arc::clone(&self.client),
-            Arc::clone(&self.state),
-            Arc::clone(&self.handlers),
-            Arc::clone(&self.stop),
-        );
+        let (client, state, stop) =
+            (Arc::clone(&self.client), Arc::clone(&self.state), Arc::clone(&self.stop));
         let handle = thread::Builder::new()
             .name("ibx-reader".to_string())
             .spawn(move || {
@@ -161,11 +137,7 @@ impl Client {
                     {
                         let _turn = client.asking.lock().unwrap_or_else(|e| e.into_inner());
                         let mut kept = state.lock().unwrap_or_else(|e| e.into_inner());
-                        let mut listening = handlers.lock().unwrap_or_else(|e| e.into_inner());
-                        client.process_msgs(&mut Fanout {
-                            kept: &mut kept,
-                            handlers: &mut listening,
-                        });
+                        client.process_msgs(&mut *kept);
                     }
                     thread::sleep(BETWEEN_READS);
                 }
@@ -190,24 +162,6 @@ impl Client {
     /// Whether the session is carrying traffic.
     pub fn is_connected(&self) -> bool {
         self.client.is_connected()
-    }
-
-    /// Be told about everything the session is told, as it is told.
-    ///
-    /// The handler is called on the thread that reads the session, before the
-    /// next message is read — so it sees every message, in order, with nothing
-    /// buffered between the two and nothing to fall behind. It also means a
-    /// handler that waits holds the session up: do the work somewhere else and
-    /// return.
-    ///
-    /// More than one may be registered, and each is told everything. That is
-    /// what a queue cannot do — a message taken off a queue is taken off it for
-    /// everyone.
-    pub fn on_event(&self, handler: impl Handler + Send + 'static) {
-        self.handlers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(Box::new(handler));
     }
 
     // ── what the session holds ──────────────────────────────────────────────
@@ -266,6 +220,33 @@ impl Client {
     }
 
     // ── waiting ─────────────────────────────────────────────────────────────
+
+    /// Every trade printed on a contract, as it prints.
+    ///
+    /// Subscribes and hands back the stream in one: what a caller wants is the
+    /// ticks, not a request id to match them up by afterwards. Only this
+    /// contract's — a caller watching one thing does not filter out the rest.
+    ///
+    /// The stream ends when the session does. Dropping it is how a caller says
+    /// they have finished, and the subscription is withdrawn with it.
+    pub fn ticks(&self, contract: &Contract) -> Result<Ticks, Refusal> {
+        let req_id = super::client::ask::ask_id();
+        let (tx, rx) = std::sync::mpsc::sync_channel(TICK_BACKLOG);
+        self.kept().stream_ticks(req_id, tx);
+        self.client.req_tick_by_tick_data(req_id, contract, "Last", 0, false)?;
+        Ok(Ticks { session: self.clone(), req_id, rx })
+    }
+
+    /// Everything that happens to this session's orders, as it happens.
+    ///
+    /// A status change and a fill both arrive here, in the order the venue
+    /// stated them. For one order rather than all of them, read it back
+    /// through what [`place`](Client::place) returned.
+    pub fn order_events(&self) -> OrderEvents {
+        let (tx, rx) = std::sync::mpsc::sync_channel(ORDER_BACKLOG);
+        self.kept().stream_order_events(tx);
+        OrderEvents { rx }
+    }
 
     // ── asking ──────────────────────────────────────────────────────────────
 
@@ -354,6 +335,55 @@ impl Client {
         &self, contract: &Contract, order: &Order,
     ) -> Result<crate::types::model::OrderState, Refusal> {
         self.client.preview(contract, order)
+    }
+}
+
+/// How far behind a stream may fall before what it missed is dropped.
+///
+/// The engine never waits on a reader — a session that stalled on one would
+/// stop carrying market data — so a stream that is not read loses what arrived
+/// while it was not. Generous enough that a reader doing ordinary work between
+/// ticks does not.
+const TICK_BACKLOG: usize = 4096;
+/// The same, for what happens to orders. Smaller because far less arrives.
+const ORDER_BACKLOG: usize = 1024;
+
+/// Every trade printed on one contract, as it prints.
+///
+/// An iterator, so it is read the way anything else in Rust is read. It ends
+/// when the session does.
+pub struct Ticks {
+    session: Client,
+    req_id: i64,
+    rx: std::sync::mpsc::Receiver<Tick>,
+}
+
+impl Iterator for Ticks {
+    type Item = Tick;
+
+    fn next(&mut self) -> Option<Tick> {
+        self.rx.recv().ok()
+    }
+}
+
+impl Drop for Ticks {
+    fn drop(&mut self) {
+        // Dropping the stream is how a caller says they have finished, so the
+        // subscription goes with it rather than running on unread.
+        let _ = self.session.client.cancel_mkt_data(self.req_id);
+    }
+}
+
+/// Everything that happens to this session's orders, as it happens.
+pub struct OrderEvents {
+    rx: std::sync::mpsc::Receiver<OrderEvent>,
+}
+
+impl Iterator for OrderEvents {
+    type Item = OrderEvent;
+
+    fn next(&mut self) -> Option<OrderEvent> {
+        self.rx.recv().ok()
     }
 }
 

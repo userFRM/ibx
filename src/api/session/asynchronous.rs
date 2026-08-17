@@ -129,14 +129,18 @@ impl AsyncClient {
         self.inner.disconnect();
     }
 
-    /// Be told about everything the session is told, as it is told.
+    /// Every trade printed on a contract, as it prints.
     ///
-    /// Not moved off the reactor: registering a handler is a push onto a list.
-    /// The handler itself is called on the thread that reads the session, so a
-    /// handler that waits holds the session up rather than the runtime — do
-    /// the work somewhere else and return.
-    pub fn on_event(&self, handler: impl super::Handler + Send + 'static) {
-        self.inner.on_event(handler);
+    /// Not moved off the reactor: subscribing sends and returns. Reading the
+    /// stream blocks the thread that reads it, so read it from a task of its
+    /// own — `spawn_blocking`, or a thread.
+    pub fn ticks(&self, contract: &Contract) -> Result<super::Ticks, Refusal> {
+        self.inner.ticks(contract)
+    }
+
+    /// Everything that happens to this session's orders, as it happens.
+    pub fn order_events(&self) -> super::OrderEvents {
+        self.inner.order_events()
     }
 
     /// Wait until the venue has finished with an order.
