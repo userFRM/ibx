@@ -376,6 +376,12 @@ fn an_order_that_cannot_be_placed_as_asked_is_refused() {
          |o| o.trigger_method = 9, "trigger_method"),
         ("a one-cancels-all rule this venue does not carry",
          |o| o.oca_type = 7, "oca_type"),
+        ("a display size that is not a quantity",
+         |o| o.display_size = -5, "display_size"),
+        ("a borrow slot that is not one",
+         |o| o.short_sale_slot = -1, "short_sale_slot"),
+        ("a minimum trade quantity below nothing",
+         |o| o.min_trade_qty = -10, "min_trade_qty"),
         // One of the twenty-nine this protocol has no field for. Stated by a
         // caller, the order would otherwise be placed with the instruction
         // missing and nothing to say it had been.

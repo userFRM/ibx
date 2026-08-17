@@ -2462,7 +2462,7 @@ impl ClientCore {
             delta_neutral_clearing_intent, delta_neutral_designated_location,
             delta_neutral_open_close, delta_neutral_settling_firm,
             delta_neutral_short_sale, delta_neutral_short_sale_slot,
-            dont_use_auto_price_for_hedge, model_code, opt_out_smart_routing,
+            delta, dont_use_auto_price_for_hedge, model_code, opt_out_smart_routing,
             submitter,
             fa_group: "FA allocation is not supported: fa_group, fa_method and \
                        fa_percentage are not carried on the order, so the full \
@@ -2500,6 +2500,41 @@ impl ClientCore {
                  once instead of waiting.",
                 order.good_after_time,
             ));
+        }
+
+        // A quantity or a slot stated as a negative number is not a smaller
+        // one, it is a mistake. The conversion clamps it, so the order goes out
+        // asking for none of whatever was asked for — an iceberg with no
+        // display size, a minimum of nothing, a leg that borrows from nowhere.
+        for (what, stated) in [
+            ("display_size", i64::from(order.display_size)),
+            ("min_qty", i64::from(order.min_qty)),
+            ("volatility_type", i64::from(order.volatility_type)),
+            ("short_sale_slot", i64::from(order.short_sale_slot)),
+            ("scale_init_level_size", i64::from(order.scale_init_level_size)),
+            ("scale_subs_level_size", i64::from(order.scale_subs_level_size)),
+        ] {
+            if stated < 0 {
+                return Err(format!(
+                    "{what} is {stated}, which is not a quantity. Sent, it goes \
+                     out as none at all and the order does something other than \
+                     what was asked.",
+                ));
+            }
+        }
+        // These two carry a sentinel for "not stated", so only a value below it
+        // and below zero is a mistake.
+        for (what, stated) in [
+            ("min_trade_qty", order.min_trade_qty),
+            ("post_to_ats", order.post_to_ats),
+            ("min_compete_size", order.min_compete_size),
+        ] {
+            if stated != i32::MAX && stated < 0 {
+                return Err(format!(
+                    "{what} is {stated}, which is not a quantity. Sent, it goes \
+                     out as none at all. Leave it at its default to state none.",
+                ));
+            }
         }
 
         // Two fields the conversion narrows to a set and turns anything else
@@ -2746,6 +2781,41 @@ impl ClientCore {
         }
         Err("a combination order has no legs: state them on the contract, \
              or use the security type of the thing you mean to trade".to_string())
+    }
+
+    /// What each leg of a combination states, before any of it is converted.
+    ///
+    /// The conversion takes each leg as it finds it: a side it does not
+    /// recognise becomes a buy, a negative ratio becomes none, and a slot
+    /// outside a byte wraps to whatever fits. Each of those is a leg trading
+    /// the other way, in no size, or borrowing from somewhere nobody named —
+    /// against the rest of a combination that is priced as one thing.
+    pub fn validate_leg(at: usize, leg: &crate::types::model::ComboLeg) -> Result<(), String> {
+        if !leg.action.eq_ignore_ascii_case("BUY") && !leg.action.eq_ignore_ascii_case("SELL") {
+            return Err(format!(
+                "leg {at} states side {:?}, which is BUY or SELL. Anything else \
+                 is sent as a buy, and the combination trades the wrong way \
+                 round on that leg.",
+                leg.action,
+            ));
+        }
+        if leg.ratio <= 0 {
+            return Err(format!(
+                "leg {at} states a ratio of {}, which is not a quantity. Sent, \
+                 the leg goes out in no size at all.",
+                leg.ratio,
+            ));
+        }
+        for (what, stated) in [("openClose", leg.open_close), ("shortSaleSlot", leg.shorting_policy)] {
+            if !(0..=255).contains(&stated) {
+                return Err(format!(
+                    "leg {at} states {what} as {stated}, which does not fit the \
+                     field it goes out in — sent, it would arrive as a \
+                     different value.",
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// `con_id` names one contract on its own. Where the caller gave one,

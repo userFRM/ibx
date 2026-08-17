@@ -116,6 +116,13 @@ pub struct Contract {
 pub struct Order {
     /// The caller's own number for this order. Every later message about
     /// it names this, and a modification is the same number placed again.
+    ///
+    /// **Reported by the venue, not sent.** It arrives on the echo of
+    /// an order and on the reports that follow it, and an order going
+    /// out carries nothing here — placing states the number in the
+    /// call. Held so an order read back from the venue and placed
+    /// again is the same value it was, which is why it is taken rather
+    /// than refused.
     pub order_id: i64,
     /// `BUY` or `SELL`. `SSHORT` where the venue takes one.
     pub action: String,
@@ -273,6 +280,13 @@ pub struct Order {
     /// How it clears: `IB`, `Away`, `PTA`.
     pub clearing_intent: String,
     /// Which client placed it.
+    ///
+    /// **Reported by the venue, not sent.** It arrives on the echo of
+    /// an order and on the reports that follow it, and an order going
+    /// out carries nothing here — placing states the number in the
+    /// call. Held so an order read back from the venue and placed
+    /// again is the same value it was, which is why it is taken rather
+    /// than refused.
     pub client_id: i32,
     /// How far a pegged-to-best order may improve on the
     /// best price.
@@ -287,6 +301,12 @@ pub struct Order {
     /// Stand the order down if the connection goes (tag 6661).
     pub deactivate_on_disconnect: bool,
     /// The hedge ratio a delta-neutral order is worked at.
+    ///
+    /// **Not carried by this protocol.** The counterpart names every field it
+    /// can write, and none of the three hundred and one that carry a tag is
+    /// this one — the delta that travels is the hedging contract's, stated on
+    /// `delta_neutral_contract`. Taken here and kept, so an order built against
+    /// another client reads back what it set.
     pub delta: f64,
     /// The hedging leg's own trigger price.
     pub delta_neutral_aux_price: f64,
@@ -386,6 +406,13 @@ pub struct Order {
     /// **Not carried by this protocol.** See `fa_group`.
     pub fa_percentage: String,
     /// How much has filled, as the venue states it back.
+    ///
+    /// **Reported by the venue, not sent.** It arrives on the echo of
+    /// an order and on the reports that follow it, and an order going
+    /// out carries nothing here — placing states the number in the
+    /// call. Held so an order read back from the venue and placed
+    /// again is the same value it was, which is why it is taken rather
+    /// than refused.
     pub filled_quantity: f64,
     /// What the hedge is measured by.
     pub hedge_param: String,
@@ -498,6 +525,13 @@ pub struct Order {
     pub percent_offset: f64,
     /// The venue's own id for the order, stable across sessions where the
     /// caller's number is not.
+    ///
+    /// **Reported by the venue, not sent.** It arrives on the echo of
+    /// an order and on the reports that follow it, and an order going
+    /// out carries nothing here — placing states the number in the
+    /// call. Held so an order read back from the venue and placed
+    /// again is the same value it was, which is why it is taken rather
+    /// than refused.
     pub perm_id: i64,
     /// Add liquidity or do not fill at all.
     pub post_only: bool,
