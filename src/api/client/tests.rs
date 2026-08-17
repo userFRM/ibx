@@ -372,6 +372,10 @@ fn an_order_that_cannot_be_placed_as_asked_is_refused() {
          "hedge_param"),
         ("a pair hedge with no ratio stated",
          |o| o.hedge_type = "P".into(), "hedge_param"),
+        ("a trigger this venue does not carry",
+         |o| o.trigger_method = 9, "trigger_method"),
+        ("a one-cancels-all rule this venue does not carry",
+         |o| o.oca_type = 7, "oca_type"),
         // One of the twenty-nine this protocol has no field for. Stated by a
         // caller, the order would otherwise be placed with the instruction
         // missing and nothing to say it had been.
@@ -4978,4 +4982,32 @@ fn placing_an_unnamed_contract_does_not_wait_on_itself() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!("placing an unnamed contract never returned: it is waiting on its own turn");
+}
+
+/// An order that cannot be placed is refused before the venue is asked
+/// anything, and a description resolved once is not asked about twice.
+///
+/// Placing looks a contract up before it takes its turn. Done ahead of the
+/// refusals, a caller who wrote an impossible order waits out a lookup for a
+/// contract that was never going to be traded, and hears about the lookup
+/// rather than about their order.
+#[test]
+fn an_impossible_order_is_refused_before_the_venue_is_asked() {
+    let (client, rx, _shared) = test_client();
+    let unnamed = Contract {
+        symbol: "SPY".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), currency: "USD".into(),
+        ..Default::default()
+    };
+    let asked = std::time::Instant::now();
+    let err = client
+        .place(&unnamed, &Order { tif: "FOREVER".into(), ..Order::limit("BUY", 1.0, 1.0) })
+        .expect_err("a time in force that is not one is refused");
+    assert!(err.message.contains("tif"), "{err}");
+    assert!(
+        asked.elapsed() < std::time::Duration::from_secs(5),
+        "the refusal waited on a lookup: {:?}",
+        asked.elapsed(),
+    );
+    assert!(rx.try_recv().is_err(), "nothing reaches the wire");
 }

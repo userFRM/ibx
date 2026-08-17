@@ -92,13 +92,31 @@ impl EClient {
     /// To place without waiting, or to choose the id,
     /// [`place_order`](EClient::place_order) takes both.
     pub fn place(&self, contract: &Contract, order: &Order) -> Result<OrderReport, Refusal> {
+        // Refused before anything is asked of the venue. An order that cannot
+        // be placed as asked is a programming error, and answering it with a
+        // fifteen-second lookup for a contract it was never going to trade is
+        // slower and says less.
+        crate::client_core::ClientCore::validate_order(order, &self.account_id)
+            .map_err(Refusal::validation)?;
+
         // Resolved before the turn is taken, not during it. `place_order` looks
         // a contract up when it carries no id, and a lookup is a question of
         // its own — asked while this held the turn, it would wait on a turn
         // this call is not going to give up, and the order would never be sent.
+        //
+        // Through the same store `place_order` reads, so a description already
+        // resolved once in this session is not asked about again.
         let named;
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
-            named = self.qualify_contract(contract)?;
+            let key = crate::client_core::ClientCore::description_key(contract);
+            named = match self.core.named_for(&key) {
+                Some(already) => already,
+                None => {
+                    let answer = self.qualify_contract(contract)?;
+                    self.core.remember_named(key, answer.clone());
+                    answer
+                }
+            };
             &named
         } else {
             contract

@@ -118,24 +118,38 @@ impl Contract {
     /// leg that is missing an attribute contributes its default rather than
     /// failing the order, except the contract id, without which the leg names
     /// nothing and the whole list is refused.
+    ///
+    /// An attribute that is there and cannot be read is not the same as one
+    /// that is absent: absent is the default the reference client would have
+    /// used, unreadable is a value the caller stated and this could not carry.
+    /// The first is taken, the second refused.
     pub fn combo_legs_api(&self, py: Python<'_>) -> Result<Vec<crate::types::model::ComboLeg>, String> {
         let mut out = Vec::with_capacity(self.combo_legs.len());
         for (i, obj) in self.combo_legs.iter().enumerate() {
-            let g = |n: &str| obj.getattr(py, n).ok();
-            let con_id = g("conId").and_then(|v| v.extract::<i64>(py).ok()).unwrap_or(0);
+            // Absent takes the default; stated and unreadable is refused.
+            macro_rules! read {
+                ($name:literal, $default:expr) => {
+                    match obj.getattr(py, $name) {
+                        Err(_) => $default,
+                        Ok(v) => v.extract(py).map_err(|e| {
+                            format!("combo leg {i} states a {} that cannot be read: {e}", $name)
+                        })?,
+                    }
+                };
+            }
+            let con_id: i64 = read!("conId", 0);
             if con_id == 0 {
                 return Err(format!("combo leg {i} has no conId, so it names no contract"));
             }
             out.push(crate::types::model::ComboLeg {
                 con_id,
-                ratio: g("ratio").and_then(|v| v.extract(py).ok()).unwrap_or(1),
-                action: g("action").and_then(|v| v.extract(py).ok()).unwrap_or_default(),
-                exchange: g("exchange").and_then(|v| v.extract(py).ok()).unwrap_or_default(),
-                open_close: g("openClose").and_then(|v| v.extract(py).ok()).unwrap_or(0),
-                shorting_policy: g("shortSaleSlot").and_then(|v| v.extract(py).ok()).unwrap_or(0),
-                designated_location: g("designatedLocation")
-                    .and_then(|v| v.extract(py).ok()).unwrap_or_default(),
-                exempt_code: g("exemptCode").and_then(|v| v.extract(py).ok()).unwrap_or(-1),
+                ratio: read!("ratio", 1),
+                action: read!("action", String::new()),
+                exchange: read!("exchange", String::new()),
+                open_close: read!("openClose", 0),
+                shorting_policy: read!("shortSaleSlot", 0),
+                designated_location: read!("designatedLocation", String::new()),
+                exempt_code: read!("exemptCode", -1),
             });
         }
         Ok(out)

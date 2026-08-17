@@ -369,10 +369,21 @@ pub struct Order {
     /// Who at the firm is operating the order.
     pub ext_operator: String,
     /// Which advisor group the order is allocated across.
+    ///
+    /// **Not carried by this protocol.** The counterpart names every
+    /// field it can write, and none of the three hundred and one that
+    /// carry a tag is this one. It arrives on a report the venue sends
+    /// back, which is not the same as an order carrying it out. Taken
+    /// here and kept, so an order built against another client reads
+    /// back what it set.
     pub fa_group: String,
     /// How it is divided among them.
+    ///
+    /// **Not carried by this protocol.** See `fa_group`.
     pub fa_method: String,
     /// What share each takes, where the method is a percentage.
+    ///
+    /// **Not carried by this protocol.** See `fa_group`.
     pub fa_percentage: String,
     /// How much has filled, as the venue states it back.
     pub filled_quantity: f64,
@@ -628,6 +639,13 @@ pub struct Order {
     /// The underlying price a volatility order is priced against.
     pub stock_ref_price: f64,
     /// Who submitted it.
+    ///
+    /// **Not carried by this protocol.** The counterpart names every
+    /// field it can write, and none of the three hundred and one that
+    /// carry a tag is this one. It arrives on a report the venue sends
+    /// back, which is not the same as an order carrying it out. Taken
+    /// here and kept, so an order built against another client reads
+    /// back what it set.
     pub submitter: String,
     /// Where a trailing stop starts, before it has followed
     /// anything.
