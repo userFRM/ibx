@@ -32,10 +32,10 @@ pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error
 
 #### `connect_with_events`
 
-Connect to IB and start the engine with an [`Events`] channel attached. Returns the client plus the stream of everything the engine pushes. This is a second, optional delivery path that runs alongside [`process_msgs()`](EClient::process_msgs) — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks.
+Connect to IB and start the engine with an event channel attached. A second, optional delivery path for a program that would rather own a queue than be called back. It is bounded, and an event arriving at a full one is discarded rather than made to wait — a session that stalled on a slow reader would stop carrying market data. Read [`events_lost`](EClient::events_lost) to learn whether that happened. One reader, and it is told what it drains and nothing else. For a program that wants more than one thing told about a message, or wants none of it dropped, hand a handler to [`IB`](crate::IB) instead: a handler is called with the message rather than sent a copy of it, so there is no queue to fill and no reader to be the only one. This is a second, optional delivery path that runs alongside [`process_msgs()`](EClient::process_msgs) — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks.
 
 ```rust
-pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result<(Self, Events), Box<dyn std::error::Error>>
+pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>>
 ```
 
 | Parameter | Type | Description |
@@ -43,7 +43,7 @@ pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result
 | `config` | `&EClientConfig` | Connection configuration (username, password, host, paper, core_id). |
 | `capacity` | `usize` |  |
 
-**Returns:** `Result<(Self, Events), Box<dyn std::error::Error>>`
+**Returns:** `Result<(Self, Receiver<Event>), Box<dyn std::error::Error>>`
 
 ---
 
@@ -109,6 +109,18 @@ pub fn seed_instrument(&self, con_id: i64, instrument: InstrumentId)
 |-----------|------|-------------|
 | `con_id` | `i64` | Contract ID. Unique per instrument. |
 | `instrument` | `InstrumentId` | Instrument type for scanner (e.g. `"STK"`, `"FUT"`). |
+
+---
+
+#### `events_lost`
+
+How many events the channel from [`connect_with_events`](EClient::connect_with_events) discarded. The engine never waits on a reader — a session that stalled on one would stop carrying market data — so an event arriving at a full channel is dropped. A program that acted on every fill it saw needs to know the difference between that and every fill there was. Zero for a session with no channel attached, and for one whose reader kept up.
+
+```rust
+pub fn events_lost(&self) -> u64
+```
+
+**Returns:** `u64`
 
 ---
 

@@ -81,6 +81,10 @@ def steps(suites):
         # step above it, and three of them reached main because this line was
         # not here.
         (["cargo", "doc", "--no-deps", "--lib"], {"RUSTDOCFLAGS": "-D warnings"}),
+        # The fan-out is written from the trait it fans out, so a call added to
+        # the trait and not to the fan-out is a message no handler is told
+        # about — silently, for exactly one kind of message.
+        (["python3", "scripts/gen_fanout.py"], {}),
         # And the Python suite, which reads the Rust source in two places. Both
         # went stale in a refactor that every Rust suite passed.
         ([".venv/bin/python", "-m", "pytest", "tests/python", "-q"], {}),
