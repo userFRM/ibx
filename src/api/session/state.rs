@@ -81,6 +81,16 @@ impl Trade {
 }
 
 /// A holding.
+///
+/// A futures position arrives carrying the venue's id for the contract and
+/// nothing else — no symbol, no security type, no currency. The definition
+/// service does not answer a query keyed on that id for a future, though it
+/// does for a share, and it holds the contract perfectly well when asked by
+/// name. So the id and the quantity are what is known, until something in the
+/// program names that contract for another reason and the definition is
+/// cached. Asked and answered against a session: `793356217` came back
+/// "no security definition has been found" by id, and by name came back as
+/// `MESU6`, September 2026, under that same id.
 #[derive(Debug, Clone)]
 pub struct Position {
     /// Which account holds it.
