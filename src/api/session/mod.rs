@@ -50,7 +50,10 @@ use crate::types::model::{Contract, ContractDetails, Order};
 use super::client::{EClient, EClientConfig};
 
 mod state;
-pub use state::{AccountValue, Fill, LiveState, OrderEvent, OrderStatus, Position, Tick, Trade};
+pub use state::{
+    AccountValue, Bulletin, Fill, Holding, LiveState, OrderEvent, OrderStatus, Pnl, Position,
+    Tick, Trade,
+};
 
 #[cfg(feature = "async")]
 mod asynchronous;
@@ -223,6 +226,28 @@ impl Client {
         if held.is_empty() { self.client.accounts.clone() } else { held }
     }
 
+    /// What the account holds, priced.
+    ///
+    /// [`positions`](Client::positions) is what it has and what that cost;
+    /// this is the same holdings marked, which is what a caller asking how
+    /// they are doing wants.
+    pub fn holdings(&self) -> Vec<Holding> {
+        self.kept().holdings()
+    }
+
+    /// What the account has made or lost, if the venue has said.
+    ///
+    /// `None` until it has. Ask for it with `req_pnl` — the venue states these
+    /// on subscription and not before.
+    pub fn pnl(&self) -> Option<Pnl> {
+        self.kept().pnl()
+    }
+
+    /// Every notice the venue has broadcast this session.
+    pub fn bulletins(&self) -> Vec<Bulletin> {
+        self.kept().bulletins()
+    }
+
     /// The latest bid, ask and last for a contract being watched.
     ///
     /// Read without waiting on anything and without locking anything, so a
@@ -234,6 +259,35 @@ impl Client {
     }
 
     // ── waiting ─────────────────────────────────────────────────────────────
+
+    /// One quote each for several contracts, now.
+    ///
+    /// Subscribes, waits for the venue to state a price, and withdraws. A
+    /// contract the venue says nothing about within `timeout` comes back
+    /// without a quote rather than being dropped, so what is returned lines up
+    /// with what was asked for.
+    ///
+    /// For a price that keeps arriving, [`watch`](Client::watch) it and read
+    /// [`ticker`](Client::ticker).
+    pub fn quotes(
+        &self, contracts: &[Contract], timeout: Duration,
+    ) -> Result<Vec<Option<crate::types::Quote>>, Refusal> {
+        let watching: Vec<i64> = contracts
+            .iter()
+            .map(|c| self.watch(c))
+            .collect::<Result<_, _>>()?;
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline
+            && contracts.iter().any(|c| self.ticker(c).is_none_or(|q| q.bid <= 0))
+        {
+            thread::sleep(BETWEEN_READS);
+        }
+        let quoted = contracts.iter().map(|c| self.ticker(c)).collect();
+        for req_id in watching {
+            let _ = self.cancel_mkt_data(req_id);
+        }
+        Ok(quoted)
+    }
 
     /// Every trade printed on a contract, as it prints.
     ///

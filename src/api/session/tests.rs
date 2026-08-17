@@ -205,3 +205,43 @@ fn shadowed_deliberately() {
         "these hide a method of the client's and nobody said they meant to: {shadowing:?}",
     );
 }
+
+/// A holding is priced as it stands, and one marked to nothing is gone.
+///
+/// Appended per mark instead, an account that moved would show a row for every
+/// price the venue ever stated it at.
+#[test]
+fn a_holding_is_priced_as_it_stands() {
+    use crate::api::wrapper::Wrapper;
+    let mut kept = LiveState::default();
+    let spy = Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() };
+
+    kept.update_portfolio(&spy, 100.0, 42.0, 4_200.0, 40.0, 200.0, 0.0, "DU1");
+    kept.update_portfolio(&spy, 100.0, 43.0, 4_300.0, 40.0, 300.0, 0.0, "DU1");
+    assert_eq!(kept.holdings().len(), 1, "one holding, not one per mark");
+    assert_eq!(kept.holdings()[0].market_value, 4_300.0);
+    assert_eq!(kept.holdings()[0].unrealized, 300.0);
+
+    kept.update_portfolio(&spy, 0.0, 43.0, 0.0, 0.0, 0.0, 300.0, "DU1");
+    assert!(kept.holdings().is_empty(), "a holding of none is not a holding");
+}
+
+/// What the account made, and what the venue broadcast, are kept as they
+/// arrive — the profit as a statement about now, the notices as a list.
+#[test]
+fn profit_is_the_latest_word_and_notices_accumulate() {
+    use crate::api::wrapper::Wrapper;
+    let mut kept = LiveState::default();
+    assert_eq!(kept.pnl(), None, "nothing until the venue says");
+
+    // Named through the trait: the reader above is `pnl()` with no arguments
+    // and hides the callback of the same name, which is what a caller wants
+    // and what a test has to say out loud.
+    Wrapper::pnl(&mut kept, 1, 10.0, 20.0, 30.0);
+    Wrapper::pnl(&mut kept, 1, 11.0, 21.0, 31.0);
+    assert_eq!(kept.pnl().unwrap().daily, 11.0, "the latest, not the first");
+
+    kept.update_news_bulletin(1, 1, "first", "NYSE");
+    kept.update_news_bulletin(2, 1, "second", "NYSE");
+    assert_eq!(kept.bulletins().len(), 2, "a notice does not replace the one before");
+}

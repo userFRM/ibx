@@ -114,6 +114,29 @@ impl AsyncClient {
         self.inner.changes()
     }
 
+    /// What the account holds, priced.
+    pub fn holdings(&self) -> Vec<super::Holding> {
+        self.inner.holdings()
+    }
+
+    /// What the account has made or lost, if the venue has said.
+    pub fn pnl(&self) -> Option<super::Pnl> {
+        self.inner.pnl()
+    }
+
+    /// Every notice the venue has broadcast this session.
+    pub fn bulletins(&self) -> Vec<super::Bulletin> {
+        self.inner.bulletins()
+    }
+
+    /// One quote each for several contracts, now.
+    pub async fn quotes(
+        &self, contracts: &[Contract], timeout: Duration,
+    ) -> Result<Vec<Option<crate::types::Quote>>, Refusal> {
+        let contracts = contracts.to_vec();
+        off_the_reactor!(self, |client| client.quotes(&contracts, timeout))
+    }
+
     /// The latest bid, ask and last for a contract being watched.
     pub fn ticker(&self, contract: &Contract) -> Option<crate::types::Quote> {
         self.inner.ticker(contract)

@@ -109,6 +109,54 @@ pub struct OrderEvent {
     pub fill: Option<Fill>,
 }
 
+/// A holding, and what it is worth now.
+///
+/// [`Position`] is what the account has and what it cost. This is the same
+/// holding priced: a caller asking "how am I doing" wants this one.
+#[derive(Debug, Clone)]
+pub struct Holding {
+    /// What is held.
+    pub contract: Contract,
+    /// How much, negative when short.
+    pub quantity: f64,
+    /// What the venue last marked it at.
+    pub market_price: f64,
+    /// What that makes the holding worth.
+    pub market_value: f64,
+    /// What it cost, on average, per unit.
+    pub average_cost: f64,
+    /// What it is up or down, unsold.
+    pub unrealized: f64,
+    /// What it has made or lost, sold.
+    pub realized: f64,
+    /// Whose.
+    pub account: String,
+}
+
+/// What the account has made or lost.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Pnl {
+    /// Today.
+    pub daily: f64,
+    /// On what is still held.
+    pub unrealized: f64,
+    /// On what has been closed.
+    pub realized: f64,
+}
+
+/// One notice the venue broadcast to everybody.
+#[derive(Debug, Clone)]
+pub struct Bulletin {
+    /// The venue's number for it.
+    pub id: i64,
+    /// What kind of notice it is.
+    pub kind: i32,
+    /// What it says.
+    pub message: String,
+    /// Which exchange it came from.
+    pub exchange: String,
+}
+
 /// A holding.
 ///
 /// A futures position arrives carrying the venue's id for the contract and
@@ -158,6 +206,9 @@ pub struct LiveState {
     changes: u64,
     /// Where a caller asked for the ticks on one contract to be sent, by the
     /// request the subscription was asked for under.
+    holdings: Vec<Holding>,
+    pnl: Option<Pnl>,
+    bulletins: Vec<Bulletin>,
     tick_streams: Vec<(i64, SyncSender<Tick>)>,
     /// Where a caller asked for what happens to orders to be sent.
     order_streams: Vec<SyncSender<OrderEvent>>,
@@ -192,6 +243,21 @@ impl LiveState {
     /// Every trade this session has been told about.
     pub fn fills(&self) -> Vec<Fill> {
         self.executions.clone()
+    }
+
+    /// What the account holds, priced.
+    pub fn holdings(&self) -> Vec<Holding> {
+        self.holdings.clone()
+    }
+
+    /// What the account has made or lost, if the venue has said.
+    pub fn pnl(&self) -> Option<Pnl> {
+        self.pnl
+    }
+
+    /// Every notice the venue has broadcast this session.
+    pub fn bulletins(&self) -> Vec<Bulletin> {
+        self.bulletins.clone()
     }
 
     /// Every account this login holds.
@@ -365,6 +431,39 @@ impl Wrapper for LiveState {
         }
         // A holding the venue reports as zero is one the account no longer has.
         self.positions.retain(|p| p.quantity != 0.0);
+        self.changed();
+    }
+
+    fn update_portfolio(
+        &mut self, contract: &Contract, quantity: f64, market_price: f64,
+        market_value: f64, average_cost: f64, unrealized: f64, realized: f64,
+        account: &str,
+    ) {
+        let priced = Holding {
+            contract: contract.clone(), quantity, market_price, market_value,
+            average_cost, unrealized, realized, account: account.to_string(),
+        };
+        // Priced as it stands, so the same contract replaces itself rather
+        // than accumulating a row per mark.
+        match self.holdings.iter_mut().find(|h| {
+            h.account == priced.account && h.contract.con_id == priced.contract.con_id
+        }) {
+            Some(existing) => *existing = priced,
+            None => self.holdings.push(priced),
+        }
+        self.holdings.retain(|h| h.quantity != 0.0);
+        self.changed();
+    }
+
+    fn pnl(&mut self, _req_id: i64, daily: f64, unrealized: f64, realized: f64) {
+        self.pnl = Some(Pnl { daily, unrealized, realized });
+        self.changed();
+    }
+
+    fn update_news_bulletin(&mut self, id: i64, kind: i32, message: &str, exchange: &str) {
+        self.bulletins.push(Bulletin {
+            id, kind, message: message.to_string(), exchange: exchange.to_string(),
+        });
         self.changed();
     }
 
