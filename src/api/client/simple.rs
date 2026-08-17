@@ -12,10 +12,10 @@
 //! layer decides, the fuller call is still there and takes it.
 //!
 //! ```no_run
-//! # use ibx::{Client, EClientConfig};
+//! # use ibx::{Config, EClient};
 //! # use ibx::types::model::{Contract, Order};
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let ib = Client::connect(&EClientConfig {
+//! let ib = EClient::connect(&Config {
 //!     username: "user".into(), password: "pass".into(),
 //!     paper: true, ..Default::default()
 //! })?;

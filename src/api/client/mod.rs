@@ -34,11 +34,7 @@
 
 mod ask;
 mod simple;
-#[cfg(feature = "async")]
-mod async_client;
 pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow};
-#[cfg(feature = "async")]
-pub use async_client::AsyncClient;
 mod market_data;
 mod orders;
 mod account;
@@ -316,7 +312,7 @@ impl EClient {
     ///
     /// One reader, and it is told what it drains and nothing else. For a
     /// program that wants more than one thing told about a message, or wants
-    /// none of it dropped, hand a handler to [`IB`](crate::IB) instead: a
+    /// none of it dropped, hand a handler to [`Client`](crate::Client) instead: a
     /// handler is called with the message rather than sent a copy of it, so
     /// there is no queue to fill and no reader to be the only one. This is a second, optional delivery path that runs alongside
     /// [`process_msgs()`](EClient::process_msgs) — it does not replace it, and

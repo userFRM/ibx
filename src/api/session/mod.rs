@@ -11,30 +11,30 @@
 //! a fill and a quote are things you look at:
 //!
 //! ```no_run
-//! # use ibx::{EClientConfig, IB};
+//! # use ibx::{Client, Config};
 //! # use ibx::types::model::{Contract, Order};
 //! # use std::time::Duration;
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let ib = IB::connect(&EClientConfig {
+//! let client = Client::connect(&Config {
 //!     username: "user".into(), password: "pass".into(),
 //!     paper: true, ..Default::default()
 //! })?;
 //!
-//! let spy = ib.qualify(Contract::stock("SPY"))?;
-//! let trade = ib.place_order(&spy, &Order::limit("BUY", 100.0, 42.50))?;
+//! let spy = client.qualify(Contract::stock("SPY"))?;
+//! let order = client.place(&spy, &Order::limit("BUY", 100.0, 42.50))?;
 //!
-//! ib.sleep(Duration::from_secs(2));
-//! println!("{}", ib.trade(trade.order.order_id).unwrap().status.status);
+//! order.wait_done(Duration::from_secs(30));
+//! println!("{} — {} filled", order.status(), order.fills().len());
 //!
-//! for position in ib.positions() {
+//! for position in client.positions() {
 //!     println!("{} {}", position.contract.symbol, position.quantity);
 //! }
-//! ib.disconnect();
+//! client.disconnect();
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! It is the same client and the same session underneath — [`client`](IB::client)
+//! It is the same session as [`EClient`] underneath — [`client`](Client::client)
 //! reaches it — so nothing here is a second way to do what that one does. What
 //! it adds is that the answers stay.
 
@@ -55,7 +55,7 @@ pub use state::{AccountValue, Fill, LiveState, OrderStatus, Position, Trade};
 #[cfg(feature = "async")]
 mod asynchronous;
 #[cfg(feature = "async")]
-pub use asynchronous::AsyncIB;
+pub use asynchronous::AsyncClient;
 
 #[cfg(test)]
 mod tests;
@@ -78,7 +78,7 @@ const BETWEEN_READS: Duration = Duration::from_millis(1);
 /// Cloning shares the session rather than opening another: the venue allows one
 /// per login, and a second would take the first one's place.
 #[derive(Clone)]
-pub struct IB {
+pub struct Client {
     client: Arc<EClient>,
     state: Arc<Mutex<LiveState>>,
     handlers: Arc<Mutex<Vec<Box<dyn Handler + Send>>>>,
@@ -97,24 +97,24 @@ struct Fanout<'a> {
     handlers: &'a mut Vec<Box<dyn Handler + Send>>,
 }
 
-impl IB {
+impl Client {
     /// Open a session and start reading it.
     pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error>> {
-        let ib = Self {
+        let session = Self {
             client: Arc::new(EClient::connect(config)?),
             state: Arc::new(Mutex::new(LiveState::default())),
             handlers: Arc::new(Mutex::new(Vec::new())),
             stop: Arc::new(AtomicBool::new(false)),
             reader: Arc::new(Mutex::new(None)),
         };
-        ib.start_reading();
+        session.start_reading();
         // Asked for as the session opens, the way the reference client's own
         // wrapper does. Without it the account is silent until something asks,
         // and `positions()` and `account_values()` return empty lists — which
         // read as an account holding nothing rather than as nobody having
         // asked. Both are subscriptions: they answer once and then keep
         // answering, so this is the only place they are asked for.
-        ib.client.req_account_updates(true, "");
+        session.client.req_account_updates(true, "");
 
         // Into a record of its own and merged after, not straight into the
         // session's. The reader takes the session's turn and then the state;
@@ -122,15 +122,15 @@ impl IB {
         // locks taken in two orders is a session that stops at the first
         // moment both are wanted.
         let mut answered = LiveState::default();
-        ib.client.req_positions(&mut answered);
+        session.client.req_positions(&mut answered);
         // And what this account already has working, which may have been
         // placed by another session or on another day. Without asking, the
         // session knows only the orders it placed itself — and `open_trades()`
         // answers "none", which reads as an account with nothing working
         // rather than as nobody having asked.
-        ib.client.req_all_open_orders(&mut answered);
-        ib.kept().absorb(answered);
-        Ok(ib)
+        session.client.req_all_open_orders(&mut answered);
+        session.kept().absorb(answered);
+        Ok(session)
     }
 
     /// The session underneath, for every request this does not name.
@@ -260,46 +260,12 @@ impl IB {
     /// Read without waiting on anything and without locking anything, so a
     /// program may read from any thread as often as it likes. `None` until the
     /// venue has sent a first tick, and for a contract nobody subscribed to —
-    /// [`watch`](IB::watch) is what makes a quote exist.
+    /// [`watch`](Client::watch) is what makes a quote exist.
     pub fn ticker(&self, contract: &Contract) -> Option<crate::types::Quote> {
         self.client.quote_of(contract)
     }
 
     // ── waiting ─────────────────────────────────────────────────────────────
-
-    /// Let the session run for a while.
-    ///
-    /// Nothing has to be pumped for this to work — a thread is already reading.
-    /// This is where a program says how long it is prepared to wait.
-    pub fn sleep(&self, how_long: Duration) {
-        thread::sleep(how_long);
-    }
-
-    /// Wait until something changes, or until `timeout` passes.
-    ///
-    /// `true` if something changed. Waiting a fixed time instead means waking
-    /// early on a quiet market and late on a busy one.
-    pub fn wait_on_update(&self, timeout: Duration) -> bool {
-        let was = self.kept().changes();
-        self.loop_until(timeout, |ib| ib.kept().changes() != was)
-    }
-
-    /// Wait until `done` is true, or until `timeout` passes.
-    ///
-    /// `true` if it became true. The condition is asked between reads, so it
-    /// sees what the session has been told and not what it is being told.
-    pub fn loop_until(&self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if done(self) {
-                return true;
-            }
-            if Instant::now() >= deadline {
-                return false;
-            }
-            thread::sleep(BETWEEN_READS);
-        }
-    }
 
     // ── asking ──────────────────────────────────────────────────────────────
 
@@ -325,28 +291,27 @@ impl IB {
         self.client.watch(contract)
     }
 
-    /// Place an order, and hand back what is known of it so far.
+    /// Place an order, and hand back the order.
     ///
-    /// Returns as soon as the order is sent. What became of it is read from the
-    /// session afterwards — [`trade`](IB::trade) under the same number, or
-    /// [`wait_on_update`](IB::wait_on_update) until the venue says something.
-    pub fn place_order(&self, contract: &Contract, order: &Order) -> Result<Trade, Refusal> {
+    /// Returns as soon as it is sent; the venue has not answered yet. What
+    /// becomes of it is read through what this returns — the number it was
+    /// placed under is bookkeeping a caller should not have to keep.
+    pub fn place(&self, contract: &Contract, order: &Order) -> Result<PlacedOrder, Refusal> {
         let order_id = self.client.next_order_id();
         self.client.place_order(order_id, contract, order)?;
         let mut placed = order.clone();
         placed.order_id = order_id;
-        let trade = Trade {
+        // Held before it is returned, so a caller that reads it back before the
+        // venue has said anything is told it is pending rather than told there
+        // is no such order.
+        self.kept().remember(order_id, Trade {
             contract: contract.clone(),
             order: placed,
             status: OrderStatus { status: "PendingSubmit".to_string(), ..Default::default() },
             state: None,
             fills: Vec::new(),
-        };
-        // Held here as well as returned, so a caller that asks for the order by
-        // number before the venue has said anything is told it is pending
-        // rather than told there is no such order.
-        self.kept().remember(order_id, trade.clone());
-        Ok(trade)
+        });
+        Ok(PlacedOrder { session: self.clone(), order_id })
     }
 
     /// An entry and the two exits that close it, placed as one instruction.
@@ -354,7 +319,7 @@ impl IB {
     /// The venue links them: whichever child fills withdraws the other, and
     /// neither reaches the market before the parent has a position for it to
     /// work against. Returns the three numbers, parent first — read each with
-    /// [`trade`](IB::trade).
+    /// [`trade`](Client::trade).
     pub fn place_bracket(
         &self, contract: &Contract, side: &str, quantity: f64,
         entry: f64, take_profit: f64, stop_loss: f64,
@@ -392,7 +357,68 @@ impl IB {
     }
 }
 
-impl Drop for IB {
+/// An order that has been placed, and what is becoming of it.
+///
+/// Held rather than looked up: the number an order was placed under is
+/// bookkeeping the caller should not have to keep, and a status read through
+/// one is a status read at the moment it is asked for rather than the moment
+/// the order was placed.
+#[derive(Clone)]
+pub struct PlacedOrder {
+    session: Client,
+    order_id: i64,
+}
+
+impl PlacedOrder {
+    /// The number the venue knows it by.
+    pub fn id(&self) -> i64 {
+        self.order_id
+    }
+
+    /// Everything the session has been told about it.
+    pub fn trade(&self) -> Option<Trade> {
+        self.session.trade(self.order_id)
+    }
+
+    /// The venue's own word for where it stands, as of now.
+    pub fn status(&self) -> String {
+        self.trade().map(|t| t.status.status).unwrap_or_default()
+    }
+
+    /// Whether it has stopped — filled, cancelled or refused.
+    pub fn is_done(&self) -> bool {
+        self.trade().is_some_and(|t| t.is_done())
+    }
+
+    /// Every trade against it so far.
+    pub fn fills(&self) -> Vec<Fill> {
+        self.trade().map(|t| t.fills).unwrap_or_default()
+    }
+
+    /// Wait until the venue has finished with it.
+    ///
+    /// `true` if it stopped, `false` if `timeout` passed first — in which case
+    /// it is still working, and this said so rather than pretending otherwise.
+    /// The waiting is here rather than on the session because this is the thing
+    /// being waited for.
+    pub fn wait_done(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.is_done() {
+                return true;
+            }
+            thread::sleep(BETWEEN_READS);
+        }
+        self.is_done()
+    }
+
+    /// Withdraw it.
+    pub fn cancel(&self) -> Result<(), Refusal> {
+        self.session.cancel_order(self.order_id)
+    }
+}
+
+impl Drop for Client {
     fn drop(&mut self) {
         // Only the last holder stops the session: cloning shares it, and a
         // clone going out of scope is not the caller finishing with it.

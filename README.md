@@ -88,44 +88,44 @@ ib.disconnect()
 A contract does not need to be qualified first: a request carrying a contract
 rather than a contract id is resolved before transmission.
 
-In Rust, the same shape:
+In Rust:
 
 ```rust
 use ibx::types::model::{Contract, Order};
-use ibx::{EClientConfig, IB};
+use ibx::{Client, Config};
 
-let ib = IB::connect(&EClientConfig {
+let client = Client::connect(&Config {
     username: "your_user".into(),
     password: "your_pass".into(),
     paper: true,
     ..Default::default()
 })?;
 
-let spy = ib.qualify(Contract::stock("SPY"))?;
+let spy = client.qualify(Contract::stock("SPY"))?;
 
-// A quote updates itself once something is watching it.
-ib.watch(&spy)?;
-ib.wait_on_update(Duration::from_secs(5));
-if let Some(quote) = ib.ticker(&spy) {
+// A quote exists because something is watching it, and updates itself after.
+client.watch(&spy)?;
+if let Some(quote) = client.ticker(&spy) {
     println!("bid {} ask {}", quote.bid, quote.ask);
 }
 
-let trade = ib.place_order(&spy, &Order::limit("BUY", 100.0, 42.50))?;
-ib.loop_until(Duration::from_secs(10), |ib| {
-    ib.trade(trade.order.order_id).is_some_and(|t| t.is_done())
-});
+// The order is the thing you hold. Its number is bookkeeping the client keeps.
+let order = client.place(&spy, &Order::limit("BUY", 100.0, 42.50))?;
+order.wait_done(Duration::from_secs(30));
+println!("{} — {} filled", order.status(), order.fills().len());
+order.cancel()?;
 
 // What the session holds, without asking for any of it.
-for position in ib.positions() { /* ... */ }
-for value in ib.account_values() { /* ... */ }
-println!("{} orders, {} fills", ib.trades().len(), ib.fills().len());
+for position in client.positions() { /* ... */ }
+for value in client.account_values() { /* ... */ }
 ```
 
 One thread reads the session and keeps what arrives, so a position, an order, a
 fill and a quote are things you look at rather than questions you ask. The
-callback client is the same session underneath — `ib.client()` reaches it.
+account, its holdings and anything already working are asked for as the session
+opens, so they are there to read the moment it returns.
 
-To be told as it happens rather than asking afterwards, hand it a handler:
+To be told as it happens rather than reading afterwards, hand it a handler:
 
 ```rust
 struct Printer;
@@ -134,7 +134,7 @@ impl Handler for Printer {
         println!("{} {} at {}", contract.symbol, execution.shares, execution.price);
     }
 }
-ib.on_event(Printer);
+client.on_event(Printer);
 ```
 
 Handlers are called on the thread that reads the session, with the message
@@ -154,19 +154,18 @@ ibx = { git = "https://github.com/userFRM/ibx", features = ["async"] }
 ```
 
 ```rust
-let ib = AsyncIB::connect(config).await?;
-let spy = ib.qualify(Contract::stock("SPY")).await?;
+let client = AsyncClient::connect(config).await?;
+let spy = client.qualify(Contract::stock("SPY")).await?;
 
-ib.watch(&spy)?;                                   // sends, does not wait
-ib.wait_on_update(Duration::from_secs(5)).await;
-let quote = ib.ticker(&spy);                       // a memory read
+client.watch(&spy)?;                 // sends, does not wait
+let quote = client.ticker(&spy);     // a memory read
 
-let preview = ib.what_if(&spy, &Order::limit("BUY", 1.0, 1.0)).await?;
+let order = client.place(&spy, &Order::limit("BUY", 1.0, 1.0)).await?;
+client.wait_done(&order, Duration::from_secs(30)).await;
 ```
 
-Every method on it has the same name and the same answer as the blocking one,
-and a test fails if either grows a name the other does not have. There is no
-second engine and no second session: `ib.blocking()` reaches the same one.
+Every question has the same name and the same answer on both, and a test fails
+if either grows a name the other does not have.
 
 ## Running an existing program
 

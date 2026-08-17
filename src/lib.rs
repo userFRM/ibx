@@ -101,19 +101,27 @@ mod python;
 pub use error_codes::Refusal;
 pub use api::{EClient, EClientConfig, Wrapper};
 
-/// The client, under the name a program that is not being migrated would look
-/// for. The same type as [`EClient`], which keeps the reference client's name
-/// for a program that is.
-pub use api::EClient as Client;
 
-/// A session you look at rather than interrogate: what it has been told stays,
-/// and a position, an order, a fill and a quote are things to read.
-pub use api::ib::IB;
 
-/// The same session, for a program already running an asynchronous runtime.
+/// The client a program that is not being migrated should reach for.
+///
+/// It keeps what the session is told, so a position, an order, a fill and a
+/// quote are things to read rather than questions to ask. [`EClient`] is the
+/// same session under the reference client's own shape, for a program that is
+/// being moved onto this one.
+pub use api::session::Client;
+
+/// What a session is opened with.
+///
+/// The same type [`EClient`] takes, under a name that does not carry the
+/// reference client's prefix into a surface that is not the reference client.
+pub use api::EClientConfig as Config;
+
+/// An order that has been placed, and what is becoming of it.
+pub use api::session::PlacedOrder;
+
+
+
+/// [`Client`] for a program already running an asynchronous runtime.
 #[cfg(feature = "async")]
-pub use api::client::AsyncClient;
-
-/// [`IB`] for a program already running an asynchronous runtime.
-#[cfg(feature = "async")]
-pub use api::ib::AsyncIB;
+pub use api::session::AsyncClient;
