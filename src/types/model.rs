@@ -674,12 +674,12 @@ pub struct Order {
     pub stock_ref_price: f64,
     /// Who submitted it.
     ///
-    /// **Not carried by this protocol.** The counterpart names every
-    /// field it can write, and none of the three hundred and one that
-    /// carry a tag is this one. It arrives on a report the venue sends
-    /// back, which is not the same as an order carrying it out. Taken
-    /// here and kept, so an order built against another client reads
-    /// back what it set.
+    /// **Reported by the venue, not sent.** It arrives on the echo of an order
+    /// and on the reports that follow it, and an order going out carries
+    /// nothing here. Held so an order read back from the venue and placed
+    /// again is the same value it was, which is why it is taken rather than
+    /// refused — every report supplies it, so refusing it would refuse every
+    /// order anyone read back.
     pub submitter: String,
     /// Where a trailing stop starts, before it has followed
     /// anything.
