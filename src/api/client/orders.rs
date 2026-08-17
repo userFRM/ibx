@@ -372,3 +372,45 @@ impl EClient {
         wrapper.exec_details_end(req_id);
     }
 }
+
+impl EClient {
+    /// Send a bracket as the one instruction the engine has for it.
+    ///
+    /// Three orders under three numbers, linked by the venue: the children are
+    /// held until the parent has a position, and whichever fills withdraws the
+    /// other. `place_bracket` is the call that states this in a caller's terms;
+    /// this is the part that reaches the engine.
+    pub(crate) fn submit_bracket(
+        &self, contract: &Contract, side: crate::types::Side, quantity: f64,
+        entry: f64, take_profit: f64, stop_loss: f64,
+    ) -> Result<[i64; 3], Refusal> {
+        let instrument = self.core.find_or_register_instrument(
+            &self.control_tx,
+            contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
+            &crate::types::model::contract_identity(
+                &contract.last_trade_date_or_contract_month, contract.strike,
+                &contract.right, &contract.multiplier, &contract.currency,
+            ),
+        )?;
+        // Consecutive, because the venue reads the children's numbers as the
+        // parent's plus one and two. Taken apart, a bracket links to whatever
+        // happened to be placed in between.
+        let parent_id = self.next_order_id();
+        let (tp_id, sl_id) = (parent_id + 1, parent_id + 2);
+        self.next_order_id.store(parent_id as u64 + 3, Ordering::Relaxed);
+
+        let scaled = |price: f64| (price * PRICE_SCALE_F) as i64;
+        self.send(ControlCommand::Order(OrderRequest::SubmitBracket {
+            parent_id: parent_id as u64,
+            tp_id: tp_id as u64,
+            sl_id: sl_id as u64,
+            instrument,
+            side,
+            qty: quantity as u32,
+            entry_price: scaled(entry),
+            take_profit: scaled(take_profit),
+            stop_loss: scaled(stop_loss),
+        }))?;
+        Ok([parent_id, tp_id, sl_id])
+    }
+}

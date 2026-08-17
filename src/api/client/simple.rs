@@ -45,16 +45,25 @@ const HEADLINE_TAGS: &str =
 const SETTLE: Duration = Duration::from_secs(5);
 
 impl EClient {
-    /// Bars of trades during regular hours, ending now.
+    /// Bars during regular hours, ending now.
     ///
     /// `duration` and `bar_size` are the venue's own words for them — `"2 D"`,
-    /// `"1 hour"`. For midpoint or bid/ask bars, an end other than now, or bars
+    /// `"1 hour"`.
+    ///
+    /// Of trades, except where the instrument has none. A currency pair does
+    /// not trade on an exchange, so the venue holds no trade history for one
+    /// and answers a request for it with *"No historical market data"* — asking
+    /// for trades there is never what a caller meant, so this asks for the
+    /// midpoint instead. For bid/ask bars, an end other than now, or bars
     /// through the whole session, state them with
     /// [`historical_data`](EClient::historical_data).
     pub fn bars(
         &self, contract: &Contract, duration: &str, bar_size: &str,
     ) -> Result<Vec<BarData>, Refusal> {
-        self.historical_data(contract, "", duration, bar_size, "TRADES", true)
+        let quoted_not_traded = contract.sec_type.eq_ignore_ascii_case("CASH")
+            || contract.sec_type.eq_ignore_ascii_case("CFD");
+        let what = if quoted_not_traded { "MIDPOINT" } else { "TRADES" };
+        self.historical_data(contract, "", duration, bar_size, what, true)
     }
 
     /// The one contract the venue means by this description.
@@ -159,6 +168,47 @@ impl EClient {
     /// to — the subscription is what makes the quote exist, not this call.
     pub fn quote_of(&self, contract: &Contract) -> Option<crate::types::Quote> {
         self.quote_by_instrument(self.instrument_of(contract.con_id)?)
+    }
+
+    /// An entry and the two exits that close it, placed as one instruction.
+    ///
+    /// The venue links them itself: whichever child fills withdraws the other,
+    /// and neither reaches the market before the parent has a position for it
+    /// to work against. Placed as three separate orders instead, a stop can
+    /// arrive before there is anything to protect.
+    ///
+    /// `entry` is where the parent works, `take_profit` where the profitable
+    /// exit sits and `stop_loss` where the protective one does. The children
+    /// trade the other way round from the parent. Returns the three numbers
+    /// they were placed under, parent first.
+    pub fn place_bracket(
+        &self, contract: &Contract, side: &str, quantity: f64,
+        entry: f64, take_profit: f64, stop_loss: f64,
+    ) -> Result<[i64; 3], Refusal> {
+        // Refused before anything is registered or sent: an entry the wrong
+        // side of its own exits is a bracket that closes itself the moment it
+        // opens, and the venue is not the right place to find that out.
+        let entering = crate::types::model::Order {
+            action: side.into(), total_quantity: quantity,
+            order_type: "LMT".into(), lmt_price: entry, tif: "DAY".into(),
+            ..Default::default()
+        };
+        crate::client_core::ClientCore::validate_order(&entering, &self.account_id)
+            .map_err(Refusal::validation)?;
+        let buying = entering.side().map_err(Refusal::validation)?;
+        let (above, below) = match buying {
+            crate::types::Side::Sell => (stop_loss, take_profit),
+            _ => (take_profit, stop_loss),
+        };
+        if !(below < entry && entry < above) {
+            return Err(Refusal::validation(format!(
+                "a bracket buying at {entry} takes profit above it and stops out \
+                 below: stated as {take_profit} and {stop_loss}, one of the two \
+                 is on the wrong side of the entry and would close the position \
+                 as soon as it opened",
+            )));
+        }
+        self.submit_bracket(contract, buying, quantity, entry, take_profit, stop_loss)
     }
 
     /// What the account is worth and what it can buy.

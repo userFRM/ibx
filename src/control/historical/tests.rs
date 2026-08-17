@@ -9,7 +9,7 @@ use super::*;
 #[test]
 fn bar_data_type_strings() {
     assert_eq!(BarDataType::Trades.as_str(), "Last");
-    assert_eq!(BarDataType::Midpoint.as_str(), "Midpoint");
+    assert_eq!(BarDataType::Midpoint.as_str(), "MidPoint");
     assert_eq!(BarDataType::BidAsk.as_str(), "BidAsk");
 }
 
@@ -452,7 +452,7 @@ fn build_realtime_bar_xml_structure() {
     let fx = build_realtime_bar_xml("rt_2", 12087792, "MIDPOINT", false, "CASH", "IDEALPRO");
     assert!(fx.contains("<secType>CASH</secType>"), "{fx}");
     assert!(fx.contains("<exchange>IDEALPRO</exchange>"), "{fx}");
-    assert!(fx.contains("<data>Midpoint</data>"), "{fx}");
+    assert!(fx.contains("<data>MidPoint</data>"), "{fx}");
     assert!(xml.contains("<id>rt_1</id>"));
     assert!(xml.contains("<type>BarData</type>"));
     assert!(xml.contains("<data>Last</data>"));
@@ -662,6 +662,26 @@ mod tick_data_type_tests {
         assert_eq!(
             super::super::min_tick_of(silent, "7"), None,
             "no unit stated is no unit, not a penny",
+        );
+    }
+}
+
+/// One name per series, whichever request asks for it.
+///
+/// The midpoint was spelled three times in this file and two of them were
+/// wrong. The venue takes only `MidPoint`, and answered the others with "no
+/// historical market data" — which reads as a series that does not exist
+/// rather than as a name it does not know, so nobody looked for a typo.
+#[test]
+fn every_request_asks_for_a_series_by_the_same_name() {
+    for name in ["TRADES", "MIDPOINT", "BID", "ASK"] {
+        let through_the_type = BarDataType::from_api_str(name)
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .as_str();
+        let xml = build_realtime_bar_xml("q", 12087792, name, false, "CASH", "IDEALPRO");
+        assert!(
+            xml.contains(&format!("<data>{through_the_type}</data>")),
+            "{name} goes out as something other than {through_the_type}: {xml}",
         );
     }
 }
