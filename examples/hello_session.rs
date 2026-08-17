@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("{} orders, {} fills", client.trades().len(), client.fills().len());
 
-    client.client().cancel_mkt_data(stream)?;
+    client.cancel_mkt_data(stream)?;
     client.disconnect();
     Ok(())
 }

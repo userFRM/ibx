@@ -142,6 +142,21 @@ for event in client.order_events() {
 ticks arrive on it — a caller watching one thing does not filter out the rest.
 Dropping the stream withdraws the subscription.
 
+**There is one client.** The calls above are the ones with a shape worth
+having; every other request the protocol carries — scanners, news, corporate
+events, fundamentals, option chains, histograms, market rules, P&L — is on the
+same `client`, in the reference client's own shape:
+
+```rust
+client.req_scanner_parameters()?;
+client.req_historical_news(9001, con_id, "BRFG", "", "", 10)?;
+```
+
+Nothing to import, nothing to choose between: `Client` reaches all 135. Where a
+name appears on both, the session's own is the one you get, because it is the
+better answer — `positions()` reads what the session already holds rather than
+asking again.
+
 ### Inside an async runtime
 
 The engine is a thread of its own, so a blocking call holds the thread that

@@ -34,9 +34,10 @@
 //! # }
 //! ```
 //!
-//! It is the same session as [`EClient`] underneath — [`client`](Client::client)
-//! reaches it — so nothing here is a second way to do what that one does. What
-//! it adds is that the answers stay.
+//! It is the same session as [`EClient`] underneath, and dereferences to it, so
+//! every one of that client's hundred and thirty-five requests is reachable
+//! here without being written out twice. What this adds is that the answers
+//! stay: nothing here is a second way to do what that one does.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -78,6 +79,27 @@ pub struct Client {
 }
 
 
+/// Everything the session does not name itself.
+///
+/// A session is the reference client with what it has been told kept beside
+/// it, so every request that client carries is a request this one carries —
+/// all hundred and thirty-five of them, without a hundred and five lines
+/// forwarding one to the other.
+///
+/// Twelve names exist on both, and in each case the one written here wins,
+/// because an inherent method is found before a dereferenced one. That is the
+/// intent and not an accident: `positions` reads what the session already
+/// holds instead of asking again, `place` hands back the order rather than a
+/// snapshot of it, and `cancel_order` does not ask for a timestamp nobody
+/// has. `shadowed_deliberately` holds them to it.
+impl std::ops::Deref for Client {
+    type Target = EClient;
+
+    fn deref(&self) -> &EClient {
+        &self.client
+    }
+}
+
 impl Client {
     /// Open a session and start reading it.
     pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error>> {
@@ -111,14 +133,6 @@ impl Client {
         session.client.req_all_open_orders(&mut answered);
         session.kept().absorb(answered);
         Ok(session)
-    }
-
-    /// The session underneath, for every request this does not name.
-    ///
-    /// Reading it is free. Asking it a question takes the same turn the reader
-    /// does, so the two do not compete.
-    pub fn client(&self) -> &EClient {
-        &self.client
     }
 
     /// One thread reads the session; everything else reads what it kept.
