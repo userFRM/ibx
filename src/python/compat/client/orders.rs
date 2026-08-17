@@ -56,14 +56,35 @@ impl EClient {
         let api_contract = crate::types::model::Contract {
             primary_exchange: contract.primary_exchange.clone(),
             combo_legs: contract.combo_legs_api(py).map_err(PyRuntimeError::new_err)?,
-            delta_neutral_contract: contract.delta_neutral_contract.as_ref().map(|d| {
-                let g = |n: &str| d.getattr(py, n).ok();
-                crate::types::model::DeltaNeutralContract {
-                    con_id: g("conId").and_then(|v| v.extract(py).ok()).unwrap_or(0),
-                    delta: g("delta").and_then(|v| v.extract(py).ok()).unwrap_or(0.0),
-                    price: g("price").and_then(|v| v.extract(py).ok()).unwrap_or(0.0),
+            // Read, not guessed. A delta or a price that fell back to zero
+            // hedged the order against nothing while the caller had stated
+            // what to hedge against, and nothing said so.
+            delta_neutral_contract: match contract.delta_neutral_contract.as_ref() {
+                None => None,
+                Some(d) => {
+                    let read = |name: &str| -> Result<f64, String> {
+                        d.getattr(py, name)
+                            .and_then(|v| v.extract(py))
+                            .map_err(|e| format!("the hedging contract states no readable {name}: {e}"))
+                    };
+                    let hedge = (|| {
+                        Ok::<_, String>(crate::types::model::DeltaNeutralContract {
+                            con_id: d
+                                .getattr(py, "conId")
+                                .and_then(|v| v.extract(py))
+                                .map_err(|e| format!("the hedging contract states no readable conId: {e}"))?,
+                            delta: read("delta")?,
+                            price: read("price")?,
+                        })
+                    })();
+                    match hedge {
+                        Ok(hedge) => Some(hedge),
+                        Err(why) => {
+                            return self.report_refusal(py, order_id, Refusal::validation(why))
+                        }
+                    }
                 }
-            }),
+            },
             ..Default::default()
         };
         // Empty before connect, so a named account cannot match and is refused.

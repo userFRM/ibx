@@ -2463,6 +2463,18 @@ impl ClientCore {
             delta_neutral_open_close, delta_neutral_settling_firm,
             delta_neutral_short_sale, delta_neutral_short_sale_slot,
             dont_use_auto_price_for_hedge, model_code, opt_out_smart_routing,
+            submitter,
+            fa_group: "FA allocation is not supported: fa_group, fa_method and \
+                       fa_percentage are not carried on the order, so the full \
+                       quantity would fill on the connected account instead of \
+                       being allocated across the advisor group.",
+            fa_method: "FA allocation is not supported: fa_method is not \
+                        carried on the order, so the full quantity would fill \
+                        on the connected account under no method at all.",
+            fa_percentage: "FA allocation is not supported: fa_percentage is \
+                            not carried on the order, so the full quantity \
+                            would fill on the connected account rather than \
+                            the share stated.",
             transmit: "transmit=false is not supported: orders are transmitted \
                        immediately on place_order; there is no staging concept, \
                        so the order would go live despite transmit=false. Place \
@@ -2487,6 +2499,30 @@ impl ClientCore {
                  the start of a day — sent unread, the order would go live at \
                  once instead of waiting.",
                 order.good_after_time,
+            ));
+        }
+
+        // Two fields the conversion narrows to a set and turns anything else
+        // into the default. Narrowing is what the counterpart does with a value
+        // it does not know, so an order that reached the venue carrying one
+        // would be treated the same way — but a value outside the set is a
+        // caller's mistake, and hearing about it is better than having it
+        // quietly become something else.
+        if !matches!(order.trigger_method, 0..=4 | 7 | 8) {
+            return Err(format!(
+                "trigger_method {} is not one this venue carries. It is 0 to 4, \
+                 7 or 8 — anything else becomes 0, which is the default trigger \
+                 and not the one asked for.",
+                order.trigger_method,
+            ));
+        }
+        if order.oca_type != 0 && !matches!(order.oca_type, 1..=4) {
+            return Err(format!(
+                "oca_type {} is not one this venue carries. It is 1 to 4, or 0 \
+                 to leave it unset — anything else is sent as unset and the \
+                 group cancels under the venue's default rather than the rule \
+                 asked for.",
+                order.oca_type,
             ));
         }
 
@@ -2541,18 +2577,6 @@ impl ClientCore {
             ));
         }
 
-        if !order.fa_group.is_empty()
-            || !order.fa_method.is_empty()
-            || !order.fa_percentage.is_empty()
-        {
-            return Err(
-                "FA allocation is not supported: fa_group, fa_method and \
-                 fa_percentage are not carried on the order, so the full \
-                 quantity would fill on the connected account instead of \
-                 being allocated across the advisor group."
-                    .into(),
-            );
-        }
 
         // An unrecognized tif would otherwise be sent as DAY silently.
         match order.tif.as_str() {

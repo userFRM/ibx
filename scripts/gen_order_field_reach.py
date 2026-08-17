@@ -39,8 +39,10 @@ BUILDERS = [
     # gets as far as a tag. Leaving this out counted a carried field as lost.
     *module_files("src/types/model"),
     *module_files("src/engine/hot_loop/order_builder"),
-    *module_files("src/engine/hot_loop/ccp"),
-    *module_files("src/engine/hot_loop/mod"),
+    # Not the connection modules: they parse what arrives, and a field an
+    # execution report fills is not a field the order carried out. Counted
+    # among these, `fa_group` read as carried by the report that names it while
+    # placement refused it, and `submitter` read as carried by nothing at all.
     *module_files("src/client_core"),
     *module_files("src/types"),
 ]
