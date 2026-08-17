@@ -16,7 +16,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TRAIT = ROOT / "src/api/wrapper.rs"
-OUT = ROOT / "src/api/ib/fanout.rs"
+OUT = ROOT / "src/api/session/fanout.rs"
 
 
 def trait_body(text: str) -> str:

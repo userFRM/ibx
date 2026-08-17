@@ -47,11 +47,7 @@ extension-module = ["pyo3/extension-module"]
 compat = []
 
 [[example]]
-name = "hello_async"
-required-features = ["async"]
-
-[[example]]
-name = "hello_ib_async"
+name = "hello_session_async"
 required-features = ["async"]
 
 [[bin]]

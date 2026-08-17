@@ -1,4 +1,4 @@
-//! [`IB`] for a program already running an asynchronous runtime.
+//! [`Client`] for a program already running an asynchronous runtime.
 //!
 //! What waits is awaited; what does not is not. A question goes to the venue
 //! and comes back, so it is moved onto a thread that may wait — holding a
@@ -7,69 +7,68 @@
 //! a copy, and making it a future would be ceremony over a memory read.
 //!
 //! ```no_run
-//! # use ibx::{AsyncIB, EClientConfig};
+//! # use ibx::{AsyncClient, Config};
 //! # use ibx::types::model::{Contract, Order};
 //! # use std::time::Duration;
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let ib = AsyncIB::connect(EClientConfig {
+//! let client = AsyncClient::connect(Config {
 //!     username: "user".into(), password: "pass".into(),
 //!     paper: true, ..Default::default()
 //! }).await?;
 //!
-//! let spy = ib.qualify(Contract::stock("SPY")).await?;
-//! let trade = ib.place_order(&spy, &Order::limit("BUY", 100.0, 42.50)).await?;
-//!
-//! ib.sleep(Duration::from_secs(2)).await;
-//! println!("{}", ib.trade(trade.order.order_id).unwrap().status.status);
+//! let spy = client.qualify(Contract::stock("SPY")).await?;
+//! let order = client.place(&spy, &Order::limit("BUY", 100.0, 42.50)).await?;
+//! client.wait_done(&order, Duration::from_secs(30)).await;
+//! println!("{}", order.status());
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! There is no second session behind this: it holds an [`IB`], reachable
-//! through [`blocking`](AsyncIB::blocking) for anything not named here.
+//! There is no second session behind this: it holds a [`Client`], reachable
+//! through [`blocking`](AsyncClient::blocking) for anything not named here.
 
 use std::time::{Duration, Instant};
 
 use crate::error_codes::Refusal;
 use crate::types::model::{BarData, Contract, ContractDetails, Order, OrderState};
 
-use super::{AccountValue, Fill, Position, Trade, IB};
+use super::{AccountValue, Client, Fill, PlacedOrder, Position, Trade};
 use crate::api::client::EClientConfig;
 
 /// A session read from a runtime.
 ///
 /// Cloning shares the session rather than opening another.
 #[derive(Clone)]
-pub struct AsyncIB {
-    inner: IB,
+pub struct AsyncClient {
+    inner: Client,
 }
 
 /// Ask on a thread that may wait, and hand the answer back.
 macro_rules! off_the_reactor {
-    ($self:expr, |$ib:ident| $ask:expr) => {{
-        let $ib = $self.inner.clone();
+    ($self:expr, |$client:ident| $ask:expr) => {{
+        let $client = $self.inner.clone();
         tokio::task::spawn_blocking(move || $ask)
             .await
             .map_err(|e| Refusal::validation(format!("the question was cancelled: {e}")))?
     }};
 }
 
-impl AsyncIB {
+impl AsyncClient {
     /// Open a session and start reading it.
     ///
     /// Takes the configuration by value: the logon runs on another thread and
     /// has to own what it reads.
     pub async fn connect(config: EClientConfig) -> Result<Self, Box<dyn std::error::Error>> {
         let inner = tokio::task::spawn_blocking(move || {
-            IB::connect(&config).map_err(|e| e.to_string())
+            Client::connect(&config).map_err(|e| e.to_string())
         })
         .await??;
         Ok(Self { inner })
     }
 
     /// The session underneath, for everything this does not name.
-    pub fn blocking(&self) -> &IB {
+    pub fn blocking(&self) -> &Client {
         &self.inner
     }
 
@@ -140,48 +139,34 @@ impl AsyncIB {
         self.inner.on_event(handler);
     }
 
-    // ── waiting, without holding a runtime thread ───────────────────────────
-
-    /// Let the session run for a while.
-    pub async fn sleep(&self, how_long: Duration) {
-        tokio::time::sleep(how_long).await;
-    }
-
-    /// Wait until something changes, or until `timeout` passes.
-    pub async fn wait_on_update(&self, timeout: Duration) -> bool {
-        let was = self.inner.changes();
-        self.loop_until(timeout, |ib| ib.changes() != was).await
-    }
-
-    /// Wait until `done` is true, or until `timeout` passes.
+    /// Wait until the venue has finished with an order.
     ///
-    /// Asked between sleeps rather than in a spin: a condition over state that
-    /// only a reader thread changes has nothing to gain from being asked again
-    /// immediately, and a runtime has better things to run.
-    pub async fn loop_until(&self, timeout: Duration, done: impl Fn(&IB) -> bool) -> bool {
+    /// `true` if it stopped, `false` if `timeout` passed first. Awaited rather
+    /// than blocked on: the order is read from memory, so what this waits for
+    /// is the venue, and a runtime thread is not the thing that should do the
+    /// waiting.
+    pub async fn wait_done(&self, order: &PlacedOrder, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        loop {
-            if done(&self.inner) {
+        while Instant::now() < deadline {
+            if order.is_done() {
                 return true;
-            }
-            if Instant::now() >= deadline {
-                return false;
             }
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
+        order.is_done()
     }
 
     // ── asking ──────────────────────────────────────────────────────────────
 
     /// The one contract the venue means by this description.
     pub async fn qualify(&self, contract: Contract) -> Result<Contract, Refusal> {
-        off_the_reactor!(self, |ib| ib.qualify(contract))
+        off_the_reactor!(self, |client| client.qualify(contract))
     }
 
     /// Everything the venue lists under this description.
     pub async fn lookup(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
         let contract = contract.clone();
-        off_the_reactor!(self, |ib| ib.lookup(&contract))
+        off_the_reactor!(self, |client| client.lookup(&contract))
     }
 
     /// Bars of trades during regular hours, ending now.
@@ -190,7 +175,7 @@ impl AsyncIB {
     ) -> Result<Vec<BarData>, Refusal> {
         let (contract, duration, bar_size) =
             (contract.clone(), duration.to_string(), bar_size.to_string());
-        off_the_reactor!(self, |ib| ib.bars(&contract, &duration, &bar_size))
+        off_the_reactor!(self, |client| client.bars(&contract, &duration, &bar_size))
     }
 
     /// Start a market-data subscription, and hand back the id that withdraws it.
@@ -201,9 +186,9 @@ impl AsyncIB {
     }
 
     /// Place an order, and hand back what is known of it so far.
-    pub async fn place_order(&self, contract: &Contract, order: &Order) -> Result<Trade, Refusal> {
+    pub async fn place(&self, contract: &Contract, order: &Order) -> Result<PlacedOrder, Refusal> {
         let (contract, order) = (contract.clone(), order.clone());
-        off_the_reactor!(self, |ib| ib.place_order(&contract, &order))
+        off_the_reactor!(self, |client| client.place(&contract, &order))
     }
 
     /// An entry and the two exits that close it, placed as one instruction.
@@ -212,7 +197,7 @@ impl AsyncIB {
         entry: f64, take_profit: f64, stop_loss: f64,
     ) -> Result<[i64; 3], Refusal> {
         let (contract, side) = (contract.clone(), side.to_string());
-        off_the_reactor!(self, |ib| ib.place_bracket(
+        off_the_reactor!(self, |client| client.place_bracket(
             &contract, &side, quantity, entry, take_profit, stop_loss
         ))
     }
@@ -221,7 +206,7 @@ impl AsyncIB {
     ///
     /// Not moved off the reactor: this writes two fields and sends nothing.
     pub fn one_cancels_all(orders: &mut [Order], group: &str, kind: i32) {
-        IB::one_cancels_all(orders, group, kind);
+        Client::one_cancels_all(orders, group, kind);
     }
 
     /// Withdraw an order.
@@ -238,7 +223,7 @@ impl AsyncIB {
     /// placing it.
     pub async fn what_if(&self, contract: &Contract, order: &Order) -> Result<OrderState, Refusal> {
         let (contract, order) = (contract.clone(), order.clone());
-        off_the_reactor!(self, |ib| ib.what_if(&contract, &order))
+        off_the_reactor!(self, |client| client.what_if(&contract, &order))
     }
 }
 
@@ -252,9 +237,16 @@ mod tests {
     #[test]
     fn the_two_sessions_answer_the_same_names() {
         use std::collections::BTreeSet;
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api/ib");
-        let names = |text: &str| -> BTreeSet<String> {
-            text.lines()
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api/session");
+        // Only what the session itself answers. The file also holds the order
+        // a caller gets back from placing one, and its methods are not the
+        // session's — compared whole, the two lists differ by things that were
+        // never meant to be on both.
+        let names = |text: &str, of: &str| -> BTreeSet<String> {
+            let at = text.find(of).unwrap_or_else(|| panic!("no {of}"));
+            let block = &text[at..text[at..].find("\n}\n").map_or(text.len(), |e| at + e)];
+            block
+                .lines()
                 .filter_map(|l| l.trim().strip_prefix("pub fn ").or(l.trim().strip_prefix("pub async fn ")))
                 .filter_map(|l| l.split('(').next())
                 .map(str::to_string)
@@ -264,9 +256,17 @@ mod tests {
         let there = std::fs::read_to_string(root.join("mod.rs")).expect("the blocking one");
         // `blocking` reaches the session underneath and has nothing to reach on
         // the session itself; `client` is that reach, under the other name.
-        let mine: BTreeSet<String> = names(&here).difference(&BTreeSet::from(["blocking".to_string()]))
+        // `blocking` reaches the session underneath and has nothing to reach
+        // on the session itself. `wait_done` is on the order on the blocking
+        // side, where waiting is a thread doing nothing; here it is on the
+        // session, because a future needs a runtime to poll it and the order
+        // has none.
+        let not_on_both = BTreeSet::from(["blocking".to_string(), "wait_done".to_string()]);
+        let mine: BTreeSet<String> = names(&here, "impl AsyncClient {")
+            .difference(&not_on_both)
             .cloned().collect();
-        let theirs: BTreeSet<String> = names(&there).difference(&BTreeSet::from(["client".to_string()]))
+        let theirs: BTreeSet<String> = names(&there, "impl Client {")
+            .difference(&BTreeSet::from(["client".to_string()]))
             .cloned().collect();
         assert!(mine.len() >= 15, "the reader found the methods: {mine:?}");
         assert_eq!(mine, theirs, "asked on one session and not the other");

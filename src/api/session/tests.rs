@@ -131,7 +131,7 @@ fn every_handler_is_told_and_so_is_the_session() {
 
     let (first, second) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let mut kept = LiveState::default();
-    let mut handlers: Vec<Box<dyn crate::api::ib::Handler + Send>> =
+    let mut handlers: Vec<Box<dyn crate::api::session::Handler + Send>> =
         vec![Box::new(Counting(Arc::clone(&first))), Box::new(Counting(Arc::clone(&second)))];
     let mut fanout = super::Fanout { kept: &mut kept, handlers: &mut handlers };
 
