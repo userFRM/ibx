@@ -260,9 +260,11 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
     // allows one, which the venue answers by dropping whatever the suite was
     // still holding. Every phase after it then ran on connections belonging to
     // a session the run had itself evicted.
+    let mut recovered = false;
     let (farm, ccp, hmds) = match (hl.farm_conn.take(), hl.ccp_conn.take()) {
         (Some(f), Some(c)) => {
             println!("  the engine rebuilt the farm on the session already open");
+            recovered = true;
             (f, c, hl.hmds_conn.take())
         }
         // The engine did not bring it back inside the wait. Opening a session
@@ -291,7 +293,18 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
     } else {
         println!("  No Disconnected event, which is what a recovered drop delivers");
     }
-    println!("  PASS\n");
+    // Recovery is what this phase is named for, so it is what the phase
+    // reports on. Opening a session carries the rest of the run, but it
+    // demonstrates nothing about the engine bringing a dropped farm back,
+    // and reporting it as a pass claimed a recovery that never happened.
+    if recovered {
+        println!("  PASS\n");
+    } else {
+        println!(
+            "  SKIP: the engine did not rebuild the farm within the wait, so the recovery \
+             this phase exists to demonstrate was not shown\n",
+        );
+    }
     Conns { farm, ccp, hmds, account_id }
 }
 

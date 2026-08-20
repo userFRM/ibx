@@ -2055,7 +2055,8 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
                 }
             }
             Ok(Event::CancelReject(_)) => {
-                // Expected: one of the cancels may be rejected
+                // The modify and the cancel race, so the venue may refuse
+                // either one of them.
             }
             _ => {}
         }
