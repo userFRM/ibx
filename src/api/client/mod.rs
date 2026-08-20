@@ -210,6 +210,12 @@ pub struct EClient {
     /// True once `connection_closed` has been delivered, so it fires at most
     /// once per session.
     pub(crate) close_notified: AtomicBool,
+    /// Whether the caller asked for positions and has not withdrawn the ask.
+    ///
+    /// `req_positions` subscribes to a real-time feed, so a holding that
+    /// moves afterwards is reported as it moves rather than only in the set
+    /// held when the call was made.
+    pub(crate) positions_requested: AtomicBool,
     pub(crate) next_order_id: AtomicU64,
     /// Where the last id handed out is kept, and under which key.
     pub(crate) order_id_store: Option<(std::path::PathBuf, String)>,
@@ -435,6 +441,7 @@ impl EClient {
             accounts,
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
+            positions_requested: AtomicBool::new(false),
             next_order_id: AtomicU64::new(start_id),
             order_id_store,
             asking: Mutex::new(()),
@@ -468,6 +475,7 @@ impl EClient {
             account_id,
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
+            positions_requested: AtomicBool::new(false),
             next_order_id: AtomicU64::new(start_id),
             // Built from parts, so nothing is remembered anywhere.
             order_id_store: None,

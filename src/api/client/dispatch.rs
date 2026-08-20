@@ -1,5 +1,6 @@
 //! Event dispatch: drains SharedState queues and fires Wrapper callbacks.
 
+use std::sync::atomic::Ordering;
 use crate::types::qty_to_f64;
 use crate::types::model::{
     BarData, CommissionAndFeesReport, ContractDetails, ContractDescription, Execution,
@@ -34,6 +35,7 @@ impl EClient {
     /// Drain all SharedState queues and dispatch to the Wrapper.
     /// Call this in a loop — it is the Rust equivalent of C++ `EReader::processMsgs()`.
     pub fn process_msgs(&self, wrapper: &mut impl Wrapper) {
+        self.dispatch_positions(wrapper);
         self.dispatch_orders(wrapper);
         self.dispatch_quotes(wrapper);
         self.dispatch_data(wrapper);
@@ -69,6 +71,28 @@ impl EClient {
     }
 
     // ── Order / Fill Dispatch ──
+
+    /// A holding that has moved since the caller last heard, where the caller
+    /// asked for positions and has not withdrawn the ask.
+    ///
+    /// The feed is real-time: a fill that changes what the account holds is
+    /// followed by the holding it changed. Drained whether or not anyone
+    /// asked, so a caller who asks later is answered with what the account
+    /// holds then rather than a backlog of what it held before.
+    fn dispatch_positions(&self, wrapper: &mut impl Wrapper) {
+        let moved = self.shared.portfolio.drain_position_changes();
+        if !self.positions_requested.load(Ordering::Acquire) {
+            return;
+        }
+        for pi in &moved {
+            wrapper.position(
+                &self.account_id,
+                &self.position_contract(pi),
+                pi.position,
+                pi.avg_cost as f64 / PRICE_SCALE_F,
+            );
+        }
+    }
 
     fn dispatch_orders(&self, wrapper: &mut impl Wrapper) {
         // Fills → order_status + exec_details + commission_and_fees_report

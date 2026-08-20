@@ -66,6 +66,13 @@ pub struct EClient {
     /// Every account this login holds, the first being `account_id`.
     pub(crate) accounts: Mutex<Vec<String>>,
     pub(crate) connected: AtomicBool,
+    /// Whether the caller asked for positions and has not withdrawn the ask.
+    ///
+    /// `reqPositions` subscribes to a real-time feed, so a holding that moves
+    /// afterwards is reported as it moves. Answering only the set held when
+    /// the call was made left a caller tracking positions from a snapshot
+    /// that went stale on the next fill.
+    pub(crate) positions_requested: AtomicBool,
     /// Whether this session is finished rather than merely disconnected.
     ///
     /// The engine announces a loss it is still working on and a loss it has
@@ -216,6 +223,7 @@ impl EClient {
             account_id: Mutex::new(None),
             accounts: Mutex::new(Vec::new()),
             connected: AtomicBool::new(false),
+            positions_requested: AtomicBool::new(false),
             session_ended: AtomicBool::new(false),
             event_rx: Mutex::new(None),
             events_lost: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -960,6 +968,43 @@ w = W()",
             assert_eq!(contract.exchange, "", "an exchange was invented");
             assert_eq!(contract.sec_type, "", "a security type was invented");
             assert_eq!(contract.con_id, 495512563);
+        });
+    }
+
+    /// `reqPositions` subscribes to a real-time feed: a holding that moves
+    /// after the call is reported as it moves. Answering only the set held
+    /// when the call was made left a caller tracking its positions from a
+    /// snapshot that went stale on the next fill.
+    #[test]
+    fn a_holding_that_moves_after_the_request_is_reported() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            shared.portfolio.set_account_download_complete();
+            let held = |qty: f64| PositionInfo {
+                con_id: 756733, position: qty, symbol: "SPY".into(),
+                sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+            };
+            shared.portfolio.set_position_info(held(1.0));
+            client.call_method0(py, "req_positions").unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let reported = || -> usize {
+                py.eval(c"len([c for c in w.calls if c[0] == 'position'])", Some(&g), None)
+                    .unwrap().extract().unwrap()
+            };
+            assert_eq!(reported(), 1, "the holding held when it was asked for");
+
+            shared.portfolio.set_position_info(held(3.0));
+            client.call_method0(py, "_test_dispatch_once").unwrap();
+            assert_eq!(reported(), 2, "and the holding once it moves");
+
+            // Withdrawn, so what moves after is no longer reported.
+            client.call_method0(py, "cancel_positions").unwrap();
+            shared.portfolio.set_position_info(held(5.0));
+            client.call_method0(py, "_test_dispatch_once").unwrap();
+            assert_eq!(reported(), 2, "a withdrawn ask is not answered further");
         });
     }
 

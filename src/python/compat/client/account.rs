@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 
 use crate::error_codes::Refusal;
 use crate::types::*;
+use std::sync::atomic::Ordering;
 use super::EClient;
 use super::super::contract::Contract;
 use super::super::super::types::PRICE_SCALE_F;
@@ -12,7 +13,7 @@ impl EClient {
     /// The contract a position is a position in. Prefers the secdef cache,
     /// which carries exchange/localSymbol/tradingClass, and falls back to the
     /// wire-derived `PositionInfo` fields when it is cold.
-    fn position_contract(&self, pi: &PositionInfo, shared: &crate::bridge::SharedState) -> Contract {
+    pub(crate) fn position_contract(&self, pi: &PositionInfo, shared: &crate::bridge::SharedState) -> Contract {
         self.core.get_contract(pi.con_id, shared)
             .map(|ac| Contract::from_api(&ac))
             .unwrap_or_else(|| Contract {
@@ -144,6 +145,10 @@ impl EClient {
             self.callback(py, "position", (self.account().as_str(), &c_py, pi.position, avg_cost))?;
         }
         self.callback(py, "position_end", ())?;
+        // What has already been delivered is not delivered again: the feed
+        // reports from here, on the next holding to move.
+        shared.portfolio.drain_position_changes();
+        self.positions_requested.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -153,6 +158,7 @@ impl EClient {
     // stops, and reporting an error for withdrawing a subscription that was
     // never made would be wrong.
     fn cancel_positions(&self) -> PyResult<()> {
+        self.positions_requested.store(false, Ordering::Release);
         Ok(())
     }
 

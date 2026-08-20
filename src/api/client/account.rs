@@ -1,5 +1,6 @@
 //! Account-related methods: positions, PnL, account summary/updates.
 
+use std::sync::atomic::Ordering;
 use crate::types::model::PRICE_SCALE_F;
 use crate::api::wrapper::Wrapper;
 use crate::error_codes::Refusal;
@@ -10,6 +11,23 @@ use super::{Contract, EClient};
 
 impl EClient {
     // ── Positions ──
+
+    /// The contract a holding is in, named as fully as this client can.
+    ///
+    /// Preferred from the definition cache, which carries the exchange,
+    /// local symbol and trading class; the feed's own fields answer while the
+    /// cache is cold. Shared with the real-time path so a holding is named
+    /// the same way whether it is read at the request or as it moves.
+    pub(crate) fn position_contract(&self, pi: &crate::types::PositionInfo) -> Contract {
+        self.core.get_contract(pi.con_id, &self.shared).unwrap_or_else(|| Contract {
+            con_id: pi.con_id,
+            symbol: pi.symbol.clone(),
+            sec_type: pi.sec_type.clone(),
+            currency: pi.currency.clone(),
+            multiplier: pi.multiplier.clone(),
+            ..Default::default()
+        })
+    }
 
     /// Request positions. Matches `reqPositions` in C++.
     ///
@@ -56,20 +74,14 @@ impl EClient {
             positions = self.shared.portfolio.position_infos();
         }
         for pi in &positions {
-            // Prefer the secdef cache (carries exchange/localSymbol/tradingClass),
-            // but fall back to the wire-derived PositionInfo fields when cold.
-            let c = self.core.get_contract(pi.con_id, &self.shared)
-                .unwrap_or_else(|| Contract {
-                    con_id: pi.con_id,
-                    symbol: pi.symbol.clone(),
-                    sec_type: pi.sec_type.clone(),
-                    currency: pi.currency.clone(),
-                    multiplier: pi.multiplier.clone(),
-                    ..Default::default()
-                });
+            let c = self.position_contract(pi);
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             wrapper.position(&self.account_id, &c, pi.position, avg_cost);
         }
+        // What has already been delivered is not delivered again: the feed
+        // reports from here, on the next holding to move.
+        self.shared.portfolio.drain_position_changes();
+        self.positions_requested.store(true, Ordering::Release);
         wrapper.position_end();
     }
 
@@ -158,8 +170,13 @@ impl EClient {
     }
 
     /// Cancel positions subscription. Matches `cancelPositions` in C++.
+    ///
+    /// Nothing is withdrawn from the venue: it pushes what the account holds
+    /// as the session opens and keeps it current whether or not anyone is
+    /// listening. What stops is the reporting — a holding that moves after
+    /// this is no longer delivered on `position`.
     pub fn cancel_positions(&self) {
-        // No-op: positions are delivered immediately by req_positions.
+        self.positions_requested.store(false, Ordering::Release);
     }
 
     /// Request managed accounts. Matches `reqManagedAccts` in C++.

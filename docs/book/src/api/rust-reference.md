@@ -374,7 +374,7 @@ pub fn req_account_updates(&self, subscribe: bool, _acct_code: &str)
 
 #### `cancel_positions`
 
-Cancel positions subscription.
+Cancel positions subscription. Nothing is withdrawn from the venue: it pushes what the account holds as the session opens and keeps it current whether or not anyone is listening. What stops is the reporting — a holding that moves after this is no longer delivered on `position`.
 
 ```rust
 pub fn cancel_positions(&self)

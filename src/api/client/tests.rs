@@ -2794,6 +2794,38 @@ fn req_matching_symbols_sends_fetch() {
 //  Positions
 // ═══════════════════════════════════════════════════════════════════
 
+/// `req_positions` subscribes to a real-time feed: a holding that moves after
+/// the call is reported as it moves. Answering only the set held when the
+/// call was made left a caller tracking its positions from a snapshot that
+/// went stale on the next fill.
+#[test]
+fn a_holding_that_moves_after_the_request_is_reported() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_account_download_complete();
+    let held = |qty: f64| PositionInfo {
+        con_id: 265598, position: qty, symbol: "AAPL".into(),
+        sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+    };
+    shared.portfolio.set_position_info(held(100.0));
+
+    let mut w = RecordingWrapper::default();
+    client.req_positions(&mut w);
+    let reported = |w: &RecordingWrapper| {
+        w.events.iter().filter(|e| e.starts_with("position:")).count()
+    };
+    assert_eq!(reported(&w), 1, "the holding held when it was asked for");
+
+    shared.portfolio.set_position_info(held(150.0));
+    client.process_msgs(&mut w);
+    assert_eq!(reported(&w), 2, "and the holding once it moves");
+
+    // Withdrawn, so what moves after is no longer reported.
+    client.cancel_positions();
+    shared.portfolio.set_position_info(held(175.0));
+    client.process_msgs(&mut w);
+    assert_eq!(reported(&w), 2, "a withdrawn ask is not answered further");
+}
+
 #[test]
 fn req_positions_delivers_via_wrapper() {
     let (client, _rx, shared) = test_client();
