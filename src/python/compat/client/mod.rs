@@ -971,6 +971,41 @@ w = W()",
         });
     }
 
+    /// One pass can carry two reports for the same order: an acknowledgement
+    /// and then a fill. Keeping one report per order dropped the earlier one,
+    /// and the caller was never told the order had been acknowledged.
+    #[test]
+    fn an_acknowledgement_survives_a_fill_in_the_same_pass() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, _shared, w) = wired_client(py);
+            let q = crate::types::QTY_SCALE;
+
+            // The venue acknowledges the order, then fills half of it, both
+            // before the caller pumps the queue again.
+            client.call_method1(py, "_test_push_order_update",
+                (88u64, 0u32, "Submitted", 0.0f64, 100.0f64)).unwrap();
+            client.call_method1(py, "_test_push_fill",
+                (0u32, 88u64, "BUY", 150.0f64, 50 * q, 50 * q, 0.0f64)).unwrap();
+            client.call_method1(py, "_test_push_order_update",
+                (88u64, 0u32, "PartiallyFilled", 50.0f64, 50.0f64)).unwrap();
+
+            client.call_method0(py, "_test_dispatch_once").unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let reported: usize = py.eval(
+                c"len([c for c in w.calls if c[0] in ('order_status', 'orderStatus')])",
+                Some(&g), None,
+            ).unwrap().extract().unwrap();
+            assert_eq!(
+                reported, 2,
+                "the acknowledgement was dropped by the fill that followed it",
+            );
+        });
+    }
+
+
     /// `reqPositions` subscribes to a real-time feed: a holding that moves
     /// after the call is reported as it moves. Answering only the set held
     /// when the call was made left a caller tracking its positions from a

@@ -101,10 +101,7 @@ impl EClient {
         // produces one `orderStatus` and not two. The engine announces the fill
         // and the order's resulting status together; emitting them separately
         // reports one execution twice, the second at no price.
-        let mut paired: std::collections::HashMap<u64, crate::types::OrderUpdate> =
-            shared.orders.drain_order_updates().into_iter()
-                .map(|u| (u.order_id, u))
-                .collect();
+        let mut paired: Vec<crate::types::OrderUpdate> = shared.orders.drain_order_updates();
 
         // A holding that moved since the caller last heard, where the caller
         // asked for positions and has not withdrawn the ask. The feed is
@@ -149,13 +146,13 @@ impl EClient {
             // acknowledgement's status and the order never reported as filled.
             // The report they share is the one whose quantities agree.
             let with_it = paired
-                .get(&fill.order_id)
-                .filter(|u| {
-                    u.remaining_qty == qty_to_f64(fill.remaining)
+                .iter()
+                .position(|u| {
+                    u.order_id == fill.order_id
+                        && u.remaining_qty == qty_to_f64(fill.remaining)
                         && u.filled_qty == qty_to_f64(fill.cum_qty)
                 })
-                .map(|u| u.order_id)
-                .and_then(|id| paired.remove(&id));
+                .map(|at| paired.remove(at));
             // The status the report carries. Derived from the remaining
             // quantity only when the report states none.
             let status = with_it
@@ -279,7 +276,7 @@ impl EClient {
         }
 
         // What is left: a status change with no fill on the same report.
-        let mut updates: Vec<_> = paired.into_values().collect();
+        let mut updates: Vec<_> = paired;
         updates.sort_by_key(|u| u.order_id);
         for update in updates {
             let status = order_status_str(update.status);
