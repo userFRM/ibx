@@ -258,15 +258,7 @@ impl EClient {
             .into_iter()
             .filter(|pi| pi.position != 0.0)
             .map(|pi| {
-                let contract = self.core.get_contract(pi.con_id, &self.shared)
-                    .unwrap_or_else(|| Contract {
-                        con_id: pi.con_id,
-                        symbol: pi.symbol.clone(),
-                        sec_type: pi.sec_type.clone(),
-                        currency: pi.currency.clone(),
-                        multiplier: pi.multiplier.clone(),
-                        ..Default::default()
-                    });
+                let contract = self.position_contract(&pi);
                 (contract, pi.position, pi.avg_cost as f64 / PRICE_SCALE_F)
             })
             .collect();
