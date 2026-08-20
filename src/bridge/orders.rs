@@ -118,6 +118,14 @@ impl OrderState {
         self.order_cache.lock().unwrap().get(&order_id).cloned()
     }
 
+    /// Whether a fill for this order is still waiting to be read.
+    ///
+    /// A fill is read against the order's record, so the record outlives the
+    /// fill rather than the other way round.
+    pub fn has_pending_fill(&self, order_id: u64) -> bool {
+        self.fills.lock().unwrap().iter().any(|f| f.order_id == order_id)
+    }
+
     /// Remove an enriched entry. Called after a completed order has been
     /// delivered to the user, to bound `order_cache` growth in long sessions.
     pub fn remove_order_info(&self, order_id: u64) {

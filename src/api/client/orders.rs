@@ -395,7 +395,13 @@ impl EClient {
                 archive.push(entry);
                 // Bound `order_cache` growth: terminal entries are no longer
                 // needed once what they carried has been read out of them.
-                self.shared.orders.remove_order_info(order.order_id);
+                // Kept while a fill for the order is still queued, because
+                // that fill is read against this record: dropping it first
+                // delivers an execution with no contract and no execution id,
+                // which is also the id its commission is reported under.
+                if !self.shared.orders.has_pending_fill(order.order_id) {
+                    self.shared.orders.remove_order_info(order.order_id);
+                }
             }
         }
         // Copied before anything is called back: a callback may ask for these

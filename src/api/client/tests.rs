@@ -2794,6 +2794,64 @@ fn req_matching_symbols_sends_fetch() {
 //  Positions
 // ═══════════════════════════════════════════════════════════════════
 
+/// Reading the completed orders discards the record each order was tracked
+/// by. A fill still queued is read against that record, so discarding it
+/// first delivered an execution with no contract and no execution id — and
+/// the commission that follows is reported under that same id.
+#[test]
+fn a_queued_fill_survives_a_completed_orders_read() {
+    let (client, _rx, shared) = test_client();
+    client.core.cache_contract(265598, ApiContract {
+        con_id: 265598, symbol: "AAPL".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+    });
+    shared.orders.push_order_info(77, crate::bridge::RichOrderInfo {
+        contract: ApiContract {
+            con_id: 265598, symbol: "AAPL".into(), sec_type: "STK".into(),
+            exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+        },
+        order: Order { order_id: 77, ..Default::default() },
+        order_state: Default::default(),
+        last_exec: Default::default(),
+    });
+
+    // The venue fills the order and completes it, and the caller reads the
+    // completed orders before it next pumps the queue.
+    shared.orders.push_fill(Fill {
+        instrument: 0, order_id: 77, side: Side::Buy,
+        price: 150 * PRICE_SCALE, qty: 10 * crate::types::QTY_SCALE, remaining: 0,
+        commission: 0, timestamp_ns: 0,
+        cum_qty: 10 * crate::types::QTY_SCALE, avg_price: 150 * PRICE_SCALE,
+    });
+    shared.orders.push_completed_order(crate::types::CompletedOrder {
+        order_id: 77, instrument: 0, status: OrderStatus::Filled,
+        filled_qty: 10 * crate::types::QTY_SCALE, timestamp_ns: 0,
+    });
+
+    // The recording wrapper does not keep the contract, and the contract is
+    // the thing at issue.
+    #[derive(Default)]
+    struct Executions(Vec<String>);
+    impl crate::api::wrapper::Wrapper for Executions {
+        fn exec_details(
+            &mut self, _req_id: i64, contract: &Contract,
+            _execution: &crate::types::model::Execution,
+        ) {
+            self.0.push(contract.symbol.clone());
+        }
+    }
+
+    let mut w = Executions::default();
+    // Read before the queue is next pumped, which is what discards the record.
+    client.req_completed_orders(false, &mut w);
+    client.process_msgs(&mut w);
+
+    assert_eq!(
+        w.0, vec!["AAPL".to_string()],
+        "the fill was delivered without the contract it was on",
+    );
+}
+
 /// A fill moves the holding, and the broker does not restate holdings when an
 /// order fills. Without the fill recording the move, a caller watching
 /// positions never heard about its own fill.
