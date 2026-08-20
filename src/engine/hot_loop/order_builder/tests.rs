@@ -119,7 +119,7 @@ fn a_cancel_names_the_side_account_and_originator_but_no_transact_time() {
         42,
         instrument,
         Side::Sell,
-        100,
+        100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE,
         b'2',
         b'0',
@@ -179,7 +179,7 @@ fn a_modify_states_the_type_tif_and_trigger_it_carries() {
         42,
         instrument,
         Side::Buy,
-        100,
+        100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE,
         b'2',
         b'0',
@@ -247,7 +247,7 @@ fn a_moved_trigger_is_sent_at_the_price_the_caller_stated() {
         42,
         instrument,
         Side::Sell,
-        100,
+        100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE,
         b'3',
         b'0',
@@ -298,7 +298,7 @@ fn a_cancel_waits_for_the_recovery_to_say_what_the_broker_holds() {
         42,
         instrument,
         Side::Buy,
-        100,
+        100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE,
         b'2',
         b'1',
@@ -325,7 +325,7 @@ fn a_cancel_waits_for_the_recovery_to_say_what_the_broker_holds() {
         43,
         instrument,
         Side::Buy,
-        1,
+        crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE,
         b'2',
         b'1',
@@ -427,7 +427,7 @@ fn an_order_whose_write_failed_is_unknown_rather_than_rejected() {
         42,
         instrument,
         Side::Buy,
-        100,
+        100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE,
         b'2',
         b'1',
@@ -510,7 +510,7 @@ fn a_replacement_can_itself_be_replaced() {
         7,
         instrument,
         Side::Buy,
-        1,
+        crate::types::QTY_SCALE,
         crate::types::PRICE_SCALE,
         b'2',
         b'0',
@@ -630,7 +630,7 @@ fn a_replace_that_drops_the_trigger_does_not_carry_it() {
         42,
         instrument,
         Side::Sell,
-        100,
+        100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE,
         b'3',
         b'1',
@@ -682,7 +682,7 @@ fn a_modify_that_states_nothing_keeps_the_resting_values() {
         42,
         instrument,
         Side::Sell,
-        100,
+        100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE,
         b'3',
         b'1',
@@ -723,13 +723,13 @@ fn a_modify_that_states_nothing_keeps_the_resting_values() {
 use super::*;
 use crate::types::Order;
 
-fn order(oid: u64, filled: u32, status: OrderStatus) -> Order {
+fn order(oid: u64, filled: crate::types::Qty, status: OrderStatus) -> Order {
     Order {
         order_id: oid,
         instrument: 0,
         side: Side::Buy,
         price: 100,
-        qty: 10,
+        qty: 10 * crate::types::QTY_SCALE,
         filled,
         status,
         ord_type: b'2',
@@ -744,7 +744,7 @@ fn order(oid: u64, filled: u32, status: OrderStatus) -> Order {
 fn synthesize_pending_cancel_updates_and_notifies() {
     let mut context = Context::new();
     let shared = Arc::new(SharedState::new());
-    context.insert_order(order(7, 3, OrderStatus::PartiallyFilled));
+    context.insert_order(order(7, 3 * crate::types::QTY_SCALE, OrderStatus::PartiallyFilled));
 
     synthesize_pending_cancel(&mut context, &shared, 7, &None);
 
@@ -761,7 +761,7 @@ fn synthesize_pending_cancel_skips_terminal_and_unknown_orders() {
     let mut context = Context::new();
     let shared = Arc::new(SharedState::new());
     // Late cancel racing a fill: the order is done, no phase to report.
-    context.insert_order(order(8, 10, OrderStatus::Filled));
+    context.insert_order(order(8, 10 * crate::types::QTY_SCALE, OrderStatus::Filled));
 
     synthesize_pending_cancel(&mut context, &shared, 8, &None);
     synthesize_pending_cancel(&mut context, &shared, 999, &None);
@@ -1367,7 +1367,7 @@ mod modify_wire_tests {
             7,
             0,
             Side::Buy,
-            1,
+            crate::types::QTY_SCALE,
             100 * crate::types::PRICE_SCALE,
             b'2',
             b'0',
@@ -1406,7 +1406,7 @@ mod modify_wire_tests {
             7,
             instrument,
             Side::Sell,
-            1,
+            crate::types::QTY_SCALE,
             600 * crate::types::PRICE_SCALE,
             b'3',
             b'0',
@@ -1434,7 +1434,7 @@ mod modify_wire_tests {
                 7,
                 instrument,
                 Side::Sell,
-                1,
+                crate::types::QTY_SCALE,
                 600 * crate::types::PRICE_SCALE,
                 ord_type,
                 b'0',
@@ -1457,7 +1457,7 @@ mod modify_wire_tests {
                 7,
                 instrument,
                 Side::Sell,
-                1,
+                crate::types::QTY_SCALE,
                 100 * crate::types::PRICE_SCALE,
                 ord_type,
                 b'0',
@@ -1484,7 +1484,7 @@ mod modify_wire_tests {
             7,
             instrument,
             Side::Sell,
-            1,
+            crate::types::QTY_SCALE,
             100 * crate::types::PRICE_SCALE,
             b'2',
             b'0',
@@ -1527,7 +1527,7 @@ mod modify_wire_tests {
                 7,
                 instrument,
                 Side::Sell,
-                1,
+                crate::types::QTY_SCALE,
                 100 * crate::types::PRICE_SCALE,
                 ord_type,
                 b'0',
@@ -1712,7 +1712,7 @@ mod modify_wire_tests {
                 7,
                 instrument,
                 Side::Sell,
-                1,
+                crate::types::QTY_SCALE,
                 605 * crate::types::PRICE_SCALE,
                 ord_type,
                 b'0',
@@ -1750,7 +1750,7 @@ mod modify_wire_tests {
             7,
             instrument,
             Side::Sell,
-            1,
+            crate::types::QTY_SCALE,
             600 * crate::types::PRICE_SCALE,
             b'3',
             b'0',
@@ -1779,7 +1779,7 @@ mod modify_wire_tests {
             7,
             instrument,
             Side::Sell,
-            1,
+            crate::types::QTY_SCALE,
             605 * crate::types::PRICE_SCALE,
             b'4',
             b'0',
@@ -2384,7 +2384,7 @@ mod outside_rth_polarity_tests {
         });
         drain(&mut context);
         context.update_order_status(11, OrderStatus::Submitted, false);
-        context.update_order_filled(11, 40);
+        context.adjust_order_filled(11, 40 * crate::types::QTY_SCALE);
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             order_id: 11,
             price: 151 * crate::types::PRICE_SCALE,
@@ -2397,7 +2397,7 @@ mod outside_rth_polarity_tests {
         drain(&mut context);
         assert_eq!(
             context.order(11).map(|o| o.filled),
-            Some(40),
+            Some(40 * crate::types::QTY_SCALE),
             "the replace kept the 40 already filled",
         );
     }
@@ -2410,7 +2410,7 @@ mod outside_rth_polarity_tests {
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
         context.insert_order(crate::types::Order::new(
-            21, instrument, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            21, instrument, Side::Buy, crate::types::QTY_SCALE, 100 * crate::types::PRICE_SCALE, b'2', b'0', 0,
         ));
         context.update_order_status(21, OrderStatus::Inactive, false);
         context.pending_orders.push(crate::types::OrderRequest::CancelAll { instrument });
@@ -2587,7 +2587,7 @@ fn a_cancel_all_names_every_order_whose_cancel_did_not_leave() {
     context.set_symbol(instrument, "SPY".to_string());
     for id in [41u64, 42, 43] {
         context.insert_order(crate::types::Order::new(
-            id, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+            id, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
         ));
         context.set_order_status_forced(id, OrderStatus::Submitted);
     }

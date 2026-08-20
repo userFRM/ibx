@@ -223,7 +223,7 @@ fn fill_dedup_duplicate_exec_id_no_double_position() {
 
     engine.context_mut().insert_order(ibx::types::Order {
         order_id: 70, instrument: 0, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 100, filled: 0,
+        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, filled: 0,
         status: OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -250,7 +250,7 @@ fn fill_dedup_different_exec_ids_both_count() {
 
     engine.context_mut().insert_order(ibx::types::Order {
         order_id: 71, instrument: 0, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 200, filled: 0,
+        price: 150 * PRICE_SCALE, qty: 200 * QTY_SCALE, filled: 0,
         status: OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -430,9 +430,9 @@ fn process_msgs_multiple_rapid_calls_no_duplicates() {
     let (client, _rx, shared) = test_client();
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 1, side: Side::Buy,
-        price: PRICE_SCALE, qty: 1, remaining: 0,
+        price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
         commission: 0, timestamp_ns: 0,
-        cum_qty: 1, avg_price: PRICE_SCALE,
+        cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
     });
 
     let mut w = RecordingWrapper::default();
@@ -558,9 +558,9 @@ fn concurrent_disconnect_during_process_msgs() {
     for i in 0..100 {
         shared.orders.push_fill(Fill {
             instrument: 0, order_id: i, side: Side::Buy,
-            price: PRICE_SCALE, qty: 1, remaining: 0,
+            price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
             commission: 0, timestamp_ns: 0,
-            cum_qty: 1, avg_price: PRICE_SCALE,
+            cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
         });
     }
 
@@ -632,9 +632,9 @@ fn concurrent_place_order_and_process_msgs() {
         for i in 0..50 {
             shared_a.orders.push_fill(Fill {
                 instrument: 0, order_id: i, side: Side::Buy,
-                price: PRICE_SCALE, qty: 1, remaining: 0,
+                price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
                 commission: 0, timestamp_ns: 0,
-                cum_qty: 1, avg_price: PRICE_SCALE,
+                cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
             });
             let mut w = RecordingWrapper::default();
             client_a.process_msgs(&mut w);
@@ -733,7 +733,7 @@ fn shared_state_all_drains_empty_after_first_call() {
     // Push one item to each queue
     ss.orders.push_fill(Fill { instrument: 0, order_id: 1, side: Side::Buy,
         cum_qty: 0, avg_price: 0,
-        price: PRICE_SCALE, qty: 1, remaining: 0, commission: 0, timestamp_ns: 0 });
+        price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0, commission: 0, timestamp_ns: 0 });
     ss.orders.push_order_update(OrderUpdate { order_id: 1, instrument: 0,
         status: OrderStatus::Filled, filled_qty: 1.0, remaining_qty: 0.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0 });
     ss.orders.push_cancel_reject(CancelReject { order_id: 1, instrument: 0,
@@ -772,9 +772,9 @@ fn concurrent_drain_fills_no_duplicates() {
     for i in 0..100 {
         shared.orders.push_fill(Fill {
             instrument: 0, order_id: i, side: Side::Buy,
-            price: PRICE_SCALE, qty: 1, remaining: 0,
+            price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
             commission: 0, timestamp_ns: 0,
-            cum_qty: 1, avg_price: PRICE_SCALE,
+            cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
         });
     }
 

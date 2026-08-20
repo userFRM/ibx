@@ -5,6 +5,7 @@
 //! file belongs to.
 
 use super::*;
+use crate::types::QTY_SCALE;
 
 // --- Order submission & drain ---
 
@@ -579,33 +580,33 @@ fn submit_stop_returns_id_and_drains() {
 }
 
 #[test]
-fn update_order_filled_accumulates() {
+fn adjust_order_filled_accumulates() {
     let mut ctx = Context::new();
     ctx.insert_order(Order {
         order_id: 1, instrument: 0, side: Side::Buy,
-        price: PRICE_SCALE, qty: 100, filled: 0,
+        price: PRICE_SCALE, qty: 100 * QTY_SCALE, filled: 0,
         status: OrderStatus::PendingSubmit,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
-    ctx.update_order_filled(1, 30);
-    assert_eq!(ctx.order(1).unwrap().filled, 30);
-    ctx.update_order_filled(1, 50);
-    assert_eq!(ctx.order(1).unwrap().filled, 80);
+    ctx.adjust_order_filled(1, 30 * QTY_SCALE);
+    assert_eq!(ctx.order(1).unwrap().filled, 30 * QTY_SCALE);
+    ctx.adjust_order_filled(1, 50 * QTY_SCALE);
+    assert_eq!(ctx.order(1).unwrap().filled, 80 * QTY_SCALE);
 }
 
 /// A gateway figure large enough to overflow the counter must not wrap the
 /// order's filled quantity round to nothing.
 #[test]
-fn update_order_filled_saturates() {
+fn adjust_order_filled_saturates() {
     let mut ctx = Context::new();
     ctx.insert_order(Order {
         order_id: 1, instrument: 0, side: Side::Buy,
-        price: PRICE_SCALE, qty: u32::MAX, filled: u32::MAX - 1,
+        price: PRICE_SCALE, qty: crate::types::Qty::MAX, filled: crate::types::Qty::MAX - 1,
         status: OrderStatus::PartiallyFilled,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
-    ctx.update_order_filled(1, 10);
-    assert_eq!(ctx.order(1).unwrap().filled, u32::MAX);
+    ctx.adjust_order_filled(1, 10 * QTY_SCALE);
+    assert_eq!(ctx.order(1).unwrap().filled, crate::types::Qty::MAX);
 }
 
 #[test]
@@ -777,7 +778,7 @@ fn an_inactive_order_is_one_the_reconnect_has_to_account_for() {
     let mut ctx = Context::new();
     let instrument = ctx.register_instrument(756733);
     let held = crate::types::Order::new(
-        7, instrument, Side::Buy, 1, 100 * PRICE_SCALE, b'2', b'0', 0,
+        7, instrument, Side::Buy, crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     );
     ctx.insert_order(held);
     ctx.set_order_status_forced(7, OrderStatus::Inactive);

@@ -6,7 +6,7 @@ use crate::protocol::datetime::{chrono_free_timestamp, unix_to_ib_utc_dash};
 use crate::engine::context::Context;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
-use crate::types::{AlgoParams, OrderCondition, OrderRequest, OrderStatus, OrderUpdate, Side};
+use crate::types::{AlgoParams, OrderCondition, OrderRequest, OrderStatus, OrderUpdate, Side, qty_from_wire, qty_to_f64};
 
 use super::{HeartbeatState, format_price, format_qty, format_uint};
 
@@ -143,7 +143,7 @@ pub(crate) fn drain_and_send_orders(
                     parent_id,
                     instrument,
                     side,
-                    qty,
+                    qty_from_wire(qty as i64),
                     entry_price,
                     b'2',
                     b'0',
@@ -176,7 +176,7 @@ pub(crate) fn drain_and_send_orders(
                     tp_id,
                     instrument,
                     exit_side,
-                    qty,
+                    qty_from_wire(qty as i64),
                     take_profit,
                     b'2',
                     b'1',
@@ -209,7 +209,7 @@ pub(crate) fn drain_and_send_orders(
 
                 // 3. Stop-loss child: stop exit, linked to parent, in OCA group
                 context.insert_order(crate::types::Order::new(
-                    sl_id, instrument, exit_side, qty, stop_loss, b'3', b'1', stop_loss,
+                    sl_id, instrument, exit_side, qty_from_wire(qty as i64), stop_loss, b'3', b'1', stop_loss,
                 ));
                 let now = chrono_free_timestamp();
                 // The legs go out as three messages and the arm reports one
@@ -247,7 +247,7 @@ pub(crate) fn drain_and_send_orders(
                     f
                 };
                 context.insert_order(crate::types::Order::new(
-                    order_id, instrument, side, 0, price, b'2', b'0', 0,
+                    order_id, instrument, side, qty, price, b'2', b'0', 0,
                 ));
                 let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
                 let clord_str = format!("{order_id}.{ver}");
@@ -405,7 +405,7 @@ pub(crate) fn drain_and_send_orders(
                         order_id,
                         orig.instrument,
                         orig.side,
-                        qty,
+                        qty_from_wire(qty as i64),
                         price,
                         ord_type,
                         tif,
@@ -626,10 +626,11 @@ fn send_cancel(
     // A cancel names the order, and also states what it is cancelling: the
     // quantity and the contract. Naming only the order left the venue to look
     // both up.
-    // A fractional order tracks `qty` as zero; the decimal it was sent with is
-    // held only in the enriched record. Tag 38 is omitted rather than sent as
-    // `38=0`.
-    let qty_str = tracked.filter(|o| o.qty > 0).map(|o| format_uint(o.qty as u64).to_string());
+    // Stated as the decimal the order was sent with, so a cancel for a
+    // fractional order names the quantity it is actually cancelling. An order
+    // whose quantity is not tracked omits tag 38 rather than sending `38=0`,
+    // which claims a cancel of nothing.
+    let qty_str = tracked.filter(|o| o.qty > 0).map(|o| format_qty(o.qty).to_string());
     let con_id_str = tracked
         .and_then(|o| context.market.con_id(o.instrument))
         .filter(|c| *c != 0)
@@ -709,8 +710,8 @@ fn synthesize_pending_cancel(
             order_id,
             instrument: order.instrument,
             status: OrderStatus::PendingCancel,
-            filled_qty: order.filled as f64,
-            remaining_qty: order.qty as f64 - order.filled as f64, avg_price: 0,
+            filled_qty: qty_to_f64(order.filled),
+            remaining_qty: qty_to_f64(order.qty - order.filled), avg_price: 0,
             perm_id: 0,
             parent_id: 0,
             timestamp_ns: context.now_ns(),
@@ -938,7 +939,7 @@ fn send_order_ex(
         order_id,
         instrument,
         side,
-        qty,
+        qty_from_wire(qty as i64),
         track_price,
         ord_type_byte,
         tif,

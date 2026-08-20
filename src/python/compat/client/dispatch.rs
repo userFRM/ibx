@@ -1,5 +1,6 @@
 //! Event dispatch: drains SharedState queues and fires Python wrapper callbacks.
 
+use crate::types::qty_to_f64;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -131,8 +132,8 @@ impl EClient {
             let with_it = paired
                 .get(&fill.order_id)
                 .filter(|u| {
-                    u.remaining_qty == fill.remaining as f64
-                        && u.filled_qty == fill.cum_qty as f64
+                    u.remaining_qty == qty_to_f64(fill.remaining)
+                        && u.filled_qty == qty_to_f64(fill.cum_qty)
                 })
                 .map(|u| u.order_id)
                 .and_then(|id| paired.remove(&id));
@@ -150,7 +151,7 @@ impl EClient {
             // `filled` and `avgFillPrice` describe the order so far;
             // `lastFillPrice` describes this print.
             let avg_price = fill.avg_price as f64 / PRICE_SCALE_F;
-            call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, fill.cum_qty as f64, fill.remaining as f64,
+            call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
                  avg_price, perm_id, parent_id, price, 0i64, "", 0.0f64));
 
             // Track execution for req_executions.
@@ -174,7 +175,7 @@ impl EClient {
             let exec_exchange = rich_info.as_ref()
                 .map(|i| i.last_exec.exchange.as_str()).unwrap_or("").to_string();
             let cum_qty = rich_info.as_ref()
-                .map(|i| i.last_exec.cum_qty).unwrap_or(fill.qty as f64);
+                .map(|i| i.last_exec.cum_qty).unwrap_or(qty_to_f64(fill.qty));
             let avg_price = rich_info.as_ref()
                 .map(|i| i.last_exec.avg_price).unwrap_or(price);
             // Build api-level contract for shared storage
@@ -191,7 +192,7 @@ impl EClient {
                 acct_number: self.account(),
                 exchange: exec_exchange.clone(),
                 side: side_str.to_string(),
-                shares: fill.qty as f64,
+                shares: qty_to_f64(fill.qty),
                 price,
                 order_id: fill.order_id as i64,
                 // The order's own permanent number and the client that placed
@@ -227,7 +228,7 @@ impl EClient {
                 acct_number: acct_name,
                 exchange: exec_exchange.clone(),
                 side: side_str.to_string(),
-                shares: fill.qty as f64,
+                shares: qty_to_f64(fill.qty),
                 price,
                 perm_id,
                 client_id: self.client_id.load(Ordering::Acquire) as i64,
@@ -243,7 +244,7 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "exec_details", (req_id, &c_py, &exec_py));
 
             // Update open order tracking
-            self.core.update_order_fill(fill.order_id, status, fill.cum_qty as f64, fill.remaining as f64);
+            self.core.update_order_fill(fill.order_id, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining));
 
             // Dispatch commission_and_fees_report
             let report = CommissionAndFeesReport {

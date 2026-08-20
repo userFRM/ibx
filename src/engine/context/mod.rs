@@ -197,6 +197,9 @@ impl Context {
     ///
     /// What one order differs from another by is its kind; the rest of a
     /// request is the same four values whatever kind it is.
+    ///
+    /// The quantity is in whole shares. A fraction of one goes through
+    /// [`Context::submit_limit_fractional`], which states it fixed-point.
     pub fn submit(
         &mut self,
         instrument: InstrumentId,
@@ -452,17 +455,14 @@ impl Context {
         }
     }
 
-    pub fn update_order_filled(&mut self, order_id: OrderId, last_shares: u32) {
-        self.adjust_order_filled(order_id, last_shares as i64);
-    }
-
-    /// Move what an order has filled by a signed amount.
+    /// Move what an order has filled by a signed amount, `QTY_SCALE`
+    /// fixed-point.
     ///
     /// A busted trade restates the order's cumulative quantity downwards, so
     /// the delta may be negative. Saturates at zero.
-    pub fn adjust_order_filled(&mut self, order_id: OrderId, delta: i64) {
+    pub fn adjust_order_filled(&mut self, order_id: OrderId, delta: Qty) {
         if let Some(order) = self.open_orders.get_mut(&order_id) {
-            order.filled = (order.filled as i64 + delta).clamp(0, u32::MAX as i64) as u32;
+            order.filled = order.filled.saturating_add(delta).max(0);
         }
     }
 

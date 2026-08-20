@@ -12,6 +12,8 @@ use crate::types::{
 };
 
 use super::{HeartbeatState, emit, parse_price_tag, decode_tif, EventSink};
+use crate::engine::hot_loop::parse_qty_tag;
+use crate::types::qty_to_f64;
 
 /// Synthetic ibapi error code for a parked (39=I) order's reason, delivered
 /// through `Wrapper::error` since ibapi has no callback dedicated to an order
@@ -121,7 +123,7 @@ pub(crate) fn uncertain_update(
                 order_id: order.order_id,
                 instrument: order.instrument,
                 status: crate::types::OrderStatus::Uncertain,
-                filled_qty: order.filled as f64,
+                filled_qty: qty_to_f64(order.filled),
                 // A fractional order deliberately tracks `qty` as zero — the
                 // decimal it was submitted with lives only in the enriched
                 // record. Both quantity fields are floating point end to
@@ -129,9 +131,9 @@ pub(crate) fn uncertain_update(
                 // as f64 — so the fraction itself survives exactly here
                 // rather than being rounded to a whole unit.
                 remaining_qty: {
-                    let outstanding = |total: f64| (total - order.filled as f64).max(0.0);
+                    let outstanding = |total: f64| (total - qty_to_f64(order.filled)).max(0.0);
                     if order.qty > 0 {
-                        outstanding(order.qty as f64)
+                        outstanding(qty_to_f64(order.qty))
                     } else if let Some(c) = cached.as_ref() {
                         outstanding(c.order.total_quantity)
                     } else {
@@ -359,7 +361,7 @@ impl CcpState {
         // order has nothing filled yet, so the arithmetic below reconciles
         // against zero.
         let target = match context.order(clord_id).copied() {
-            Some(order) => Some((order.instrument, order.side, order.filled as i64)),
+            Some(order) => Some((order.instrument, order.side, order.filled)),
             None => untracked_fill_target(context, parsed).map(|(i, s)| (i, s, 0i64)),
         };
         if let Some((instrument, side, already_filled)) = target {
@@ -423,7 +425,7 @@ impl CcpState {
                     Side::Buy => booked,
                     Side::Sell | Side::ShortSell => -booked,
                 };
-                context.update_position(instrument, delta as f64);
+                context.update_position(instrument, qty_to_f64(delta));
                 shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
                 // The holding the caller reads is keyed by contract, and
                 // the broker restates that feed on its own schedule — never
@@ -439,7 +441,7 @@ impl CcpState {
                     .or_else(|| context.market.con_id(instrument));
                 if let Some(con_id) = filled_con_id {
                     shared.portfolio.apply_fill(
-                        con_id, delta as f64, (last_px * PRICE_SCALE as f64) as Price,
+                        con_id, qty_to_f64(delta), (last_px * PRICE_SCALE as f64) as Price,
                     );
                 }
                 // Returned rather than announced here. A caller told about a
@@ -492,7 +494,7 @@ impl CcpState {
                 None
             }
         };
-        let qty: u32 = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).map(|q| q as u32)
+        let qty = parse_qty_tag(parsed.get(&38))
             .unwrap_or_else(|| prior.map_or(0, |o| o.qty));
         let limit_price_i64: i64 = parsed.get(&44)
             .and_then(|s| s.parse::<f64>().ok())
@@ -541,9 +543,7 @@ impl CcpState {
                 // Without it a fresh process believes nothing has filled,
                 // and the replayed executions behind this record all look
                 // like new quantity.
-                filled: parsed.get(&14)
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|c| c as u32)
+                filled: parse_qty_tag(parsed.get(&14))
                     .unwrap_or_else(|| prior.map_or(0, |o| o.filled)),
                 // An order this session never saw is working by the fact of
                 // being in the push. One whose state was not known stays
@@ -584,7 +584,7 @@ impl CcpState {
                         Side::Buy => "BUY".to_string(),
                         _ => "SELL".to_string(),
                     },
-                    total_quantity: qty as f64,
+                    total_quantity: qty_to_f64(qty),
                     order_type: crate::types::ord_type_fix_str(ord_type_byte).to_string(),
                     lmt_price: limit_price_i64 as f64 / PRICE_SCALE as f64,
                     aux_price: stop_price_i64 as f64 / PRICE_SCALE as f64,
@@ -825,29 +825,26 @@ impl CcpState {
         let exec_type = parsed.get(&150).map(|s| s.as_str()).unwrap_or("");
         let exec_id = parsed.get(&17).map(|s| s.as_str()).unwrap_or("");
         let last_px = parsed.get(&31).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-        // Tag 32 in whole shares, which is what a fill books here. A
-        // fractional quantity cannot be booked without carrying fractions the
-        // whole way, so it is reported rather than dropped.
+        // Tag 32, the quantity of this print, held fixed-point. A fractional
+        // order fills in fractions, so the decimal is carried rather than
+        // rounded: read as an integer, `32=0.5` is a fill of nothing and the
+        // position never moves.
         let last_shares = match parsed.get(&32) {
             None => 0,
-            Some(stated) => match stated.trim().parse::<i64>() {
-                Ok(n) => n,
-                Err(_) => {
-                    log::error!(
-                        "order {clord_id} filled {stated} — this client books whole \
-                         shares, so the fill is reported and the position is not moved",
-                    );
-                    0
-                }
-            },
+            Some(stated) => parse_qty_tag(Some(stated)).unwrap_or_else(|| {
+                log::error!(
+                    "order {clord_id} states an unreadable fill quantity {stated} — nothing is booked",
+                );
+                0
+            }),
         };
         // Absent is not zero. Without 151 the caller was told nothing was left
         // on an order that was still working; the terminal falls back to the
         // order quantity less what has filled, and so does this.
-        let leaves_qty = parsed.get(&151).and_then(|s| s.parse::<i64>().ok()).unwrap_or_else(|| {
-            let ordered = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-            let done = parsed.get(&14).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-            ((ordered - done).max(0.0)) as i64
+        let leaves_qty = parse_qty_tag(parsed.get(&151)).unwrap_or_else(|| {
+            let ordered = parse_qty_tag(parsed.get(&38)).unwrap_or(0);
+            let done = parse_qty_tag(parsed.get(&14)).unwrap_or(0);
+            (ordered - done).max(0)
         });
         // 14 CumQty and 6 AvgPx describe the order as a whole; 32 and 31
         // describe this print alone. The gateway sends all four on every
@@ -860,11 +857,10 @@ impl CcpState {
         // is not reconstructible that way, so it falls back to the print — and
         // a negative average is a real value for a spread, so only an absent
         // or unparseable tag falls back at all.
-        let order_cum_qty = parsed.get(&14).and_then(|s| s.parse::<f64>().ok())
-            .map(|q| q as i64)
+        let order_cum_qty = parse_qty_tag(parsed.get(&14))
             .filter(|q| *q > 0)
             .unwrap_or_else(|| {
-                context.order(clord_id).map_or(last_shares, |o| o.filled as i64 + last_shares)
+                context.order(clord_id).map_or(last_shares, |o| o.filled + last_shares)
             });
         let order_avg_px = parsed.get(&6)
             .and_then(|s| s.parse::<f64>().ok())
@@ -963,9 +959,9 @@ impl CcpState {
         let is_resend = is_resend || restates_history;
 
         // CumQty — the order's cumulative filled quantity as of this report.
-        let report_cum_qty = parsed.get(&14)
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|c| c as i64);
+        // Held in the same fixed-point unit as what the order has already
+        // booked, because a resend books the difference between the two.
+        let report_cum_qty = parse_qty_tag(parsed.get(&14));
 
         // Dedup key. An execution with no ExecID skipped the window entirely,
         // so a replayed copy booked a second time — and an absent tag 17 is the
@@ -1032,8 +1028,8 @@ impl CcpState {
                     order_id: clord_id,
                     instrument: order.instrument,
                     status,
-                    filled_qty: order.filled as f64,
-                    remaining_qty: leaves_qty as f64,
+                    filled_qty: qty_to_f64(order.filled),
+                    remaining_qty: qty_to_f64(leaves_qty),
                     avg_price: (order_avg_px * PRICE_SCALE as f64) as Price,
                     perm_id,
                     parent_id,
@@ -1327,7 +1323,7 @@ impl CcpState {
                 side: if let Some(o) = context.order(clord_id) {
                     match o.side { Side::Buy => "BOT", Side::Sell | Side::ShortSell => "SLD" }.to_string()
                 } else { String::new() },
-                shares: last_shares as f64,
+                shares: qty_to_f64(last_shares),
                 price: last_px,
                 order_id: clord_id as i64,
                 // The execution record describes this report, so an absent
@@ -1425,7 +1421,7 @@ impl CcpState {
                 order_id: clord_id,
                 instrument: tracked.map_or(0, |o| o.instrument),
                 status,
-                filled_qty: tracked.map_or(0, |o| o.filled as i64),
+                filled_qty: tracked.map_or(0, |o| o.filled),
                 timestamp_ns: context.now_ns(),
             });
             context.retire_order(clord_id);

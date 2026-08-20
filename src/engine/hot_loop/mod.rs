@@ -33,7 +33,7 @@ use crate::protocol::datetime::chrono_free_timestamp;
 use crate::gateway::{connect_farm, reconnect_ccp, Farm, ReconnectAuth};
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
-use crate::types::{ContractRef, ControlCommand, Fill, InstrumentId, Price, Qty, PRICE_SCALE, QTY_SCALE};
+use crate::types::{ContractRef, ControlCommand, Fill, InstrumentId, Price, Qty, PRICE_SCALE, QTY_SCALE, qty_to_f64};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 
 use farm::FarmState;
@@ -2140,7 +2140,7 @@ impl HotLoop {
             crate::types::Side::Buy => fill.qty,
             crate::types::Side::Sell | crate::types::Side::ShortSell => -fill.qty,
         };
-        self.context.update_position(fill.instrument, delta as f64);
+        self.context.update_position(fill.instrument, qty_to_f64(delta));
         self.shared.orders.push_fill(*fill);
         self.shared.portfolio.set_position(fill.instrument, self.context.position(fill.instrument));
         emit(&self.event_tx, Event::Fill(*fill));
@@ -2378,6 +2378,21 @@ pub(crate) fn parse_price_tag(val: Option<&String>) -> Price {
         .filter(|f| f.is_finite())
         .map(|f| (f * PRICE_SCALE as f64) as Price)
         .unwrap_or(0)
+}
+
+/// Parse a FIX quantity tag into the `QTY_SCALE` fixed-point form `Qty`
+/// holds. Returns `None` where the tag is absent, unparseable, or non-finite,
+/// so a caller can tell "the venue said nothing" from "the venue said zero" —
+/// `38=0` on a cancel and an absent 38 mean different things.
+///
+/// Quantities arrive as decimals: a fractional order fills in fractions, and
+/// `32=0.5` parsed as an integer is a fill of nothing. Rounded rather than
+/// truncated, because a tenth is not exact in binary and truncation takes
+/// `0.3` to one hundred-millionth under three tenths.
+pub(crate) fn parse_qty_tag(val: Option<&String>) -> Option<Qty> {
+    val.and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|f| f.is_finite())
+        .map(|f| (f * QTY_SCALE as f64).round() as Qty)
 }
 
 /// Decode a wire TIF byte to the API TIF string. Exact inverse of
@@ -3246,6 +3261,27 @@ mod tests {
         assert_eq!(parse_price_tag(Some(&s("-1.5"))), (-1.5 * PRICE_SCALE as f64) as Price);
     }
 
+    /// Absent and zero are different answers: `38=0` on a cancel states a
+    /// quantity, an absent 38 states none, and a caller that cannot tell them
+    /// apart falls back where it should not.
+    #[test]
+    fn parse_qty_tag_separates_absent_from_zero_and_holds_fractions() {
+        let s = |v: &str| v.to_string();
+        assert_eq!(parse_qty_tag(None), None, "absent is not a quantity");
+        assert_eq!(parse_qty_tag(Some(&s("0"))), Some(0), "zero is");
+        assert_eq!(parse_qty_tag(Some(&s("nan"))), None);
+        assert_eq!(parse_qty_tag(Some(&s("inf"))), None);
+        assert_eq!(parse_qty_tag(Some(&s("n/a"))), None);
+        assert_eq!(parse_qty_tag(Some(&s("100"))), Some(100 * QTY_SCALE));
+        assert_eq!(parse_qty_tag(Some(&s(" 5 "))), Some(5 * QTY_SCALE), "padding is trimmed");
+        assert_eq!(parse_qty_tag(Some(&s("0.5"))), Some(QTY_SCALE / 2));
+        assert_eq!(parse_qty_tag(Some(&s("-1.5"))), Some(-3 * QTY_SCALE / 2), "a bust is signed");
+        // Rounded, not truncated: a tenth is not exact in binary, and
+        // truncation puts three tenths one hundred-millionth low.
+        assert_eq!(parse_qty_tag(Some(&s("0.3"))), Some(3 * QTY_SCALE / 10));
+        assert_eq!(parse_qty_tag(Some(&s("0.00000001"))), Some(1), "the finest the scale holds");
+    }
+
     #[test]
     fn inject_tick_emits_events() {
         let shared = Arc::new(SharedState::new());
@@ -3292,11 +3328,11 @@ mod tests {
             order_id: 1001,
             side: Side::Buy,
             price: 150_00000000,
-            qty: 100,
+            qty: 100 * QTY_SCALE,
             remaining: 0,
             commission: 1_00000000,
             timestamp_ns: 0,
-            cum_qty: 100, avg_price: 150_00000000,
+            cum_qty: 100 * QTY_SCALE, avg_price: 150_00000000,
         };
         engine.inject_fill(&fill);
         assert_eq!(engine.context_mut().position(0), 100.0);

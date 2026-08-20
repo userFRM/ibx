@@ -1,5 +1,6 @@
 //! Event dispatch: drains SharedState queues and fires Wrapper callbacks.
 
+use crate::types::qty_to_f64;
 use crate::types::model::{
     BarData, CommissionAndFeesReport, ContractDetails, ContractDescription, Execution,
     Order as ApiOrder, OrderState, TickAttribLast, TickAttribBidAsk, PRICE_SCALE_F,
@@ -89,8 +90,8 @@ impl EClient {
                 .iter()
                 .position(|u| {
                     u.order_id == fill.order_id
-                        && u.remaining_qty == fill.remaining as f64
-                        && u.filled_qty == fill.cum_qty as f64
+                        && u.remaining_qty == qty_to_f64(fill.remaining)
+                        && u.filled_qty == qty_to_f64(fill.cum_qty)
                 })
                 .map(|at| paired.remove(at));
             // Status as the report states it, derived from `remaining` only when
@@ -108,7 +109,7 @@ impl EClient {
             // `lastFillPrice` describes this print.
             let avg_price_f = fill.avg_price as f64 / PRICE_SCALE_F;
             wrapper.order_status(
-                fill.order_id as i64, status, fill.cum_qty as f64, fill.remaining as f64,
+                fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
                 avg_price_f, perm_id, parent_id, price_f,
                 self.core.placing_client(&self.shared, fill.order_id) as i64, "", 0.0,
             );
@@ -121,7 +122,7 @@ impl EClient {
             let (c, exec) = if let Some(info) = self.shared.orders.get_order_info(fill.order_id) {
                 let mut ex = info.last_exec;
                 ex.side = side_str.into();
-                ex.shares = fill.qty as f64;
+                ex.shares = qty_to_f64(fill.qty);
                 ex.price = price_f;
                 ex.order_id = fill.order_id as i64;
                 let contract = if info.contract.con_id != 0 {
@@ -133,7 +134,7 @@ impl EClient {
             } else {
                 (Contract::default(), Execution {
                     side: side_str.into(),
-                    shares: fill.qty as f64,
+                    shares: qty_to_f64(fill.qty),
                     price: price_f,
                     order_id: fill.order_id as i64,
                     ..Default::default()
@@ -153,7 +154,7 @@ impl EClient {
             self.core.push_execution(req_id, c, exec, report);
 
             // Update open order tracking
-            self.core.update_order_fill(fill.order_id, status, fill.cum_qty as f64, fill.remaining as f64);
+            self.core.update_order_fill(fill.order_id, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining));
         }
 
         // What is left: a status change with no fill on the same report.

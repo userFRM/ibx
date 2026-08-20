@@ -83,6 +83,15 @@ pub fn qty_from_wire(magnitude: i64) -> Qty {
     magnitude.saturating_mul(QTY_SCALE)
 }
 
+/// Convert a fixed-point `Qty` into the decimal a caller reads it as.
+///
+/// The inverse of [`qty_from_wire`], and the one place the division lives: a
+/// quantity handed out without it is `QTY_SCALE` times what filled.
+#[inline(always)]
+pub fn qty_to_f64(qty: Qty) -> f64 {
+    qty as f64 / QTY_SCALE as f64
+}
+
 /// Convert a counted size into the `QTY_SCALE` fixed-point form, where the
 /// venue stated what it counts this instrument's sizes in.
 ///

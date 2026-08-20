@@ -252,9 +252,12 @@ pub struct Order {
     /// The price, scaled by `PRICE_SCALE`.
     pub price: Price,
     /// How much, scaled by `QTY_SCALE`.
-    pub qty: u32,
-    /// How much has filled.
-    pub filled: u32,
+    pub qty: Qty,
+    /// How much has filled, scaled by `QTY_SCALE`. Same unit as `qty`: a
+    /// fill arrives as a decimal and the two are compared against each other,
+    /// so holding one in whole shares and the other in fractions reconciles
+    /// a fractional order against the wrong total.
+    pub filled: Qty,
     /// Where it stands.
     pub status: OrderStatus,
     /// FIX tag 40 OrdType: b'1'=MKT, b'2'=LMT, b'3'=STP, b'4'=STPLMT, b'P'=TRAIL, etc.
@@ -269,7 +272,7 @@ pub struct Order {
 
 impl Order {
     /// Create a new tracked order with FIX type metadata.
-    pub fn new(order_id: OrderId, instrument: InstrumentId, side: Side, qty: u32, price: Price, ord_type: u8, tif: u8, stop_price: Price) -> Self {
+    pub fn new(order_id: OrderId, instrument: InstrumentId, side: Side, qty: Qty, price: Price, ord_type: u8, tif: u8, stop_price: Price) -> Self {
         Self { order_id, instrument, side, price, qty, filled: 0, status: OrderStatus::PendingSubmit, ord_type, tif, stop_price }
     }
 }
@@ -1137,7 +1140,7 @@ pub enum OrderRequest {
         instrument: InstrumentId,
         /// Whether it buys or sells.
         side: Side,
-        /// How much, scaled by `QTY_SCALE`.
+        /// How much, in whole shares.
         qty: u32,
         /// Where the parent enters.
         entry_price: Price,
@@ -1156,7 +1159,7 @@ pub enum OrderRequest {
         instrument: InstrumentId,
         /// Whether it buys or sells.
         side: Side,
-        /// How much, scaled by `QTY_SCALE`.
+        /// How much, in whole shares.
         qty: u32,
         /// What kind of order this is, and the prices that kind needs.
         kind: OrderKind,
@@ -1211,7 +1214,7 @@ pub enum OrderRequest {
         order_id: OrderId,
         /// The price, scaled by `PRICE_SCALE`.
         price: Price,
-        /// How much, scaled by `QTY_SCALE`.
+        /// How much, in whole shares.
         qty: u32,
         /// Outside-RTH flag from the order the caller resubmitted. The replace
         /// asserts tag 6433 from this rather than from the tracked record,
@@ -1394,8 +1397,8 @@ pub struct CompletedOrder {
     pub instrument: InstrumentId,
     /// What it finished as.
     pub status: OrderStatus,
-    /// How much filled.
-    pub filled_qty: i64,
+    /// How much filled, scaled by `QTY_SCALE`.
+    pub filled_qty: Qty,
     /// When, in nanoseconds since the epoch.
     pub timestamp_ns: u64,
 }

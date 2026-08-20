@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::bridge::RichOrderInfo;
-use crate::types::{PositionInfo, Price, Side, PRICE_SCALE};
+use crate::types::{PositionInfo, Price, Side, PRICE_SCALE, QTY_SCALE};
 
 /// `Uncertain` promises the caller a reconciliation when the reconnect
 /// completes. Nothing completed it, so an order the recovery push left out
@@ -18,7 +18,7 @@ fn the_recovery_reports_the_orders_it_did_not_account_for() {
     let shared = SharedState::new();
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        7, instrument, crate::types::Side::Buy, 100,
+        7, instrument, crate::types::Side::Buy, 100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
     ));
     context.mark_orders_uncertain();
@@ -222,7 +222,7 @@ fn what_if_test_state() -> (CcpState, Context, SharedState) {
         instrument,
         side: Side::Buy,
         price: 0,
-        qty: 100,
+        qty: 100 * QTY_SCALE,
         filled: 0,
         status: crate::types::OrderStatus::Submitted,
         ord_type: b'2',
@@ -302,7 +302,7 @@ fn leaves_qty_is_still_reported_as_the_remainder() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].remaining, 70, "the fill reports what is still working");
+    assert_eq!(fills[0].remaining, 70 * QTY_SCALE, "the fill reports what is still working");
 }
 
 /// `filled_quantity` was taken from tag 151 (LeavesQty), the *unfilled*
@@ -316,7 +316,7 @@ fn filled_quantity_is_the_filled_amount_not_the_remainder() {
     let shared = SharedState::new();
     let instrument = context.market.register(265598);
     context.insert_order(crate::types::Order {
-        order_id: 77, instrument, side: Side::Buy, price: 0, qty: 100,
+        order_id: 77, instrument, side: Side::Buy, price: 0, qty: 100 * QTY_SCALE,
         filled: 0, status: crate::types::OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -342,7 +342,7 @@ fn filled_quantity_is_the_filled_amount_not_the_remainder() {
     let shared = SharedState::new();
     let instrument = context.market.register(265598);
     context.insert_order(crate::types::Order {
-        order_id: 78, instrument, side: Side::Buy, price: 0, qty: 100,
+        order_id: 78, instrument, side: Side::Buy, price: 0, qty: 100 * QTY_SCALE,
         filled: 0, status: crate::types::OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -860,7 +860,7 @@ fn ord_status_test_state() -> (CcpState, Context, SharedState) {
     let mut context = Context::new();
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 1, 100 * PRICE_SCALE, b'2', b'0', 0,
+        42, instrument, Side::Buy, crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     )); // starts at PendingSubmit
     (CcpState::new(), context, SharedState::new())
 }
@@ -921,7 +921,7 @@ fn tracked_order_state() -> (CcpState, Context, SharedState) {
     let mut context = Context::new();
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 100, 100 * PRICE_SCALE, b'2', b'0', 0,
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     ));
     (CcpState::new(), context, SharedState::new())
 }
@@ -936,7 +936,7 @@ fn tracked_order_state() -> (CcpState, Context, SharedState) {
 fn a_resent_execution_does_not_book_a_fill() {
     for marker in [(97u32, "Y"), (43u32, "Y")] {
         let (mut ccp, mut context, shared) = tracked_order_state();
-        context.update_order_filled(42, 10); // already counted
+        context.adjust_order_filled(42, 10 * crate::types::QTY_SCALE); // already counted
         let frame = fill_frame(&[marker]);
         ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
@@ -980,7 +980,7 @@ fn a_fresh_process_does_not_book_the_history_it_is_replayed() {
     let _ = shared.orders.drain_fills();
 
     assert_eq!(
-        context.order(78).expect("recovered").filled, 10,
+        context.order(78).expect("recovered").filled, 10 * QTY_SCALE,
         "the record's own cumulative quantity is the baseline",
     );
 
@@ -999,7 +999,7 @@ fn a_fresh_process_does_not_book_the_history_it_is_replayed() {
         shared.orders.drain_fills().is_empty(),
         "the replayed execution states nothing the record did not already carry",
     );
-    assert_eq!(context.order(78).expect("tracked").filled, 10, "and nothing is double-counted");
+    assert_eq!(context.order(78).expect("tracked").filled, 10 * QTY_SCALE, "and nothing is double-counted");
 }
 
 /// The case a blanket suppression of marked reports loses. A CCP reconnect
@@ -1013,7 +1013,7 @@ fn a_resent_execution_carrying_new_quantity_is_still_booked() {
     let (mut ccp, mut context, shared) = tracked_order_state();
 
     // Five already booked before the outage.
-    context.update_order_filled(42, 5);
+    context.adjust_order_filled(42, 5 * crate::types::QTY_SCALE);
 
     // The replay carries eight cumulative — three of which are news.
     let frame = fill_frame(&[(97, "Y"), (14, "8"), (32, "3"), (151, "92")]);
@@ -1088,7 +1088,7 @@ fn an_execution_without_an_exec_id_is_still_deduplicated() {
 #[test]
 fn a_replay_of_booked_history_adds_nothing_to_the_order() {
     let (mut ccp, mut context, shared) = tracked_order_state();
-    context.update_order_filled(42, 12); // both executions already booked
+    context.adjust_order_filled(42, 12 * crate::types::QTY_SCALE); // both executions already booked
 
     let mut later = fill_frame(&[(97, "Y"), (14, "12"), (32, "4"), (151, "88")]);
     later.remove(&17);
@@ -1098,7 +1098,7 @@ fn a_replay_of_booked_history_adds_nothing_to_the_order() {
     ccp.handle_exec_report(&earlier, b"", &mut context, &shared, &None, "");
 
     assert!(shared.orders.drain_fills().is_empty(), "history restated is not new quantity");
-    assert_eq!(context.order(42).unwrap().filled, 12, "and the order is not overcounted");
+    assert_eq!(context.order(42).unwrap().filled, 12 * QTY_SCALE, "and the order is not overcounted");
     assert_eq!(context.position(0), 0.0);
 
     // A fill from the same replay that this session has not booked is news
@@ -1117,12 +1117,12 @@ fn a_replay_of_booked_history_adds_nothing_to_the_order() {
 #[test]
 fn a_marked_execution_is_remembered_for_its_unmarked_twin() {
     let (mut ccp, mut context, shared) = tracked_order_state();
-    context.update_order_filled(42, 5);
+    context.adjust_order_filled(42, 5 * crate::types::QTY_SCALE);
 
     let marked = fill_frame(&[(97, "Y"), (17, "E-9"), (14, "9"), (32, "4"), (151, "91")]);
     ccp.handle_exec_report(&marked, b"", &mut context, &shared, &None, "");
     assert_eq!(shared.orders.drain_fills().len(), 1, "the marked copy books what is new");
-    assert_eq!(context.order(42).unwrap().filled, 9);
+    assert_eq!(context.order(42).unwrap().filled, 9 * QTY_SCALE);
 
     // The same execution again, this time without its marker.
     let unmarked = fill_frame(&[(17, "E-9"), (14, "9"), (32, "4"), (151, "91")]);
@@ -1132,7 +1132,7 @@ fn a_marked_execution_is_remembered_for_its_unmarked_twin() {
         shared.orders.drain_fills().is_empty(),
         "the window catches the copy the cumulative figure cannot judge",
     );
-    assert_eq!(context.order(42).unwrap().filled, 9, "and nothing is double-booked");
+    assert_eq!(context.order(42).unwrap().filled, 9 * QTY_SCALE, "and nothing is double-booked");
 }
 
 /// The ExecID window evicts oldest-first, so a replay batch deeper than
@@ -1147,7 +1147,7 @@ fn a_marked_execution_is_remembered_for_its_unmarked_twin() {
 #[test]
 fn a_replay_deeper_than_the_exec_id_window_does_not_double_count() {
     let (mut ccp, mut context, shared) = tracked_order_state();
-    context.update_order_filled(42, 12);
+    context.adjust_order_filled(42, 12 * crate::types::QTY_SCALE);
 
     // The window has rolled past this execution, so its ID is unseen here —
     // which is the whole point: the dedup window cannot be what saves this.
@@ -1159,7 +1159,7 @@ fn a_replay_deeper_than_the_exec_id_window_does_not_double_count() {
         shared.orders.drain_fills().is_empty(),
         "a replay the window has forgotten still adds no quantity the order holds",
     );
-    assert_eq!(context.order(42).unwrap().filled, 12);
+    assert_eq!(context.order(42).unwrap().filled, 12 * QTY_SCALE);
     assert_eq!(context.position(0), 0.0);
 }
 
@@ -1168,14 +1168,14 @@ fn a_replay_deeper_than_the_exec_id_window_does_not_double_count() {
 #[test]
 fn a_marked_execution_delivered_twice_books_once() {
     let (mut ccp, mut context, shared) = tracked_order_state();
-    context.update_order_filled(42, 5);
+    context.adjust_order_filled(42, 5 * crate::types::QTY_SCALE);
 
     let frame = fill_frame(&[(97, "Y"), (14, "12"), (32, "4"), (151, "88")]);
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
     assert_eq!(shared.orders.drain_fills().len(), 1, "the second copy adds nothing");
-    assert_eq!(context.order(42).unwrap().filled, 12);
+    assert_eq!(context.order(42).unwrap().filled, 12 * QTY_SCALE);
     assert_eq!(context.position(0), 7.0);
 }
 
@@ -1215,7 +1215,7 @@ fn a_key_is_not_spent_before_the_order_exists() {
 
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 100, 100 * PRICE_SCALE, b'2', b'0', 0,
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     ));
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
@@ -1553,7 +1553,7 @@ fn a_busted_execution_reconciles_rather_than_adds() {
         (17, "exec-1"), (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
     ]);
     ccp.handle_exec_report(&booked, b"", &mut context, &shared, &None, "");
-    assert_eq!(context.order(42).unwrap().filled, 50, "the trade is booked");
+    assert_eq!(context.order(42).unwrap().filled, 50 * QTY_SCALE, "the trade is booked");
     assert_eq!(context.position(0), 50.0);
     let _ = shared.orders.drain_fills();
 
@@ -1571,7 +1571,7 @@ fn a_busted_execution_reconciles_rather_than_adds() {
     assert_eq!(context.position(0), 0.0, "and neither does the position");
     let fills = shared.orders.drain_fills();
     assert!(
-        fills.iter().any(|f| f.qty == -50),
+        fills.iter().any(|f| f.qty == -50 * QTY_SCALE),
         "the caller is told what was taken back: {fills:?}",
     );
 }
@@ -1589,7 +1589,7 @@ fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
     ]);
     ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
     let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
-    assert_eq!(booked, 50, "the original execution books what it states");
+    assert_eq!(booked, 50 * QTY_SCALE, "the original execution books what it states");
 
     let corrected = exec_report_frame(&[
         (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
@@ -1597,7 +1597,7 @@ fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
     ]);
     ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
     let after: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
-    assert_eq!(after, 10, "the correction books the difference, not the whole trade again");
+    assert_eq!(after, 10 * QTY_SCALE, "the correction books the difference, not the whole trade again");
 }
 
 /// A live order was retired by this: `D` is not in the terminal's terminal
@@ -1627,7 +1627,7 @@ fn an_unknown_status_still_books_its_fill() {
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1, "the fill survives a status this does not know");
-    assert_eq!(fills[0].qty, 50);
+    assert_eq!(fills[0].qty, 50 * QTY_SCALE);
 }
 
 /// Absent is not zero. Without 151 the caller was told nothing was left on an
@@ -1761,7 +1761,7 @@ fn an_unknown_time_in_force_falls_back_to_the_one_that_was_submitted() {
     // A tracked order submitted GTC, so a wrong answer is visibly wrong.
     let tracked = |ccp: &mut CcpState, context: &mut Context, shared: &SharedState, tif59: Option<&str>| {
         context.insert_order(crate::types::Order::new(
-            42, 0, Side::Buy, 1, 100 * PRICE_SCALE, b'2', b'1', 0,
+            42, 0, Side::Buy, crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'1', 0,
         ));
         let mut pairs = vec![(39u32, "0"), (150u32, "0"), (100u32, "ARCA"), (198u32, "ARCA:1")];
         if let Some(v) = tif59 {
@@ -1862,7 +1862,7 @@ fn cancel_reject_frame(reason_code: &str) -> std::collections::HashMap<u32, Stri
 fn tracked_for_cancel(context: &mut Context) {
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 100, 100 * PRICE_SCALE, b'2', b'0', 0,
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     ));
     context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false);
 }
@@ -2635,7 +2635,7 @@ fn a_fill_for_an_untracked_order_is_still_booked() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1, "the fill must be reported");
-    assert_eq!(fills[0].qty, 5);
+    assert_eq!(fills[0].qty, 5 * QTY_SCALE);
     assert_eq!(fills[0].order_id, 99);
     assert_eq!(fills[0].side, Side::Buy);
     assert_eq!(
@@ -2738,6 +2738,36 @@ fn an_unbookable_fill_does_not_consume_its_exec_id() {
     );
 }
 
+/// A fractional order fills in fractions, and the venue states them as
+/// decimals. Read as an integer, `32=0.5` parsed to nothing: the fill was
+/// reported as zero shares and the position never moved, on a client that
+/// accepts fractional orders.
+#[test]
+fn a_fractional_print_books_the_fraction_it_states() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let before = context.position(0);
+    let frame = exec_report_frame(&[
+        (150, "F"), (17, "EXEC-FRAC"), (100, "ARCA"), (198, "ARCA:1"),
+        (32, "0.5"), (31, "101.00"), (14, "0.5"), (6, "101.00"), (151, "0.25"), (39, "1"),
+    ]);
+
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    let fills = shared.orders.drain_fills();
+    assert_eq!(fills.len(), 1, "the fill is reported");
+    assert_eq!(fills[0].qty, QTY_SCALE / 2, "half a share books as half a share");
+    assert_eq!(fills[0].cum_qty, QTY_SCALE / 2, "and the order total states the same");
+    assert_eq!(fills[0].remaining, QTY_SCALE / 4, "as does what is still working");
+    assert_eq!(
+        context.position(0) - before, 0.5,
+        "and the position moves by the fraction that filled",
+    );
+    assert_eq!(
+        context.order(42).unwrap().filled, QTY_SCALE / 2,
+        "and the order records the fraction as filled",
+    );
+}
+
 /// The cumulative pair has to come off the wire. Tag 14 is the order's
 /// filled total and tag 6 its volume-weighted average; 32 and 31 describe
 /// only the print that triggered the report.
@@ -2753,9 +2783,9 @@ fn the_fill_carries_the_orders_totals_not_the_prints() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].qty, 5, "qty stays the print");
+    assert_eq!(fills[0].qty, 5 * QTY_SCALE, "qty stays the print");
     assert_eq!(fills[0].price, 101 * PRICE_SCALE, "price stays the print");
-    assert_eq!(fills[0].cum_qty, 12, "cum_qty is the order total from tag 14");
+    assert_eq!(fills[0].cum_qty, 12 * QTY_SCALE, "cum_qty is the order total from tag 14");
     assert_eq!(
         fills[0].avg_price, 100 * PRICE_SCALE + PRICE_SCALE / 2,
         "avg_price is the volume-weighted average from tag 6",
@@ -2778,7 +2808,7 @@ fn a_missing_cumulative_quantity_does_not_walk_backwards() {
         &mut context, &shared, &None, "",
     );
     let first = shared.orders.drain_fills();
-    assert_eq!(first[0].cum_qty, 7);
+    assert_eq!(first[0].cum_qty, 7 * QTY_SCALE);
 
     // One more, with the cumulative fields absent.
     ccp.handle_exec_report(
@@ -2789,7 +2819,7 @@ fn a_missing_cumulative_quantity_does_not_walk_backwards() {
     );
     let second = shared.orders.drain_fills();
     assert_eq!(
-        second[0].cum_qty, 8,
+        second[0].cum_qty, 8 * QTY_SCALE,
         "the order's own total carries it, rather than dropping back to the print",
     );
 }
@@ -2818,7 +2848,7 @@ fn the_fill_falls_back_to_the_print_when_the_totals_are_absent() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].cum_qty, 5);
+    assert_eq!(fills[0].cum_qty, 5 * QTY_SCALE);
     assert_eq!(fills[0].avg_price, 101 * PRICE_SCALE);
 }
 
@@ -2900,7 +2930,7 @@ fn a_duplicate_exec_id_suppresses_the_fill_and_nothing_else() {
     // filled; the replay must not make it two.
     assert_eq!(position_after, 1.0, "the duplicate must not move the position again");
     assert_eq!(updates[0].filled_qty, 1.0, "nor inflate the filled quantity");
-    assert_eq!(completed[0].filled_qty, 1);
+    assert_eq!(completed[0].filled_qty, QTY_SCALE);
 
     // The event channel is a second delivery path for the same fill, and
     // every other test here passes None for it, so it is checked once.
