@@ -878,6 +878,33 @@ fn req_mkt_data_ex_propagates_mode_9887() {
     }
 }
 
+/// The headlines stop when the last caller that asked for them goes, not when
+/// the first one does and not when the quotes happen to end. A caller
+/// watching a subscription someone else opened leaves by a different path,
+/// and the news it asked for was never withdrawn on that one.
+#[test]
+fn the_headlines_stop_with_the_last_caller_that_asked_for_them() {
+    let (client, _rx, _shared) = test_client();
+    // Someone already watches the quotes, and asked for no headlines.
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+    client.core.req_to_instrument.lock().unwrap().insert(1, 0);
+
+    // A second caller watches the same contract and does want them.
+    client.req_mkt_data(2, &spy(), "292", false, false).expect("watches what is up");
+    let (withdraw, stop_news) = client.core.unregister_mkt_data(2);
+    assert!(withdraw.is_none(), "the quotes stay up for the caller still watching");
+    assert!(stop_news, "but the only caller that asked for headlines has gone");
+
+    // Two callers asking: the headlines outlast the first of them.
+    client.req_mkt_data(3, &spy(), "292", false, false).expect("watches what is up");
+    client.req_mkt_data(4, &spy(), "292", false, false).expect("watches what is up");
+    let (_, stop_news) = client.core.unregister_mkt_data(3);
+    assert!(!stop_news, "one of two left, so the headlines carry on");
+    let (_, stop_news) = client.core.unregister_mkt_data(4);
+    assert!(stop_news, "and stop when the last of them goes");
+}
+
 // A second live subscription on the same contract would clobber
 // the first's reverse mapping and orphan it silently. Reject at the call.
 #[test]
@@ -2849,6 +2876,18 @@ fn a_queued_fill_survives_a_completed_orders_read() {
     assert_eq!(
         w.0, vec!["AAPL".to_string()],
         "the fill was delivered without the contract it was on",
+    );
+
+    // Held back, not held forever: the next read frees it now the fill has
+    // been delivered.
+    assert!(
+        shared.orders.get_order_info(77).is_some(),
+        "the record was freed while the fill still needed it",
+    );
+    client.req_completed_orders(false, &mut w);
+    assert!(
+        shared.orders.get_order_info(77).is_none(),
+        "the record was kept back and then never freed",
     );
 }
 

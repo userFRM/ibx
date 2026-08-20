@@ -365,6 +365,16 @@ impl EClient {
     /// them rather than with a guess at which were typed.
     pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper) {
         let _ = api_only;
+        // Records held back on an earlier read because a fill for them was
+        // still queued. The fill has been delivered by now, or it has not and
+        // they wait another pass.
+        self.deferred_evictions.lock().unwrap().retain(|oid| {
+            if self.shared.orders.has_pending_fill(*oid) {
+                return true;
+            }
+            self.shared.orders.remove_order_info(*oid);
+            false
+        });
         // Drained once and retained. The queue empties on read and the venue does
         // not resend completed orders, so later calls answer from this archive.
         {
@@ -399,7 +409,9 @@ impl EClient {
                 // that fill is read against this record: dropping it first
                 // delivers an execution with no contract and no execution id,
                 // which is also the id its commission is reported under.
-                if !self.shared.orders.has_pending_fill(order.order_id) {
+                if self.shared.orders.has_pending_fill(order.order_id) {
+                    self.deferred_evictions.lock().unwrap().push(order.order_id);
+                } else {
                     self.shared.orders.remove_order_info(order.order_id);
                 }
             }

@@ -276,9 +276,11 @@ impl EClient {
         }
 
         // What is left: a status change with no fill on the same report.
-        let mut updates: Vec<_> = paired;
-        updates.sort_by_key(|u| u.order_id);
-        for update in updates {
+        // In the order they arrived. They were sorted by order only because
+        // they had been collected into a map, which left them in no order at
+        // all; kept as they came, the order the venue reported them in is the
+        // order the caller reads them in.
+        for update in paired {
             let status = order_status_str(update.status);
             // The engine reads no parent from the report, but this client
             // placed the order and was told. Prefer what it recorded; an order

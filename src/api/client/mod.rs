@@ -216,6 +216,13 @@ pub struct EClient {
     /// moves afterwards is reported as it moves rather than only in the set
     /// held when the call was made.
     pub(crate) positions_requested: AtomicBool,
+    /// Order records kept back because a fill for them was still queued.
+    ///
+    /// A fill is read against the record, so the record cannot be freed while
+    /// one is waiting. Freed on the next read of the completed orders, which
+    /// is when the fill has been delivered — so the deferral costs a pass and
+    /// not the rest of the session.
+    pub(crate) deferred_evictions: Mutex<Vec<u64>>,
     pub(crate) next_order_id: AtomicU64,
     /// Where the last id handed out is kept, and under which key.
     pub(crate) order_id_store: Option<(std::path::PathBuf, String)>,
@@ -442,6 +449,7 @@ impl EClient {
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
+            deferred_evictions: Mutex::new(Vec::new()),
             next_order_id: AtomicU64::new(start_id),
             order_id_store,
             asking: Mutex::new(()),
@@ -476,6 +484,7 @@ impl EClient {
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
+            deferred_evictions: Mutex::new(Vec::new()),
             next_order_id: AtomicU64::new(start_id),
             // Built from parts, so nothing is remembered anywhere.
             order_id_store: None,

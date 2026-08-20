@@ -73,6 +73,13 @@ pub struct EClient {
     /// the call was made left a caller tracking positions from a snapshot
     /// that went stale on the next fill.
     pub(crate) positions_requested: AtomicBool,
+    /// Order records kept back because a fill for them was still queued.
+    ///
+    /// A fill is read against the record, so the record cannot be freed while
+    /// one is waiting. Freed on the next read of the completed orders, which
+    /// is when the fill has been delivered — so the deferral costs a pass and
+    /// not the rest of the session.
+    pub(crate) deferred_evictions: Mutex<Vec<u64>>,
     /// Whether this session is finished rather than merely disconnected.
     ///
     /// The engine announces a loss it is still working on and a loss it has
@@ -224,6 +231,7 @@ impl EClient {
             accounts: Mutex::new(Vec::new()),
             connected: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
+            deferred_evictions: Mutex::new(Vec::new()),
             session_ended: AtomicBool::new(false),
             event_rx: Mutex::new(None),
             events_lost: Arc::new(std::sync::atomic::AtomicU64::new(0)),

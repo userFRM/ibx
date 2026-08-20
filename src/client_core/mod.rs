@@ -681,7 +681,12 @@ pub struct ClientCore {
     /// Every provider this account may read.
     pub news_providers: Mutex<String>,
     /// Which contracts news was asked for on.
-    pub news_instruments: Mutex<HashSet<InstrumentId>>,
+    /// Which requests asked for news on an instrument.
+    ///
+    /// Held by request and not merely by instrument, because the headlines
+    /// stop when the last caller that asked for them goes — not when the
+    /// first one does, and not when the quotes happen to end.
+    pub news_instruments: Mutex<HashMap<InstrumentId, HashSet<i64>>>,
 
     // Contract cache for enrichment
     /// What the venue has said about each contract, kept so a second
@@ -785,7 +790,7 @@ impl ClientCore {
             // standing in for it asked for news from providers the account
             // may not be entitled to and left out the ones it is.
             news_providers: Mutex::new(String::new()),
-            news_instruments: Mutex::new(HashSet::new()),
+            news_instruments: Mutex::new(HashMap::new()),
             contract_cache: Mutex::new(HashMap::new()),
             named_by_description: Mutex::new(HashMap::new()),
         }
@@ -1104,7 +1109,8 @@ impl ClientCore {
             // on the path that also opened the quotes, it was never withdrawn:
             // the caller stopped watching and the headlines kept coming.
             if wants_news {
-                self.news_instruments.lock().unwrap().insert(instrument);
+                self.news_instruments.lock().unwrap()
+                    .entry(instrument).or_default().insert(req_id);
             }
             return Ok(instrument);
         }
@@ -1166,9 +1172,25 @@ impl ClientCore {
             self.snapshot_reqs.lock().unwrap().insert(req_id, None);
         }
         if wants_news {
-            self.news_instruments.lock().unwrap().insert(instrument_id);
+            self.news_instruments.lock().unwrap()
+                .entry(instrument_id).or_default().insert(req_id);
         }
         Ok(instrument_id)
+    }
+
+    /// Drop this request's claim on the headlines, and say whether that was
+    /// the last one. Called on every path out of a withdrawal: the quotes may
+    /// stay up for another caller while the headlines this one asked for stop.
+    fn release_news(&self, instrument: InstrumentId, req_id: i64) -> bool {
+        let mut news = self.news_instruments.lock().unwrap();
+        let Some(askers) = news.get_mut(&instrument) else {
+            return false;
+        };
+        if !askers.remove(&req_id) || !askers.is_empty() {
+            return false;
+        }
+        news.remove(&instrument);
+        true
     }
 
     /// Unregister a market data subscription.
@@ -1201,11 +1223,11 @@ impl ClientCore {
                     self.mdt_sent.lock().unwrap().remove(&req_id);
                     self.mdt_by_req.lock().unwrap().remove(&req_id);
                     if was_following {
-                        return (None, false);
+                        return (None, self.release_news(instrument, req_id));
                     }
                     if let Some(next) = next {
                         self.instrument_to_req.lock().unwrap().insert(instrument, next);
-                        return (None, false);
+                        return (None, self.release_news(instrument, req_id));
                     }
                 }
             }
@@ -1213,7 +1235,7 @@ impl ClientCore {
             self.last_quotes.lock().unwrap().remove(&instrument);
             self.mdt_sent.lock().unwrap().remove(&req_id);
             self.mdt_by_req.lock().unwrap().remove(&req_id);
-            let needs_news = self.news_instruments.lock().unwrap().remove(&instrument);
+            let needs_news = self.release_news(instrument, req_id);
             self.forget_instrument(instrument);
             (Some(instrument), needs_news)
         } else {

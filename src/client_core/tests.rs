@@ -1085,10 +1085,6 @@ fn a_position_pnl_is_answered_without_a_market_data_subscription() {
     assert!((update.daily_pnl - 50.0).abs() < 1e-6, "daily={}", update.daily_pnl);
 }
 
-/// News is asked for from the providers the logon named this account, and
-/// only by the entry that names it. A fixed pair of codes asks providers the
-/// account may not be entitled to and omits the ones it is, and matching on
-/// the last three characters of an entry subscribes "1292" to news.
 #[test]
 fn news_is_asked_for_from_the_providers_the_logon_named() {
     let (tx, rx) = std::sync::mpsc::sync_channel(8);

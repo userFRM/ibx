@@ -603,7 +603,7 @@ impl HmdsState {
                         let ticker_id: u32 = ticker_id_str.parse().unwrap_or(0);
                         let mut matched = false;
                         for sub in &mut self.rtbar_subs {
-                            if xml_tag.contains(&sub.0) {
+                            if answers(xml_tag, &sub.0) {
                                 sub.2 = Some(ticker_id);
                                 sub.3 = min_tick;
                                 log::info!("HMDS rtbar ticker_id={} min_tick={} for req_id={}", ticker_id, min_tick, sub.1);
