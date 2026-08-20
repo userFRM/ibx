@@ -642,6 +642,33 @@ mod hmds_correlation_tests {
     use crate::bridge::SharedState;
     use crate::protocol::connection::Connection;
 
+    /// Query names are numbered, so one is a prefix of another as soon as the
+    /// count reaches ten. Searching the payload for the name handed the answer
+    /// for `tk_12` to whichever of `tk_1` and `tk_12` was waiting first, and
+    /// the other was never answered.
+    ///
+    /// A news reply states what the query asked for after its name, separated
+    /// from it, and is still that query's answer.
+    #[test]
+    fn a_query_name_that_prefixes_another_is_not_answered_by_it() {
+        let answer_for = |id: &str| {
+            format!("<ResultSetTick><id>{id}</id><eoq>true</eoq></ResultSetTick>")
+        };
+
+        assert!(answers(&answer_for("tk_1"), "tk_1"), "its own answer");
+        assert!(
+            !answers(&answer_for("tk_12"), "tk_1"),
+            "tk_1 took the answer meant for tk_12",
+        );
+        assert!(answers(&answer_for("tk_12"), "tk_12"), "which tk_12 needs itself");
+        assert!(!answers(&answer_for("tk_2"), "tk_1"), "a different query entirely");
+
+        // The decorated form a news reply states.
+        let news = "<NewsResponse><id>news_2-headlines;;NewsQuery;;0;;true;;0;;U</id></NewsResponse>";
+        assert!(answers(news, "news_2"), "the reply names the query it answers");
+        assert!(!answers(news, "news_2x"), "and not one whose name merely resembles it");
+    }
+
     fn tick_msg(query_id: &str, done: bool) -> Vec<u8> {
         let xml = format!(
             "<ResultSetTick><id>{}</id><eoq>{}</eoq><tz>UTC</tz><Events>\

@@ -5,6 +5,7 @@
 //! file belongs to.
 
 use super::*;
+use crate::types::model as api;
 use crate::bridge::RichOrderInfo;
 use crate::types::{PositionInfo, Price, Side, PRICE_SCALE, QTY_SCALE};
 

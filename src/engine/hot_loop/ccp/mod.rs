@@ -10,7 +10,6 @@ const MATCHING_SYMBOLS_TIMEOUT: Duration = Duration::from_secs(60);
 const OPTION_CHAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 use crate::bridge::{Event, SharedState};
-use crate::types::model as api;
 use crate::engine::context::Context;
 use crate::protocol::datetime::chrono_free_timestamp;
 use crate::protocol::connection::Connection;
@@ -716,17 +715,16 @@ impl CcpState {
                         && rid < 0xF000_0000
                     {
                         for def in all.into_iter().filter(|d| d.con_id != 0) {
-                            shared.reference.cache_contract(def.con_id as i64, api::Contract {
-                                con_id: def.con_id as i64,
-                                symbol: def.symbol.clone(),
-                                sec_type: def.sec_type.to_api_str().to_string(),
-                                exchange: def.exchange.clone(),
-                                currency: def.currency.clone(),
-                                local_symbol: def.local_symbol.clone(),
-                                primary_exchange: def.primary_exchange.clone(),
-                                trading_class: def.trading_class.clone(),
-                                ..Default::default()
-                            });
+                            shared.reference.cache_contract(
+                            def.con_id as i64,
+                            // Mapped where every other reader of a
+                            // definition maps it. Written out here, an
+                            // option was cached without its strike, its
+                            // right, its expiry or its multiplier — which
+                            // is all that tells two options on one
+                            // underlying apart.
+                            crate::types::model::ContractDetails::from_definition(&def).contract,
+                        );
                             if self.details_delivered.entry(rid).or_default().insert(def.con_id as i64) {
                                 let for_event = clone_for_event(event_tx, &def);
                                 shared.reference.push_contract_details(rid, def);
@@ -751,18 +749,16 @@ impl CcpState {
                         // still counts toward the fan-out below, so the
                         // request completes.
                         if def.con_id != 0 {
-                            let sec_type_str = def.sec_type.to_api_str();
-                            shared.reference.cache_contract(def.con_id as i64, api::Contract {
-                                con_id: def.con_id as i64,
-                                symbol: def.symbol.clone(),
-                                sec_type: sec_type_str.to_string(),
-                                exchange: def.exchange.clone(),
-                                currency: def.currency.clone(),
-                                local_symbol: def.local_symbol.clone(),
-                                primary_exchange: def.primary_exchange.clone(),
-                                trading_class: def.trading_class.clone(),
-                                ..Default::default()
-                            });
+                            shared.reference.cache_contract(
+                            def.con_id as i64,
+                            // Mapped where every other reader of a
+                            // definition maps it. Written out here, an
+                            // option was cached without its strike, its
+                            // right, its expiry or its multiplier — which
+                            // is all that tells two options on one
+                            // underlying apart.
+                            crate::types::model::ContractDetails::from_definition(&def).contract,
+                        );
                             identify_position(shared, &def);
                             self.try_release_scanner_enrichments(def.con_id as i64, shared);
                             // The master row for this same contract may be
@@ -818,18 +814,16 @@ impl CcpState {
                 if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
                     let is_last_wire = crate::control::contracts::secdef_response_is_last(msg);
                     if def.con_id != 0 {
-                        let sec_type_str = def.sec_type.to_api_str();
-                        shared.reference.cache_contract(def.con_id as i64, api::Contract {
-                            con_id: def.con_id as i64,
-                            symbol: def.symbol.clone(),
-                            sec_type: sec_type_str.to_string(),
-                            exchange: def.exchange.clone(),
-                            currency: def.currency.clone(),
-                            local_symbol: def.local_symbol.clone(),
-                            primary_exchange: def.primary_exchange.clone(),
-                            trading_class: def.trading_class.clone(),
-                            ..Default::default()
-                        });
+                        shared.reference.cache_contract(
+                            def.con_id as i64,
+                            // Mapped where every other reader of a
+                            // definition maps it. Written out here, an
+                            // option was cached without its strike, its
+                            // right, its expiry or its multiplier — which
+                            // is all that tells two options on one
+                            // underlying apart.
+                            crate::types::model::ContractDetails::from_definition(&def).contract,
+                        );
                         identify_position(shared, &def);
                         self.try_release_scanner_enrichments(def.con_id as i64, shared);
                         // A subscription held back for want of an id. Answered

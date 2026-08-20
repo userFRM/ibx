@@ -1099,6 +1099,13 @@ impl ClientCore {
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, None);
             }
+            // The news subscription was sent above whether or not the quotes
+            // were already up, so it is recorded here as well. Recorded only
+            // on the path that also opened the quotes, it was never withdrawn:
+            // the caller stopped watching and the headlines kept coming.
+            if wants_news {
+                self.news_instruments.lock().unwrap().insert(instrument);
+            }
             return Ok(instrument);
         }
 

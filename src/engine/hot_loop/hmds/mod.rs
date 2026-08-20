@@ -541,7 +541,7 @@ impl HmdsState {
                         // echoes. Two head-timestamp requests can be in flight
                         // at once.
                         if let Some(pos) = self.pending_head_ts.iter()
-                            .position(|(qid, _)| xml_tag.contains(qid.as_str()))
+                            .position(|(qid, _)| answers(xml_tag, qid))
                         {
                             let (_, req_id) = self.pending_head_ts.remove(pos);
                             let for_event = clone_for_event(event_tx, &resp);
@@ -556,14 +556,14 @@ impl HmdsState {
                         // responses are.
                         if let Some(pos) = self.pending_histogram
                             .iter()
-                            .position(|(qid, _)| xml_tag.contains(qid.as_str()))
+                            .position(|(qid, _)| answers(xml_tag, qid))
                         {
                             let (_, req_id) = self.pending_histogram.remove(pos);
                             shared.reference.push_histogram_data(req_id, entries);
                         }
                     }
                     else if xml_tag.contains("<ResultSetTick>") {
-                        if let Some(pos) = self.pending_ticks.iter().position(|(qid, _, _)| xml_tag.contains(qid.as_str())) {
+                        if let Some(pos) = self.pending_ticks.iter().position(|(qid, _, _)| answers(xml_tag, qid)) {
                             let (_, req_id, what_to_show) = self.pending_ticks[pos].clone();
                             match crate::control::historical::parse_tick_response(xml_tag, &what_to_show) {
                                 // A tick response may arrive in segments,
@@ -614,7 +614,7 @@ impl HmdsState {
                         if !matched {
                             // Check keepUpToDate historical queries
                             for (qid, req_id, _) in &self.pending_historical {
-                                if xml_tag.contains(qid.as_str()) && self.keep_up_to_date_reqs.contains(req_id) {
+                                if answers(xml_tag, qid) && self.keep_up_to_date_reqs.contains(req_id) {
                                     // Store as rtbar subscription so 35=G bars get
                                     // dispatched
                                     self.rtbar_subs.push((qid.clone(), *req_id, Some(ticker_id), min_tick));
@@ -772,7 +772,7 @@ impl HmdsState {
                                 let is_article = xml.contains("article_file");
                                 if is_article {
                                     if let Some(pos) = self.pending_articles.iter()
-                                        .position(|(qid, _)| xml.contains(qid.as_str()))
+                                        .position(|(qid, _)| answers(xml, qid))
                                         .or_else(|| (!self.pending_articles.is_empty()).then_some(0))
                                     {
                                         let (_, req_id) = self.pending_articles.remove(pos);
@@ -800,7 +800,7 @@ impl HmdsState {
                                 // pending request only when the response names
                                 // none.
                                 } else if let Some(pos) = self.pending_news.iter()
-                                    .position(|(qid, _)| xml.contains(qid.as_str()))
+                                    .position(|(qid, _)| answers(xml, qid))
                                     .or_else(|| (!self.pending_news.is_empty()).then_some(0))
                                 {
                                     let (_, req_id) = self.pending_news.remove(pos);
@@ -1730,3 +1730,27 @@ fn scaled_size(counted: u64, size_tick: f64) -> i64 {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether a response answers the query named by `qid`.
+///
+/// Read from the name the response states rather than searched for in the
+/// payload. Searching matched any query whose name was a prefix of another:
+/// with `tk_1` and `tk_12` both in flight, the answer to `tk_12` contains
+/// `tk_1`, so it went to whichever of the two was waiting first and the other
+/// was never answered at all.
+///
+/// The stated name is not always the bare one. A news reply carries what the
+/// query asked for after it, separated from it — `news_2-headlines;;...` —
+/// so a name the reply continues past is still that query's, unless what
+/// follows reads as more of the name. `tk_1` and `tk_12` differ by a digit,
+/// which is why a digit is not a separator.
+fn answers(xml: &str, qid: &str) -> bool {
+    let Some(stated) = crate::control::xml::tag(xml, "id") else {
+        return false;
+    };
+    match stated.strip_prefix(qid) {
+        Some("") => true,
+        Some(rest) => !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'),
+        None => false,
+    }
+}

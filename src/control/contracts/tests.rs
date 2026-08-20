@@ -1424,6 +1424,32 @@ mod delivered_name_tests {
     }
     // The reported Contract must round-trip — sec_type is the
     // official API string, and market_name is no longer thrown away.
+
+/// A definition names an option by its strike, its right, its expiry and its
+/// multiplier. Mapped without them, two options on one underlying read as the
+/// same contract to anything holding the cache.
+#[test]
+fn an_option_definition_keeps_what_identifies_it() {
+    let def = super::ContractDefinition {
+        con_id: 756733,
+        symbol: "SPY".into(),
+        sec_type: super::SecurityType::Option,
+        exchange: "SMART".into(),
+        currency: "USD".into(),
+        last_trade_date: "20260320".into(),
+        strike: 600.0,
+        right: Some(super::OptionRight::Call),
+        multiplier: 100.0,
+        ..Default::default()
+    };
+
+    let c = crate::types::model::ContractDetails::from_definition(&def).contract;
+
+    assert_eq!(c.last_trade_date_or_contract_month, "20260320", "the expiry");
+    assert_eq!(c.strike, 600.0, "the strike");
+    assert_eq!(c.right, "C", "a call is not a put");
+    assert_eq!(c.multiplier, "100", "the multiplier");
+}
     #[test]
     fn contract_details_from_definition_round_trips() {
         let def = super::ContractDefinition {
