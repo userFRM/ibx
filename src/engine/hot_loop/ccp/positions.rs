@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::{adopt_position, CcpState};
 
 use crate::bridge::{Event, SharedState};
@@ -184,11 +186,20 @@ pub(crate) fn handle_position_elsewhere(
     else {
         return;
     };
+    // The basis this holding was already carrying, where the frame states
+    // none. Written into a row that persists, an absent tag read as zero, so a
+    // later frame about the same holding replaced a real cost with nothing —
+    // the rule the account's own holdings already follow.
     let avg_cost = parsed.get(&6101)
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|v| v.is_finite())
         .map(|v| (v * PRICE_SCALE as f64) as Price)
-        .unwrap_or(0);
+        .unwrap_or_else(|| {
+            shared.portfolio.positions_elsewhere()
+                .iter()
+                .find(|row| row.con_id == con_id && row.held == held)
+                .map_or(0, |row| row.avg_cost)
+        });
     let row = crate::types::PositionElsewhere {
         con_id,
         symbol: parsed.get(&6068).map(|s| s.trim_end().to_string()).unwrap_or_default(),
@@ -307,6 +318,10 @@ impl CcpState {
     // absent cost indistinguishable from a real one, and publishing it erased
     // the basis of a live holding.
     let mut avg_cost_raw: Option<f64> = None;
+    // The contract as this entry names it. The venue states both beside the
+    // quantity; the definition lookup is what fills them in when it does not.
+    let mut symbol = String::new();
+    let mut sec_type = String::new();
     let mut count = 0;
     for part in text.split('\x01') {
         if let Some(v) = part.strip_prefix("6008=") {
@@ -318,7 +333,12 @@ impl CcpState {
                         avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
                     );
                     shared.portfolio.set_position_info(PositionInfo {
-                        con_id, position: qty, avg_cost, ..Default::default()
+                        con_id,
+                        position: qty,
+                        avg_cost,
+                        symbol: std::mem::take(&mut symbol),
+                        sec_type: std::mem::take(&mut sec_type),
+                        ..Default::default()
                     });
                     if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
                         adopt_position(context, instrument, qty);
@@ -331,7 +351,16 @@ impl CcpState {
             con_id = v.parse().unwrap_or(0);
             qty = None;
             avg_cost_raw = None;
+            symbol.clear();
+            sec_type.clear();
             count += 1;
+        } else if let Some(v) = part.strip_prefix("6068=") {
+            // The entry names its own contract. Dropped here, a holding reached
+            // the caller carrying a contract id and nothing else, and stayed
+            // that way until a definition lookup answered.
+            symbol = v.trim_end().to_string();
+        } else if let Some(v) = part.strip_prefix("167=") {
+            sec_type = v.to_string();
         } else if let Some(v) = part.strip_prefix("6064=") {
             // Filtered to finite: `"NaN".parse()` succeeds and `NaN as i64`
             // is 0, which would flatten by the same route.
@@ -359,4 +388,16 @@ impl CcpState {
         self.auto_fetch_secdef_if_cold(con_id, ccp_conn, shared, hb);
     }
     }
+}
+
+/// One message per holding a position frame carries.
+///
+/// A position frame is a repeating group: one message states as many holdings
+/// as the account has, and a holding begins at its symbol. A flat parse keeps
+/// only the last value of each tag, so only the holding the venue lists last
+/// is reported and a fill on any other leaves that position looking frozen.
+pub(crate) fn split_position_entries(msg: &[u8]) -> Vec<HashMap<u32, String>> {
+    /// A holding begins where it names itself.
+    const SYMBOL: u32 = 6068;
+    crate::protocol::fix::fix_parse_repeating(msg, SYMBOL)
 }

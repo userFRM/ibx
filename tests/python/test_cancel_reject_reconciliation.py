@@ -1,10 +1,10 @@
 """Cancel-reject reconciliation.
 
-Regression: when the gateway rejects a cancel for an order it had previously
+Regression: when the venue rejects a cancel for an order it had previously
 listed in the post-connect mass-status burst (CxlRejReason=1, "No such
 order"), IBX must:
 
-  - parse OrigClOrdID (tag 41) correctly despite the gateway's "C" prefix
+  - parse OrigClOrdID (tag 41) correctly despite the venue's "C" prefix
     and ".0/.1/.2" modify-chain suffix,
   - surface the reject through wrapper.error (code 202),
   - purge the stale entry from order_cache so subsequent req_open_orders
@@ -25,9 +25,21 @@ import pytest
 from ibx import EClient, EWrapper
 
 
+# This one cancels orders it did not place. The reject it is written to catch
+# only comes from an order the venue listed and the venue no longer holds, so
+# there is nothing it can create for itself: it walks the account's own open
+# orders and cancels up to ten of them. That destroys state nobody asked it to
+# touch, so it runs only when the account is explicitly offered up for it.
 pytestmark = pytest.mark.skipif(
-    not (os.environ.get("IB_USERNAME") and os.environ.get("IB_PASSWORD")),
-    reason="IB_USERNAME and IB_PASSWORD not set",
+    not (
+        os.environ.get("IB_USERNAME")
+        and os.environ.get("IB_PASSWORD")
+        and os.environ.get("IBX_MAY_CANCEL_EXISTING_ORDERS")
+    ),
+    reason=(
+        "cancels pre-existing orders on the account; set "
+        "IBX_MAY_CANCEL_EXISTING_ORDERS=1 to allow it"
+    ),
 )
 
 
@@ -119,7 +131,7 @@ class TestCancelRejectReconcile:
             self.wrapper.errors = []
             self.client.cancel_order(candidate_id, "")
 
-            # Wait briefly for resolution. The gateway responds within ~1s
+            # Wait briefly for resolution. The venue responds within ~1s
             # for stale-order rejects; some IDs simply do not respond, so the scan
             # try the next candidate.
             deadline = time.time() + 3
@@ -137,18 +149,16 @@ class TestCancelRejectReconcile:
                 break
 
         if rejected_id is None:
-            # Pre-fix this is the bug's signature: cancel-reject was silently
-            # swallowed for every candidate, no 202 ever emitted. Distinguish
-            # from "no stale entries" by asserting at least one of the
-            # candidates is still in the cache (i.e. the gateway responded
-            # but it was ignored).
+            # No 202 arrived. Tell a swallowed reject from an account with no
+            # stale entries: a candidate still in the cache means the venue
+            # answered and the answer was dropped.
             still_present = [c for c, _, _ in snap_before[:10]
                              if any(o[0] == c for o in self._snapshot_open())]
             assert not still_present, (
                 f"cancelled {len(snap_before[:10])} candidates but received "
                 f"no 202 cancel-rejects; {len(still_present)} are still in "
                 f"req_open_orders. handle_cancel_reject is silently swallowing "
-                f"the gateway's reject. still-present sample: {still_present[:3]}"
+                f"the venue's reject. still-present sample: {still_present[:3]}"
             )
             pytest.skip(
                 "no 202 cancel-reject produced and no stale entries to test "

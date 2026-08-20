@@ -63,7 +63,7 @@ impl EClient {
 
     /// Place an order. Matches `placeOrder` in C++.
     ///
-    /// An order names its contract by the venue's own id. A caller who states
+    /// An order names its contract by the venue's id. A caller who states
     /// a description instead of an id — which every example written against
     /// the reference client does — has it resolved here, once the order itself
     /// is known to be one the venue would take: an order that names no
@@ -82,6 +82,7 @@ impl EClient {
     /// — from `qualify_contract`, or from any contract-details answer — and
     /// nothing is resolved and nothing waits.
     pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), Refusal> {
+        self.core.refuse_if_readonly("an order").map_err(Refusal::validation)?;
         ClientCore::validate_order_destination(&contract.exchange)?;
 
         // Validate order params and contract before registering instrument (fail fast).
@@ -125,7 +126,10 @@ impl EClient {
         let oid = if order_id > 0 {
             order_id as u64
         } else {
-            self.next_order_id.fetch_add(1, Ordering::Relaxed)
+            // Through the reservation, which persists the id. An id taken from
+            // the counter alone is not recorded, and a restart reuses it; the
+            // venue rejects a repeated tag 11.
+            self.reserve_order_ids(1) as u64
         };
 
         let instrument = self.core.find_or_register_instrument(
@@ -140,6 +144,20 @@ impl EClient {
         // If orderId is already tracked, this is a modification — emit Modify instead
         // of Submit.
         let cmd = if self.core.is_order_tracked(oid) {
+            // A replace carries the order id and its fields, not the contract, so
+            // the order stays on the instrument it was placed on. A contract naming
+            // a different instrument is refused rather than recorded.
+            let placed_on = self.core.open_orders.lock().unwrap()
+                .get(&oid)
+                .map(|tracked| tracked.instrument);
+            if placed_on.is_some_and(|placed_on| placed_on != instrument) {
+                return Err(Refusal::validation(format!(
+                    "order {oid} is working on another contract, and a replace names \
+                     the order rather than the contract: withdraw it and place a new \
+                     order to trade {}",
+                    contract.symbol,
+                )));
+            }
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one, so refuse
             // rather than send a message that destroys it.
@@ -174,12 +192,13 @@ impl EClient {
     ///
     /// `exercise_action` is 1 to exercise and 2 to lapse; anything else is
     /// refused. `override_` is taken for signature compatibility and is not
-    /// sent: it is a validation bypass the venue's own front end applies before
+    /// sent: it is a validation bypass the venue's front end applies before
     /// it builds the order, so there is no tag for it on the wire.
     pub fn exercise_options(
         &self, req_id: i64, contract: &Contract, exercise_action: i32,
         exercise_quantity: i32, account: &str, override_: bool,
     ) -> Result<(), Refusal> {
+        self.core.refuse_if_readonly("an exercise").map_err(Refusal::validation)?;
         let _ = override_;
         let (action, qty) = ClientCore::validate_exercise(
             exercise_action, exercise_quantity, account, &self.account_id,
@@ -193,7 +212,8 @@ impl EClient {
         let oid = if req_id > 0 {
             req_id as u64
         } else {
-            self.next_order_id.fetch_add(1, Ordering::Relaxed)
+            // Written down, as on `place_order` above.
+            self.reserve_order_ids(1) as u64
         };
         let instrument = self.core.find_or_register_instrument(
             &self.control_tx,
@@ -208,12 +228,18 @@ impl EClient {
     /// Cancel an order. Matches `cancelOrder` in C++.
     ///
     /// `manual_order_cancel_time` is taken and not applied. A cancel names five
-    /// fields on this wire and no time among them, as the counterpart's own
+    /// fields on this wire and no time among them, as the protocol's
     /// cancel does.
     pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal> {
-        self.send(ControlCommand::Order(OrderRequest::Cancel {
-            order_id: order_id as u64,
-        }))
+        self.core.refuse_if_readonly("a cancel").map_err(Refusal::validation)?;
+        // Tag 11 order ids start at 1. A negative id cast unchecked becomes a
+        // large unsigned one, which the venue answers "no such order".
+        let order_id = u64::try_from(order_id).ok().filter(|id| *id > 0).ok_or_else(|| {
+            Refusal::validation(format!(
+                "order_id {order_id} is not an order number: they start at one",
+            ))
+        })?;
+        self.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
     }
 
     /// Cancel an order identified by `permId` — stable across sessions.
@@ -227,6 +253,7 @@ impl EClient {
     /// `place_order` callbacks or by the CCP session-recovery push hydrated in
     /// `handle_exec_report`). Fails if `perm_id` is not currently tracked.
     pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), Refusal> {
+        self.core.refuse_if_readonly("a cancel").map_err(Refusal::validation)?;
         if perm_id == 0 {
             return Err("cancel_order_by_perm_id: perm_id must be non-zero".into());
         }
@@ -240,6 +267,7 @@ impl EClient {
 
     /// Cancel all orders. Matches `reqGlobalCancel` in C++.
     pub fn req_global_cancel(&self) -> Result<(), Refusal> {
+        self.core.refuse_if_readonly("a global cancel").map_err(Refusal::validation)?;
         // Use global instrument count (not just locally-tracked ones)
         let count = self.shared.market.instrument_count();
         for instrument in 0..count {
@@ -256,20 +284,37 @@ impl EClient {
 
     /// Get the next order ID (local counter).
     pub fn next_order_id(&self) -> i64 {
-        let id = self.next_order_id.fetch_add(1, Ordering::Relaxed);
-        // Remembered as it is handed out rather than in a batch: a run that
+        self.reserve_order_ids(1)
+    }
+
+    /// Take `n` consecutive ids in one step.
+    ///
+    /// A bracket occupies three consecutive ids: parent, parent+1, parent+2.
+    /// Reserving them in one step keeps a concurrent placement from taking a
+    /// child's id or moving the counter back over ids already handed out.
+    fn reserve_order_ids(&self, n: u64) -> i64 {
+        let first = self.next_order_id.fetch_add(n, Ordering::Relaxed);
+        // Remembered as they are handed out rather than in a batch: a run that
         // ends between the two is exactly the run whose ids would be reused.
+        // The last of the reservation is what is written down, because a
+        // restart has to continue past every id this handed out.
+        let last = first + n - 1;
         if let Some((path, key)) = self.order_id_store.as_ref()
-            && let Err(e) = crate::order_ids::remember(path, key, id)
+            && let Err(e) = crate::order_ids::remember(path, key, last)
         {
-            log::warn!("order id {id} not remembered in {}: {e}", path.display());
+            log::warn!("order id {last} not remembered in {}: {e}", path.display());
         }
-        id as i64
+        first as i64
     }
 
     // ── Open Orders ──
 
     /// Request open orders for this client. Matches `reqOpenOrders` in C++.
+    ///
+    /// Answers with every order working on the account, as
+    /// [`req_all_open_orders`](EClient::req_all_open_orders) does. The protocol
+    /// carries no client number on an order, so this session cannot tell which
+    /// orders it placed; reporting fewer would omit working orders.
     pub fn req_open_orders(&self, wrapper: &mut impl Wrapper) {
         self.req_all_open_orders(wrapper);
     }
@@ -286,6 +331,15 @@ impl EClient {
         for _ in 0..300 {
             if self.shared.orders.replay_done() { break; }
             std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !self.shared.orders.replay_done() {
+            // An incomplete replay is reported: what follows is what has arrived,
+            // which is otherwise indistinguishable from an account with nothing
+            // working.
+            log::warn!(
+                "the venue had not finished naming this account's working orders within \
+                 the wait, so what follows is what had arrived rather than what is working",
+            );
         }
         for (order_id, tracked) in self.core.collect_open_orders(&self.shared) {
             let state = crate::types::model::OrderState {
@@ -311,30 +365,44 @@ impl EClient {
     /// them rather than with a guess at which were typed.
     pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper) {
         let _ = api_only;
-        for order in self.shared.orders.drain_completed_orders() {
-            let status_str = crate::types::order_status::order_status_str(order.status);
-            if let Some(info) = self.shared.orders.get_order_info(order.order_id) {
-                let mut state = info.order_state;
-                state.status = status_str.into();
-                // Enrich contract with secdef cache at read time
-                let contract = if info.contract.con_id != 0 {
-                    self.core.get_contract(info.contract.con_id, &self.shared).unwrap_or(info.contract)
+        // Drained once and retained. The queue empties on read and the venue does
+        // not resend completed orders, so later calls answer from this archive.
+        {
+            let mut archive = self.completed.lock().unwrap();
+            for order in self.shared.orders.drain_completed_orders() {
+                let status_str = crate::types::order_status::order_status_str(order.status);
+                let entry = if let Some(info) = self.shared.orders.get_order_info(order.order_id) {
+                    let mut state = info.order_state;
+                    state.status = status_str.into();
+                    // Enrich contract with secdef cache at read time
+                    let contract = if info.contract.con_id != 0 {
+                        self.core.get_contract(info.contract.con_id, &self.shared)
+                            .unwrap_or(info.contract)
+                    } else {
+                        info.contract
+                    };
+                    (contract, info.order, state)
                 } else {
-                    info.contract
+                    (
+                        Contract::default(),
+                        Order { order_id: order.order_id as i64, ..Default::default() },
+                        crate::types::model::OrderState {
+                            status: status_str.into(),
+                            ..Default::default()
+                        },
+                    )
                 };
-                wrapper.completed_order(&contract, &info.order, &state);
-            } else {
-                let contract = Contract::default();
-                let api_order = Order { order_id: order.order_id as i64, ..Default::default() };
-                let state = crate::types::model::OrderState {
-                    status: status_str.into(),
-                    ..Default::default()
-                };
-                wrapper.completed_order(&contract, &api_order, &state);
+                archive.push(entry);
+                // Bound `order_cache` growth: terminal entries are no longer
+                // needed once what they carried has been read out of them.
+                self.shared.orders.remove_order_info(order.order_id);
             }
-            // Bound `order_cache` growth: terminal entries are no longer needed
-            // once delivered through `completed_order`.
-            self.shared.orders.remove_order_info(order.order_id);
+        }
+        // Copied before anything is called back: a callback may ask for these
+        // again, and the lock is not re-entrant.
+        let completed = self.completed.lock().unwrap().clone();
+        for (contract, order, state) in &completed {
+            wrapper.completed_order(contract, order, state);
         }
         wrapper.completed_orders_end();
     }
@@ -345,7 +413,7 @@ impl EClient {
     /// C++.
     /// Bind orders entered elsewhere to this client.
     ///
-    /// Nothing goes to the venue: the counterpart answers this itself, setting
+    /// Nothing goes to the venue; this is answered locally, setting
     /// a property of its own and refusing it for any client but the one those
     /// orders bind to. What that property gates does not arise here — this
     /// session is told about every order on the account, whether it placed
@@ -384,6 +452,22 @@ impl EClient {
         &self, contract: &Contract, side: crate::types::Side, quantity: f64,
         entry: f64, take_profit: f64, stop_loss: f64,
     ) -> Result<[i64; 3], Refusal> {
+        // Checked here rather than in `place_bracket`: every surface that places a
+        // bracket routes through this.
+        self.core.refuse_if_readonly("a bracket").map_err(Refusal::validation)?;
+        // The checks `place_order` applies. An order on a security type the account
+        // is not permitted is returned Inactive with tag 58 empty, so the reason is
+        // stated here instead.
+        ClientCore::validate_order_destination(&contract.exchange)?;
+        ClientCore::validate_order_contract(
+            contract.con_id,
+            &contract.sec_type,
+            &crate::types::model::contract_identity(
+                &contract.last_trade_date_or_contract_month, contract.strike,
+                &contract.right, &contract.multiplier, &contract.currency,
+            ),
+        )?;
+        self.check_sec_type_permitted(&contract.sec_type)?;
         let instrument = self.core.find_or_register_instrument(
             &self.control_tx,
             contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
@@ -395,9 +479,8 @@ impl EClient {
         // Consecutive, because the venue reads the children's numbers as the
         // parent's plus one and two. Taken apart, a bracket links to whatever
         // happened to be placed in between.
-        let parent_id = self.next_order_id();
+        let parent_id = self.reserve_order_ids(3);
         let (tp_id, sl_id) = (parent_id + 1, parent_id + 2);
-        self.next_order_id.store(parent_id as u64 + 3, Ordering::Relaxed);
 
         let scaled = |price: f64| (price * PRICE_SCALE_F) as i64;
         self.send(ControlCommand::Order(OrderRequest::SubmitBracket {

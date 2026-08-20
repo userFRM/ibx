@@ -395,6 +395,7 @@ fn empty_scanner_results() {
         con_ids: vec![],
         entries: vec![],
         scan_time: "2026-03-13".into(),
+        error_text: String::new(),
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);

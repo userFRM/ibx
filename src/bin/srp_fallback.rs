@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut auth = ReconnectAuth {
+        account_id: gw.account_id.clone(),
         trading_port: gw.trading_port,
         hmds_port: gw.hmds_port,
         secdef_port: gw.secdef_port,

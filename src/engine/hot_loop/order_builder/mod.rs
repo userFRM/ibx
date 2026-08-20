@@ -35,7 +35,7 @@ pub(crate) fn drain_and_send_orders(
     };
     let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
     let mut unsent: Vec<OrderRequest> = Vec::new();
-    for mut order_req in orders {
+    for order_req in orders {
         // Once a write has abandoned the transport nothing else can leave on
         // it, and the pre-write guard refuses the rest before they touch the
         // wire. Those are not in doubt the way the failed one is: they were
@@ -60,9 +60,12 @@ pub(crate) fn drain_and_send_orders(
                 OrderRequest::Cancel { order_id } | OrderRequest::Modify { order_id, .. } => {
                     context.order(order_id).is_some_and(|o| o.status == OrderStatus::Uncertain)
                 }
-                OrderRequest::CancelAll { .. } => {
-                    context.uncertain_orders().iter().any(|o| o.status == OrderStatus::Uncertain)
-                }
+                // Scoped to the instrument this request cancels. An
+                // `Uncertain` order on another instrument does not hold it.
+                OrderRequest::CancelAll { instrument } => context
+                    .uncertain_orders()
+                    .iter()
+                    .any(|o| o.instrument == instrument),
                 _ => false,
             };
         if waits_for_recovery {
@@ -78,20 +81,14 @@ pub(crate) fn drain_and_send_orders(
         // and a write that fails must not leave that attempt standing as though
         // the broker had accepted it.
         let before = context.order(oid).copied();
-        let speculative = match order_req {
-            OrderRequest::Modify { .. } => None,
-            _ => None,
-        };
-        // Snap every price to the contract's tick grid before encoding. The tick comes
-        // from the market-data subscription ack;
-        // without one it is 0 and prices pass through unchanged.
-        if let Some(instrument) = order_req.instrument() {
-            order_req.snap_prices(context.market.min_tick_scaled(instrument));
-        }
+        // Prices go out as stated. The venue rejects a price off the
+        // contract's tick grid rather than adjusting it, so snapping here would
+        // substitute a price the caller never gave.
         let result = match order_req {
             OrderRequest::SubmitEx { order_id, instrument, side, qty, kind, tif, attrs } => {
                 send_order_ex(
-                    conn, context, account_id, order_id, instrument, side, qty, kind, tif, &attrs,
+                    conn, context, shared, account_id, order_id, instrument, side, qty, kind, tif,
+                    &attrs,
                 )
             }
             OrderRequest::SubmitBracket {
@@ -129,6 +126,17 @@ pub(crate) fn drain_and_send_orders(
                 let tp_price_str = format_price(take_profit);
                 let sl_price_str = format_price(stop_loss);
                 let oca_group = format!("OCA_{parent_id}");
+                // Contract identity tags on every leg. A symbol alone names an
+                // option or future family, which the venue answers as ambiguous
+                // or unknown. Built before the tracking below borrows the
+                // context mutably, then appended to each leg.
+                let identity: Vec<(u32, String)> = {
+                    let mut f = Vec::new();
+                    push_contract_identity(&mut f, context, instrument);
+                    f
+                };
+                let identity: Vec<(u32, &str)> =
+                    identity.iter().map(|(t, v)| (*t, v.as_str())).collect();
 
                 // 1. Parent order: limit entry
                 context.insert_order(crate::types::Order::new(
@@ -142,7 +150,7 @@ pub(crate) fn drain_and_send_orders(
                     0,
                 ));
                 let now = chrono_free_timestamp();
-                let parent_sent = conn.send_fix(&[
+                let mut parent_fields = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &parent_str),
@@ -159,7 +167,9 @@ pub(crate) fn drain_and_send_orders(
                     (6210, &destination),
                     (15, &currency),
                     (204, CUSTOMER),
-                ]);
+                ];
+                parent_fields.extend_from_slice(&identity);
+                let parent_sent = conn.send_fix(&parent_fields);
 
                 // 2. Take-profit child: limit exit, linked to parent, in OCA group
                 context.insert_order(crate::types::Order::new(
@@ -173,7 +183,7 @@ pub(crate) fn drain_and_send_orders(
                     0,
                 ));
                 let now = chrono_free_timestamp();
-                let tp_sent = conn.send_fix(&[
+                let mut tp_fields = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &tp_str),
@@ -193,7 +203,9 @@ pub(crate) fn drain_and_send_orders(
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3
-                ]);
+                ];
+                tp_fields.extend_from_slice(&identity);
+                let tp_sent = conn.send_fix(&tp_fields);
 
                 // 3. Stop-loss child: stop exit, linked to parent, in OCA group
                 context.insert_order(crate::types::Order::new(
@@ -203,7 +215,7 @@ pub(crate) fn drain_and_send_orders(
                 // The legs go out as three messages and the arm reports one
                 // outcome. Reporting only the last meant a parent that never
                 // left was silence, with two children tracked against it.
-                parent_sent.and(tp_sent).and(conn.send_fix(&[
+                let mut sl_fields = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &sl_str),
@@ -223,9 +235,17 @@ pub(crate) fn drain_and_send_orders(
                     (6107, &parent_str),            // ParentOrderID
                     (583, &oca_group),              // OCAGroup
                     (6209, "ReduceOnFillNonBlock"), // OCA type: gateway default 3
-                ]))
+                ];
+                sl_fields.extend_from_slice(&identity);
+                parent_sent.and(tp_sent).and(conn.send_fix(&sl_fields))
             }
             OrderRequest::SubmitLimitFractional { order_id, instrument, side, qty, price } => {
+                // Contract identity tags, as on the bracket legs.
+                let identity: Vec<(u32, String)> = {
+                    let mut f = Vec::new();
+                    push_contract_identity(&mut f, context, instrument);
+                    f
+                };
                 context.insert_order(crate::types::Order::new(
                     order_id, instrument, side, 0, price, b'2', b'0', 0,
                 ));
@@ -240,7 +260,7 @@ pub(crate) fn drain_and_send_orders(
                 // happen to be.
                 let currency = currency_for(context, shared, instrument);
                 let now = chrono_free_timestamp();
-                conn.send_fix(&[
+                let mut fields = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
                     (fix::TAG_SENDING_TIME, &now),
                     (11, &clord_str),
@@ -257,7 +277,9 @@ pub(crate) fn drain_and_send_orders(
                     (6210, &destination),
                     (15, &currency),
                     (204, CUSTOMER),
-                ])
+                ];
+                fields.extend(identity.iter().map(|(t, v)| (*t, v.as_str())));
+                conn.send_fix(&fields)
             }
             OrderRequest::Cancel { order_id } => {
                 let result = send_cancel(conn, context, account_id, order_id);
@@ -269,14 +291,31 @@ pub(crate) fn drain_and_send_orders(
             OrderRequest::CancelAll { instrument } => {
                 let open_ids: Vec<u64> =
                     context.open_orders_for(instrument).iter().map(|o| o.order_id).collect();
-                let mut last_result = Ok(());
+                // One outcome per order. `CancelAll` carries no order id of
+                // its own, so a single result for the set cannot name the order
+                // whose cancel failed.
+                //
+                // The first failure ends the loop: a failed write abandons the
+                // transport, so the remaining cancels cannot leave and are
+                // marked `Uncertain` with it.
+                let mut failed = false;
                 for oid in open_ids {
-                    last_result = send_cancel(conn, context, account_id, oid);
-                    if last_result.is_ok() {
-                        synthesize_pending_cancel(context, shared, oid, event_tx);
+                    if failed {
+                        report_uncertain(context, shared, event_tx, oid);
+                        continue;
+                    }
+                    match send_cancel(conn, context, account_id, oid) {
+                        Ok(()) => synthesize_pending_cancel(context, shared, oid, event_tx),
+                        Err(e) => {
+                            log::error!(
+                                "Failed to cancel order {oid}: {e} — its state is not known",
+                            );
+                            report_uncertain(context, shared, event_tx, oid);
+                            failed = true;
+                        }
                     }
                 }
-                last_result
+                Ok(())
             }
             OrderRequest::Modify {
                 order_id,
@@ -287,8 +326,24 @@ pub(crate) fn drain_and_send_orders(
                 tif,
                 stop_price,
             } => {
-                let orig = context.order(order_id).copied();
+                // A replace states the whole order, so an untracked order has
+                // nothing to restate. Refused rather than sent under defaults
+                // that name no order the venue holds.
+                let Some(orig) = context.order(order_id).copied() else {
+                    log::warn!(
+                        "order {order_id} cannot be replaced: this session holds no record \
+                         of it, and a replace states the whole order",
+                    );
+                    shared.orders.push_order_inactive(
+                        order_id,
+                        ORDER_NOT_FOUND_ERROR_CODE,
+                        format!("no order {order_id} is tracked here, so it cannot be replaced"),
+                    );
+                    continue;
+                };
                 let spec = context.submitted.get(&order_id).cloned();
+                // Whether the resting order was placed with tag 6433 set.
+                let was_outside_rth = spec.as_ref().is_some_and(|s| s.attrs.outside_rth);
                 // What the replace states. A zero field states nothing, so the
                 // resting order's value stays in force. The fields a caller
                 // changed are stated, so a change to the order type, the
@@ -297,56 +352,29 @@ pub(crate) fn drain_and_send_orders(
                 // below overwrites it. A trigger on the request only means one
                 // when the replace also states what it is replacing into.
                 let ord_type_stated = ord_type != 0;
-                let ord_type =
-                    if ord_type != 0 { ord_type } else { orig.map_or(b'2', |o| o.ord_type) };
-                let tif = if tif != 0 { tif } else { orig.map_or(b'0', |o| o.tif) };
-                // Modify carries no instrument, so `snap_prices` cannot reach
-                // it and both price-like fields are snapped here against the
-                // tracked order's grid. The trigger needs it as much
-                // as the limit does — a moved stop off the grid is rejected by
-                // the gateway the same way a limit is.
-                let (price, stop_price) = orig.map_or((price, stop_price), |o| {
-                    let tick = context.market.min_tick_scaled(o.instrument);
-                    (
-                        crate::types::snap_to_tick(price, tick),
-                        if stop_price != 0 {
-                            crate::types::snap_to_tick(stop_price, tick)
-                        } else {
-                            0
-                        },
-                    )
-                });
+                let ord_type = if ord_type != 0 { ord_type } else { orig.ord_type };
+                let tif = if tif != 0 { tif } else { orig.tif };
+                // Neither price is snapped to the tick grid; see the submit
+                // path above.
                 // Which tag each price belongs on depends on the order type,
                 // and the answer is needed twice: once for what the engine
                 // records, once for what goes on the wire. A replacement that
                 // recorded the old trigger would leave the next modify
                 // restating a price this one just moved.
                 let trigger_only = is_trigger_only(ord_type);
-                let orig_stop = orig.map_or(0, |o| o.stop_price);
-                let type_changed = orig.is_some_and(|o| o.ord_type != ord_type);
-                // A two-legged type can have its trigger moved, but only if it
-                // has one: b'K' is Limit-if-Touched and Market-to-Limit both,
-                // and the tracked trigger is what separates them. Every other
-                // type keeps the shape it had, so a trigger supplied on the
-                // request cannot become a tag 99 for a limit order.
+                let orig_stop = orig.stop_price;
+                let type_changed = orig.ord_type != ord_type;
+                // A two-legged type carries a trigger on tag 99 when it has
+                // one: either the resting order had one, or this replace states
+                // both the type and the trigger. Every other type keeps the
+                // shape it had, so a trigger on the request cannot become a tag
+                // 99 for a limit order.
                 //
-                // A pegged or relative order tracks its offset in `stop_price`,
-                // so its replace does restate that on 99 — unchanged from
-                // before, and one of the reasons those types are refused a
-                // modify outright.
-                // A two-legged type carries a trigger when it has one, and it
-                // has one either because the resting order did or because this
-                // replace states it. Reading only the resting order sent a
-                // stop-limit with no tag 99 at all when a limit was replaced
-                // into one, which is not a stop-limit the gateway can accept.
-                // A two-legged type carries a trigger when it has one: either
-                // the resting order had one, or this replace states both the
-                // type and the trigger. Reading only the resting order sent a
-                // stop-limit with no tag 99 when a limit was replaced into one.
-                // Reading the request alone is worse — the public client fills
-                // it from aux_price, which on a market-to-limit is meaningless.
+                // A pegged or relative order holds its offset in `stop_price`
+                // and restates it on tag 99 unchanged. Those types are refused
+                // a modify outright.
                 let carries_trigger = trigger_only
-                    || (matches!(ord_type, b'4' | b'K')
+                    || (matches!(ord_type, b'4' | crate::types::ORD_LIT)
                         && if ord_type_stated {
                             // The replace names the type, so only what it also
                             // states belongs to it. The resting trigger was the
@@ -369,11 +397,11 @@ pub(crate) fn drain_and_send_orders(
                     orig_stop
                 };
 
-                if let Some(orig) = orig {
+                {
                     // The moved trigger is recorded too: a replacement that
                     // kept the old one would leave the next modify restating a
                     // price this one just moved.
-                    context.insert_order(crate::types::Order::new(
+                    let mut replaced = crate::types::Order::new(
                         order_id,
                         orig.instrument,
                         orig.side,
@@ -382,7 +410,14 @@ pub(crate) fn drain_and_send_orders(
                         ord_type,
                         tif,
                         new_stop,
-                    ));
+                    );
+                    // A replace restates the order's terms, not its history.
+                    // `filled` and `PendingReplace` carry forward: the next
+                    // execution report reconciles its cumulative quantity
+                    // against `filled`.
+                    replaced.filled = orig.filled;
+                    replaced.status = OrderStatus::PendingReplace;
+                    context.insert_order(replaced);
                 }
                 // Versioned ClOrdID chaining: orderId.0 → .1 → .2
                 let prev_ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
@@ -411,31 +446,29 @@ pub(crate) fn drain_and_send_orders(
                 let qty_str = format_uint(qty as u64);
                 let price_str = format_price(price);
                 let now = chrono_free_timestamp();
-                let side_str = orig.map(|o| fix_side(o.side)).unwrap_or("1");
-                let symbol = orig
-                    .map(|o| context.market.symbol(o.instrument).to_string())
-                    .unwrap_or_default();
-                // A replace names the contract by the venue's own local symbol,
-                // which is the same string as the symbol for a stock and a
-                // different one for anything with an expiry or a strike. Naming
+                let side_str = fix_side(orig.side);
+                let symbol = context.market.symbol(orig.instrument).to_string();
+                // A replace names the contract by its local symbol (tag 6035),
+                // which equals the symbol for a stock and differs for anything
+                // with an expiry or a strike. Naming
                 // the family there says nothing about which member is being
                 // replaced.
-                let local_symbol = orig
-                    .and_then(|o| context.market.order_identity(o.instrument))
+                let local_symbol = context
+                    .market
+                    .order_identity(orig.instrument)
                     .map(|id| id.local_symbol)
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| symbol.clone());
-                let (sec_type_str, destination) = orig
-                    .map(|o| context.market.order_routing(o.instrument))
-                    .unwrap_or_else(|| ("STK".to_string(), "SMART".to_string()));
+                let (sec_type_str, destination) = context.market.order_routing(orig.instrument);
                 let ord_type_str = crate::types::ord_type_fix_str(ord_type).to_string();
                 // An order recovered without a stated time-in-force has none to
                 // restate. Tag 59 carries a real instruction on a replace, so a
-                // guess here would set what the gateway is holding — omitted
-                // instead, leaving the resting order's own value in force.
+                // guess here would change what the venue holds. Omitted
+                // instead, leaving the resting order's value in force.
                 let tif_str = std::str::from_utf8(&[tif]).unwrap_or("0").to_string();
-                let con_id_str = orig
-                    .and_then(|o| context.market.con_id(o.instrument))
+                let con_id_str = context
+                    .market
+                    .con_id(orig.instrument)
                     .map(|c| c.to_string())
                     .unwrap_or_default();
 
@@ -454,13 +487,24 @@ pub(crate) fn drain_and_send_orders(
                     fields.push((44, &price_str)); // Price
                 }
                 fields.push((1, account_id)); // Account
-                fields.push((6122, "c")); // Client version
+                // Tag 6122 is the option account. The replace is accepted with
+                // this value; confirmed against a live session.
+                fields.push((6122, "c"));
                 // OutsideRTH, from the order the caller resubmitted rather than
                 // hard-coded: the tracked record cannot express it, and asserting
                 // 1 unconditionally opted every modified order into the extended
                 // session. Same position it held in the capture.
                 if outside_rth {
                     fields.push((6433, "1"));
+                } else if was_outside_rth {
+                    // Omitting tag 6433 on a replace leaves the resting
+                    // order's value in force. No value that clears it has been
+                    // observed, so the caller is told the flag is unchanged.
+                    log::warn!(
+                        "order {order_id} was placed for the extended session and the \
+                         replacement does not ask for it; this client states no value \
+                         that clears it, so the order goes on working outside regular hours",
+                    );
                 }
                 let rest: [(u32, &str); 13] = [
                     (100, &destination),  // where the resting order is working
@@ -500,7 +544,7 @@ pub(crate) fn drain_and_send_orders(
                         &mut attr_fields,
                         &spec.attrs,
                         &spec.kind,
-                        orig.map(|o| o.side).unwrap_or(Side::Buy),
+                        orig.side,
                         exec_inst_for(&spec.kind),
                     );
                     // Stated once. The lean message already names these, and the
@@ -528,18 +572,14 @@ pub(crate) fn drain_and_send_orders(
                 // re-recorded from that echo. Where the recovery accounts for
                 // none of it, the sweep says so rather than this guessing.
                 log::error!("Failed to send order {oid}: {e} — its state is not known");
-                // Back to the last thing the broker was known to hold. The
-                // attempt is dropped: it was never accepted, and hydration
-                // would otherwise read it as the order's own truth for every
-                // field the recovery push does not state. Both belong to the
-                // replace path, which carries one id.
-                if oid != 0 {
-                    if let Some(new_id) = speculative {
-                        context.remove_order(new_id);
-                    }
-                    if let Some(prior) = before {
-                        context.insert_order(prior);
-                    }
+                // Restore the last state the venue is known to hold. An
+                // attempt the venue did not accept is not the order's own
+                // values, and hydration must not read it as such. Replace path
+                // only; it carries one id.
+                if oid != 0
+                    && let Some(prior) = before
+                {
+                    context.insert_order(prior);
                 }
                 // Every leg is marked, not just the one the outcome was
                 // reported under. A bracket's children are sent whatever the
@@ -547,28 +587,7 @@ pub(crate) fn drain_and_send_orders(
                 // wire never confirmed — an entry with exits that may not
                 // exist, which is worse than an entry known to be uncertain.
                 for id in written {
-                    if id == 0 {
-                        continue;
-                    }
-                    context.set_order_status_forced(id, OrderStatus::Uncertain);
-                    let update = OrderUpdate {
-                        order_id: id,
-                        instrument: 0,
-                        status: OrderStatus::Uncertain,
-                        filled_qty: 0.0,
-                        remaining_qty: 0.0, avg_price: 0,
-                        perm_id: 0,
-                        parent_id: 0,
-                        timestamp_ns: 0,
-                    };
-                    shared.orders.push_order_update(update);
-                    // An order whose state is no longer known is the one thing
-                    // a caller must not have to ask for, so it is announced on
-                    // the event channel as well as recorded.
-                    crate::engine::hot_loop::emit(
-                        event_tx,
-                        crate::bridge::Event::OrderUpdate(update),
-                    );
+                    report_uncertain(context, shared, event_tx, id);
                 }
             }
         }
@@ -607,7 +626,10 @@ fn send_cancel(
     // A cancel names the order, and also states what it is cancelling: the
     // quantity and the contract. Naming only the order left the venue to look
     // both up.
-    let qty_str = tracked.map(|o| format_uint(o.qty as u64).to_string());
+    // A fractional order tracks `qty` as zero; the decimal it was sent with is
+    // held only in the enriched record. Tag 38 is omitted rather than sent as
+    // `38=0`.
+    let qty_str = tracked.filter(|o| o.qty > 0).map(|o| format_uint(o.qty as u64).to_string());
     let con_id_str = tracked
         .and_then(|o| context.market.con_id(o.instrument))
         .filter(|c| *c != 0)
@@ -635,6 +657,30 @@ fn send_cancel(
     conn.send_fix(&fields)
 }
 
+/// Mark an order's state unknown and announce it.
+///
+/// Reports the order as this session holds it. Instrument 0 is a valid
+/// instrument id, so a zeroed update names another contract's order.
+fn report_uncertain(
+    context: &mut Context,
+    shared: &Arc<SharedState>,
+    event_tx: &Option<crate::engine::hot_loop::EventSink>,
+    order_id: crate::types::OrderId,
+) {
+    if order_id == 0 {
+        return;
+    }
+    context.set_order_status_forced(order_id, OrderStatus::Uncertain);
+    let Some(order) = context.order(order_id).copied() else { return };
+    let update = crate::engine::hot_loop::ccp::executions::uncertain_update(
+        &order,
+        shared.orders.get_order_info(order_id),
+    );
+    shared.orders.push_order_update(update);
+    // Announced on the event channel as well as recorded.
+    crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::OrderUpdate(update));
+}
+
 fn fix_side(side: Side) -> &'static str {
     match side {
         Side::Buy => "1",
@@ -655,7 +701,7 @@ fn synthesize_pending_cancel(
     order_id: crate::types::OrderId,
     event_tx: &Option<crate::engine::hot_loop::EventSink>,
 ) {
-    if !context.update_order_status(order_id, OrderStatus::PendingCancel) {
+    if !context.update_order_status(order_id, OrderStatus::PendingCancel, false) {
         return; // unknown order, already terminal, or already pending-cancel
     }
     if let Some(order) = context.order(order_id).copied() {
@@ -675,14 +721,14 @@ fn synthesize_pending_cancel(
 }
 
 /// Map the OCA type code (1..=4) to its tag 6209 wire label. 0/unset and
-/// out-of-range coerce to 3 (ReduceOnFillNonBlock), the gateway default.
+/// out-of-range coerce to 3 (ReduceOnFillNonBlock), the protocol default.
 /// Unit a trailing amount is expressed in, on tag 6268: percent, as against
 /// an absolute amount (0) or ticks (1).
 const TRAIL_UNIT_PERCENT: u32 = 100;
 
-/// The SecurityIDSource an order states when the SecurityID it carries is the
-/// venue's own local symbol rather than a public identifier. Not one of the
-/// published sources, which are single characters.
+/// SecurityIDSource (tag 22) for a SecurityID carrying IB's local symbol
+/// rather than a public identifier. Not one of the published sources, which
+/// are single characters.
 const IB_LOCAL_SYMBOL_SOURCE: &str = "101";
 
 /// What this client calls itself when a message asks who originated it.
@@ -691,6 +737,10 @@ const ORIGINATOR: &str = "Socket";
 /// Who the order is for. The venue requires it stated and this client places
 /// orders for the account that authenticated it.
 const CUSTOMER: &str = "0";
+
+/// IB error code 135: the order a request names does not exist. Reported when
+/// a replace arrives for an order this session does not track.
+const ORDER_NOT_FOUND_ERROR_CODE: i32 = 135;
 
 fn oca_type_str(oca_type: u8) -> &'static str {
     match oca_type {
@@ -708,30 +758,30 @@ fn is_trigger_only(ord_type: u8) -> bool {
     matches!(ord_type, b'3' | b'J') || ord_type == crate::types::ORD_STP_PRT
 }
 
-/// What an order says a contract is denominated in.
+/// The currency an order states for a contract (tag 15).
 ///
-/// What the caller registered, where they registered one. Otherwise what the
-/// venue's own definition of that contract says, which is the answer a caller
-/// who named their contract by id alone never gave and the venue always has.
-/// Dollars only where neither states anything, which is what an unstated
-/// currency has always meant here.
-///
-/// Saying dollars from the start put an order for a contract priced in
-/// something else into the wrong currency, on a path a caller reaches by
-/// passing back a contract read out of their own positions.
+/// The caller's own, where they registered one. Otherwise the currency on the
+/// venue's definition of the contract, which a caller naming it by contract id
+/// alone does not supply. Empty where neither states one: the venue infers the
+/// currency from the contract id, and stating a currency the caller did not
+/// give describes a different listing.
 fn currency_for(
     context: &Context,
     shared: &Arc<SharedState>,
     instrument: crate::types::InstrumentId,
 ) -> String {
-    context.market.order_currency_stated(instrument)
+    context
+        .market
+        .order_currency_stated(instrument)
         .or_else(|| {
-            context.market.con_id(instrument)
+            context
+                .market
+                .con_id(instrument)
                 .and_then(|con_id| shared.reference.get_contract(con_id))
                 .map(|known| known.currency)
                 .filter(|c| !c.is_empty())
         })
-        .unwrap_or_else(|| "USD".to_string())
+        .unwrap_or_default()
 }
 
 
@@ -777,12 +827,10 @@ fn push_contract_identity(
     let (sec_type, _) = context.market.order_routing(instrument);
     // How an order names one contract rather than a family.
     //
-    // A stock is named by its symbol and nothing else. Every other kind is
-    // named by the venue's own local symbol on SecurityID, under the source
-    // that says the identifier is the venue's own, and states no trading
-    // class: a class describes a family, which is what left a futures order
-    // ambiguous. Options are the exception here only because they are accepted
-    // as they stand and are left exactly as they were.
+    // A stock is named by its symbol alone. Every other kind is named by its
+    // local symbol on SecurityID (tag 48) under source `101`, and states no
+    // trading class: a trading class names a family, not one contract.
+    // Options keep the encoding they already use.
     let names_itself_by_local_symbol =
         matches!(sec_type.as_str(), "FUT" | "FWD" | "IND" | "BOND" | "CFD" | "CRYPTO" | "WAR");
     // Which kinds state a maturity, and in what form. A future and a warrant
@@ -790,9 +838,15 @@ fn push_contract_identity(
     // states what it has always stated, because that is accepted.
     let states_contract_month = matches!(sec_type.as_str(), "FUT" | "FWD" | "WAR");
     if states_contract_month {
-        let month: String = expiry.chars().take(6).collect();
-        if month.len() == 6 {
-            fields.push((200, month));
+        // A month stated as a month is the contract month; a full date is a
+        // date, and the first six characters of one are not the month it
+        // belongs to. CLZ6 is the December contract and stops trading on the
+        // twentieth of November, so truncating its last trade date named a
+        // contract that does not exist and the venue refused the order. Each
+        // form goes on the tag that carries it, which is the rule every other
+        // kind of contract already follows.
+        if let Some(tag) = super::ccp::maturity_tag(&expiry) {
+            fields.push((tag, expiry.clone()));
         }
     } else if !names_itself_by_local_symbol
         && let Some(tag) = super::ccp::maturity_tag(&expiry)
@@ -816,8 +870,8 @@ fn push_contract_identity(
         fields.push((202, strike));
     }
     // PutOrCall is a code on this wire, not the letter: Call = 1, Put = 0, the
-    // same mapping the security-definition request uses. Sending "C" would name
-    // no side the gateway recognises.
+    // same mapping the security-definition request uses. `C` names no side on
+    // this tag.
     match right.to_ascii_uppercase().as_str() {
         "C" | "CALL" | "1" => fields.push((201, "1".to_string())),
         "P" | "PUT" | "0" => fields.push((201, "0".to_string())),
@@ -834,6 +888,7 @@ fn push_contract_identity(
 fn send_order_ex(
     conn: &mut Connection,
     context: &mut Context,
+    shared: &Arc<SharedState>,
     account_id: &str,
     order_id: crate::types::OrderId,
     instrument: crate::types::InstrumentId,
@@ -853,12 +908,15 @@ fn send_order_ex(
         K::Stop { stop_price } => (b'3', stop_price, stop_price),
         K::StopLimit { price, stop_price } => (b'4', price, stop_price),
         K::TrailingStop { .. } => (b'P', 0, 0),
-        K::TrailingStopLimit { lmt_offset, .. } => (b'P', lmt_offset, 0),
+        // Each kind is tracked under the discriminant whose tag 40 the encoder
+        // below writes, so a replace restates the type the submit sent. Tag 40
+        // has no value `R`: a relative order is `P` with `18=R`.
+        K::TrailingStopLimit { lmt_offset, .. } => (crate::types::ORD_TRAIL_LIMIT, lmt_offset, 0),
         K::TrailPct { .. } => (b'P', 0, 0),
         K::Moc => (b'5', 0, 0),
         K::Loc { price } => (b'B', price, 0),
         K::Mit { stop_price } => (b'J', stop_price, stop_price),
-        K::Lit { price, stop_price } => (b'K', price, stop_price),
+        K::Lit { price, stop_price } => (crate::types::ORD_LIT, price, stop_price),
         K::PegBench { price, .. } => (crate::types::ORD_PEG_BENCH, price, 0),
         K::Mtl => (b'K', 0, 0),
         K::MktPrt => (b'U', 0, 0),
@@ -869,12 +927,12 @@ fn send_order_ex(
         K::SnapPri { offset } => (crate::types::ORD_SNAP_PRI, 0, offset),
         K::PegMkt { offset, .. } => (crate::types::ORD_PEG_MKT, 0, offset),
         K::PegMid { offset, .. } => (crate::types::ORD_PEG_MID, 0, offset),
-        K::Rel { offset } => (b'R', 0, offset),
+        K::Rel { offset } => (b'P', 0, offset),
         K::AdjustableStop { stop_price, .. } => (b'3', 0, stop_price),
         K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', price, 0),
         // Tracked under the what-if marker so the response is recognised as a
         // preview; it never becomes a live order.
-        K::WhatIf { price, .. } => (crate::types::ORD_WHAT_IF, price, 0),
+        K::WhatIf { price, aux, .. } => (crate::types::ORD_WHAT_IF, price, aux),
     };
     context.insert_order(crate::types::Order::new(
         order_id,
@@ -886,9 +944,8 @@ fn send_order_ex(
         tif,
         track_stop,
     ));
-    // Kept so a replace can restate it: the gateway takes a replace as a full
-    // statement of the order, so an attribute this submit made and the replace
-    // leaves out is an attribute the order loses.
+    // Kept so a replace can restate it. A replace is a full statement of the
+    // order: an attribute this submit set and the replace omits is lost.
     context.submitted.insert(
         order_id,
         Box::new(crate::types::OrderSpec { kind: kind.clone(), attrs: attrs.clone() }),
@@ -896,6 +953,14 @@ fn send_order_ex(
 
     let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
     let symbol = context.market.symbol(instrument).to_string();
+    if symbol.is_empty() {
+        // The instrument carries no symbol. Tag 55 goes out empty and the
+        // venue refuses the order.
+        log::warn!(
+            "order {order_id} names instrument {instrument}, which this session \
+             registered under no symbol; the venue will refuse it",
+        );
+    }
     let (sec_type_str, destination) = context.market.order_routing(instrument);
     let now = chrono_free_timestamp().to_string();
     let tif_byte = [tif];
@@ -998,9 +1063,9 @@ fn send_order_ex(
             fields.push((99, format_price(stop_price).to_string()));
         }
         K::MidPrice { .. } => fields.push((40, "MIDPX".to_string())),
-        // The offset rides tag 211, which the gateway requires: without it the
-        // order comes back "Message must contain field # 211" and is never
-        // worked. Seen on all three against a paper account.
+        // Tag 211 carries the offset and is required: without it the order is
+        // rejected with "Message must contain field # 211". Confirmed against a
+        // paper account for all three snap types.
         K::SnapMkt { offset } => {
             fields.push((40, "SMKT".to_string()));
             fields.push((211, format_price(offset).to_string()));
@@ -1017,6 +1082,7 @@ fn send_order_ex(
         // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
         // OrdType sent the two as the same message, saying which peg neither.
         K::PegBench {
+            price,
             ref_con_id,
             is_peg_decrease,
             pegged_change_amount,
@@ -1036,6 +1102,10 @@ fn send_order_ex(
             fields.push((6942, ref_exchange.clone()));
             fields.push((6580, format_price(stock_ref_price).to_string()));
             fields.push((99, format_price(starting_price).to_string()));
+            // Tag 44 bounds the peg. 0 = no bound, so the tag is omitted.
+            if price != 0 {
+                fields.push((44, format_price(price).to_string()));
+            }
         }
         // The venue names these back as PegToMkt and PegToMid under "P", and
         // named them something else entirely under "E" — so an order a caller
@@ -1054,27 +1124,38 @@ fn send_order_ex(
             fields.push((211, format_price(offset).to_string()));
         }
         K::Adaptive { price, .. } => {
-            // capture: Adaptive needs 18=e (ExecInst = adaptive
-            // algo wrapper). Without it the gateway rejects with "Invalid value
-            // in field # 18". The strategy and its one parameter are appended
-            // after the attribute block, where the encoder this replaced put them.
+            // Adaptive requires `18=e`. Without it the order is rejected with
+            // "Invalid value in field # 18"; confirmed against a live session.
+            // The strategy and its parameter are appended after the attribute
+            // block.
             fields.push((40, "2".to_string()));
             fields.push((44, format_price(price).to_string()));
         }
         K::Algo { price, .. } => {
             fields.push((40, "2".to_string()));
             fields.push((44, format_price(price).to_string()));
-            // Same marker the adaptive wrapper carries: an order handed to an
-            // algo says so here, and the gateway refuses every one that does
-            // not with "Invalid value in field # 18" — which it also answers
-            // for a value that is merely the wrong one, so the six algo types
+            // Same `18=e` marker the adaptive wrapper carries. An algo order
+            // without it is rejected with "Invalid value in field # 18", which
+            // is also the answer to a wrong value, so the six algo types
             // were refused identically whether the field was absent or wrong.
         }
-        K::WhatIf { price, ord_type } => {
-            fields.push((40, (ord_type as char).to_string()));
+        K::WhatIf { price, aux, ord_type } => {
+            // Tag 40 as the order itself would state it. Multi-character types
+            // are held as discriminants below the printable range, so the byte
+            // cannot be written out as a character.
+            let ord_type_str = crate::types::ord_type_fix_str(ord_type);
+            fields.push((40, ord_type_str.to_string()));
             // A market preview has no price to state, and stating one is how a
             // market-only security came to be refused as a limit.
-            if ord_type != b'1' {
+            //
+            // Each price on the tag its type carries it on. A trigger-only
+            // type states tag 99 and no tag 44; a stop limit states both.
+            if is_trigger_only(ord_type) {
+                fields.push((99, format_price(aux).to_string()));
+            } else if ord_type == b'4' {
+                fields.push((44, format_price(price).to_string()));
+                fields.push((99, format_price(aux).to_string()));
+            } else if ord_type_str != "1" {
                 fields.push((44, format_price(price).to_string()));
             }
         }
@@ -1093,37 +1174,22 @@ fn send_order_ex(
     // emit it, so it reaches the venue some other way there, but what this
     // client sends has to satisfy the venue rather than match the writer.
     fields.push((204, CUSTOMER.to_string()));
-    // Stated with no value on every order the venue's own client sends: the
-    // alert an order came from, and what that alert asked for. An order that
-    // came from no alert still says so.
+    // Tags 6211 and 6238 name the alert an order came from and what that alert
+    // asked for. Both are stated empty when there is no alert.
     fields.push((6211, String::new()));
     fields.push((6238, String::new()));
-    // MIDPX / SNAP* / PEG* require a directed exchange; everything else
-    // routes per the instrument's registered routing.
-    let destination = match kind {
-        K::MidPrice { .. }
-        | K::SnapMkt { .. }
-        | K::SnapMid { .. }
-        | K::SnapPri { .. }
-        | K::PegMkt { .. }
-        | K::PegMid { .. } => "ISLAND".to_string(),
-        _ => destination,
-    };
+    // Routed per the instrument's own registration, as every other order type
+    // is. A directed exchange is rejected for the midprice, snap and pegged
+    // types: "The order type <name> is invalid for this combination of exchange
+    // and security type". Confirmed against a live session.
     fields.push((100, destination.clone()));
     // Secondary routing field — the reference encoder always writes it
     // alongside the destination.
     fields.push((6210, destination));
-    // What the contract is priced in, where the caller has said. It was a
-    // constant, which is right for a US instrument and wrong for every other:
-    // an order on a contract quoted in another currency named a contract that
-    // is not the one it meant.
-    fields.push((
-        15,
-        context
-            .market
-            .order_identity(instrument)
-            .map_or_else(|| "USD".to_string(), |id| id.currency),
-    ));
+    // Tag 15, read the same way every other submit path reads it, so a
+    // contract registered by conId alone is denominated by its own definition
+    // rather than defaulting to USD.
+    fields.push((15, currency_for(context, shared, instrument)));
 
     push_order_attrs(&mut fields, attrs, &kind, side, exec_inst);
 
@@ -1180,8 +1246,8 @@ fn push_order_attrs(
     if attrs.hidden {
         fields.push((6135, "1".to_string()));
     }
-    // Held until this moment, in the dash-joined UTC form the counterpart
-    // writes on 168 — not the space-joined form used elsewhere here.
+    // Tag 168 takes the dash-joined UTC form, not the space-joined form used
+    // elsewhere here.
     if attrs.good_after > 0 {
         fields.push((168, unix_to_ib_utc_dash(attrs.good_after)));
     }
@@ -1261,8 +1327,12 @@ fn push_order_attrs(
     if attrs.solicited {
         fields.push((6488, "1".to_string()));
     }
-    if attrs.manual_order_indicator > 0 {
-        fields.push((1028, attrs.manual_order_indicator.to_string()));
+    // Tag 1028 carries the character `Y` or `N`, not a number. Any other value
+    // reads as unstated. The tag is omitted when the caller states nothing.
+    match attrs.manual_order_indicator {
+        1 => fields.push((1028, "Y".to_string())),
+        0 => fields.push((1028, "N".to_string())),
+        _ => {}
     }
     if attrs.route_marketable_to_bbo {
         fields.push((8265, "1".to_string()));
@@ -1435,7 +1505,9 @@ fn push_order_attrs(
         fields.push((8415, format_uint(attrs.min_trade_qty as u64).to_string()));
     }
     if attrs.block_order {
-        fields.push((9801, "1".to_string()));
+        // Tag 9801 carries the character `Y`. A numeric `1` is not read, and
+        // the tag is omitted when the flag is off.
+        fields.push((9801, "Y".to_string()));
     }
     if !attrs.auto_cancel_date.is_empty() {
         fields.push((6596, attrs.auto_cancel_date.clone()));
@@ -1489,10 +1561,9 @@ fn push_order_attrs(
     // price. Stated on the contract rather than the order, so an order that
     // named a hedging leg still said nothing about what to hedge with.
     // Which contract to hedge with is stated on the contract and again on the
-    // order, and a caller written against the reference client sets both. Sent
-    // twice the gateway reads it as a second statement of the same field, so
-    // it is stated once. The contract's own answer is preferred: it is where
-    // the hedging leg is named, and the order restates it.
+    // order, and a caller written against the reference client sets both. A
+    // repeated tag reads as a second statement of the same field, so it is
+    // stated once, from the contract.
     let hedge_con_id = attrs.delta_neutral_contract.as_deref()
         .map(|dnc| dnc.con_id)
         .filter(|id| *id != 0)
@@ -1554,11 +1625,8 @@ fn push_order_attrs(
         fields.push((6520, attrs.soft_dollar_tier_val.clone()));
     }
     // The caller's own name for the algo running this order is not sent. The
-    // counterpart declares a field for it, and the venue refuses it: previewed
-    // with one, on an algo and without, it answered "Invalid value in field #
-    // 8016" both times. A field that makes an order fail is worse than one
-    // that is dropped, and the venue's own answer outranks a tag read off a
-    // class that declares it.
+    // Tag 8016 is rejected with "Invalid value in field # 8016" whether or not
+    // the order runs an algo; confirmed against a live session both ways.
     // Who settles this order, where that is not the account's own.
     if !attrs.settling_firm.is_empty() {
         fields.push((6282, attrs.settling_firm.clone()));
@@ -1669,11 +1737,9 @@ fn push_order_attrs(
         K::MidPrice { price_cap } if *price_cap > 0 => {
             fields.push((44, format_price(*price_cap).to_string()));
         }
-        // The offset is stated whether or not it is zero. Pegging at the price
-        // with no offset is an ordinary order, and omitting the tag for it had
-        // the gateway refuse the whole thing — seen against a paper account as
-        // "Invalid value in field # 44", which is what an absent offset leaves
-        // it looking for.
+        // Tag 211 is stated even when the offset is 0. Omitting it is rejected
+        // with "Invalid value in field # 44"; confirmed against a paper
+        // account.
         K::PegMkt { offset, price_cap } => {
             fields.push((211, format_price(*offset).to_string()));
             if *price_cap > 0 {
@@ -1682,15 +1748,19 @@ fn push_order_attrs(
         }
         K::PegMid { offset, price_cap } => {
             // A midpoint peg states its offset one of two ways: as one
-            // continuous number on tag 211, or as a whole-tick part and a
-            // half-tick part together. The counterpart sends a different order
-            // type for the second form, chosen when both parts are set, and
-            // states no peg instruction beside it. Zero is how the first form
-            // says it is not the second.
+            // continuous number on tag 211, or as a whole-tick part on tag 8403
+            // and a half-tick part on tag 8404. The two-part form has its own
+            // tag 40 value and carries no peg instruction on tag 18. 0 on both
+            // parts selects the continuous form.
             //
-            // Both parts were sent as zero whatever the caller asked for, so a
-            // caller stating the two-part offset had it replaced with nothing
-            // and got the continuous form with no offset in it.
+            // ponytail: the two-part form is selected on both parts being
+            // non-zero. The protocol also requires each part to be an exact
+            // multiple of the contract's price increment, and the two to differ
+            // by exactly half of it; an off-grid pair is rejected by the venue.
+            // Applying that test here would use an increment that is 0 until a
+            // subscription is acknowledged, which downgrades a valid two-part
+            // peg to the continuous form with no diagnostic. Add the test once
+            // the increment is known before the order is built.
             let whole = if attrs.mid_offset_at_whole == f64::MAX { 0.0 } else { attrs.mid_offset_at_whole };
             let half = if attrs.mid_offset_at_half == f64::MAX { 0.0 } else { attrs.mid_offset_at_half };
             fields.push((8403, format!("{whole:.6}")));

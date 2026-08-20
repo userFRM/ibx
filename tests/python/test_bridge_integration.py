@@ -492,7 +492,10 @@ class TestFillDispatch:
         c._test_dispatch_once()
 
         status_events = [e for e in w.events if e[0] == "order_status"]
-        assert status_events[0][2] == "PartiallyFilled"
+        # A partly filled working order is Submitted: the venue's vocabulary
+        # has no status of its own for it, and the filled and remaining
+        # quantities carry the distinction.
+        assert status_events[0][2] == "Submitted"
         assert status_events[0][3] == 50.0   # filled
         assert status_events[0][4] == 50.0   # remaining
 
@@ -506,8 +509,14 @@ class TestFillDispatch:
         exec_events = [e for e in w.events if e[0] == "exec_details"]
         assert len(exec_events) == 1
         execution = exec_events[0][3]
-        assert execution.side == "SELL"
+        # The venue's word for a sale on an execution, not the order action
+        # that produced it. This asserted the order's vocabulary and so passed
+        # while a fill reported a side no reference wrapper recognises.
+        assert execution.side == "SLD"
         assert abs(execution.price - 200.0) < 0.01
+        # An unsolicited fill is numbered -1. The reference wrapper tells one
+        # from the answer to a request it is waiting on by that id.
+        assert exec_events[0][1] == -1
 
     def test_short_sell(self):
         w, c = make_test_client()
@@ -517,7 +526,9 @@ class TestFillDispatch:
         c._test_dispatch_once()
 
         exec_events = [e for e in w.events if e[0] == "exec_details"]
-        assert exec_events[0][3].side == "SSHORT"
+        # A short sale is reported sold. The venue states two sides on an
+        # execution and no third word for this one.
+        assert exec_events[0][3].side == "SLD"
 
     def test_exec_details_has_required_keys(self):
         w, c = make_test_client()
@@ -573,7 +584,10 @@ class TestCancelRejectDispatch:
         errors = [e for e in w.events if e[0] == "error"]
         assert len(errors) == 1
         assert errors[0][1] == 42  # order_id
-        assert errors[0][2] == 202  # error_code for cancel reject
+        # The reason the venue gave, not a single code meaning "cancelled" for
+        # every refusal: 10147 is the order this cancel named not being one the
+        # venue is holding.
+        assert errors[0][2] == 10147
 
 
 class TestReqOpenOrdersOrderState:
@@ -590,9 +604,8 @@ class TestReqOpenOrdersOrderState:
         open_events = [e for e in w.events if e[0] == "open_order"]
         assert len(open_events) == 1, f"expected 1 open_order, got {open_events}"
         state = open_events[0][4]  # captured as dict by RecordingWrapper
-        # If state were still a PyDict, RecordingWrapper.open_order would have
-        # crashed on `order_state.status` (AttributeError on dict). Reaching
-        # here means state was an OrderState instance.
+        # RecordingWrapper.open_order reads `order_state.status`, which raises
+        # AttributeError on a dict. Reaching here means state is an OrderState.
         assert state["status"] == "PendingSubmit"
         # Newly tracked orders have empty margin fields — populated only for what-if.
         assert state["init_margin_after"] == ""
@@ -630,6 +643,29 @@ class TestReqCompletedOrdersOrderState:
         # completed_orders_end must fire after the per-order callbacks.
         end_events = [e for e in w.events if e[0] == "completed_orders_end"]
         assert len(end_events) == 1
+
+    def test_asking_a_second_time_answers_the_same_orders(self):
+        """The queue these arrive on empties as it is read and the venue does
+        not send them again. A second request used to be answered with none of
+        them, so an account that completed a dozen orders today read as having
+        completed nothing after the first ask."""
+        w, c = make_test_client()
+        c._test_push_completed_order(
+            order_id=99, instrument=0, status="Filled", filled_qty=100,
+            symbol="SPY", action="BUY", total_quantity=100.0, lmt_price=400.0,
+            completed_status="Filled", completed_time="20260430-15:30:00",
+            commission_and_fees_currency="USD", warning_text="",
+            commission_and_fees=2.50,
+        )
+        c.req_completed_orders(False)
+        w.events.clear()
+        c.req_completed_orders(False)
+
+        again = [e for e in w.events if e[0] == "completed_order"]
+        assert len(again) == 1, f"the second request answered with {len(again)} orders"
+        assert again[0][1].symbol == "SPY", "and with the contract, not a default one"
+        assert again[0][2].totalQuantity == 100.0, "and the order it was placed for"
+        assert again[0][3]["completed_time"] == "20260430-15:30:00"
 
 
 class TestOrderAllocation:
@@ -819,9 +855,8 @@ class TestAccountDispatch:
         nlv_event = [e for e in events if e[1] == "NetLiquidation"][0]
         assert nlv_event[2] == "100000.00"
         # The currency is whatever the venue stated for this figure. Nothing
-        # stated one here, so nothing is claimed. Asserting dollars would have
-        # the client say so whatever the venue reported, describing an account
-        # held in euros in a currency it does not hold.
+        # stated one here, so the field is empty. A fixed "USD" would describe
+        # an account held in euros in a currency it does not hold.
         assert nlv_event[3] == ""
         assert nlv_event[4] == "DU12345"
 
@@ -995,12 +1030,14 @@ class TestEdgeCases:
             c._test_connect()
 
     def test_req_ids_without_connection(self):
-        """Req_ids fires next_valid_id even without connect."""
+        """The venue states the id an account may next use, so before there is
+        a session there is nothing to answer with. This required an id to be
+        invented, and zero is what got announced."""
         w = RecordingWrapper()
         c = EClient(w)
         c.req_ids()
-        events = [e for e in w.events if e[0] == "next_valid_id"]
-        assert len(events) == 1
+        assert not [e for e in w.events if e[0] == "next_valid_id"]
+        assert [e for e in w.events if e[0] == "error" and e[2] == 504]
 
     def test_disconnect_idempotent(self):
         w, c = make_test_client()
@@ -1054,7 +1091,7 @@ class TestScenarios:
 
         execs = [e for e in w.events if e[0] == "exec_details"]
         assert len(execs) == 1
-        assert execs[0][3].side == "BUY"
+        assert execs[0][3].side == "BOT"
 
     def test_partial_fill_then_cancel(self):
         """Partial fill → cancel → verify statuses."""
@@ -1069,7 +1106,8 @@ class TestScenarios:
         c._test_dispatch_once()
 
         statuses = [e for e in w.events if e[0] == "order_status"]
-        assert statuses[0][2] == "PartiallyFilled"
+        # Submitted, as above: a partial fill is not a status of its own.
+        assert statuses[0][2] == "Submitted"
         assert statuses[1][2] == "Cancelled"
 
     def test_ticks_during_fills(self):

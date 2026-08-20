@@ -19,6 +19,39 @@ from ._state import BracketOrder, HistoricalNews, HistoricalSchedule, LiveState,
 from .ibx import Contract, EClient
 
 
+def _refuse_options(named: str, given) -> None:
+    """A free-form option list this request cannot carry.
+
+    Every one of these was accepted and dropped on the floor, so a caller who
+    tuned a request with one was answered by an untuned request and had no way
+    to tell. Empty or absent is what every ordinary call passes, and that is
+    taken; anything in it is said out loud.
+    """
+    if given:
+        raise NotImplementedError(
+            f"{named}={given!r} is not carried here: this request has no "
+            "free-form option list to send it under, so the request would go "
+            "out without it and answer something other than what was asked"
+        )
+
+
+def _refuse_regulatory_snapshot(asked: bool) -> None:
+    """A regulatory snapshot is a different request, and a chargeable one.
+
+    It was accepted and dropped, so the caller was billed nothing and given an
+    ordinary subscription instead of the single NBBO snapshot they asked for.
+    Refused by name: a request this cannot make is worth more said out loud
+    than answered with something else.
+    """
+    if asked:
+        raise NotImplementedError(
+            "regulatorySnapshot is not carried here: it is a separate, "
+            "chargeable one-shot request, and answering it with an ordinary "
+            "subscription would be a different request than the one asked for. "
+            "Use snapshot=True for the free snapshot this does carry"
+        )
+
+
 class Client:
     """One session, asked questions directly."""
 
@@ -28,8 +61,24 @@ class Client:
         self._pump: threading.Thread | None = None
         self._stop = threading.Event()
         self._subscribed: dict[int, object] = {}
-        self._by_contract: dict[int, int] = {}
+        # Keyed by the kind of stream as well as the contract. One contract can
+        # carry a quote, a book, bars and a tick stream at once, and one slot
+        # per contract meant the newest request overwrote the rest: cancelling
+        # any of them sent the wrong kind of cancel under another request's id,
+        # withdrew a subscription the caller still wanted, and left the one
+        # they asked to stop running at the venue.
+        self._by_contract: dict[tuple[str, int], int] = {}
+        # Which request id each P&L subscription was made under, so a cancel
+        # names the one it was asked about.
+        self._pnl_reqs: dict[tuple[str, str], int] = {}
+        self._pnl_single_reqs: dict[tuple[str, str, int], int] = {}
+        # Which id the calendar was asked for under, so a cancel names it.
+        self._wsh_meta = 0
+        self._wsh_event = 0
         self._req_id = 0
+        # What a wait with no timeout of its own waits for. `setTimeout` names
+        # another.
+        self._timeout = 60
 
     def _next_req_id(self) -> int:
         self._req_id += 1
@@ -153,7 +202,7 @@ class Client:
 
     def ticker(self, contract):
         """The quote for a contract already subscribed to, or nothing."""
-        req_id = self._by_contract.get(id(contract))
+        req_id = self._by_contract.get(("quote", id(contract)))
         if req_id is None:
             for rid, c in self._subscribed.items():
                 if getattr(c, "conId", None) and getattr(c, "conId", None) == getattr(contract, "conId", None):
@@ -175,16 +224,28 @@ class Client:
         ticks reach it. Its fields are ``None`` until the venue sends them, so a
         caller can tell "no bid yet" from "a bid of zero".
         """
-        del regulatorySnapshot, mktDataOptions
-        req_id = self._next_req_id()
-        self._subscribed[req_id] = contract
-        self._by_contract[id(contract)] = req_id
-        ticker = self.wrapper.bind_ticker(req_id, contract)
-        self.client.req_mkt_data(req_id, contract, genericTickList, snapshot, False, [])
+        _refuse_options("mktDataOptions", mktDataOptions)
+        _refuse_regulatory_snapshot(regulatorySnapshot)
+        req_id, ticker = self._start_quote(contract, genericTickList, snapshot)
+        self._by_contract[("quote", id(contract))] = req_id
         return ticker
 
+    def _start_quote(self, contract, genericTickList="", snapshot=False):
+        """Subscribe and hand back the request id along with the quote.
+
+        The id is what a cancel names. A caller who owns it can withdraw its
+        own subscription without going through the per-contract registry,
+        which holds one quote per contract object and would otherwise lose
+        whichever came first.
+        """
+        req_id = self._next_req_id()
+        self._subscribed[req_id] = contract
+        ticker = self.wrapper.bind_ticker(req_id, contract)
+        self.client.req_mkt_data(req_id, contract, genericTickList, snapshot, False, [])
+        return req_id, ticker
+
     def cancelMktData(self, contract):
-        req_id = self._by_contract.pop(id(contract), None)
+        req_id = self._by_contract.pop(("quote", id(contract)), None)
         if req_id is None:
             return
         self._subscribed.pop(req_id, None)
@@ -203,8 +264,12 @@ class Client:
         that has not spoken.
         """
         del account
+        # Waits for the venue to say it has stated every figure, not for the
+        # first of them. Stopping at the first handed back one field of an
+        # account and read the same as a whole one, so a caller sizing a
+        # position off net liquidation sized it off whatever had landed.
         deadline = time.monotonic() + timeout
-        while not self.wrapper.snapshot_account_values() and time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self.wrapper.account_download_finished():
             time.sleep(0.05)
         return self.wrapper.snapshot_account_values()
 
@@ -226,30 +291,50 @@ class Client:
         return self.wrapper.snapshot_bars()
 
     def cancelPnL(self, account="", modelCode=""):
-        del account, modelCode
-        self.client.cancel_pnl(self._req_id)
+        """Withdraw the P&L subscription this account and model asked for.
+
+        The id the request was made under is what the venue and the client
+        underneath both match a cancel against. This used to send the newest
+        request id of any kind, so any request in between made the cancel name
+        something else: the P&L stream carried on and nothing said so.
+        """
+        req_id = self._pnl_reqs.pop((account, modelCode), None)
+        if req_id is not None:
+            self.client.cancel_pnl(req_id)
 
     def cancelPnLSingle(self, account="", modelCode="", conId=0):
-        del account, modelCode, conId
-        self.client.cancel_pnl_single(self._req_id)
+        """As above, for one position's P&L."""
+        req_id = self._pnl_single_reqs.pop((account, modelCode, conId), None)
+        if req_id is not None:
+            self.client.cancel_pnl_single(req_id)
 
     # -- waiting -----------------------------------------------------------
 
     def waitOnUpdate(self, timeout=0):
-        """Wait for something to arrive.
+        """Wait for something to arrive, and say whether anything did.
 
-        A pump is already running, so this is a sleep with a floor rather than
-        an event loop turn. It returns True to say the wait completed, matching
-        the wrapper this follows.
+        A pump is already running, so this watches what it records rather than
+        turning an event loop. False means the wait ran out with the session
+        silent, which is what a program checking that its feed is alive is
+        asking. Returning True regardless made that check one that could not
+        fail, so a dead feed read exactly like a busy one.
+
+        With no timeout, the one set by ``setTimeout`` is used.
         """
-        time.sleep(timeout if timeout else 0.01)
-        return True
+        seen = self.wrapper.updates()
+        deadline = time.monotonic() + (timeout or self._timeout)
+        while time.monotonic() < deadline:
+            if self.wrapper.updates() != seen:
+                return True
+            time.sleep(0.005)
+        return False
 
     def sleep(self, secs=0.02):
         time.sleep(secs)
         return True
 
     def setTimeout(self, timeout=60):
+        """How long a wait with no timeout of its own waits for."""
         self._timeout = timeout
 
     def loopUntil(self, condition=None, timeout=0):
@@ -276,19 +361,24 @@ class Client:
         returned with its fields unset rather than dropped, so the result lines
         up with what was asked for.
         """
-        del regulatorySnapshot
-        tickers = [self.reqMktData(c, snapshot=True) for c in contracts]
+        _refuse_regulatory_snapshot(regulatorySnapshot)
+        # Its own ids, kept here rather than in the per-contract registry. A
+        # snapshot on a contract already streaming would otherwise overwrite
+        # the stream's id there, and cancelling the snapshot would drop the
+        # entry and leave the stream running with nothing to name it by.
+        started = [self._start_quote(c, snapshot=True) for c in contracts]
+        tickers = [t for _, t in started]
         deadline = time.monotonic() + timeout
-        # What a snapshot is asked for is the quote, so that is what this
-        # waits for. Waiting for any field at all was answered by the previous
-        # close, which arrives first, and the quote was cancelled before it
-        # came.
+        # A snapshot is asked for the quote, so that is what this waits for.
+        # Waiting for any field at all is satisfied by the previous close,
+        # which arrives first, and cancels before the quote lands.
         while time.monotonic() < deadline:
             if all(t.hasBidAsk() or t.last is not None for t in tickers):
                 break
             time.sleep(0.01)
-        for c in contracts:
-            self.cancelMktData(c)
+        for req_id, _ in started:
+            self._subscribed.pop(req_id, None)
+            self.client.cancel_mkt_data(req_id)
         return tickers
 
     def whatIfOrder(self, contract, order, timeout=5):
@@ -297,33 +387,56 @@ class Client:
         The order is marked as a question rather than an instruction, so nothing
         reaches the market. Returns what the venue answered about margin and
         commission, or raises if it answered nothing.
+
+        The caller's order is handed back as they wrote it. The mark used to
+        stay on it, so the next time they placed that same order it went out as
+        another question and nothing reached the market. The record the preview
+        left behind is dropped for the same reason: a question is not an order,
+        and the session reported one working that nobody had sent.
         """
+        stated = getattr(order, "whatIf", False), getattr(order, "orderId", 0)
+        order_id = stated[1] or self.client.next_order_id()
         order.whatIf = True
-        trade = self.placeOrder(contract, order)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if trade.orderState is not None:
-                return trade.orderState
-            time.sleep(0.01)
-        raise TimeoutError("the venue did not answer what the order would cost")
+        order.orderId = order_id
+        try:
+            trade = self.placeOrder(contract, order)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if trade.orderState is not None:
+                    return trade.orderState
+                time.sleep(0.01)
+            raise TimeoutError("the venue did not answer what the order would cost")
+        finally:
+            order.whatIf, order.orderId = stated
+            self.wrapper.forget_trade(order_id)
 
     def reqScannerData(self, subscription, scannerSubscriptionOptions=None, scannerSubscriptionFilterOptions=None, timeout=5):
-        del scannerSubscriptionOptions, scannerSubscriptionFilterOptions
-        req_id = self.reqScannerSubscription(subscription)
+        """Run a scan and hand back its rows, in the order the venue ranked them.
+
+        Waits for the venue to say it has named every row. Stopping at the
+        first one it had named was a scan of one out of fifty, with nothing to
+        say the rest were still coming.
+        """
+        req_id = self.reqScannerSubscription(
+            subscription, scannerSubscriptionOptions, scannerSubscriptionFilterOptions,
+        )
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            rows = self.wrapper.take_scanner(req_id)
-            if rows:
-                self.cancelScannerSubscription(req_id)
-                return [cd for _, cd in rows]
+        while time.monotonic() < deadline and not self.wrapper.scanner_finished(req_id):
             time.sleep(0.01)
+        rows = self.wrapper.take_scanner(req_id)
         self.cancelScannerSubscription(req_id)
-        return []
+        self.wrapper.forget_scanner(req_id)
+        return rows
 
     def reqScannerSubscription(self, subscription, scannerSubscriptionOptions=None, scannerSubscriptionFilterOptions=None):
-        del scannerSubscriptionOptions, scannerSubscriptionFilterOptions
+        """Start a scan. The filters go with it; dropped, the scan that runs is
+        a broader one than the caller described."""
         req_id = self._next_req_id()
-        self.client.req_scanner_subscription(req_id, subscription)
+        self.client.req_scanner_subscription(
+            req_id, subscription,
+            scannerSubscriptionOptions or [],
+            scannerSubscriptionFilterOptions or [],
+        )
         return req_id
 
     def cancelScannerSubscription(self, req_id):
@@ -334,35 +447,44 @@ class Client:
     def bracketOrder(
         self, action, quantity, limitPrice, takeProfitPrice, stopLossPrice, **kwargs
     ):
-        """A parent and its two exits, linked so that filling one cancels the other.
+        """A parent and its two exits, each numbered and each naming its parent.
 
-        Built here; nothing is sent. The children are held until the parent is
-        transmitted, which is what stops a stop-loss reaching the market before
-        there is a position for it to protect.
+        Built here; nothing is sent. Each order is given its own id and both
+        exits name the parent's, which is what holds them at the venue until
+        the parent fills and what makes filling one withdraw the other. Left
+        unnumbered they are three unrelated orders, and placing them sends a
+        stop-loss to the market with no position behind it.
+
+        The wrapper this follows holds the first two back with transmit=False
+        as well. There is no staging here — an order reaches the market when it
+        is placed — so an order carrying it is refused outright, and the parent
+        id is what does the linking.
         """
         from .ibx import Order
 
         reverse = "SELL" if action.upper() == "BUY" else "BUY"
         parent = Order()
+        parent.orderId = self.client.next_order_id()
         parent.action = action
         parent.orderType = "LMT"
         parent.totalQuantity = quantity
         parent.lmtPrice = limitPrice
-        parent.transmit = False
 
         take_profit = Order()
+        take_profit.orderId = self.client.next_order_id()
+        take_profit.parentId = parent.orderId
         take_profit.action = reverse
         take_profit.orderType = "LMT"
         take_profit.totalQuantity = quantity
         take_profit.lmtPrice = takeProfitPrice
-        take_profit.transmit = False
 
         stop_loss = Order()
+        stop_loss.orderId = self.client.next_order_id()
+        stop_loss.parentId = parent.orderId
         stop_loss.action = reverse
         stop_loss.orderType = "STP"
         stop_loss.totalQuantity = quantity
         stop_loss.auxPrice = stopLossPrice
-        stop_loss.transmit = True
 
         for o in (parent, take_profit, stop_loss):
             for k, v in kwargs.items():
@@ -397,16 +519,25 @@ class Client:
         return self.client.replace_fa(self._next_req_id(), faDataType, xml)
 
     def reqWshMetaData(self):
-        return self.client.req_wsh_meta_data(self._next_req_id())
+        self._wsh_meta = self._next_req_id()
+        return self.client.req_wsh_meta_data(self._wsh_meta)
 
     def cancelWshMetaData(self, reqId=0):
-        return self.client.cancel_wsh_meta_data(reqId or self._req_id)
+        """Withdraw the calendar request this session made.
+
+        Falling back to the newest request id of any kind, any request in
+        between made the cancel name something else: the calendar carried on
+        and an unrelated subscription was withdrawn in its place.
+        """
+        return self.client.cancel_wsh_meta_data(reqId or self._wsh_meta)
 
     def reqWshEventData(self, data):
-        return self.client.req_wsh_event_data(self._next_req_id(), data)
+        self._wsh_event = self._next_req_id()
+        return self.client.req_wsh_event_data(self._wsh_event, data)
 
     def cancelWshEventData(self, reqId=0):
-        return self.client.cancel_wsh_event_data(reqId or self._req_id)
+        """As above, for the events themselves."""
+        return self.client.cancel_wsh_event_data(reqId or self._wsh_event)
 
     def getWshMetaData(self):
         return self.reqWshMetaData()
@@ -423,12 +554,10 @@ class Client:
         status moves under the caller as the venue answers. That is what makes
         it worth holding on to rather than reading a return code.
 
-        A contract with no ``conId`` is resolved before the order is sent, and
-        that resolution is a request and an answer, so this call waits for it.
-        Against a gateway it never waited, because the gateway had resolved the
-        contract before the order reached it. Call ``qualifyContracts`` once and
-        place against the result — which their own examples do — and nothing
-        here waits.
+        A contract with no ``conId`` is resolved before the order is sent. That
+        resolution is a request and an answer, so this call blocks until it
+        completes. Call ``qualifyContracts`` once and place against the result,
+        as the reference client's examples do, and this call does not block.
         """
         order_id = getattr(order, "orderId", 0) or self.client.next_order_id()
         try:
@@ -450,9 +579,19 @@ class Client:
     def reqAutoOpenOrders(self, autoBind=True):
         self.client.req_auto_open_orders(autoBind)
 
-    def reqCompletedOrders(self, apiOnly=False):
+    def reqCompletedOrders(self, apiOnly=False, timeout=5):
+        """The orders the venue has finished with.
+
+        Waits for the venue to say it has named them all, and hands back what
+        it named. This used to return the session's ordinary trades, so an
+        answer that arrived and an answer that never came looked the same.
+        """
+        self.wrapper.forget_completed()
         self.client.req_completed_orders(apiOnly)
-        return self.trades()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not self.wrapper.completed_orders_finished():
+            time.sleep(0.01)
+        return self.wrapper.snapshot_completed()
 
     def exerciseOptions(
         self, contract, exerciseAction, exerciseQuantity, account="", override=False,
@@ -465,42 +604,42 @@ class Client:
     # -- streams the caller reads through the live state ------------------
 
     def reqMktDepth(self, contract, numRows=5, isSmartDepth=False, mktDepthOptions=None):
-        del mktDepthOptions
+        _refuse_options("mktDepthOptions", mktDepthOptions)
         req_id = self._next_req_id()
         self._subscribed[req_id] = contract
-        self._by_contract[id(contract)] = req_id
+        self._by_contract[("depth", id(contract))] = req_id
         self.client.req_mkt_depth(req_id, contract, numRows, isSmartDepth, [])
         return req_id
 
     def cancelMktDepth(self, contract, isSmartDepth=False):
-        req_id = self._by_contract.pop(id(contract), None)
+        req_id = self._by_contract.pop(("depth", id(contract)), None)
         if req_id is not None:
             self._subscribed.pop(req_id, None)
             self.client.cancel_mkt_depth(req_id, isSmartDepth)
 
     def reqRealTimeBars(self, contract, barSize=5, whatToShow="TRADES", useRTH=True, realTimeBarsOptions=None):
-        del realTimeBarsOptions
+        _refuse_options("realTimeBarsOptions", realTimeBarsOptions)
         req_id = self._next_req_id()
         self._subscribed[req_id] = contract
-        self._by_contract[id(contract)] = req_id
+        self._by_contract[("bars", id(contract))] = req_id
         self.client.req_real_time_bars(req_id, contract, barSize, whatToShow, useRTH, [])
         return req_id
 
     def cancelRealTimeBars(self, bars):
-        req_id = bars if isinstance(bars, int) else self._by_contract.pop(id(bars), None)
+        req_id = bars if isinstance(bars, int) else self._by_contract.pop(("bars", id(bars)), None)
         if req_id is not None:
             self.client.cancel_real_time_bars(req_id)
 
     def reqTickByTickData(self, contract, tickType="Last", numberOfTicks=0, ignoreSize=False):
         req_id = self._next_req_id()
         self._subscribed[req_id] = contract
-        self._by_contract[id(contract)] = req_id
+        self._by_contract[("ticks", id(contract))] = req_id
         self.client.req_tick_by_tick_data(req_id, contract, tickType, numberOfTicks, ignoreSize)
         return req_id
 
     def cancelTickByTickData(self, contract, tickType="Last"):
         del tickType
-        req_id = self._by_contract.pop(id(contract), None)
+        req_id = self._by_contract.pop(("ticks", id(contract)), None)
         if req_id is not None:
             self.client.cancel_tick_by_tick_data(req_id)
 
@@ -509,15 +648,33 @@ class Client:
 
     # -- account ----------------------------------------------------------
 
-    def reqAccountSummary(self, group="All", tags=""):
-        self.client.req_account_summary(self._next_req_id(), group, tags)
-        return self.accountValues()
+    def reqAccountSummary(self, group="All", tags="", timeout=5):
+        """What the venue says the account is worth, tag by tag.
+
+        The request is answered on its own callback, which this records. It
+        used to hand back the running account values instead — a different set,
+        arriving from a different subscription — while the rows actually asked
+        for reached a callback nothing implemented and were dropped.
+        """
+        req_id = self._next_req_id()
+        self.wrapper.forget_account_summary(req_id)
+        self.client.req_account_summary(req_id, group, tags)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not self.wrapper.account_summary_finished(req_id):
+            time.sleep(0.01)
+        return self.wrapper.take_account_summary(req_id)
 
     def reqPnL(self, account="", modelCode=""):
-        self.client.req_pnl(self._next_req_id(), account, modelCode)
+        req_id = self._next_req_id()
+        self._pnl_reqs[(account, modelCode)] = req_id
+        self.client.req_pnl(req_id, account, modelCode)
+        return req_id
 
     def reqPnLSingle(self, account, modelCode, conId):
-        self.client.req_pnl_single(self._next_req_id(), account, modelCode, conId)
+        req_id = self._next_req_id()
+        self._pnl_single_reqs[(account, modelCode, conId)] = req_id
+        self.client.req_pnl_single(req_id, account, modelCode, conId)
+        return req_id
 
     def reqAccountUpdatesMulti(self, account="", modelCode="", ledgerAndNLV=False):
         self.client.req_account_updates_multi(self._next_req_id(), account, modelCode, ledgerAndNLV)
@@ -554,14 +711,14 @@ class Client:
         self.client.req_news_providers()
 
     def reqNewsArticle(self, providerCode, articleId, newsArticleOptions=None):
-        del newsArticleOptions
+        _refuse_options("newsArticleOptions", newsArticleOptions)
         self.client.req_news_article(self._next_req_id(), providerCode, articleId, [])
 
     def reqHistoricalNews(
         self, conId, providerCodes, startDateTime, endDateTime,
         totalResults=100, historicalNewsOptions=None,
     ):
-        del historicalNewsOptions
+        _refuse_options("historicalNewsOptions", historicalNewsOptions)
         return [
             HistoricalNews(*row)
             for row in self.client.news_headlines(
@@ -596,14 +753,14 @@ class Client:
         self, contract, startDateTime="", endDateTime="", numberOfTicks=1000,
         whatToShow="TRADES", useRth=True, ignoreSize=False, miscOptions=None,
     ):
-        del miscOptions
+        _refuse_options("miscOptions", miscOptions)
         self.client.req_historical_ticks(
             self._next_req_id(), contract, startDateTime, endDateTime,
             numberOfTicks, whatToShow, 1 if useRth else 0, ignoreSize, [],
         )
 
     def cancelHistoricalData(self, bars):
-        req_id = bars if isinstance(bars, int) else self._by_contract.pop(id(bars), None)
+        req_id = bars if isinstance(bars, int) else self._by_contract.pop(("history", id(bars)), None)
         if req_id is not None:
             self.client.cancel_historical_data(req_id)
 
@@ -626,9 +783,14 @@ class Client:
         return self.trades()
 
     def reqExecutions(self, execFilter=None):
-        del execFilter
-        self.client.req_executions(1)
-        return self.fills()
+        """The fills the filter names, and only those.
+
+        The filter goes to the client, which decides what the request replays.
+        Dropped, the answer was every fill the session had seen: another
+        client's, and ones before the cutoff the caller asked from."""
+        before = len(self.wrapper.snapshot_fills())
+        self.client.req_executions(self._next_req_id(), execFilter)
+        return self.wrapper.snapshot_fills()[before:]
 
     def reqManagedAccts(self):
         self.client.req_managed_accts()
@@ -680,7 +842,26 @@ class Client:
         keepUpToDate=False,
         chartOptions=None,
     ):
-        del formatDate, keepUpToDate, chartOptions
+        _refuse_options("chartOptions", chartOptions)
+        # Refused rather than dropped. This answers once with the bars the
+        # venue has, so a caller asking for a series that keeps updating would
+        # be handed a snapshot that never changes; and it hands back the
+        # moments as the venue spelled them, so one asking for seconds since
+        # the epoch would be reading dates. Both are carried by the client
+        # underneath, where the answer arrives on a callback.
+        if keepUpToDate:
+            raise NotImplementedError(
+                "keepUpToDate is not carried here: this answers once with the "
+                "bars the venue has. Ask the client for a series that keeps "
+                "updating: ib.client.req_historical_data(...), whose bars "
+                "arrive on historicalDataUpdate"
+            )
+        if formatDate != 1:
+            raise NotImplementedError(
+                f"formatDate={formatDate} is not carried here: the bars come "
+                "back stating the moment as the venue spells it. Ask the "
+                "client for another shape: ib.client.req_historical_data(...)"
+            )
         return self.client.historical_data(
             contract,
             endDateTime,
@@ -698,7 +879,7 @@ class Client:
         return self.client.histogram_data(contract, useRTH, period)
 
     def reqFundamentalData(self, contract: Contract, reportType: str, fundamentalDataOptions=None):
-        del fundamentalDataOptions
+        _refuse_options("fundamentalDataOptions", fundamentalDataOptions)
         return self.client.fundamental_data(contract, reportType)
 
     # -- what has not been carried across yet ----------------------------
@@ -723,33 +904,6 @@ class Client:
                 f"neither this session nor the client underneath has {name!r}"
             ) from None
 
-
-#: Every method the wrapper this follows has, that this facade does not carry
-#: yet. Listed rather than inferred so that the count is a fact and not an
-#: impression, and so a caller gets a named refusal instead of an AttributeError
-#: that reads like a typo.
-_NOT_YET = frozenset({
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-})
 
 #: The session under the name the widely used asynchronous wrapper gives it, so
 #: a program written against that one — and a test written against this one —

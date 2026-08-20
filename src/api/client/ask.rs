@@ -5,9 +5,16 @@
 //! the right shape for a program with its own event loop. It is a poor shape
 //! for asking one question. These ask, wait, and hand back the answer.
 //!
-//! They drive `process_msgs` themselves, so a caller already pumping it from
-//! another thread should keep using the callbacks: the two would compete for
-//! the same events.
+//! They drive `process_msgs` themselves. That drains everything the session
+//! has queued, and a question keeps what carries its own request id and
+//! discards the rest, so what arrives while a question is waiting is delivered
+//! to that question rather than to a wrapper of the caller's. A program that
+//! reads the session through its own wrapper, or through
+//! [`Client`](crate::api::Client), should know that a question opens a window
+//! of that shape: it lasts until the answer or the timeout. Where nothing may
+//! be missed, take the events from the channel
+//! [`connect_with_events`](super::EClient::connect_with_events) hands back,
+//! which the engine fills whether anything is pumping or not.
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -125,7 +132,7 @@ pub struct AccountValue {
 pub struct OrderReport {
     /// The order this is about.
     pub order_id: i64,
-    /// The venue's own word for it: `Filled`, `Cancelled`, `Inactive`, and so on.
+    /// The venue's word for it: `Filled`, `Cancelled`, `Inactive`, and so on.
     pub status: String,
     /// How much has filled.
     pub filled: f64,
@@ -395,9 +402,13 @@ impl EClient {
         let req_id = ask_id();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Headlines { req_id, state: Arc::clone(&state) };
+        // A count below zero is not a count: cast unchecked it asked for four
+        // billion headlines.
+        let total_results = u32::try_from(total_results).map_err(|_| {
+            Refusal::validation(format!("total_results {total_results} is negative"))
+        })?;
         self.req_historical_news(
-            req_id, con_id, provider_codes, start_date_time, end_date_time,
-            total_results as u32,
+            req_id, con_id, provider_codes, start_date_time, end_date_time, total_results,
         )?;
         self.wait_for(&mut collector, &state, &format!("headlines for contract {con_id}"))
     }
@@ -468,10 +479,18 @@ impl EClient {
     ///
     /// The order is marked as a question rather than an instruction, so
     /// nothing reaches the market.
-    /// A type this client states no byte for is previewed as a limit at the
-    /// same price: the margin comes back for a limit rather than for the order
-    /// asked about. Eleven types state a byte; the rest — trailing, pegged,
-    /// relative, snap and the touched types — do not.
+    ///
+    /// The preview states the order's own type, so a security that refuses a
+    /// type refuses the preview of it rather than answering about an order
+    /// that was not asked about. What it cannot state is the instruction that
+    /// separates types sharing one: trailing, relative and the pegged pair are
+    /// all sent as "P" and separated by their ExecInst, which a preview does
+    /// not carry, so the venue reads any of them as the same peg. The margin is
+    /// the same either way — it follows the position the order would leave, not
+    /// the instruction that reaches it.
+    ///
+    /// A type this client states no value for is previewed as a limit at the
+    /// same price, which is the only thing left to ask.
     pub fn what_if_order(
         &self, contract: &Contract, order: &crate::types::model::Order,
     ) -> Result<crate::types::model::OrderState, Refusal> {
@@ -614,8 +633,11 @@ impl EClient {
                 let report = OrderReport {
                     order_id, status: status.to_string(), filled, remaining,
                     // A status arriving after a fill can state no average; the
-                    // one already reported is the better answer.
-                    avg_price: if avg_price > 0.0 {
+                    // one already reported is the better answer. Nothing is
+                    // what zero means, and only zero: an instrument can trade
+                    // at a negative price, and reading anything below zero as
+                    // unstated reported the previous average for exactly those.
+                    avg_price: if avg_price != 0.0 {
                         avg_price
                     } else {
                         r.as_ref().map_or(0.0, |p| p.avg_price)
@@ -760,11 +782,13 @@ pub struct ScanRow {
     pub rank: i32,
     /// What the venue says the contract is.
     pub details: ContractDetails,
-    /// How far it sits from the scan's benchmark, where the scan states one.
+    /// How far it sits from the scan's benchmark. Empty: the venue answers a
+    /// scan on this connection with the contracts it found and the time it ran,
+    /// and states none of the three below.
     pub distance: String,
-    /// What that benchmark is.
+    /// What that benchmark is. Empty, as above.
     pub benchmark: String,
-    /// What the scan projects, where it projects anything.
+    /// What the scan projects. Empty, as above.
     pub projection: String,
 }
 
@@ -777,7 +801,8 @@ pub struct Schedule {
     pub end: String,
     /// The zone the times above are stated in.
     pub time_zone: String,
-    /// Each session: its start, its end, and the day it belongs to.
+    /// Each session, in the order the venue states it: the day it belongs to,
+    /// then when it opens and when it closes.
     pub sessions: Vec<(String, String, String)>,
 }
 
@@ -825,7 +850,12 @@ impl EClient {
         let mut collector = Rows { req_id, state: Arc::clone(&state) };
         self.req_scanner_subscription(req_id, instrument, location, scan_code, most, &[])?;
         let found = self.wait_for(&mut collector, &state, &format!("a {scan_code} scan"));
-        let _ = self.cancel_scanner_subscription(req_id);
+        // Withdrawn, and said so when it is not: a scan left running keeps
+        // answering into a session nobody is reading, and this call states that
+        // it does not leave one.
+        if let Err(e) = self.cancel_scanner_subscription(req_id) {
+            log::warn!("scan {req_id} was not withdrawn: {e}");
+        }
         found
     }
 
@@ -868,14 +898,14 @@ impl EClient {
 
     /// What the corporate-events calendar says it carries.
     ///
-    /// As the venue's own JSON: it states a schema of its own that changes
+    /// As the venue's JSON: it states a schema of its own that changes
     /// without notice, and a shape imposed here would be a shape to keep in
     /// step with it.
     pub fn calendar_schema(&self) -> Result<String, Refusal> {
         self.ask_wsh(None)
     }
 
-    /// The calendar's events for one contract, as the venue's own JSON.
+    /// The calendar's events for one contract, as the venue's JSON.
     pub fn calendar_events(&self, con_id: i64) -> Result<String, Refusal> {
         self.ask_wsh(Some(con_id))
     }

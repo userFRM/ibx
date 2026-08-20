@@ -480,6 +480,16 @@ fn order_status_equality() {
     assert_eq!(OrderStatus::Submitted, OrderStatus::Submitted);
     assert_ne!(OrderStatus::Filled, OrderStatus::Cancelled);
     assert_ne!(OrderStatus::PartiallyFilled, OrderStatus::Filled);
+
+    // The outward vocabulary has no status of its own for a partly filled
+    // working order: the venue reports it as submitted and the filled and
+    // remaining quantities carry the distinction. Named as one it sat in
+    // neither the active set nor the done set of a program reading this, so a
+    // working order read as neither running nor finished.
+    use crate::types::order_status::{is_open_status, order_status_str};
+    assert_eq!(order_status_str(OrderStatus::PartiallyFilled), "Submitted");
+    assert!(is_open_status(order_status_str(OrderStatus::PartiallyFilled)));
+    assert!(!is_open_status("PartiallyFilled"), "and it is not a status this states");
 }
 
 // --- WhatIfResponse ---
@@ -501,8 +511,8 @@ fn what_if_response_is_copy() {
         commission_currency: String::new(),
         warning_text: String::new(),
     };
-    // The reply carries the venue's own words now, so it is cloned rather
-    // than copied.
+    // The reply carries venue-supplied text, so it is cloned rather than
+    // copied.
     let r2 = r.clone();
     assert_eq!(r.init_margin_after, r2.init_margin_after);
     assert_eq!(r.commission, r2.commission);
@@ -510,14 +520,44 @@ fn what_if_response_is_copy() {
     assert_eq!(r.init_margin_change(), r.init_margin_after - r.init_margin_before);
 }
 
+/// A preview carries what the order would cost, and where the venue can only
+/// bound that cost it says so as a range in a stated currency, with any warning
+/// it has about the order beside it. Dropped on the way to the callback, a
+/// preview reported a cost of zero for every such order.
+#[test]
+fn a_preview_carries_the_cost_the_venue_quoted() {
+    let reply = WhatIfResponse {
+        order_id: 1,
+        instrument: 0,
+        init_margin_before: 0,
+        maint_margin_before: 0,
+        equity_with_loan_before: 0,
+        init_margin_after: 0,
+        maint_margin_after: 0,
+        equity_with_loan_after: 0,
+        commission: 0,
+        min_commission: 175 * (PRICE_SCALE / 100),
+        max_commission: 320 * (PRICE_SCALE / 100),
+        commission_currency: "USD".into(),
+        warning_text: "this order will be routed away".into(),
+    };
+    let state = crate::types::model::OrderState::from(&reply);
+    assert!((state.min_commission_and_fees - 1.75).abs() < 1e-9, "{state:?}");
+    assert!((state.max_commission_and_fees - 3.20).abs() < 1e-9, "{state:?}");
+    assert_eq!(state.commission_and_fees_currency, "USD");
+    assert_eq!(state.warning_text, "this order will be routed away");
+}
+
 // --- AdjustedOrderType ---
 
+/// Tag 6261 carries the order type's registry code, which is a number for
+/// only two of the four conversions.
 #[test]
 fn adjusted_order_type_fix_codes() {
     assert_eq!(AdjustedOrderType::Stop.fix_code(), "3");
     assert_eq!(AdjustedOrderType::StopLimit.fix_code(), "4");
-    assert_eq!(AdjustedOrderType::Trail.fix_code(), "7");
-    assert_eq!(AdjustedOrderType::TrailLimit.fix_code(), "8");
+    assert_eq!(AdjustedOrderType::Trail.fix_code(), "T");
+    assert_eq!(AdjustedOrderType::TrailLimit.fix_code(), "TSL");
 }
 
 // --- OrderAttrs cash_qty ---
@@ -575,4 +615,79 @@ mod quantity_scale_tests {
         assert_eq!(held / QTY_SCALE, shares);
         assert!(held < Qty::MAX / 2, "a day's volume is nowhere near the ceiling");
     }
+}
+
+/// A preview names the order it was asked about.
+///
+/// The narrower set a replace may restate was shared with previews, so a
+/// trailing stop, a relative, a midprice, a snap and a pegged order all went
+/// out as limits. The margin is the same either way — it follows the position
+/// the order would leave, not the instruction that reaches it — but a security
+/// that refuses limits refused a preview of an order that was not one.
+#[test]
+fn a_preview_states_the_type_it_was_asked_about() {
+    use crate::types::model::Order;
+
+    // What tag 40 carries, which is what the venue reads. Asserting the byte
+    // instead let a type whose value is more than one character pass while the
+    // wire got the discriminant itself — an unprintable byte, not a type.
+    let previewed = |kind: &str| {
+        let mut o = Order::limit("BUY", 1.0, 1.00);
+        o.order_type = kind.to_string();
+        crate::types::ord_type_fix_str(o.what_if_byte())
+    };
+
+    // The types a replace also states, unchanged.
+    assert_eq!(previewed("MKT"), "1");
+    assert_eq!(previewed("LMT"), "2");
+    assert_eq!(previewed("STP LMT"), "4");
+
+    // The types a replace does not state. A preview states the same value the
+    // order itself would be sent as, so these are the strings the new-order
+    // path writes on tag 40.
+    // Trailing, relative and pegged orders are all sent as "P" and told apart
+    // by their ExecInst, so that is what a preview of one states.
+    assert_eq!(previewed("TRAIL"), "P");
+    assert_eq!(previewed("REL"), "P");
+    assert_eq!(previewed("PEG MID"), "P");
+    assert_eq!(previewed("TRAIL LIMIT"), "TSL");
+    assert_eq!(previewed("LIT"), "LT");
+    assert_eq!(previewed("MTL"), "K");
+    assert_eq!(previewed("MIDPRICE"), "MIDPX");
+    assert_eq!(previewed("SNAP MID"), "SMID");
+    assert_eq!(previewed("STP PRT"), "SP");
+    assert_eq!(previewed("PEG BENCH"), "PB");
+
+    // Spelled the way a caller spells it.
+    assert_eq!(previewed("peg mid"), previewed("PEG MID"));
+
+    // Every type a preview names is one the table spells out. A discriminant
+    // with no entry falls back to a limit, which reaches the venue as a
+    // preview of an order the caller did not describe.
+    for kind in [
+        "MKT", "LMT", "STP", "STP LMT", "MOC", "LOC", "MIT", "MTL", "BOX TOP",
+        "MKT PRT", "REL", "TRAIL", "TRAIL LIMIT", "LIT", "STP PRT", "MIDPRICE",
+        "SNAP MKT", "SNAP MID", "SNAP PRI", "PEG MKT", "PEG MID", "PEG BENCH",
+    ] {
+        let s = previewed(kind);
+        assert!(
+            s.is_ascii() && !s.is_empty() && s.bytes().all(|b| b.is_ascii_graphic()),
+            "{kind} previews as {s:?}, which is not a type the venue can read",
+        );
+    }
+
+    // A replace still states only what it can carry, and reads no byte as
+    // "leave the resting order's type alone" — widening that is a change to
+    // modification, not to previews.
+    let mut trailing = Order::limit("BUY", 1.0, 1.00);
+    trailing.order_type = "TRAIL".to_string();
+    assert_eq!(trailing.ord_type_byte(), 0, "a replace cannot restate a trailing stop");
+
+    // Both spellings of a midprice, since the placement path takes both.
+    assert_eq!(previewed("MIDPX"), "MIDPX");
+
+    // A type nobody here knows falls back to a limit, and validation refuses
+    // it before a preview gets this far — see
+    // `a_preview_is_refused_for_a_type_this_client_cannot_send`.
+    assert_eq!(previewed("SOMETHING NEW"), "2");
 }

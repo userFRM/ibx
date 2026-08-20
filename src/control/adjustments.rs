@@ -24,7 +24,7 @@ pub enum AdjustmentKind {
 }
 
 impl AdjustmentKind {
-    /// The venue's own two-letter name for the action, which is the element it
+    /// The venue's two-letter name for the action, which is the element it
     /// arrives under.
     pub fn code(self) -> &'static str {
         match self {

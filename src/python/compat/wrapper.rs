@@ -78,7 +78,7 @@ impl EWrapper {
     /// for a call made with no session.
     fn error(&self, _req_id: i64, _error_code: i64, _error_string: &str, _advanced_order_reject_json: &str) {}
 
-    /// The venue's own clock, in seconds since the epoch.
+    /// The venue clock, in seconds since the epoch.
     fn current_time(&self, _time: i64) {}
 
     // ── Market Data ──
@@ -313,9 +313,8 @@ impl EWrapper {
 
     // ── Options ──
 
-    /// The venue's own model for an option: the volatility its price
-    /// implies, the greeks, and what the model says the option and its
-    /// underlying are worth.
+    /// The venue's model for an option: the volatility its price implies, the
+    /// greeks, and the modelled value of the option and its underlying.
     fn tick_option_computation(
         &self, _req_id: i64, _tick_type: i32, _tick_attrib: i32,
         _implied_vol: f64, _delta: f64, _opt_price: f64, _pv_dividend: f64,
@@ -469,10 +468,15 @@ mod tests {
 
     /// The constructor takes the arguments PyO3 passes a `#[new]`, so the only
     /// way to build one is from Python. That the type is constructible at all
-    /// is what the compiler already checks; this asserts the shape the wrapper
-    /// presents, which is what a caller subclasses.
+    /// is what the compiler already checks; this asserts that the type reaches
+    /// Python carrying callbacks on it.
+    ///
+    /// Which callbacks, and all of them, is asserted where the list can be
+    /// written out without repeating it in two languages:
+    /// `tests/python/test_the_callback_surface_is_complete.py`. Five names
+    /// here would pass while the other seventy-six were missing.
     #[test]
-    fn ewrapper_exposes_the_callback_surface() {
+    fn ewrapper_reaches_python_carrying_callbacks() {
         Python::initialize();
         Python::attach(|py| {
             let cls = py.get_type::<EWrapper>();

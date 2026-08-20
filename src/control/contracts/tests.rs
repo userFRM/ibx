@@ -134,8 +134,8 @@ fn parse_secdef_response() {
     assert_eq!(def.con_id, 265598);
     assert_eq!(def.symbol, "AAPL");
     assert_eq!(def.sec_type, SecurityType::Stock);
-    // Handed back under the name the counterpart hands it back under. What
-    // goes out still routes under the venue's own name.
+    // Handed back under the older spelling. What goes out still routes under
+    // the venue's name.
     assert_eq!(def.exchange, "ISLAND");
     assert_eq!(exchange_to_fix(&def.exchange), "NASDAQ");
     assert_eq!(def.currency, "USD");
@@ -673,6 +673,56 @@ fn sec_type_to_api_str_round_trips_and_other_is_empty() {
     }
 }
 
+/// A symbol search hands back contracts a caller feeds into the next request,
+/// so its security type is the one every request path takes. Handed over as the
+/// wire name for it, a stock arrived as CS and no request would take it.
+#[test]
+fn a_symbol_search_states_the_type_a_request_takes() {
+    let m = SymbolMatch {
+        con_id: 756733,
+        symbol: "SPY".into(),
+        description: "SPDR S&P 500 ETF TRUST".into(),
+        sec_type: SecurityType::Stock,
+        currency: "USD".into(),
+        primary_exchange: "ARCA".into(),
+        derivative_types: vec![],
+    };
+    let described = crate::types::model::ContractDescription::from(&m);
+    assert_eq!(described.sec_type, "STK");
+}
+
+/// A bond definition can arrive as `167=CORP`, the standard FIX spelling. Read
+/// as a type nobody knows, it reached the caller with no security type at all.
+///
+/// What goes back out is BOND. Tag 167 carries each type's own name, with one
+/// exception: a stock is written CS.
+#[test]
+fn a_bond_is_read_from_either_name_and_sent_under_the_venue_s() {
+    assert_eq!(SecurityType::from_fix("CORP"), SecurityType::Bond);
+    assert_eq!(SecurityType::from_fix("BOND"), SecurityType::Bond);
+    assert_eq!(SecurityType::Bond.to_fix(), "BOND");
+    assert_eq!(SecurityType::Bond.to_api_str(), "BOND");
+
+    // The one type whose wire spelling is not its own name.
+    assert_eq!(SecurityType::Stock.to_fix(), "CS");
+    assert_eq!(SecurityType::Stock.to_api_str(), "STK");
+    for other in [
+        SecurityType::Option, SecurityType::Future, SecurityType::Forex,
+        SecurityType::Index, SecurityType::Warrant, SecurityType::FutureOption,
+        SecurityType::Cfd, SecurityType::Commodity, SecurityType::Fund,
+        SecurityType::Forward, SecurityType::Bill, SecurityType::Combo,
+        SecurityType::Crypto, SecurityType::FixedIncome,
+        SecurityType::SecuritiesLending, SecurityType::News,
+        SecurityType::Basket, SecurityType::IndexOption, SecurityType::IcuContract,
+        SecurityType::IcsContract, SecurityType::PhysicalSettlement,
+    ] {
+        assert_eq!(
+            other.to_fix(), other.to_api_str(),
+            "{other:?} is written the same on the wire as it is named",
+        );
+    }
+}
+
 #[test]
 fn parse_matching_symbols_rejects_non_match() {
     let msg = fix::fix_build(&[(TAG_MSG_TYPE, "d")], 1);
@@ -1042,6 +1092,22 @@ mod unread_tag_tests {
         assert!(unread.contains(&9999), "an unread tag was not reported");
         assert!(!unread.contains(&6008), "a tag that is read was reported unread");
     }
+
+    /// The envelope's own tags are on every message the venue sends and say
+    /// nothing about the contract. Counting them among a contract's own fields
+    /// overstates the gap by ten and names the sequence number and the message
+    /// type as dropped contract data.
+    #[test]
+    fn the_envelope_is_not_reported_as_dropped_contract_data() {
+        let frame = b"8=FIX.4.1\x019=0050\x0135=d\x0134=000007\x0152=20260318-14:30:00\x01                      320=R1\x016008=756733\x0155=SPY\x016344=1\x0110=123\x01";
+        let unread = unread_definition_tags(frame);
+        for envelope in [8u32, 9, 10, 34, 35, 52, 6344] {
+            assert!(
+                !unread.contains(&envelope),
+                "tag {envelope} belongs to the message, not the contract: {unread:?}",
+            );
+        }
+    }
 }
 mod unnamed_field_tests {
     use super::super::*;
@@ -1123,8 +1189,8 @@ mod smart_venue_tests {
     /// A table of venues written into this client's own source would name
     /// nothing for every venue absent from it — most of the United States, and
     /// all of everywhere else — with nothing to check
-    /// it against what the server assigns. The counterpart carries no such
-    /// table either: it reads the map off the wire.
+    /// it against what the server assigns. The map is read off the wire
+    /// instead.
     #[test]
     fn a_venues_letter_is_not_this_clients_to_invent() {
         use crate::types::exchange_letter;
@@ -1324,9 +1390,8 @@ mod size_table_tests {
 mod delivered_name_tests {
     use super::super::delivered_exchange;
 
-    /// A US stock on Nasdaq is handed back under the older spelling, the way
-    /// the counterpart hands it back — so a program written against that one
-    /// compares the same here.
+    /// A US stock on Nasdaq is handed back under the older spelling, so a
+    /// program written against the reference API compares the same here.
     #[test]
     fn a_us_stock_on_nasdaq_is_handed_back_as_island() {
         assert_eq!(delivered_exchange("NASDAQ", "STK", "USD", true), "ISLAND");
@@ -1342,7 +1407,7 @@ mod delivered_name_tests {
         assert_eq!(delivered_exchange("", "STK", "USD", true), "");
     }
 
-    /// A session that wants the venue's own name says so, and says it for
+    /// A session that wants the venue's name says so, and says it for
     /// itself, rather than from the process, so one session stating it does
     /// not state it for every other session running beside it.
     #[test]
@@ -1351,7 +1416,7 @@ mod delivered_name_tests {
         assert_eq!(delivered_exchange("NASDAQ", "STK", "USD", true), "ISLAND");
     }
 
-    /// And what goes out still routes under the venue's own name, whatever a
+    /// And what goes out still routes under the venue's name, whatever a
     /// caller was handed: the older spelling reaches nothing.
     #[test]
     fn what_goes_out_still_routes_as_nasdaq() {

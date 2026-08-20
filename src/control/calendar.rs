@@ -10,9 +10,9 @@
 //! another.
 //!
 //! The event request is refused here when no metadata has been asked for
-//! first. That is not this client's rule: the counterpart holds the metadata
-//! and will not build an event request without it, so a request sent anyway
-//! would be one the venue was never asked in the counterpart's own operation.
+//! first. The metadata is a prerequisite of the event request, not a local
+//! rule: an event request built without it is not a request the venue is
+//! asked in normal operation.
 
 // The query a request is built from sits beside the command that carries
 // it. Reachable here because that is the path a program written against this
@@ -45,7 +45,7 @@ pub const CALENDAR_REFUSAL: &str = "159";
 
 /// What this client can be sent, as the venue states it: three bits, set.
 ///
-/// Sent on both requests. It is the venue's own encoding of what a caller can
+/// Sent on both requests. It is the venue's encoding of what a caller can
 /// be given, and a request that states less is answered with less.
 const CLIENT_CAPABILITY: &str = "Bw==";
 
@@ -65,7 +65,7 @@ pub fn meta_data_request() -> String {
 ///
 /// A caller either writes a filter or names a contract. Naming a contract
 /// becomes a watchlist of one, with the contract written as text inside an
-/// array — which is how the venue reads it, and how the counterpart writes it.
+/// array, which is how the venue reads it.
 ///
 /// Nothing is stated where a caller stated nothing: a key with an empty value
 /// is left out rather than sent empty.
@@ -90,9 +90,11 @@ pub fn event_data_request(query: &CalendarQuery) -> Result<String, String> {
     if !query.end_date.trim().is_empty() {
         dates.push(format!(r#""end":"{}""#, query.end_date.trim()));
     }
-    if !dates.is_empty() {
-        parts.push(format!(r#""date":{{{}}}"#, dates.join(",")));
-    }
+    // Always stated, empty where the caller bounded nothing. The window and
+    // the account are present on every request whether or not either holds
+    // anything; omitting them makes a different document.
+    parts.push(format!(r#""date":{{{}}}"#, dates.join(",")));
+    parts.push(r#""account":"""#.to_string());
 
     parts.push(format!(r#""filters":{filter}"#));
     parts.push(r#""api":true"#.to_string());
@@ -101,8 +103,7 @@ pub fn event_data_request(query: &CalendarQuery) -> Result<String, String> {
     parts.push(format!(r#""fill_competitors":{}"#, query.fill_competitors));
     parts.push(r#""mode":"chronological""#.to_string());
     if let Some(limit) = query.total_limit {
-        // Stated as text. The venue takes it that way and the counterpart
-        // writes it that way; a bare number is a different document.
+        // Stated as text. A bare number is a different document.
         parts.push(format!(r#""total_limit":"{limit}""#));
     }
     parts.push(format!(r#""client_capability":"{CLIENT_CAPABILITY}""#));
@@ -151,12 +152,15 @@ mod tests {
         assert!(json.contains(r#""filters":{"portfolio":true,"other":false}"#), "{json}");
     }
 
-    /// A key a caller stated nothing for is left out rather than sent empty.
+    /// The window and the account are stated on every request, empty where
+    /// the caller bounded nothing. A limit the caller did not set is left
+    /// out.
     #[test]
     fn nothing_stated_is_nothing_sent() {
         let json = event_data_request(&CalendarQuery { con_id: Some(1), ..Default::default() })
             .expect("asks");
-        assert!(!json.contains("date"), "an empty window was stated: {json}");
+        assert!(json.contains(r#""date":{}"#), "an unbounded window is still stated: {json}");
+        assert!(json.contains(r#""account":"""#), "the account is stated: {json}");
         assert!(!json.contains("total_limit"), "an unset limit was stated: {json}");
 
         let bounded = event_data_request(&CalendarQuery {

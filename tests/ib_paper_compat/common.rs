@@ -83,7 +83,7 @@ pub(super) struct Conns {
 
 /// Credentials every phase's engine recovers with.
 ///
-/// Set once, after the gateway is up. Without it a phase builds an engine that
+/// Set once, after the session is up. Without it a phase builds an engine that
 /// cannot rebuild a dropped transport, so a drop anywhere in a twenty-minute
 /// run fails whichever phase was unlucky — which is how three runs died on the
 /// farm going away rather than on anything the client did. With it the engine
@@ -152,29 +152,39 @@ pub(super) fn shutdown_and_reclaim(
     Conns { farm, ccp, hmds, account_id }
 }
 
+/// Every FIX message a frame carries, unsigned and decompressed.
+///
+/// A FIXCOMP frame is an envelope holding several messages; all of them are
+/// returned. The venue closes a connection that leaves a TestRequest
+/// unanswered, and a TestRequest can arrive behind another message.
+///
+/// Every frame is unsigned, whatever kind it is: on a signed session the read
+/// chain advances per message, so skipping one leaves the rest unreadable.
+pub(super) fn messages_in(conn: &mut Connection, frame: &Frame) -> Vec<Vec<u8>> {
+    let raw = match frame {
+        Frame::Fix(r) | Frame::FixComp(r) | Frame::Binary(r) => r,
+        // Control-state frames are not consumed downstream.
+        Frame::Control(_) => return Vec::new(),
+    };
+    let Some(unsigned) = conn.unsign(raw) else { return Vec::new() };
+    if matches!(frame, Frame::FixComp(_)) {
+        fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
+    } else {
+        vec![unsigned]
+    }
+}
+
 /// Send a heartbeat on the auth connection and respond to any pending TestRequests.
 /// Prevents IB from killing the connection during phase transitions.
 pub(super) fn ccp_keepalive(ccp: &mut Connection) {
-    // Drain any pending data (heartbeats, TestRequests from IB)
-    let _ = ccp.try_recv();
+    // Drained, not sampled: what is left queued is what the next phase reads, and
+    // a TestRequest among it is one the venue is waiting on.
+    let _ = drained_without_closing(ccp);
     // `extract_frames` on an empty buffer yields nothing, so the guard this
     // replaces was hardwired true and never gated anything.
     let frames = ccp.extract_frames();
     for frame in frames {
-        let raw = match &frame {
-            Frame::Fix(r) | Frame::FixComp(r) | Frame::Binary(r) => r,
-            // Control-state frames are not consumed downstream.
-            Frame::Control(_) => continue,
-        };
-        let Some(unsigned) = ccp.unsign(raw) else { continue };
-        let msg = if matches!(frame, Frame::FixComp(_)) {
-            fixcomp::fixcomp_decompress(&unsigned)
-                .ok()
-                .and_then(|m| m.into_iter().next())
-        } else {
-            Some(unsigned)
-        };
-        if let Some(m) = msg {
+        for m in messages_in(ccp, &frame) {
             let parsed = fix::fix_parse(&m);
             if parsed.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some(fix::MSG_TEST_REQUEST) {
                 // Respond to TestRequest with Heartbeat containing the test ID
@@ -197,6 +207,54 @@ pub(super) fn ccp_keepalive(ccp: &mut Connection) {
     ]);
 }
 
+/// Whether the auth connection still answers.
+///
+/// Sends a TestRequest and requires the Heartbeat carrying that request's id.
+/// Bytes alone do not establish liveness: a Logout precedes the close, so a
+/// read that returns data can come from a connection already going away.
+///
+/// Reads frames to find the answer, so it runs between phases where no engine
+/// holds the connection. Other messages read on the way are consumed.
+fn ccp_answers(ccp: &mut Connection) -> bool {
+    let test_id = format!("reclaim-{}", next_order_id());
+    let ts = ibx::protocol::datetime::chrono_free_timestamp();
+    if ccp
+        .send_fix(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_TEST_REQUEST),
+            (fix::TAG_SENDING_TIME, &ts),
+            (fix::TAG_TEST_REQ_ID, &test_id),
+        ])
+        .is_err()
+    {
+        return false;
+    }
+    // Only the Heartbeat carrying this request's id counts. A Logout is taken as
+    // the connection going away.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match ccp.try_recv() {
+            Ok(0) => std::thread::sleep(Duration::from_millis(50)),
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+        for frame in ccp.extract_frames() {
+            for m in messages_in(ccp, &frame) {
+                let parsed = fix::fix_parse(&m);
+                match parsed.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) {
+                    Some(fix::MSG_LOGOUT) => return false,
+                    Some(fix::MSG_HEARTBEAT)
+                        if parsed.get(&fix::TAG_TEST_REQ_ID).is_some_and(|v| *v == test_id) =>
+                    {
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Generate a unique order ID based on current time. The trailing three
 /// digits come from a process-wide counter: two calls in the same
 /// millisecond (e.g. allocating a parent and child id back-to-back)
@@ -211,6 +269,60 @@ pub(super) fn next_order_id() -> OrderId {
     base + (SEQ.fetch_add(1, Ordering::Relaxed) % 1000)
 }
 
+/// Rebuild the trading connection on the session already open, whatever state
+/// it is in.
+///
+/// For the phases that sit idle. The venue closes a quiet trading connection,
+/// and the two heartbeat phases leave it unused for eighty-five seconds.
+///
+/// Rebuilt unconditionally rather than probed: the venue can answer a liveness
+/// check and close immediately after, so the answer is stale by the next phase.
+/// One logon on an open session is cheap.
+pub(super) fn rebuild_ccp(mut conns: Conns) -> Conns {
+    // The previous connection is dropped whatever state it is in.
+    let _taking_it_away = TakingTheSessionAway::begin();
+    let Some(auth) = RECOVERY_AUTH.get() else { return conns };
+    match gateway::reconnect_ccp(auth) {
+        Ok(ccp) => {
+            // The reconnect sends the same opening sequence a first logon does.
+            // Repeating it here would request the same subscriptions twice.
+            conns.ccp = ccp;
+            println!("  [reconnect] trading connection rebuilt after the idle phases\n");
+        }
+        Err(e) => println!("  [reconnect] could not rebuild after the idle phases: {e}\n"),
+    }
+    conns
+}
+
+/// Read a socket until it has nothing more to say, and report whether it is
+/// still there.
+///
+/// A read returning bytes says nothing about what is queued behind them: a final
+/// message and the close that follows arrive in that order. `Ok(0)` means
+/// nothing more to read; an error means the connection is closed.
+///
+/// Draining to nothing does not establish liveness, since a close already sent
+/// may not have surfaced. Where a phase claims a connection survived, follow
+/// this with [`ccp_still_carrying`].
+pub(super) fn drained_without_closing(conn: &mut Connection) -> bool {
+    loop {
+        match conn.try_recv() {
+            Ok(0) => return true,
+            Ok(_) => continue,
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Whether the auth connection is still carrying traffic, proved by asking it.
+///
+/// Drains what is queued, then sends a TestRequest and requires the Heartbeat
+/// answering it. Reading the socket alone cannot establish this: bytes queued
+/// ahead of a close arrive first.
+pub(super) fn ccp_still_carrying(ccp: &mut Connection) -> bool {
+    drained_without_closing(ccp) && ccp_answers(ccp)
+}
+
 /// Check if CCP connection is alive and reconnect the full gateway if not.
 /// Returns updated Conns (and optionally a new Gateway) with fresh connections.
 pub(super) fn ensure_ccp_alive(
@@ -218,18 +330,15 @@ pub(super) fn ensure_ccp_alive(
     gw: &mut gateway::Gateway,
     config: &GatewayConfig,
 ) -> Conns {
-    // A read that hands back bytes says nothing about what is queued behind
-    // them: the venue's last message and the close that follows it arrive in
-    // that order, and one read of the first reported the connection alive while
-    // the second was already waiting. Read until it says there is nothing more
-    // — Ok(0) is that, an error is the close — so the phase after this one does
-    // not discover it instead.
-    loop {
-        match conns.ccp.try_recv() {
-            Ok(0) => return conns,
-            Ok(_) => continue,
-            Err(_) => break,
-        }
+    let mut closed = !drained_without_closing(&mut conns.ccp);
+    // Draining to nothing does not establish liveness: a close already sent may
+    // not have surfaced on this read. Ask instead — send a TestRequest and
+    // require the answer.
+    if !closed && !ccp_answers(&mut conns.ccp) {
+        closed = true;
+    }
+    if !closed {
+        return conns;
     }
     println!("  [reconnect] CCP connection dead, rebuilding it on this session...");
 
@@ -568,7 +677,7 @@ pub(super) fn london_is_trading() -> bool {
 /// Historical data does not wait for an opening bell: the venue serves last
 /// week's bars at midnight. So silence is either the venue declining and saying
 /// why — pacing, or a product this session is not entitled to — or this client
-/// asking wrongly. Only the first is a skip, and it quotes the venue's own code
+/// asking wrongly. Only the first is a skip, and it quotes the venue's code
 /// and words so the log says which request was refused and for what.
 pub(super) fn historical_silence(shared: &SharedState, what: &str) {
     if let Some((_, code, message)) = shared.reference.drain_historical_errors().first() {
@@ -650,12 +759,23 @@ pub(super) fn no_phase_lost_the_session_unasked() {
 pub(super) fn session_owed(shared: &SharedState, what: &str) {
     // The session owes this only while it has one. A connection that went away
     // explains the absence, and explains it better than the rule does.
-    if shared.take_connection_lost() {
+    if lost_unasked(shared) {
         note_lost_session(what);
         println!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
         return;
     }
     panic!("{what} — the session delivers this whether or not the market is trading.");
+}
+
+/// Whether the session went away for a reason nobody here asked for.
+///
+/// Shutting an engine down sets the same flag a lost connection does, and phases
+/// read it after shutting their engine down. The recorded reason distinguishes
+/// the two; the flag alone does not.
+pub(super) fn lost_unasked(shared: &SharedState) -> bool {
+    // Read from the recorded reason, not the flag: a deliberate shutdown sets the
+    // same flag and records itself as the cause.
+    shared.take_connection_lost() && !shared.connection_lost_by_design()
 }
 
 /// A lookup that had to answer and did not.
@@ -687,7 +807,7 @@ pub(super) fn no_market(shared: &SharedState, what: &str) {
     // reconnect rather than dropping it, so nothing arrives and nothing is
     // wrong with the client — but "the market is quiet" is the one reading that
     // is certainly false.
-    if shared.take_connection_lost() {
+    if lost_unasked(shared) {
         note_lost_session(what);
         println!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
         return;
@@ -703,14 +823,19 @@ pub(super) fn no_market(shared: &SharedState, what: &str) {
 
 /// Reasons a rejection is about the market or the account rather than the
 /// order this client built: the session cannot trade the thing, cannot trade
-/// it now, or cannot afford it. Matched case-insensitively on the venue's own
+/// it now, or cannot afford it. Matched case-insensitively on the venue's
 /// prose, and grown only from a reason a live session actually stated.
+/// "No security definition has been found for the request" is deliberately not
+/// listed. The venue answers it when the described contract matches nothing it
+/// holds — a future named by date where a month is required, an option missing
+/// its right — which is a contract-encoding fault and is what these phases
+/// exist to catch. An account not permitted to trade something is refused in
+/// the words listed below.
 const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     "outside",                  // outside regular trading hours
     "closed",                   // the market is closed
     "no trading permission",
     "not permitted",
-    "no security definition",   // the account cannot see the contract
     "not available",
     "not subscribed",
     "market data",              // no quote to price against
@@ -738,7 +863,7 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     // A time-in-force the venue does not accept for the destination the order
     // is routed to. The destination is not this client's invention: an order
     // on no particular venue, or on the smart route, is sent to the same
-    // place the counterpart sends it, so an order placed the same way through
+    // position the protocol states it in, so an order placed the same way through
     // a gateway is refused with the same words. What is left is the venue's
     // rule about which time-in-force it takes where.
     "is invalid for this combination of exchange and security type",
@@ -800,11 +925,28 @@ pub(super) fn run_submit_cancel_phase(
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+    // The contract these phases order: a US stock routed smart. An instrument
+    // registered by id alone states no security type, and the venue answers an
+    // order carrying an empty tag 167 with "Unsupported type". A caller states
+    // this on the contract it subscribes with; a phase that registers directly
+    // states it here.
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = order_req.order_id();
+    // Tag 6035 order reference, where the order carries one. Read back below from
+    // the venue's report: a reference written into a message and never read back
+    // does not show the venue took it.
+    let stated_ref = match &order_req {
+        OrderRequest::SubmitEx { attrs, .. } => attrs.order_ref.clone(),
+        _ => String::new(),
+    };
 
     control_tx.send(ControlCommand::Order(order_req)).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -817,6 +959,12 @@ pub(super) fn run_submit_cancel_phase(
 
     while Instant::now() < deadline {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            // Scoped to this order. The session reports every order on the
+            // account, including orders left resting by earlier phases and
+            // orders replayed on connecting.
+            if update.order_id != order_id {
+                continue;
+            }
             match update.status {
                 // PreSubmitted (39=A) is the server's ack: received, not yet
                 // working on the exchange. An at-the-open order stops there until
@@ -841,7 +989,7 @@ pub(super) fn run_submit_cancel_phase(
                 // order type the instrument does not support lands here
                 // instead of Rejected. Captured live, STP PRT on a
                 // SMART-routed stock returns Inactive and then refuses the
-                // cancel with 202. That is the gateway declining the
+                // cancel with 202. That is the venue declining the
                 // combination, not the client failing to submit it, so the
                 // phase reports it rather than asserting against it.
                 OrderStatus::Inactive => { order_inactive = true; break; }
@@ -854,7 +1002,30 @@ pub(super) fn run_submit_cancel_phase(
         }
     }
 
+    // Withdrawn unless known terminal. An order that answered nothing, or that
+    // went silent after an acknowledgement, cannot be shown gone; every path
+    // below returns SKIP, and a GTC order would rest at the venue.
+    if !(order_cancelled || order_rejected || order_filled) {
+        let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }));
+        // Long enough for the loop to write it before it is stopped.
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    // Only where the venue reported on this order: an unacknowledged order has no
+    // report to read back from.
+    if !stated_ref.is_empty() && order_acked {
+        let echoed = shared.orders.get_order_info(order_id)
+            .map(|i| i.order.order_ref)
+            .unwrap_or_default();
+        assert_eq!(
+            echoed, stated_ref,
+            "the order was placed naming itself {stated_ref:?} and the venue's \
+             report names it {echoed:?}",
+        );
+        println!("  order reference echoed: {echoed:?}");
+    }
 
     if order_rejected {
         println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, order_id));
@@ -964,6 +1135,27 @@ pub(super) fn now_ib_timestamp() -> String {
     let min = (now % 3600) / 60;
     let sec = now % 60;
     format!("{y:04}{m:02}{day:02}-{hour:02}:{min:02}:{sec:02}")
+}
+
+/// The contract id the venue gave for EUR.USD, as the phase that looks it up
+/// read it off the wire.
+///
+/// Contract ids are venue-assigned and region-specific. A phase carrying a
+/// literal id cannot distinguish a changed identity from a failed subscription.
+/// The phase that resolves it runs immediately before the phases that use it.
+pub(super) static FOREX_CON_ID: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+
+/// A schedule starting shortly from now and running four hours, formatted
+/// `YYYYMMDD-HH:MM:SS` in UTC.
+///
+/// Computed rather than fixed: a literal date passes, and a schedule in the past
+/// is answered on its schedule rather than on its encoding.
+pub(super) fn a_schedule_ahead() -> (String, String) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    (format_utc_timestamp(now + 60), format_utc_timestamp(now + 4 * 3600))
 }
 
 /// Format seconds since epoch as YYYYMMDD-HH:MM:SS UTC.

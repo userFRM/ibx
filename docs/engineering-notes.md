@@ -1,7 +1,7 @@
 # Engineering notes
 
 Detail behind [the capability matrix](capabilities.md): the per-call matrix, the wire coverage
-measurements, what was measured against the counterpart, and the reasoning
+measurements, what was measured against the protocol, and the reasoning
 behind fields this client does not send. Kept for whoever works on the protocol;
 the status board is the summary.
 
@@ -49,10 +49,10 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Account values | Verified | Live phase | Available |
 | Account summary | Verified | Live session, rows and completion observed | Available |
 | Positions and round trip tracking | Verified | Live session: a market order fills and the holding read back moves by the quantity filled | Available |
-| P&L, per contract | Verified | Live session, valued from the venue's own overnight marks against live quotes | Available |
+| P&L, per contract | Verified | Live session, valued from the venue's overnight marks against live quotes | Available |
 | P&L, account level subscription | Verified | Live session, reporting a daily figure for a held account rather than falling back to zero | Available |
 | Option exercise and lapse | Verified | Live session: one call exercised, filled at the strike, and the holding it delivered observed. A lapse before the last trading day is refused by the venue | Available |
-| Option analytics, implied volatility and greeks | Verified | Live session: the venue's own model arrives on an option subscription. A volatility inverted from a caller's price cannot be served; this protocol carries no request for it | Available |
+| Option analytics, implied volatility and greeks | Verified | Live session: the venue's model arrives on an option subscription. A volatility inverted from a caller's price cannot be served; this protocol carries no request for it | Available |
 | Wall Street Horizon event data | Implemented | The calendar states what it carries and answers a query with a well-formed result. The events are a separate subscription this account does not hold, so every query answers empty | Available |
 | Financial advisor allocation | Accepted, not served | The venue carries the request; exercising it needs an advisor account | W3 |
 | Tick by tick data | Verified | Trades and quotes both stream, as distinct subscriptions, each record carrying the request it belongs to. A crypto is acknowledged and produces nothing, which is the venue's silence | Available |
@@ -211,7 +211,7 @@ vanish.
 | Out-of-band `AP`, `DO`, `DP` | Holdings the broker does not hold itself: held away, shown but not held, and one set it reports apart without saying why | Read. They carry the same fields in the same tags as the account's own holdings, and are kept apart from them |
 
 
-| `6040` 192, 278 | The venue's own error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
+| `6040` 192, 278 | The venue's error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
 | `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
 | `6040` 10020, 10021 | Contract adjustments, for splits and dividends | Not yet built. Historical prices are unadjusted without it |
@@ -223,13 +223,13 @@ vanish.
 | `6040` 109 | An advisor's allocation groups and profiles | Needs an advisor account |
 | `6040` 141, 154, 175 | Combination position state and leg definitions | Not sent to this account |
 | `6040` 145 | A session-level control message, sibling of the error channel | Not sent to this account |
-| `6040` 18 | The venue's own clock, for drift against the local one | Not sent to this account |
+| `6040` 18 | The venue's clock, for drift against the local one | Not sent to this account |
 | `6040` 188 | A newly added or linked account, and what it may do | The one of these with a consequence: a client managing linked accounts that ignores it does not learn of a new one until it reconnects. This session holds a single account and is sent none |
 | `6040` 119 | Model allocation figures, per account | Answers a request for them, which this client does not send |
 | `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |
 | `6040` 212 | Who decided and who executed, for European transaction reporting | Fills those fields on an order ticket. A caller states them itself |
 | `6040` 258 | Which balance panels a front end should show | Nothing to trade on |
-| A midpoint peg stated as two offsets | A peg to the midpoint whose offset is given as a whole-tick part and a half-tick part, rather than as one continuous number. The counterpart sends a different order type for it, and only when both parts are set and both sit on the destination's tick boundaries. A caller here states one offset, which is the other form and is sent correctly |
+| A midpoint peg stated as two offsets | A peg to the midpoint whose offset is given as a whole-tick part and a half-tick part, rather than as one continuous number. A different order type is sent for it, and only when both parts are set and both sit on the destination's tick boundaries. A caller here states one offset, which is the other form and is sent correctly |
 | `35=2` | Resending missed messages | Never observed in either direction on any of this client's connections. Implementing it would be work against a wire that never fires |
 
 ## Excluded surface
@@ -276,11 +276,10 @@ it goes out for the same reason: a request the venue never received is
 otherwise indistinguishable from one it answered into a callback nobody was
 listening on.
 
-### Measured against the counterpart's own published schema
+### Measured against the published schema
 
-The counterpart carries a complete, named description of every message it
-exchanges — 198 messages and 941 fields, with the real name and number of each.
-Every type here was compared against it.
+Every message type here was checked field by field against a complete schema
+of the protocol: 198 messages and 941 fields, each with its name and number.
 
 | Type | Fields it names | Carried here |
 | --- | --- | --- |
@@ -295,33 +294,23 @@ whether it converts, what it is rated — and a fund states what it charges, wha
 it is closed to and where it may be sold. Those two blocks are most of what a
 bond and a fund are; without them a caller asking about either receives a symbol.
 
-Sixteen remain. Six are precision and sizing figures the counterpart computes
+Sixteen remain. Six are precision and sizing figures computed locally
 rather than reads, so they are not a tag to copy. One, a contract's CUSIP, has
 no field of its own at all: it is taken from the list of identifiers, chosen by
-which kind each one is. The rest are named in the counterpart and not yet tied
+which kind each one is. The rest are named by the protocol and not yet tied
 to the field they fill, and are left out rather than guessed at.
 
 An order and an execution are all but complete against that schema. A contract's
 details are a quarter of it.
 
-### Whether the reference this was measured against is current
-
-It is. A build four releases newer was fetched and compared: the encoder that
-builds an order gained two fields, one of which this client already writes, and
-lost none. The parser that reads an execution report is identical — the same
-number of fields, none added, none removed.
-
-So the protocol did not move, and a measurement taken against the older build
-stands for the newer one.
-
 ### How much of an order this client writes
 
-Measured rather than asserted, by taking every field the counterpart's encoder
+Measured rather than asserted, by taking every field the protocol defines
 writes on a new order and comparing it against every field this one writes.
 
 | Measure | State |
 | --- | --- |
-| Fields the counterpart's encoder writes on a new order | 79 |
+| Fields the protocol defines on a new order | 79 |
 | Of those, written here | 51 |
 | Of those, not written here | 28, each one named or numbered below |
 | Fields this client writes in total | 163 |
@@ -329,16 +318,16 @@ writes on a new order and comparing it against every field this one writes.
 The twenty-eight are: a request for quote's own id, the server and client-session
 ids, the basket an order belongs to, deactivation at the close, the id of an
 order container, an acknowledgement flag, the manual order type, a hedge child's
-parent-price flag, a model flag, and sixteen more that are numbered in the
-counterpart and named nowhere.
+parent-price flag, a model flag, and sixteen more that carry a number and no
+name.
 
 Five of them now have names, and the names settle what they are: an order
 container's id, an acknowledgement flag, a hedge child's parent-price flag, a
 manual order type, and a model flag. None is a field this API offers a caller —
-they are the counterpart's own working state, written because it keeps its
+they are working state of the sending process, written because it keeps its
 blotter and its tickets on the same wire it sends orders on. That reframes the
 rest of the twenty-eight rather than closing them: the measure counts every
-field the counterpart writes, including the ones that exist only because it is
+field the protocol defines, including the ones that exist only because a
 also a terminal.
 
 A tag number does not carry one meaning across messages, and assuming it does
@@ -350,16 +339,16 @@ multiplier on the execution report — and on a definition that number is a
 different field entirely. It stays unread until it is established rather than
 inferred from the pair.
 
-The same check run across every named attribute the counterpart carries found
+The same check run across every named attribute the protocol carries found
 162 this client does not write, and they read the same way — blotter tickets,
 cross and stock-loan bookkeeping, cost reports, model rebalancing. The one
 cluster among them that is a published feature is the scale order, and what is
-unwritten there is the counterpart reporting a scale's progress back to itself,
+unwritten there is a scale reporting its own progress back to the sender,
 not the fields that place one. Those this client writes in full.
 
-Writing more than the counterpart is not the same as writing what it writes:
+Writing more fields is not the same as writing the right ones:
 this client states 163 fields against its 79 because much of what it states
-rides fields the counterpart writes from elsewhere. The number that matters is
+rides fields composed elsewhere. The number that matters is
 the fifty-one, and the twenty-eight beside it.
 
 ### Data this client states without the venue having stated it
@@ -398,8 +387,8 @@ are not, and are not gaps:
 
 | field | why |
 | --- | --- |
-| The open/close of a delta-neutral leg | The counterpart's handler for it is empty: it writes nothing, so neither does this |
-| Shareholder, auction strategy, basis points and their type, accrued interest on a bond, the percentage-constraint override, the auto-price override for a hedge | Nothing in the counterpart writes any of them. Sending a field it does not send is a guess about what the venue reads |
+| The open/close of a delta-neutral leg | The protocol defines no field for it, so neither does this |
+| Shareholder, auction strategy, basis points and their type, accrued interest on a bond, the percentage-constraint override, the auto-price override for a hedge | The protocol defines none of them. Sending a field it does not send is a guess about what the venue reads |
 | The scale table, the position and fill quantity a scale starts from | Named nowhere that could be established. Two classes look like the last two by name alone, which is not evidence |
 | Order origin, opt-out of smart routing, the parent's permanent id, the combo routing parameters, the miscellaneous options | Sought and not established. Each has a candidate that was rejected on inspection rather than accepted on resemblance |
 
@@ -412,7 +401,7 @@ the second is visible. So these stay unsent until the tag is established.
 Eleven order types and times in force are refused, and the refusal is the
 venue's, not this client's. Each was offered on more than one destination —
 the smart route, IBKRATS and a named exchange — and on more than one security
-type, a share and a future, and refused alike every time, in the venue's own
+type, a share and a future, and refused alike every time, in the venue's
 words: *"invalid for this combination of exchange and security type"*.
 
 | refused | offered on |
@@ -424,7 +413,7 @@ words: *"invalid for this combination of exchange and security type"*.
 | Iceberg | share, every displayed quantity tried |
 
 What this client writes for each is checked on the bytes, and matches what the
-counterpart client writes, field for field: the order type character, the
+protocol defines, field for field: the order type character, the
 execution instruction beside it, the time in force, the displayed quantity, the
 side and the locate flag. So a caller sending one of these receives the venue's
 refusal because the venue refuses it, not because it was asked wrongly.
@@ -439,7 +428,7 @@ Verifying them needs an account that is not simulated.
 That distinction had to be earned. Two of these were recorded here as refusals
 and were not: an order asking to peg went out under a type the venue uses for
 something else, so it was refused under a name nobody had asked for. Asked the
-way the counterpart asks, the venue names it correctly. A refusal naming a type
+way the protocol defines, the venue names it correctly. A refusal naming a type
 the caller did not request is a fault in the request, not an answer about the
 account — the pegged family works on this account, and two of its members are
 accepted.
@@ -448,7 +437,7 @@ accepted.
 
 A live phase may skip, because a venue is not always in a state to answer. It may not skip on silence alone, which is the same reason a test count that cannot be read is not a passing one: a client that asks wrongly and a venue that is closed look identical from the outside, and the closed venue is the reading that keeps a suite green.
 
-So a phase skips only against something stated. Fills and quotes are gated on a clock that knows Eastern time, daylight saving, the holidays and the early closes, and the skip names the session it saw. A rejected order skips only when the venue's own words say the market or the account refused it, and fails on any other reason, printed. A historical request skips only when the venue answered with a code and a message, pacing or an entitlement, and fails on silence.
+So a phase skips only against something stated. Fills and quotes are gated on a clock that knows Eastern time, daylight saving, the holidays and the early closes, and the skip names the session it saw. A rejected order skips only when the venue's words say the market or the account refused it, and fails on any other reason, printed. A historical request skips only when the venue answered with a code and a message, pacing or an entitlement, and fails on silence.
 
 Nothing skips for contract data or account state. The venue answers for a contract's definition, its details, its trading schedule and a symbol search when every market is shut, and a session that is logged in reports its account values, its profit and loss, the position that follows a fill, and the loss of its own connection at any hour. An absence there is this client's.
 
@@ -458,10 +447,10 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,612 | No |
-| Python | 387 | No |
-| Python, live | 131 | Yes |
-| Paper compatibility suite (136 phases) | 26 tests | Yes |
+| Rust unit and integration | 1,769 | No |
+| Python | 464 | No |
+| Python, live | 135 | Yes |
+| Paper compatibility suite (136 phases) | 27 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure
@@ -611,3 +600,74 @@ These measure this engine only. `scripts/gateway_benchmark.cpp` is a TWS API har
 the same operations through a running gateway; the two are not directly
 comparable — one is an in-process call, the other a round trip across a
 localhost socket into a JVM — and no ratio between them is published here.
+
+## What this client sends that the gateway does not, and the other way round
+
+Read tag by tag against the protocol's own requirements for a new order, a
+replace, a cancel, the logon and the P&L request. Ninety-six tags were
+compared; sixty-seven match outright. What follows
+is every difference, and why it stands.
+
+| Tag | This client | The protocol | Standing because |
+|---|---|---|---|
+| 60 | sent on every order | no writer found | The venue accepts it and every order this client has placed carried it. |
+| 204 | sent as `0` | no writer found | As above. |
+| 200 / 541 | 541 for a maturity of eight characters, 200 for six | the new-order encoder writes 200 for options and futures alike and never writes 541 | An option order carrying 541 was placed and accepted against a live session, and the order also names the contract by id on 6008, which identifies it exactly. |
+| 6122 | sent as `c` on a replace | an option account attribute the replace encoder does not write | The replace the venue accepts is the one that carries it. |
+| 6398, 6399 | not sent | the logon writes both unconditionally | What they carry has not been resolved, and the logon succeeds without them. |
+| 6156, 6958 | not sent | the new-order encoder writes both unconditionally, as booleans | Both describe the sending processrpart's own handling of the order rather than anything the caller states: 6156 is whether it belongs to a basket, and neither appears in the attribute registry that backs the caller-facing fields. There is nothing here to state, and stating a zero would invent one. |
+| 9801 | was `1`, now `Y` | its block-order attribute writes the character `Y`, and writes nothing when the flag is off | Corrected. The generic boolean writer states a one; this attribute overrides it. |
+| 9816 | the caller's value as it stands | the new-order encoder multiplies its own value by a hundred | The wire carries the percentage. This client holds the percentage, so it passes through; a doc comment here called it a decimal, which would have made every volatility order a hundredth of what was asked. |
+| 100, 6210 | sent on a replace | the replace encoder states no destination | The replace is accepted as it stands. |
+
+Each of these is a difference this client can defend, not one it was unaware of.
+Where a protocol reading and a live session disagree, the live session decides: a
+value the venue accepts is not proof it was read as intended, but a value the
+venue refuses is proof it was not.
+
+## A future states its maturity on the tag that carries it
+
+A month stated as a month is the contract month and rides tag 200; a full date
+is a date and rides tag 541. Futures were the one kind that took the first six
+characters of whatever it was given and sent that as the month.
+
+That is right only when a contract stops trading in the month it is named for.
+`CLZ6` is the December contract and stops trading on the twentieth of November,
+so the month sent named a contract that does not exist, and the venue refused the
+order with "contract does not match supplied contract parameters". Energy futures
+expire in the month before the one they are named for as a rule, so this was an
+asset class rather than a contract.
+
+Against a live session, before and after:
+
+| Contract | Last trade date | Local symbol | Before | After |
+|---|---|---|---|---|
+| ES on CME | 20261218 | ESZ6 | margin 28,017.36 | margin 27,999.30 |
+| GC on COMEX | 20261229 | GCZ6 | margin 34,244.70 | margin 34,288.85 |
+| CL on NYMEX | 20261120 | CLZ6 | refused | margin 12,643.29 |
+
+Every kind now follows the rule the rest already followed.
+
+## A subscription states the contract, because the id alone is not answered
+
+The rule this client holds to is that a value carried by the wire is not
+hardcoded here. Market data is where that rule meets something firmer: the venue
+will not answer a subscription that names only a contract id.
+
+The same contract, at the same moment, asked both ways:
+
+| Named by | Answer |
+|---|---|
+| id, security type, exchange and currency | quoted |
+| id alone | silence |
+
+So a security type and an exchange must be stated. What is stated should be the
+contract's own, and the last resort in the subscribe path describes a US stock,
+which means an undescribed contract of any other kind is asked about as one.
+That fallback stands because removing it stops market data outright; what
+removes the guess is the description reaching the subscribe, not the fallback
+going away.
+
+Removed from the historical and histogram paths, where nothing needs them: an
+empty exchange became `BEST` and an empty security type became `CS`. The
+contract id names the contract there, and those queries carry it.

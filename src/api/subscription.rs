@@ -46,7 +46,7 @@ pub struct Subscription<T> {
     cancel: Option<Cancel>,
     buffered: VecDeque<T>,
     idle: Duration,
-    /// The venue's own words, if it refused the request.
+    /// The venue's words, if it refused the request.
     refusal: Option<(i64, String)>,
     done: bool,
 }

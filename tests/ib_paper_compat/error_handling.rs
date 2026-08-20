@@ -14,6 +14,10 @@ pub(super) fn phase_ib_error_handling(conns: Conns) -> Conns {
 
     let spy_inst = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(spy_inst, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(spy_inst, "STK", "SMART");
 
     // Submit an order for a non-existent instrument (con_id 999999999)
     // The hot loop should handle this gracefully
@@ -24,7 +28,7 @@ pub(super) fn phase_ib_error_handling(conns: Conns) -> Conns {
 
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: bogus_inst, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -63,7 +67,13 @@ pub(super) fn phase_ib_error_handling(conns: Conns) -> Conns {
 // ─── Phase 114: Pacing violation recovery — rapid historical requests ───
 
 pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
-    println!("--- Phase 114: Pacing Violation Recovery (10 rapid historical requests) ---");
+    // Named for a pacing violation it does not provoke: ten requests against a
+    // limit of roughly sixty in ten minutes will not trip one, and deliberately
+    // tripping it would leave the historical farm throttled for every phase
+    // after this. What it can establish is that none of the ten went missing —
+    // each is answered, or the venue says why. A request that vanishes with
+    // nothing reported is the defect, and reads the same as a throttled one.
+    println!("--- Phase 114: Ten rapid historical requests are each answered or explained ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -75,18 +85,23 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let end_dt = format_utc_timestamp(now);
 
-    // Fire 10 historical requests in rapid succession (IB pacing limit is ~60/10min)
+    // Ten in rapid succession. The venue's limit is roughly sixty in ten
+    // minutes, so this is well inside it by design.
     let num_requests = 10u32;
     for i in 0..num_requests {
-        control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 14000 + i, end_date_time: end_dt.clone(), duration: "1 d".to_string(), bar_size: "5 mins".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
+        control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 14000 + i, end_date_time: end_dt.clone(), duration: "1 d".to_string(), bar_size: "5 mins".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
     }
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut responses_received = std::collections::HashSet::new();
-    let errors_received = 0u32;
+    // What the venue said went wrong, which is where a throttled request is
+    // named. Drained from the historical-error queue: without it a request the
+    // venue refused and a request that vanished are indistinguishable.
+    let mut errors_received: std::collections::HashMap<u32, String> =
+        std::collections::HashMap::new();
 
     while Instant::now() < deadline {
         // Check for historical data responses
@@ -96,6 +111,12 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
                 && resp.is_complete {
                     responses_received.insert(*req_id);
                 }
+        }
+
+        for (req_id, code, message) in shared.reference.drain_historical_errors() {
+            if (14000..14000 + num_requests).contains(&req_id) {
+                errors_received.insert(req_id, format!("{code}: {message}"));
+            }
         }
 
         // Check for error events (pacing violations)
@@ -108,7 +129,7 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
             _ => {}
         }
 
-        if responses_received.len() == num_requests as usize {
+        if responses_received.len() + errors_received.len() == num_requests as usize {
             break;
         }
     }
@@ -116,15 +137,32 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     println!("  Responses received: {}/{}", responses_received.len(), num_requests);
-    println!("  Errors: {errors_received}");
+    println!("  Errors: {}", errors_received.len());
+    for (req_id, why) in &errors_received {
+        println!("    {req_id}: {why}");
+    }
 
-    if responses_received.is_empty() {
+    let unaccounted: Vec<u32> = (14000..14000 + num_requests)
+        .filter(|id| !responses_received.contains(id) && !errors_received.contains_key(id))
+        .collect();
+
+    if responses_received.is_empty() && errors_received.is_empty() {
         // Historical server may be fully rate-limited from prior historical phases
-        println!("  SKIP: No responses — HMDS likely pacing-limited from prior phases\n");
-    } else if responses_received.len() == num_requests as usize {
-        println!("  PASS (all {num_requests} requests completed)\n");
+        println!("  SKIP: nothing came back at all — HMDS is likely throttled from earlier phases\n");
     } else {
-        println!("  PASS ({}/{} completed — pacing may have throttled some)\n", responses_received.len(), num_requests);
+        // A request that neither answered nor was refused is one this client
+        // dropped on the floor, which is not the same as a throttled one.
+        assert!(
+            unaccounted.is_empty(),
+            "{} of {num_requests} historical requests were neither answered nor refused: \
+             {unaccounted:?}. A request that goes missing with nothing reported is not a \
+             throttled one",
+            unaccounted.len(),
+        );
+        println!(
+            "  PASS ({} answered, {} refused, none missing)\n",
+            responses_received.len(), errors_received.len(),
+        );
     }
     conns
 }

@@ -65,7 +65,48 @@ def parse(block: str) -> dict[str, str]:
     )
 
 
+def _off_by_a_bar(mine: dict[str, str], theirs: dict[str, str]) -> bool:
+    """Whether the two bar counts differ by the one bar an hour ticking over adds."""
+    try:
+        return abs(int(mine["bars"]) - int(theirs["bars"])) <= 1
+    except (KeyError, ValueError):
+        return False
+
+
+def _window_slid(mine: dict[str, str], theirs: dict[str, str]) -> bool:
+    """Whether the oldest bar differs because the window moved, not the client.
+
+    The two clients are asked seconds apart, so an hour boundary between them
+    adds a bar at one end and drops one at the other: the counts differ by one
+    and the oldest bar differs with them. Equal counts and a different oldest
+    bar is the two clients disagreeing about the same window, which is a real
+    difference and is counted.
+    """
+    try:
+        return int(mine["bars"]) != int(theirs["bars"]) and _off_by_a_bar(mine, theirs)
+    except (KeyError, ValueError):
+        return False
+
+
+def _selftest() -> int:
+    assert _off_by_a_bar({"bars": "14"}, {"bars": "15"}), "an hour ticked over"
+    assert _off_by_a_bar({"bars": "14"}, {"bars": "14"})
+    assert not _off_by_a_bar({"bars": "2"}, {"bars": "50"}), "that is a disagreement"
+    assert not _off_by_a_bar({"bars": "14"}, {}), "a missing answer is not agreement"
+    assert _window_slid({"bars": "14"}, {"bars": "15"}), "the window moved by one bar"
+    assert not _window_slid({"bars": "14"}, {"bars": "14"}), (
+        "the same window: a different oldest bar is the clients disagreeing"
+    )
+    assert not _window_slid({"bars": "2"}, {"bars": "50"}), "that is a disagreement"
+    assert not _window_slid({"bars": "14"}, {}), "a missing answer is not agreement"
+    assert not _off_by_a_bar({"bars": "—"}, {"bars": "14"})
+    print("ok")
+    return 0
+
+
 def main() -> int:
+    if "--selftest" in sys.argv:
+        return _selftest()
     mine = answers()
     if "--compare" not in sys.argv:
         for key, value in mine.items():
@@ -103,8 +144,16 @@ def main() -> int:
             differ.append(key)
 
     # Bars are asked twice, seconds apart, so an hour can tick over between
-    # them. That one is reported and not counted; everything else must match.
-    counted = [k for k in differ if k != "bars"]
+    # them and one client see a bar the other did not. That is the whole of
+    # what is excused: the count was excused outright, so fifty bars against
+    # two went uncounted too, and the field most likely to expose a real
+    # disagreement was the one field that could not fail.
+    counted = [
+        k
+        for k in differ
+        if not (k == "bars" and _off_by_a_bar(mine, theirs))
+        and not (k == "first_bar" and _window_slid(mine, theirs))
+    ]
     print()
     if counted:
         print(f"the two clients disagree on: {', '.join(counted)}")

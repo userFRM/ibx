@@ -232,7 +232,7 @@ fn poll_pnl_no_subscription_returns_none() {
 /// A total missing one position is not a smaller correct total. When a
 /// position cannot be priced the client-side sum is incomplete — and the
 /// realized figure has already accrued for it, so the three do not even
-/// agree with each other. The gateway's own account numbers are complete by
+/// agree with each other. The venue's account numbers are complete by
 /// construction, so one unpriceable position sends the whole account there.
 #[test]
 fn one_unpriceable_position_sends_the_whole_account_to_the_gateway() {
@@ -307,7 +307,7 @@ fn an_unknown_seed_does_not_suppress_the_rest_of_a_single_callback() {
 /// publishing a flat, but P&L reads the absence back as zero shares and
 /// reports the whole overnight holding as sold. Held 10 at a $730 close,
 /// now $735: the honest answer is 50, the flat reading is -7300, and with
-/// nothing priceable the gateway's own account figure stands instead.
+/// nothing priceable the venue's account figure stands instead.
 #[test]
 fn an_unsizeable_overnight_position_is_not_priced_as_sold() {
     let core = ClientCore::new();
@@ -340,7 +340,7 @@ fn an_unsizeable_overnight_position_is_not_priced_as_sold() {
     let update = core.poll_pnl(&shared).expect("callback must fire");
     assert!(
         (update.daily_pnl - 50.0).abs() < 1e-6,
-        "the gateway's own figure stands; -7300 is the flat reading: daily={}",
+        "the stated figure stands; -7300 is the flat reading: daily={}",
         update.daily_pnl,
     );
 }
@@ -467,7 +467,7 @@ fn poll_pnl_change_detection_suppresses_duplicate() {
 fn poll_pnl_falls_back_to_account_level_without_market_data() {
     // A client that asks only for P&L never subscribes to market data, so no
     // position has a live quote (con_id_to_instrument is empty and every
-    // position hits `continue`). poll_pnl must then emit the gateway's
+    // position hits `continue`). poll_pnl must then emit the venue's
     // account-level P&L instead of returning None forever.
     let core = ClientCore::new();
     let shared = SharedState::new();
@@ -566,11 +566,14 @@ fn the_venues_midnight_value_beats_the_clients_previous_close() {
     assert!((update.daily_pnl - 10.0).abs() < 1e-6, "daily={}", update.daily_pnl);
 }
 
-/// The table is kept as the venue wrote it and read where it is used, so
-/// text that is not a price costs its own contract a valuation and nothing
-/// else. The entry stays in the table exactly as it arrived.
+/// The table is kept as the venue wrote it and read where it is used, so text
+/// that is not a price costs its own contract a valuation. What it must not do
+/// is leave the rest of the account reported as the whole of it: the realized
+/// figure accrues for a contract that cannot be marked while the daily and
+/// unrealized ones do not, so a partial sum does not even agree with itself.
+/// The account goes to the venue's figures instead.
 #[test]
-fn a_mark_that_does_not_read_as_a_number_costs_only_its_own_contract() {
+fn a_mark_that_does_not_read_as_a_number_sends_the_account_to_the_venue() {
     let core = ClientCore::new();
     let shared = SharedState::new();
     core.subscribe_pnl(33);
@@ -601,12 +604,21 @@ fn a_mark_that_does_not_read_as_a_number_costs_only_its_own_contract() {
         (6003i64, "0.00".to_string()),
     ].into());
 
+    // What the venue says about the account as a whole, which is complete by
+    // construction where a sum built here is not.
+    shared.portfolio.set_account(&AccountState {
+        daily_pnl: (12.0 * PRICE_SCALE_F) as i64,
+        unrealized_pnl: (34.0 * PRICE_SCALE_F) as i64,
+        realized_pnl: (9.0 * PRICE_SCALE_F) as i64,
+        ..Default::default()
+    });
+
     let update = core.poll_pnl(&shared).expect("callback must fire");
-    // The one contract with a readable mark: 51.00 now against 50.00 then.
-    assert!((update.daily_pnl - 1.00).abs() < 1e-6,
-        "the readable mark still values its own contract, daily={}", update.daily_pnl);
-    assert!((update.realized_pnl - 9.00).abs() < 1e-6,
-        "what a contract has already realised counts whether or not it can be marked, real={}", update.realized_pnl);
+    assert!((update.daily_pnl - 12.0).abs() < 1e-6,
+        "two contracts could not be marked, so the venue's total stands, daily={}",
+        update.daily_pnl);
+    assert!((update.unrealized_pnl - 34.0).abs() < 1e-6, "unreal={}", update.unrealized_pnl);
+    assert!((update.realized_pnl - 9.0).abs() < 1e-6, "real={}", update.realized_pnl);
     assert_eq!(
         shared.portfolio.venue_price(6002).as_deref(), Some("n/a"),
         "the table holds what the venue wrote; reading it is the caller's job",
@@ -919,4 +931,281 @@ mod exchange_mask_provenance_tests {
             "saying nothing about the currency is not the same as saying USD",
         );
     }
+}
+
+/// A halt changes what every other tick in a quote means: the prices standing
+/// are the ones from before the venue stopped, not a market anyone can deal
+/// on. It arrives on the trading-status tick and is written into the quote and
+/// compared against the last one. Caching it without emitting a tick consumes
+/// the transition, and it cannot be delivered afterwards.
+#[test]
+fn a_halt_the_venue_states_reaches_the_caller() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+
+    let trading = Quote { last: (735.00 * PRICE_SCALE_F) as i64, ..Default::default() };
+    shared.market.push_quote(0, &trading);
+    let first = core.poll_instrument_ticks(&shared, 0, 11);
+    assert!(
+        first.generic_ticks.is_empty(),
+        "a contract that has not stopped states no halt",
+    );
+
+    shared.market.push_quote(0, &Quote { halted: 1, ..trading });
+    let halted = core.poll_instrument_ticks(&shared, 0, 11);
+    let tick = halted.generic_ticks.first().expect("the halt is delivered");
+    assert_eq!(tick.tick_type, TICK_HALTED);
+    assert_eq!(tick.value, 1.0);
+    assert_eq!(tick.req_id, 11);
+    assert!(!tick.is_price, "a halt is not a price");
+
+    // And it is not repeated while nothing about it has changed.
+    assert!(
+        core.poll_instrument_ticks(&shared, 0, 11).generic_ticks.is_empty(),
+        "a halt that is still standing is not restated",
+    );
+
+    // Trading resumes, and that is a transition too.
+    shared.market.push_quote(0, &Quote { halted: 0, ..trading });
+    let resumed = core.poll_instrument_ticks(&shared, 0, 11);
+    assert_eq!(resumed.generic_ticks.first().expect("the resume is delivered").value, 0.0);
+}
+
+/// The summary reports what the venue stated, under the venue's names.
+/// Matched against a list of sixteen names kept here instead, "All" — the
+/// the venue's word for every figure it holds — matched none of them and came
+/// back empty, and the figures that were not on that list went with it.
+#[test]
+fn an_account_summary_reports_every_figure_the_venue_stated() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    for (key, value, currency) in [
+        ("NetLiquidation", "75425.51", "USD"),
+        ("AccruedCash", "12.40", "USD"),
+        ("SMA", "38000.00", "USD"),
+        ("FullInitMarginReq", "1364.01", "USD"),
+        ("TotalCashValue", "5000.00", "EUR"),
+    ] {
+        shared.portfolio.note_account_value(key, value, currency);
+    }
+
+    core.subscribe_account_summary(3, "All");
+    let batch = core.prepare_account_summary(&shared, "DU1").expect("a summary");
+    assert_eq!(batch.req_id, 3);
+    let names: Vec<&str> = batch.entries.iter().map(|e| e.tag.as_str()).collect();
+    for stated in ["NetLiquidation", "AccruedCash", "SMA", "FullInitMarginReq"] {
+        assert!(names.contains(&stated), "{stated} missing from {names:?}");
+    }
+
+    // A figure stated in more than one currency is stated in each of them.
+    core.subscribe_account_summary(4, "TotalCashValue");
+    let batch = core.prepare_account_summary(&shared, "DU1").expect("a summary");
+    assert_eq!(batch.entries.len(), 1);
+    assert_eq!(batch.entries[0].tag, "TotalCashValue");
+    assert_eq!(batch.entries[0].currency, "EUR");
+
+    // And a tag the venue never stated reports nothing rather than a zero.
+    core.subscribe_account_summary(5, "Cushion");
+    let batch = core.prepare_account_summary(&shared, "DU1").expect("a summary");
+    assert!(batch.entries.is_empty(), "{:?}", batch.entries.len());
+}
+
+/// A quote is per unit and a contract may be worth many of them. Valued from
+/// the price alone, an option holding came out at a hundredth of what it is
+/// worth and the account total with it, so such a position goes to the venue's
+/// own figures instead.
+#[test]
+fn an_option_holding_is_not_valued_from_a_per_unit_price() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.subscribe_pnl(41);
+
+    seed_pnl_position(&core, &shared, 7001, 0, 2.0, 3.00, 4.00, 3.00);
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 7001,
+        position: 2.0,
+        avg_cost: (300.0 * PRICE_SCALE_F) as i64,
+        symbol: "SPY   260320C00500000".into(),
+        sec_type: "OPT".into(),
+        currency: "USD".into(),
+        multiplier: "100".into(),
+        ..Default::default()
+    });
+    shared.portfolio.set_account(&AccountState {
+        daily_pnl: (200.0 * PRICE_SCALE_F) as i64,
+        unrealized_pnl: (200.0 * PRICE_SCALE_F) as i64,
+        ..Default::default()
+    });
+
+    let update = core.poll_pnl(&shared).expect("callback must fire");
+    assert!((update.daily_pnl - 200.0).abs() < 1e-6,
+        "the venue's total, not two dollars of per-unit move, daily={}",
+        update.daily_pnl);
+}
+
+/// This subscription does not depend on a market-data one. Answered only from
+/// a live quote, a caller who never asked for market data heard nothing at all
+/// and was told nothing either, though the venue states its own mark for every
+/// position it reports.
+#[test]
+fn a_position_pnl_is_answered_without_a_market_data_subscription() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.subscribe_pnl_single(9, 8001);
+
+    // No entry in con_id_to_instrument: nothing here subscribed to quotes.
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 8001,
+        position: 10.0,
+        avg_cost: (100.0 * PRICE_SCALE_F) as i64,
+        symbol: "SYM8001".into(),
+        sec_type: "STK".into(),
+        currency: "USD".into(),
+        multiplier: String::new(),
+        market_price: (105.0 * PRICE_SCALE_F) as i64,
+        market_value: (1050.0 * PRICE_SCALE_F) as i64,
+        unrealized_pnl: (50.0 * PRICE_SCALE_F) as i64,
+        realized_pnl: 0,
+    });
+    shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
+        con_id: 8001,
+        qty_midnight: Some(10.0),
+        cost_midnight: Some(1000.0),
+        qty_traded: Some(0.0),
+        money_traded: 0.0,
+        realized_pnl: 0.0,
+    }]);
+
+    let updates = core.poll_pnl_single(&shared);
+    let update = updates.first().expect("the venue's mark answers it");
+    assert_eq!(update.req_id, 9);
+    assert!((update.pos - 10.0).abs() < 1e-6);
+    assert!((update.value - 1050.0).abs() < 1e-6, "value={}", update.value);
+    assert!((update.unrealized_pnl - 50.0).abs() < 1e-6, "unreal={}", update.unrealized_pnl);
+    assert!((update.daily_pnl - 50.0).abs() < 1e-6, "daily={}", update.daily_pnl);
+}
+
+/// News is asked for from the providers the logon named this account, and
+/// only by the entry that names it. A fixed pair of codes asks providers the
+/// account may not be entitled to and omits the ones it is, and matching on
+/// the last three characters of an entry subscribes "1292" to news.
+#[test]
+fn news_is_asked_for_from_the_providers_the_logon_named() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.reference.set_news_providers(vec![
+        crate::types::NewsProvider { code: "DJNL".into(), name: "Dow Jones".into() },
+        crate::types::NewsProvider { code: "BRFUPDN".into(), name: "Briefing".into() },
+    ]);
+
+    // Every provider named on this attempt, and nothing if news was not asked
+    // for. The register also emits its own commands, which are not these.
+    let asked = |tick_list: &str| -> Option<String> {
+        let _ = core.register_mkt_data(
+            &shared, &tx, 1, 265598, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            false, tick_list, 0,
+        );
+        let mut named = None;
+        while let Ok(cmd) = rx.try_recv() {
+            if let ControlCommand::SubscribeNews { providers, .. } = cmd {
+                named = Some(providers);
+            }
+        }
+        named
+    };
+
+    assert_eq!(asked("1292"), None, "1292 is not 292");
+    assert_eq!(asked("100,101"), None, "nor is anything else");
+    assert_eq!(
+        asked("292").as_deref(), Some("DJNL*BRFUPDN"),
+        "the providers the logon named",
+    );
+
+    // A caller naming its own set overrides that; emptying it returns to the
+    // logon's answer.
+    core.set_news_providers("BRFG");
+    assert_eq!(asked("292").as_deref(), Some("BRFG"));
+    core.set_news_providers("");
+    assert_eq!(asked("292").as_deref(), Some("DJNL*BRFUPDN"));
+}
+
+/// A mask with bits set and no letters to show for them is one the venue has
+/// not named its exchanges for yet. Caching it as delivered leaves it equal to
+/// the next mask, so it is never rendered again once the names arrive and the
+/// quote's exchange is lost for the life of the subscription.
+#[test]
+fn an_exchange_mask_is_rendered_once_the_venue_names_its_bits() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+
+    shared.market.push_quote(0, &Quote {
+        bid: (150.0 * PRICE_SCALE_F) as i64,
+        bid_exch_mask: 0b101,
+        ..Default::default()
+    });
+    let before = core.poll_instrument_ticks(&shared, 0, 5);
+    assert!(
+        !before.string_ticks.iter().any(|t| t.tick_type == TICK_BID_EXCHANGE),
+        "nothing names those bits yet, so nothing is stated about them",
+    );
+
+    shared.reference.set_smart_components(vec![
+        SmartComponent { bit_number: 0, exchange: "ARCA".into(), exchange_letter: "P".into() },
+        SmartComponent { bit_number: 2, exchange: "NASDAQ".into(), exchange_letter: "Q".into() },
+    ]);
+    let after = core.poll_instrument_ticks(&shared, 0, 5);
+    let rendered = after.string_ticks.iter()
+        .find(|t| t.tick_type == TICK_BID_EXCHANGE)
+        .expect("the same mask is rendered once its bits are named");
+    assert_eq!(rendered.value, "PQ");
+}
+
+/// An adjustable stop states what the contract states, not only what the
+/// order states.
+///
+/// Its legs, its listing exchange and the contract it hedges against are
+/// stated on the contract rather than on the order, and every other order type
+/// picks them up on the way through. Built from the order's own attributes
+/// alone, an adjustable stop on a combination reached the encoder with no legs
+/// at all.
+#[test]
+fn an_adjustable_stop_carries_what_the_contract_states() {
+    let order = ApiOrder {
+        action: "SELL".into(),
+        total_quantity: 1.0,
+        order_type: "STP".into(),
+        aux_price: 11.0,
+        tif: "DAY".into(),
+        adjusted_order_type: "TRAIL".into(),
+        adjusted_stop_price: 11.5,
+        trigger_price: 12.0,
+        ..Default::default()
+    };
+    let contract = crate::types::model::Contract {
+        symbol: "SPX".into(),
+        sec_type: "BAG".into(),
+        exchange: "SMART".into(),
+        currency: "USD".into(),
+        primary_exchange: "CBOE".into(),
+        combo_legs: vec![
+            crate::types::model::ComboLeg {
+                con_id: 111, ratio: 1, action: "BUY".into(), exchange: "SMART".into(),
+                ..Default::default()
+            },
+            crate::types::model::ComboLeg {
+                con_id: 222, ratio: 1, action: "SELL".into(), exchange: "SMART".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let cmd = ClientCore::build_order_request(&order, 7, 0, Some(&contract)).unwrap();
+    let ControlCommand::Order(OrderRequest::SubmitEx { attrs, .. }) = cmd else {
+        panic!("an adjustable stop routes through the shared extended submission");
+    };
+    assert_eq!(attrs.combo_legs.len(), 2, "the legs the contract named");
+    assert_eq!(attrs.combo_legs[0].con_id, 111);
+    assert_eq!(attrs.combo_legs[1].con_id, 222);
+    assert_eq!(attrs.primary_exchange, "CBOE", "the listing exchange it names");
 }

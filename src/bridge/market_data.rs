@@ -5,6 +5,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use crate::types::*;
 
+/// How many broadcast notices are kept for a caller who has not asked for them
+/// yet. The venue broadcasts these unasked and only a subscriber drains them,
+/// so without a bound a session that never subscribes keeps every notice of the
+/// day for the life of the process.
+pub const NEWS_BULLETIN_LIMIT: usize = 1000;
+
 /// Lock-free quotes, TBT streams, real-time bars, depth updates, and news ticks.
 pub struct MarketDataState {
     quotes: Box<[SeqQuote; MAX_INSTRUMENTS]>,
@@ -24,7 +30,7 @@ pub struct MarketDataState {
     subscription_failures: Mutex<Vec<(crate::types::InstrumentId, String)>>,
     /// What the venue has said went wrong, in its own words.
     venue_errors: Mutex<Vec<String>>,
-    /// The venue's own clock, from the last message it sent.
+    /// The venue's clock, from the last message it sent.
     ///
     /// Every message it sends is stamped with the time it sent it. Reporting
     /// this machine's clock instead would answer the question a caller asked —
@@ -209,15 +215,30 @@ impl MarketDataState {
         self.tick_news.lock().unwrap().push(news);
     }
 
+    /// A broadcast notice, kept until someone reads it.
+    ///
+    /// Bounded, because the venue broadcasts these whether or not anyone
+    /// subscribed and the drain only runs once someone has: a session that
+    /// never asks for bulletins would otherwise hold every notice of the day
+    /// for the life of the process and free none of them. Past the bound the
+    /// oldest are dropped, so a late subscriber is handed the most recent
+    /// [`NEWS_BULLETIN_LIMIT`] rather than everything or nothing.
     #[doc(hidden)] pub fn push_news_bulletin(&self, bulletin: NewsBulletin) {
-        self.news_bulletins.lock().unwrap().push(bulletin);
+        let mut held = self.news_bulletins.lock().unwrap();
+        if held.len() >= NEWS_BULLETIN_LIMIT {
+            // ponytail: O(n) shift on a queue of a thousand, on an event that
+            // arrives a few times an hour. A VecDeque if bulletins ever became
+            // a hot path.
+            held.remove(0);
+        }
+        held.push(bulletin);
     }
 
     /// What the venue last said its own model made of a contract.
     ///
     /// Kept as well as delivered. Delivered alone it is gone the moment a
     /// caller reads it, and answering "what would this be worth at another
-    /// volatility" needs the venue's own statement still to hand.
+    /// volatility" needs the venue's statement still to hand.
     pub fn option_model(&self, instrument: crate::types::InstrumentId) -> Option<crate::types::OptionComputation> {
         self.last_option_model.lock().unwrap().get(&instrument).copied()
     }

@@ -45,6 +45,19 @@ def main() -> int:
 
     order = ibx.Order(action="BUY", orderType="LMT", totalQuantity=10, lmtPrice=100.0)
     trade = ib.placeOrder(spy, order)
+    try:
+        return _through(ib, spy, order, trade, settle)
+    finally:
+        # Whatever went wrong, nothing is left working at the venue. Anything
+        # raised between the placement and the withdrawal below skipped both
+        # the cancel and the disconnect, and left the order resting on a real
+        # account with the script gone.
+        if trade.orderStatus.status not in ("Cancelled", "ApiCancelled", "Filled"):
+            ib.cancelOrder(order)
+        ib.disconnect()
+
+
+def _through(ib, spy, order, trade, settle) -> int:
     heard = settle()
     print(f"placed     {trade.orderStatus.status:12} "
           f"filled={trade.orderStatus.filled} remaining={trade.orderStatus.remaining} {heard}")
@@ -62,8 +75,6 @@ def main() -> int:
     print(f"withdrawn  {trade.orderStatus.status:12} "
           f"open trades {len(ib.openTrades())} {heard}")
     print(f"           the venue said: {[str(s) for s in getattr(trade, 'log', [])][-3:]}")
-
-    ib.disconnect()
     return 0 if trade.orderStatus.status in ("Cancelled", "ApiCancelled") else 1
 
 

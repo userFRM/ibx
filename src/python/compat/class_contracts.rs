@@ -87,9 +87,14 @@ impl Default for Contract {
         Self {
             con_id: 0,
             symbol: String::new(),
-            sec_type: "STK".into(),
-            exchange: "SMART".into(),
-            currency: "USD".into(),
+            // Empty, as the reference client leaves them. Defaulting to a US
+            // stock on SMART sends three terms the caller never stated: a
+            // future is described as a stock, and a contract listed abroad is
+            // asked for in dollars on a US venue. What the
+            // caller did not state is not stated for them.
+            sec_type: String::new(),
+            exchange: String::new(),
+            currency: String::new(),
             last_trade_date_or_contract_month: String::new(),
             last_trade_date: String::new(),
             strike: 0.0,
@@ -119,10 +124,9 @@ impl Contract {
     /// failing the order, except the contract id, without which the leg names
     /// nothing and the whole list is refused.
     ///
-    /// An attribute that is there and cannot be read is not the same as one
-    /// that is absent: absent is the default the reference client would have
-    /// used, unreadable is a value the caller stated and this could not carry.
-    /// The first is taken, the second refused.
+    /// An absent attribute takes the reference client's default. An attribute
+    /// that is present and cannot be read is a value the caller stated and
+    /// this cannot carry, and is refused.
     pub fn combo_legs_api(&self, py: Python<'_>) -> Result<Vec<crate::types::model::ComboLeg>, String> {
         let mut out = Vec::with_capacity(self.combo_legs.len());
         for (i, obj) in self.combo_legs.iter().enumerate() {
@@ -130,11 +134,14 @@ impl Contract {
             macro_rules! read {
                 ($name:literal, $default:expr) => {
                     match obj.getattr(py, $name) {
-                        // Absent is the default the reference client would have
-                        // used. Anything else — a property that raised, an
-                        // object that refuses attribute access — is a value the
-                        // caller has and this could not read, and guessing at
-                        // it puts a leg on the wire nobody described.
+                        // Absent is the default the reference client would
+                        // have used. An attribute that raises this from inside
+                        // itself is indistinguishable from one that is not
+                        // there — the interpreter states the same error for
+                        // both — so it is read the same way. Anything else is a
+                        // value the caller has and this could not read, and
+                        // guessing at it puts a leg on the wire nobody
+                        // described.
                         Err(e) if e.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => {
                             let _ = e;
                             $default
@@ -154,7 +161,11 @@ impl Contract {
             }
             out.push(crate::types::model::ComboLeg {
                 con_id,
-                ratio: read!("ratio", 1),
+                // Nought, which is what the reference client leaves a leg it
+                // was not given a ratio for. One made such a leg into a
+                // one-for-one executable leg — an instruction the caller never
+                // gave, on a leg they had not finished describing.
+                ratio: read!("ratio", 0),
                 action: read!("action", String::new()),
                 exchange: read!("exchange", String::new()),
                 open_close: read!("openClose", 0),
@@ -230,7 +241,7 @@ impl Contract {
 #[pymethods]
 impl Contract {
     #[new]
-    #[pyo3(signature = (con_id=0, symbol="".to_string(), sec_type="STK".to_string(), exchange="SMART".to_string(), currency="USD".to_string(), last_trade_date_or_contract_month="".to_string(), strike=0.0, right="".to_string(), multiplier="".to_string(), local_symbol="".to_string(), primary_exchange="".to_string(), trading_class="".to_string(), **keywords))]
+    #[pyo3(signature = (con_id=0, symbol="".to_string(), sec_type="".to_string(), exchange="".to_string(), currency="".to_string(), last_trade_date_or_contract_month="".to_string(), strike=0.0, right="".to_string(), multiplier="".to_string(), local_symbol="".to_string(), primary_exchange="".to_string(), trading_class="".to_string(), **keywords))]
     fn new(
         con_id: i64,
         symbol: String,
@@ -321,10 +332,23 @@ impl Contract {
     fn get_combo_legs_descrip_alias(&self) -> String { self.combo_legs_descrip.clone() }
     #[setter(comboLegsDescrip)]
     fn set_combo_legs_descrip_alias(&mut self, v: String) { self.combo_legs_descrip = v; }
+    // What the contract holds, rather than an empty list whatever it holds: a
+    // combination read by the name the reference client uses reported no legs,
+    // and a delta-neutral contract reported none.
     #[getter(comboLegs)]
-    fn get_combo_legs_alias(&self) -> Vec<Py<PyAny>> { Vec::new() }
+    fn get_combo_legs_alias(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
+        self.combo_legs.iter().map(|l| l.clone_ref(py)).collect()
+    }
+    #[setter(comboLegs)]
+    fn set_combo_legs_alias(&mut self, v: Vec<Py<PyAny>>) { self.combo_legs = v; }
     #[getter(deltaNeutralContract)]
-    fn get_delta_neutral_alias(&self) -> Option<Py<PyAny>> { None }
+    fn get_delta_neutral_alias(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.delta_neutral_contract.as_ref().map(|c| c.clone_ref(py))
+    }
+    #[setter(deltaNeutralContract)]
+    fn set_delta_neutral_alias(&mut self, v: Option<Py<PyAny>>) {
+        self.delta_neutral_contract = v;
+    }
 }
 
 /// ibapi-compatible TagValue for algo parameters.
@@ -734,6 +758,18 @@ impl ContractDetails {
     }
 
     pub fn from_definition(py: Python<'_>, def: &crate::control::contracts::ContractDefinition) -> Self {
+        /// A right under the letter the official API states it by, not the
+        /// name this crate spells it with: `"Call"` is a Rust word, `"C"` is
+        /// what goes back on the wire and what a caller compares against.
+        fn right_str(right: Option<crate::control::contracts::OptionRight>) -> String {
+            use crate::control::contracts::OptionRight;
+            match right {
+                Some(OptionRight::Call) => "C".to_string(),
+                Some(OptionRight::Put) => "P".to_string(),
+                None => String::new(),
+            }
+        }
+
         let c = Contract {
             con_id: def.con_id as i64,
             // Official API string ("STK"), not the Debug derive ("Stock"): the
@@ -747,6 +783,11 @@ impl ContractDetails {
             trading_class: def.trading_class.clone(),
             last_trade_date_or_contract_month: def.last_trade_date.clone(),
             strike: def.strike,
+            // Under the official API's letters, as the security type above is.
+            // Left off, a call and a put on the same strike are the same
+            // contract, and one reused for another request names whichever the
+            // venue picks.
+            right: right_str(def.right),
             multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
             ..Default::default()
         };
@@ -764,7 +805,7 @@ impl ContractDetails {
             market_rule_id: def.market_rule_id.map(|id| id as i64).unwrap_or(-1),
             market_rule_ids: def.market_rule_id.map(|id| id.to_string()).unwrap_or_default(),
             strike: def.strike,
-            right: def.right.map(|r| format!("{r:?}")).unwrap_or_default(),
+            right: right_str(def.right),
             primary_exchange: def.primary_exchange.clone(),
             local_symbol: def.local_symbol.clone(),
             trading_class: def.trading_class.clone(),
@@ -939,6 +980,10 @@ impl PriceIncrementPy {
     fn low_edge_camel(&self) -> f64 {
         self.low_edge
     }
+    #[setter(lowEdge)]
+    fn set_low_edge_camel(&mut self, v: f64) {
+        self.low_edge = v;
+    }
 
     fn __repr__(&self) -> String {
         format!("PriceIncrement(lowEdge={}, increment={})", self.low_edge, self.increment)
@@ -972,5 +1017,35 @@ impl OptionChain {
             self.expirations.len(),
             self.strikes.len(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A leg the caller did not finish describing is not completed here.
+    ///
+    /// The reference client leaves a leg given no ratio at nought. Substituting
+    /// one turns an incomplete leg into a one-for-one executable leg, which is
+    /// an instruction the caller did not give.
+    #[test]
+    fn a_leg_with_no_ratio_states_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let leg = py
+                .eval(
+                    pyo3::ffi::c_str!(
+                        "type('Leg', (), {'conId': 756733, 'action': 'BUY', 'exchange': 'SMART'})()"
+                    ),
+                    None,
+                    None,
+                )
+                .expect("a leg naming a contract and nothing else");
+            let contract = Contract { combo_legs: vec![leg.unbind()], ..Default::default() };
+            let built = contract.combo_legs_api(py).expect("the leg reads");
+            assert_eq!(built[0].ratio, 0, "no ratio stated, so none is invented");
+            assert_eq!(built[0].con_id, 756733);
+        });
     }
 }

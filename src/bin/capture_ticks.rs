@@ -1,9 +1,8 @@
 //! Subscribe to every trade and quote change on a contract, and keep the frames
 //! exactly as the venue sends them.
 //!
-//! The layout this client now decodes was read from the counterpart, not from a
-//! capture. A decoder checked only against frames it made up proves nothing
-//! about the ones that arrive, so this asks for real ones.
+//! A decoder checked only against synthetic frames proves nothing about the
+//! ones that arrive, so this captures real ones.
 //!
 //! Reads only. It places nothing.
 //!
@@ -76,6 +75,9 @@ fn subjects() -> Vec<(&'static str, &'static str, Contract)> {
     ]
 }
 
+/// Record frames printed per subject. A dump at this size states so.
+const DUMP_LIMIT: usize = 200;
+
 fn main() {
     let _ = env_logger::try_init();
 
@@ -121,6 +123,13 @@ fn main() {
     println!("session open");
 
     for (n, (what, kind, contract)) in subjects().into_iter().enumerate() {
+        // Frames already accumulated before this subject subscribed.
+        // Everything past this mark belongs to it.
+        let seen_before = client
+            .unread_wire()
+            .iter()
+            .filter(|(kind, _)| *kind == "hmds-msg")
+            .count();
         let req = n as i64 + 1;
         // Resolve it first: a subscription wants the contract's own id, and the
         // id is also what says the venue knows the contract at all.
@@ -198,12 +207,17 @@ fn main() {
             );
         }
 
-        let frames: Vec<String> = client
+        // `unread_wire` accumulates for the life of the session and never
+        // clears, so a subject's own frames are the ones past the mark taken
+        // before it subscribed. Read cumulatively, every subject reports the
+        // first subscription's traffic.
+        let all: Vec<String> = client
             .unread_wire()
             .into_iter()
             .filter(|(kind, _)| *kind == "hmds-msg")
             .map(|(_, hex)| hex)
             .collect();
+        let frames: Vec<String> = all[seen_before.min(all.len())..].to_vec();
 
         if frames.is_empty() {
             println!("  {what:<20} nothing arrived in twenty seconds");
@@ -228,12 +242,17 @@ fn main() {
             }
             // A few whole frames, so the layout can be checked against the
             // decoder rather than against a guess.
-            for hex in frames.iter().filter(|h| {
+            let records: Vec<&String> = frames.iter().filter(|h| {
                 let bytes: Vec<u8> = (0..h.len() / 2)
                     .map(|i| u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).unwrap_or(0))
                     .collect();
                 String::from_utf8_lossy(&bytes).contains("35=E")
-            }).take(40) {
+            }).collect::<Vec<_>>();
+            let shown = records.len().min(DUMP_LIMIT);
+            if records.len() > shown {
+                println!("        showing {shown} of {} record frame(s)", records.len());
+            }
+            for hex in records.iter().take(shown) {
                 println!("        E {hex}");
             }
             // The acknowledgement, which is where the venue says what number

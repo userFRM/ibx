@@ -9,6 +9,11 @@ use super::OrderStatus;
 /// True when `status` names an IB order state that is still working on the broker.
 /// Whitelist (rather than blacklist) so non-canonical or empty strings — and
 /// any future terminal states added by IB — are treated as "not open".
+///
+/// A partly filled order that is still working is `Submitted`, and the filled
+/// and remaining quantities beside it are what say how far it has got. There is
+/// no separate status for it in this vocabulary, and a program reading one
+/// finds it in neither the active set nor the done set.
 #[inline]
 pub fn is_open_status(status: &str) -> bool {
     matches!(
@@ -18,7 +23,6 @@ pub fn is_open_status(status: &str) -> bool {
             | "PendingCancel"
             | "PreSubmitted"
             | "Submitted"
-            | "PartiallyFilled"
     )
 }
 
@@ -49,7 +53,12 @@ pub fn order_status_str(status: OrderStatus) -> &'static str {
         OrderStatus::PendingCancel => "PendingCancel",
         OrderStatus::PendingReplace => "PendingCancel", // IB API has no PendingReplace string
         OrderStatus::Filled => "Filled",
-        OrderStatus::PartiallyFilled => "PartiallyFilled",
+        // The venue reports a partly filled working order as submitted, and
+        // the filled and remaining quantities carry the distinction. Named as
+        // a status of its own it is in neither the active set nor the done set
+        // of a program written against this vocabulary, so a working order
+        // read as neither running nor finished.
+        OrderStatus::PartiallyFilled => "Submitted",
         OrderStatus::Cancelled => "Cancelled",
         // ibapi has no "Rejected" status string — rejected orders surface as "Inactive"
         // with the rejection reason carried separately on OrderState.completedStatus.

@@ -80,6 +80,7 @@ fn build_query_xml_structure() {
         bar_size: BarSize::Min5,
         use_rth: true,
         keep_up_to_date: false,
+        include_expired: false,
     };
     let xml = build_query_xml(&req);
     assert!(xml.contains("<id>q1</id>"));
@@ -105,6 +106,7 @@ fn build_fix_request() {
         bar_size: BarSize::Min5,
         use_rth: true,
         keep_up_to_date: false,
+        include_expired: false,
     };
     let msg = build_historical_request(&req, 1);
     let tags = fix::fix_parse(&msg);
@@ -228,7 +230,7 @@ fn parse_ticker_id_rejects_other() {
 
 /// The contract's own security type and exchange have to reach the query.
 /// Hardcoding them described a stock on SMART whatever was asked for, and
-/// the gateway rejected anything venue-specific with error 162.
+/// anything venue-specific is rejected with error 162.
 #[test]
 fn a_futures_query_carries_its_own_sec_type_and_exchange() {
     let req = HistoricalRequest {
@@ -243,6 +245,7 @@ fn a_futures_query_carries_its_own_sec_type_and_exchange() {
         bar_size: BarSize::Day1,
         use_rth: false,
         keep_up_to_date: false,
+        include_expired: false,
     };
     let xml = build_query_xml(&req);
     assert!(xml.contains("<secType>FUT</secType>"), "got: {xml}");
@@ -265,6 +268,7 @@ fn a_smart_query_still_routes_to_best() {
         bar_size: BarSize::Day1,
         use_rth: true,
         keep_up_to_date: false,
+        include_expired: false,
     };
     let xml = build_query_xml(&req);
     assert!(xml.contains("<exchange>BEST</exchange>"), "got: {xml}");
@@ -275,8 +279,8 @@ fn a_smart_query_still_routes_to_best() {
 fn head_timestamp_xml_structure() {
     let req = HeadTimestampRequest {
         con_id: 756733,
-        sec_type: "STK",
-        exchange: "SMART",
+        sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(),
         data_type: BarDataType::Trades,
         use_rth: true,
     };
@@ -359,7 +363,7 @@ fn parse_schedule_response_rejects_other() {
 
 #[test]
 fn build_tick_query_xml_structure() {
-    let xml = build_tick_query_xml("tk_1", 265598, "", "20260312-15:00:00", 100, "TRADES", true, "CS", "BEST");
+    let xml = build_tick_query_xml("tk_1", 265598, "20260312-15:00:00", 100, "TRADES", true, "CS", "BEST", false);
     assert!(xml.contains("<id>tk_1</id>"));
     assert!(xml.contains("<type>TickData</type>"));
     assert!(xml.contains("<data>AllLast</data>"));
@@ -370,9 +374,20 @@ fn build_tick_query_xml_structure() {
 
 #[test]
 fn build_tick_query_xml_bid_ask() {
-    let xml = build_tick_query_xml("tk_2", 265598, "", "20260312-15:00:00", 50, "BID_ASK", false, "CS", "BEST");
+    let xml = build_tick_query_xml("tk_2", 265598, "20260312-15:00:00", 50, "BID_ASK", false, "CS", "BEST", false);
     assert!(xml.contains("<data>BidAsk</data>"));
     assert!(xml.contains("<useRTH>false</useRTH>"));
+}
+
+/// The query counts back from its end. A start written into that same field
+/// asked for the ticks before the moment the caller wanted the ticks after, and
+/// the answer looked right and covered the wrong side of the clock.
+#[test]
+fn a_tick_request_naming_only_a_start_is_refused() {
+    use crate::control::historical::validate_tick_window;
+    assert!(validate_tick_window("20260312-09:30:00", "").is_err());
+    assert!(validate_tick_window("", "20260312-15:00:00").is_ok());
+    assert!(validate_tick_window("", "").is_ok(), "the most recent ticks");
 }
 
 #[test]
@@ -440,6 +455,29 @@ fn parse_tick_response_midpoint() {
     }
 }
 
+/// The venue's interest-rate series is a value with a moment, not a print.
+///
+/// Read through the trade decoder it arrived as a trade, with a size of zero
+/// and no venue — a rate reported as something that changed hands.
+#[test]
+fn the_interest_rate_series_is_not_read_as_a_trade() {
+    let xml = r#"<ResultSetTick>
+            <id>tk_4</id>
+        <eoq>true</eoq>
+        <Events>
+            <Tick><time>20260312-14:30:01</time><price>0.0425</price></Tick>
+        </Events>
+    </ResultSetTick>"#;
+    let (_, data, _) = parse_tick_response(xml, "OPTION_EXERCISE_INTEREST_RATE").unwrap();
+    match data {
+        crate::types::HistoricalTickData::Midpoint(ticks) => {
+            assert_eq!(ticks.len(), 1);
+            assert_eq!(ticks[0].price, 0.0425);
+        }
+        other => panic!("a rate is not a trade: {other:?}"),
+    }
+}
+
 #[test]
 fn parse_tick_response_rejects_other() {
     assert!(parse_tick_response("<ResultSetBar>...</ResultSetBar>", "TRADES").is_none());
@@ -460,16 +498,61 @@ fn build_realtime_bar_xml_structure() {
     assert!(xml.contains("<step>5 secs</step>"));
 }
 
+/// A payload the decoder can read: 4 bits of padding, a 1-bit flag and an
+/// 8-bit count, a 31-bit low in ticks, then a 1-bit flag and a 16-bit volume.
+/// Sixty-one bits, in eight bytes, written the way the reader takes them —
+/// least significant bit first, with each four-byte group reversed, which is
+/// its own inverse over two whole groups.
+fn single_tick_payload(low_ticks: u32, volume: u32) -> Vec<u8> {
+    let mut bits: Vec<u8> = Vec::new();
+    let mut put = |value: u32, width: usize| {
+        for i in 0..width {
+            bits.push(((value >> i) & 1) as u8);
+        }
+    };
+    put(0, 4);
+    put(1, 1);
+    put(1, 8);
+    put(low_ticks, 31);
+    put(1, 1);
+    put(volume, 16);
+    bits.resize(64, 0);
+
+    let mut stream = [0u8; 8];
+    for (at, bit) in bits.iter().enumerate() {
+        stream[at / 8] |= bit << (at % 8);
+    }
+    stream.chunks(4).flat_map(|c| c.iter().rev().copied()).collect()
+}
+
 #[test]
 fn decode_bar_payload_single_tick() {
-    // A minimal payload with count=1: the bar collapses to a single price.
-    // Build a synthetic payload: 4-bit pad, 1-bit flag=1, 8-bit count=1,
-    // 31-bit low_ticks=15000 (=150.00 at min_tick=0.01),
-    // 1-bit vol_flag=1, 16-bit volume=100
-    // Total bits: 4 + 1 + 8 + 31 + 1 + 16 = 61 bits → 8 bytes
-    // After 4-byte group reversal decoding, this is complex to hand-build.
-    // Just verify None on empty payload.
+    // Count of one, so the bar collapses to a single price: 15000 ticks of a
+    // cent is 150.00, and the volume is stated in the narrow field.
+    let bar = decode_bar_payload(&single_tick_payload(15_000, 100), 0.01)
+        .expect("a whole payload decodes");
+    assert_eq!(bar.count, 1);
+    assert!((bar.low - 150.00).abs() < 1e-9, "{bar:?}");
+    assert!((bar.open - 150.00).abs() < 1e-9, "{bar:?}");
+    assert!((bar.high - 150.00).abs() < 1e-9, "{bar:?}");
+    assert!((bar.close - 150.00).abs() < 1e-9, "{bar:?}");
+    assert!((bar.volume - 100.0).abs() < 1e-9, "{bar:?}");
+
     assert!(decode_bar_payload(&[], 0.01).is_none());
+}
+
+/// A read past the end of the payload takes zeroes, and so does every field
+/// after it. Unrecorded, a payload cut anywhere decodes into a bar of plausible
+/// zeroes indistinguishable from one the venue sent.
+#[test]
+fn a_bar_payload_cut_short_is_not_decoded() {
+    let whole = single_tick_payload(15_000, 100);
+    for cut in 1..whole.len() {
+        assert!(
+            decode_bar_payload(&whole[..cut], 0.01).is_none(),
+            "{cut} of {} bytes decoded into a bar", whole.len(),
+        );
+    }
 }
 mod duration_spelling_tests {
     use super::super::normalize_duration;
@@ -684,4 +767,35 @@ fn every_request_asks_for_a_series_by_the_same_name() {
             "{name} goes out as something other than {through_the_type}: {xml}",
         );
     }
+}
+
+/// A settled contract is asked about as settled, on both query shapes.
+///
+/// Written as a flat `no`, a request for an expired future asked about a
+/// contract that no longer exists and came back empty, whatever the caller's
+/// own contract said.
+#[test]
+fn an_expired_contract_is_asked_about_as_expired() {
+    let stated = |include_expired: bool| HistoricalRequest {
+        query_id: "h_1".into(),
+        con_id: 495512563,
+        symbol: "ES".into(),
+        sec_type: "FUT".into(),
+        exchange: "CME".into(),
+        data_type: BarDataType::Trades,
+        end_time: "20260101-16:00:00".into(),
+        duration: "1 D".into(),
+        bar_size: BarSize::Hour1,
+        use_rth: true,
+        keep_up_to_date: false,
+        include_expired,
+    };
+    assert!(build_query_xml(&stated(true)).contains("<expired>yes</expired>"));
+    assert!(build_query_xml(&stated(false)).contains("<expired>no</expired>"));
+
+    let ticks = |include_expired: bool| build_tick_query_xml(
+        "tk_1", 495512563, "20260101-16:00:00", 100, "TRADES", true, "FUT", "CME", include_expired,
+    );
+    assert!(ticks(true).contains("<expired>yes</expired>"));
+    assert!(ticks(false).contains("<expired>no</expired>"));
 }

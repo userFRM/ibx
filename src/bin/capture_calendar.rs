@@ -64,8 +64,7 @@ fn main() {
 
     let mut heard = Heard::default();
 
-    // The event types first. The counterpart holds them and will not build an
-    // event request without them.
+    // The event types first. An event request is not accepted without them.
     if let Err(e) = client.req_wsh_meta_data(1) {
         println!("  the event types could not be asked for: {e}");
     }

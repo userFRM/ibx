@@ -22,7 +22,7 @@ pub struct HistoricalNewsRequest {
     pub query_id: String,
     /// The venue's id for the contract.
     pub con_id: u32,
-    /// Which providers to ask, separated by the venue's own separator.
+    /// Which providers to ask, separated by the venue's separator.
     pub provider_codes: String,
     /// The start of the window asked for.
     pub start_time: String,
@@ -82,6 +82,28 @@ fn build_news_id(req_num: &str, cmd: &str) -> String {
     format!("{};;NewsQuery;;0;;true;;0;;U", format_args!("{}-{}", req_num, cmd))
 }
 
+/// What a historical-news window has to state to be askable.
+///
+/// The query this client sends names a contract, a set of providers and a row
+/// count, and carries no time bounds at all. Accepting a start and an end and
+/// dropping them returns the most recent headlines for every request, which
+/// read as the ones inside the window asked for.
+pub fn validate_news_window(start_time: &str, end_time: &str) -> Result<(), String> {
+    if start_time.is_empty() && end_time.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "the news query this client sends carries no time bounds, and this \
+         request names {}. Leave both empty and bound the answer with \
+         total_results, which is what limits it.",
+        match (start_time.is_empty(), end_time.is_empty()) {
+            (false, false) => format!("{start_time} to {end_time}"),
+            (false, true) => format!("a start of {start_time}"),
+            _ => format!("an end of {end_time}"),
+        },
+    ))
+}
+
 /// Build the XML query for a historical news request.
 pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
     // Convert "BRFG+BRFUPDN" to "BRFG*BRFUPDN" for url_key
@@ -94,10 +116,9 @@ pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
     };
 
     // The identity fields are an authorisation pair the news service issues,
-    // not something a client invents. The counterpart sends empty strings where
-    // it holds none, and the same slot carries a refusal back. A literal stands
-    // in for neither, whether or not the venue validates it for what is asked
-    // here.
+    // not something a client invents. Empty strings are valid where none is
+    // held, and the same slot carries a refusal back. A literal stands in for
+    // neither, whether or not the venue validates it for what is asked here.
     let query_raw = format!(
         "conid_count=\"{count}\";\
          total_count=\"{count}\";\
@@ -239,7 +260,16 @@ pub fn parse_news_payload(raw: &[u8]) -> (Vec<NewsHeadline>, bool) {
 
     let entry = match extract_zip_entry(&decoded) {
         Some(e) => e,
-        None => return (headlines, has_more),
+        None => {
+            // The venue answered and this could not read the answer. An
+            // empty result reads to a caller as a contract with no news
+            // rather than as headlines that arrived and could not be read.
+            log::warn!(
+                "news: {} bytes arrived and no archive entry could be read from them,                  so no headline in them reaches the caller",
+                raw.len(),
+            );
+            return (headlines, has_more);
+        }
     };
 
     let text = String::from_utf8_lossy(&entry);
@@ -392,6 +422,17 @@ pub fn parse_article_payload(raw: &[u8]) -> Option<(i32, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The query carries no time bounds. Accepting a start and an end and
+    /// dropping them returns the most recent headlines for every request,
+    /// which read as the ones inside the window asked for.
+    #[test]
+    fn a_news_window_this_query_cannot_carry_is_refused() {
+        assert!(validate_news_window("", "").is_ok());
+        assert!(validate_news_window("2026-01-01", "2026-03-01").is_err());
+        assert!(validate_news_window("2026-01-01", "").is_err());
+        assert!(validate_news_window("", "2026-03-01").is_err());
+    }
 
     #[test]
     fn historical_news_xml_structure() {

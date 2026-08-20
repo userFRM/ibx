@@ -32,6 +32,12 @@ fn build_conid_subscribe_tags(
     // both fields to empty, and the in-tree benchmark does exactly that. Keep
     // the smart-routed stock those callers expect rather than sending an empty
     // SecurityType and Exchange, which the venue answers with a partial ack.
+    // A subscription naming only a contract id is not answered; tags 167 and
+    // 207 must both be present. Confirmed against a live session: the same
+    // contract is answered with them and silent without them.
+    //
+    // These are the last resort when nothing upstream described the contract.
+    // They describe a US stock, so any other kind is subscribed as one.
     let exchange = if exchange.is_empty() { "SMART" } else { exchange };
     let sec_type = if sec_type.is_empty() { "STK" } else { sec_type };
     let fix_exchange = crate::control::contracts::exchange_to_fix(exchange);
@@ -226,7 +232,7 @@ const GREEKS_VENUE: &str = "IBVOL";
 
 /// The venue refusing to serve data this account is not subscribed to.
 ///
-/// The number the counterpart reports that under. It was this client's own
+/// The number the venue reports that under. It was this client's own
 /// number for a malformed request, which said the caller had asked wrongly
 /// when the venue had simply declined to serve it — a caller branching on it
 /// the way it would against the reference client read a refusal it could fix
@@ -246,7 +252,7 @@ const NEWS_REQUEST_TYPE: u32 = 292;
 /// How a generic tick states the length of its payload.
 ///
 /// Which of the three a tick uses is not on the wire: it is a property of the
-/// tick, held the same way the counterpart holds it. Guessing from the frame
+/// tick, held as the protocol states it. Guessing from the frame
 /// works until two readings both square with it, and then it misframes every
 /// record after the one it got wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,6 +383,16 @@ fn read_generic_ticks<'a>(
     }
 }
 
+/// The text inside a tick payload that states its own length.
+///
+/// Four bytes of big-endian length, then that many bytes of text, then padding
+/// to a four-byte boundary. Read end to end as text, the length bytes join the
+/// first name and the padding joins the last.
+fn length_prefixed_text(payload: &[u8]) -> Option<std::borrow::Cow<'_, str>> {
+    let stated = u32::from_be_bytes(payload.get(..4)?.try_into().ok()?) as usize;
+    Some(String::from_utf8_lossy(payload.get(4..4 + stated)?))
+}
+
 /// What the venue sent of its option model.
 ///
 /// A set of flags says which fields the payload carries, then one price that
@@ -444,7 +460,7 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
     let _time_value = next(flags & TIME_VALUE != 0);
 
     Some(crate::types::OptionComputation {
-        // The venue's own, reported under whichever request subscribed it.
+        // The venue's, reported under whichever request subscribed it.
         answers: None,
         instrument: 0,
         implied_vol,
@@ -636,8 +652,11 @@ impl FarmState {
             b"L" => self.handle_ticker_setup(msg, context),
             b"UT" | b"UM" | b"RL" => super::ccp::positions::handle_account_update(msg, context, shared),
             b"UP" => {
-                let parsed = fix::fix_parse(msg);
-                super::ccp::positions::handle_position_update(&parsed, context, shared, event_tx);
+                // One frame names several holdings. A flat parse keeps only
+                // the last value of each tag.
+                for parsed in super::ccp::positions::split_position_entries(msg) {
+                    super::ccp::positions::handle_position_update(&parsed, context, shared, event_tx);
+                }
             }
             // The venue refusing a subscription it was asked for, naming the
             // request that asked. Dropped, a caller that asked for depth on a
@@ -725,6 +744,13 @@ impl FarmState {
             // PRICE_SCALE, which reads downstream as an ordinary quote, and
             // leaving the previous one standing is the honest failure.
             let scaled = |m: i64| m.checked_mul(mts);
+            // Whether this entry changed the quote. An unmapped opcode does
+            // not mark the instrument notified; it is visible in the raw trace
+            // above instead.
+            //
+            // A price too large to scale is refused above, leaving the quote
+            // unchanged, so it does not mark the instrument notified either.
+            let mut applied = true;
             match tick.tick_type {
                 // Opcode 18 is deliberately not read as a halt. It was named
                 // for one on no evidence, and the venue states a halt
@@ -735,43 +761,64 @@ impl FarmState {
                 tick_decoder::O_BID_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.bid = v,
-                        None => log::warn!("35=P bid price out of range (magnitude={}), tick dropped", tick.magnitude),
+                        None => {
+                            log::warn!("35=P bid price out of range (magnitude={}), tick dropped", tick.magnitude);
+                            applied = false;
+                        }
                     }
                 }
                 tick_decoder::O_ASK_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.ask = v,
-                        None => log::warn!("35=P ask price out of range (magnitude={}), tick dropped", tick.magnitude),
+                        None => {
+                            log::warn!("35=P ask price out of range (magnitude={}), tick dropped", tick.magnitude);
+                            applied = false;
+                        }
                     }
                 }
                 tick_decoder::O_LAST_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.last = v,
-                        None => log::warn!("35=P last price out of range (magnitude={}), tick dropped", tick.magnitude),
+                        None => {
+                            log::warn!("35=P last price out of range (magnitude={}), tick dropped", tick.magnitude);
+                            applied = false;
+                        }
                     }
                 }
                 tick_decoder::O_HIGH_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.high = v,
-                        None => log::warn!("35=P high price out of range (magnitude={}), tick dropped", tick.magnitude),
+                        None => {
+                            log::warn!("35=P high price out of range (magnitude={}), tick dropped", tick.magnitude);
+                            applied = false;
+                        }
                     }
                 }
                 tick_decoder::O_LOW_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.low = v,
-                        None => log::warn!("35=P low price out of range (magnitude={}), tick dropped", tick.magnitude),
+                        None => {
+                            log::warn!("35=P low price out of range (magnitude={}), tick dropped", tick.magnitude);
+                            applied = false;
+                        }
                     }
                 }
                 tick_decoder::O_OPEN_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.open = v,
-                        None => log::warn!("35=P open price out of range (magnitude={}), tick dropped", tick.magnitude),
+                        None => {
+                            log::warn!("35=P open price out of range (magnitude={}), tick dropped", tick.magnitude);
+                            applied = false;
+                        }
                     }
                 }
                 tick_decoder::O_CLOSE_PRICE => {
                     match scaled(tick.magnitude) {
                         Some(v) => q.close = v,
-                        None => log::warn!("35=P close price out of range (magnitude={}), tick dropped", tick.magnitude),
+                        None => {
+                            log::warn!("35=P close price out of range (magnitude={}), tick dropped", tick.magnitude);
+                            applied = false;
+                        }
                     }
                 }
                 // Quantities are fixed-point, the same way prices are; every
@@ -796,10 +843,12 @@ impl FarmState {
                 tick_decoder::O_BID_EXCH => { q.bid_exch_mask = tick.magnitude; }
                 tick_decoder::O_ASK_EXCH => { q.ask_exch_mask = tick.magnitude; }
                 tick_decoder::O_LAST_EXCH => { q.last_exch_mask = tick.magnitude; }
-                _ => {}
+                _ => applied = false,
             }
 
-            notified[(instrument >> 6) as usize] |= 1u64 << (instrument & 63);
+            if applied {
+                notified[(instrument >> 6) as usize] |= 1u64 << (instrument & 63);
+            }
         }
 
         // Phase 2: Publish complete quotes after all ticks in the batch are applied.
@@ -1298,7 +1347,7 @@ impl FarmState {
         // the market: a table this client does not have is not evidence that
         // the venue serves nothing.
         // Under the name the venue routes by, not the one a caller was handed.
-        // The counterpart remaps its smart destination before sending and this
+        // The smart destination is remapped before sending and this
         // client already does it for quotes and for orders; a book asked for
         // under the caller's spelling was the one request still going out
         // under a name the venue does not route by.
@@ -1365,7 +1414,7 @@ impl FarmState {
         // that way put seventy-odd subscribes and as many withdrawals on the
         // connection every minute, and the venue stopped answering it
         // altogether: no error, no loss, quotes and books both silent. One
-        // request is what the counterpart sends and what the connection can
+        // request is what the protocol defines and what the connection can
         // carry.
         // A book on one named venue is a book gathered from one venue. Asking
         // under an id of this client's own either way is what keeps the two
@@ -1496,6 +1545,10 @@ impl FarmState {
         let mut pos = 0;
         let mut bid_position: i32 = 0;
         let mut ask_position: i32 = 0;
+        // Which stream the level counters above belong to. One frame can
+        // carry sections for more than one stream, and each book's levels are
+        // numbered from zero.
+        let mut counting_for: Option<u32> = None;
 
         while pos < body.len() {
             if body[pos] != 0x00 { pos += 1; continue; }
@@ -1504,6 +1557,11 @@ impl FarmState {
 
             let stag = ((body[pos] as u32) << 16) | ((body[pos+1] as u32) << 8) | (body[pos+2] as u32);
             pos += 3;
+            if counting_for != Some(stag) {
+                counting_for = Some(stag);
+                bid_position = 0;
+                ask_position = 0;
+            }
 
             let Some((_, _, min_tick, size_tick, _)) = self.lookup_depth_stag(stag) else {
                 // A book frame for a stream this session does not hold. Silent
@@ -1710,7 +1768,7 @@ impl FarmState {
                 {
                     for (req_id, is_smart, venue) in &subscribers {
                         if !self.within_asked_depth(*req_id, book_position) { continue; }
-                        // The venue's own name for the maker where it states
+                        // The venue's name for the maker where it states
                         // one, and otherwise the exchange this section of the
                         // book is from: a level with neither is a level a
                         // caller cannot place.
@@ -1838,7 +1896,19 @@ impl FarmState {
             }
         }
 
-        if has_price || has_size { Some((price, size, side, is_snapshot)) } else { None }
+        // A level requires both a price and a size. One alone would report
+        // the other as zero, which is not a quoted level.
+        if has_price && has_size {
+            Some((price, size, side, is_snapshot))
+        } else {
+            if has_price || has_size {
+                log::debug!(
+                    "book entry states {} alone; a level is a price and a size, so it is left out",
+                    if has_price { "a price" } else { "a size" },
+                );
+            }
+            None
+        }
     }
 
     pub(crate) fn handle_disconnect(&mut self, context: &mut Context, _event_tx: &Option<EventSink>) {
@@ -2023,7 +2093,13 @@ impl FarmState {
                 BBO_EXCHANGE_MAP_REQUEST_TYPE => {
                     // Every venue, in the order the mask's bits refer to:
                     // `NAME/LETTER` per venue, one after another.
-                    let stated = String::from_utf8_lossy(payload);
+                    let Some(stated) = length_prefixed_text(payload) else {
+                        log::warn!(
+                            "the exchange map states a length its {} bytes do not carry",
+                            payload.len(),
+                        );
+                        continue;
+                    };
                     let venues: Vec<crate::types::SmartComponent> = stated
                         .split(';')
                         .filter(|entry| !entry.trim().is_empty())

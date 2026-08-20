@@ -51,7 +51,7 @@ impl BarDataType {
             "OPTION_IMPLIED_VOLATILITY" => Self::ImpliedVolatility,
             // The rate the venue prices options at, as a series of its own.
             // Not a name the reference client offers — it is what the
-            // counterpart's own option tools ask for, and the one number an
+            // protocol's option tools ask for, and the one number an
             // option model needs that no tick states.
             "OPTION_EXERCISE_INTEREST_RATE" => Self::OptionInterestRate,
             other => {
@@ -273,6 +273,12 @@ pub struct HistoricalRequest {
     pub use_rth: bool,
     /// Whether the venue keeps sending once the window is answered.
     pub keep_up_to_date: bool,
+    /// Whether a contract that has already expired is in scope.
+    ///
+    /// Stated on every query, and stated as the caller set it. Written as a
+    /// flat `no`, a request for a settled future asked about a contract that
+    /// no longer exists and came back empty.
+    pub include_expired: bool,
 }
 
 /// A single historical OHLCV bar parsed from XML.
@@ -334,7 +340,7 @@ pub fn normalize_duration(duration: &str) -> String {
         'M' | 'm' => 'm',
         'Y' | 'y' => 'y',
         // Not a unit this venue names. Passed through, because refusing it here
-        // would hide the venue's own answer about what it accepts.
+        // would hide the venue's answer about what it accepts.
         other => other,
     };
     let mut out: String = trimmed[..trimmed.len() - unit.len_utf8()].to_string();
@@ -349,6 +355,7 @@ pub fn build_query_xml(req: &HistoricalRequest) -> String {
         e => e,
     };
     let rth = if req.use_rth { "true" } else { "false" };
+    let expired = if req.include_expired { "yes" } else { "no" };
 
     let data_str = req.data_type.as_str();
     // keepUpToDate uses structured ;;-delimited ID required by CCP gateway parser.
@@ -375,7 +382,7 @@ pub fn build_query_xml(req: &HistoricalRequest) -> String {
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
          <secType>{sec_type}</secType>\
-         <expired>no</expired>\
+         <expired>{expired}</expired>\
          <type>BarData</type>\
          <data>{data}</data>\
          {end_time}\
@@ -435,7 +442,7 @@ pub fn build_cancel_request(ticker_id: &str, seq: u32) -> Vec<u8> {
 ///
 /// Every price on the contract is decoded against this, so the wrong one does
 /// not fail — it scales every price by a constant and reports the result as
-/// the venue's own. A penny is the right answer for a US share and wrong for a
+/// the venue's. A penny is the right answer for a US share and wrong for a
 /// currency pair, a future, and anything quoted in yen — so where the venue
 /// states none, this states none, and the bars are left unread.
 ///
@@ -536,10 +543,10 @@ pub fn parse_ticker_id(xml: &str) -> Option<String> {
 pub struct HeadTimestampRequest {
     /// The venue's id for the contract.
     pub con_id: u32,
-    /// What kind of contract it is.
-    pub sec_type: &'static str,
+    /// What kind of contract it is, as the venue names it.
+    pub sec_type: String,
     /// Which venue to answer for.
-    pub exchange: &'static str,
+    pub exchange: String,
     /// Which series is wanted.
     pub data_type: BarDataType,
     /// Whether to count only regular trading hours.
@@ -555,15 +562,29 @@ pub struct HeadTimestampResponse {
     pub timezone: String,
 }
 
-/// Build the XML query for a head timestamp request.
-pub fn build_head_timestamp_xml(req: &HeadTimestampRequest) -> String {
-    let exchange = match req.exchange {
+/// The id a head-timestamp query goes out under, which is what its answer
+/// comes back naming.
+///
+/// Built from the request itself, so the caller that sent it can be found from
+/// the reply rather than from the order the replies happen to arrive in.
+pub fn head_timestamp_query_id(req: &HeadTimestampRequest) -> String {
+    let exchange = match req.exchange.as_str() {
         "SMART" => "BEST",
         e => e,
     };
     let rth = if req.use_rth { "true" } else { "false" };
-    let id = format!("TickHeadClient1;;{}@{} {};;0;;{};;0;;U",
-        req.con_id, exchange, req.data_type.as_str(), rth);
+    format!("TickHeadClient1;;{}@{} {};;0;;{};;0;;U",
+        req.con_id, exchange, req.data_type.as_str(), rth)
+}
+
+/// Build the XML query for a head timestamp request.
+pub fn build_head_timestamp_xml(req: &HeadTimestampRequest) -> String {
+    let exchange = match req.exchange.as_str() {
+        "SMART" => "BEST",
+        e => e,
+    };
+    let rth = if req.use_rth { "true" } else { "false" };
+    let id = head_timestamp_query_id(req);
 
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
@@ -592,12 +613,9 @@ pub fn build_head_timestamp_xml(req: &HeadTimestampRequest) -> String {
 /// Map whatToShow to data type.
 /// What the venue calls a tick series, from what a caller calls it.
 ///
-/// A name this does not know is refused rather than turned into trades. The
-/// bar path stopped doing that when a misspelled `BID` quietly returned trade
-/// bars; this path went on doing it, so a caller asking for anything
-/// else was answered with trades and told nothing — which is exactly how a
-/// request for the venue's own interest-rate series came back as a list of
-/// option prints.
+/// A name this does not know is refused rather than turned into trades.
+/// Falling back to trades answers a misspelled `BID`, or the venue's
+/// interest-rate series, with option prints and reports nothing.
 pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
     Ok(match what_to_show.to_uppercase().as_str() {
         "" | "TRADES" => "AllLast",
@@ -615,28 +633,48 @@ pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
     })
 }
 
+/// What a historical-tick window has to state to be askable.
+///
+/// The query this client sends is bounded at its end and counts back from
+/// there. Writing a start into that same field returns the ticks before the
+/// moment rather than after it: the right number of records, off the wrong
+/// side of the clock, with nothing in them to say so.
+pub fn validate_tick_window(start_date_time: &str, end_date_time: &str) -> Result<(), String> {
+    if end_date_time.is_empty() && !start_date_time.is_empty() {
+        return Err(format!(
+            "historical ticks are asked for by their end here, and this request \
+             names only a start ({start_date_time}). Give end_date_time, or leave \
+             both empty for the most recent ticks.",
+        ));
+    }
+    Ok(())
+}
+
 /// Build the XML query for a historical ticks request.
 ///
 /// Uses `<type>TickData</type>`, `<step>ticks</step>`, `<timeLength>{N}
 /// t</timeLength>`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_tick_query_xml(
-    query_id: &str, con_id: i64, start_date_time: &str, end_date_time: &str,
+    query_id: &str, con_id: i64, end_date_time: &str,
     number_of_ticks: u32, what_to_show: &str, use_rth: bool,
-    sec_type: &str, exchange: &str,
+    sec_type: &str, exchange: &str, include_expired: bool,
 ) -> String {
-    // Stated from the contract. Assuming a US stock routed BEST left every
-    // other kind asking for ticks under a description that is not its own.
-    let exchange = if exchange.is_empty() { "BEST" } else { exchange };
-    let sec_type = if sec_type.is_empty() { "CS" } else { sec_type };
+    let expired = if include_expired { "yes" } else { "no" };
+    // Stated from the contract, and left unstated where the contract does
+    // not state it. Assuming a BEST-routed US stock describes every other
+    // kind of contract wrongly, and a description stated here is one the
+    // venue reads. The contract id identifies the contract exactly, so an
+    // empty field asks about it rather than about something else.
     let rth = if use_rth { "true" } else { "false" };
     let data = tick_data_type(what_to_show).unwrap_or("AllLast");
 
-    // Use endTime if provided, otherwise startTime
-    let time_tag = if !end_date_time.is_empty() {
-        format!("<endTime>{end_date_time}</endTime>")
-    } else {
-        format!("<endTime>{start_date_time}</endTime>")
-    };
+    // This query is bounded at its end and counts backwards from there. A
+    // start was once written into the same field, which asked for the ticks
+    // before the moment the caller wanted the ticks after — the answer looked
+    // right and covered the wrong side of the clock. A start-only request is
+    // refused before it reaches here; see `EClient::req_historical_ticks`.
+    let time_tag = format!("<endTime>{end_date_time}</endTime>");
 
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
@@ -647,7 +685,7 @@ pub fn build_tick_query_xml(
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
          <secType>{sec_type}</secType>\
-         <expired>no</expired>\
+         <expired>{expired}</expired>\
          <type>TickData</type>\
          <data>{data}</data>\
          {time_tag}\
@@ -694,7 +732,10 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
             }
             Some((query_id, crate::types::HistoricalTickData::BidAsk(ticks), is_complete))
         }
-        "MIDPOINT" => {
+        // A rate is a value with a moment, and nothing else. Read through
+        // the trade decoder it arrives as a print, with a size and a venue it
+        // never had. No trade is involved in this series.
+        "MIDPOINT" | "OPTION_EXERCISE_INTEREST_RATE" => {
             let mut ticks = Vec::new();
             while let Some(tick_pos) = xml[search_start..].find("<Tick>") {
                 let abs = search_start + tick_pos;
@@ -744,14 +785,16 @@ pub fn build_realtime_bar_xml(
     // the only shape this ever described, so a request for anything else — an
     // FX pair on IDEALPRO, a future on its own venue — went out saying it was
     // a US stock and came back untyped.
-    let exchange = if exchange.is_empty() { "BEST" } else { exchange };
-    let sec_type = if sec_type.is_empty() { "CS" } else { sec_type };
+
     let rth = if use_rth { "true" } else { "false" };
     // Through the one place that knows these names. Spelled out again here,
     // the midpoint was "Midpoint" in two of the three and "MidPoint" in the
     // third — and the venue, which only takes the third, answered the other
     // two with "no historical market data", which reads as a series that does
     // not exist rather than a name that is misspelled.
+    // Refused at the request, so nothing reaches here that this does not know.
+    // Falling back to trades sent a different series than the one asked for,
+    // and the bars that came back read as the ones the caller wanted.
     let data = BarDataType::from_api_str(what_to_show)
         .map(|kind| kind.as_str())
         .unwrap_or("Last");
@@ -797,6 +840,10 @@ pub fn decode_bar_payload(payload: &[u8], min_tick: f64) -> Option<crate::types:
     let data = &reordered;
     let mut pos: usize = 0; // bit position
 
+    // A read past the end of the payload takes zeroes, and so does every
+    // field after it. Unrecorded, a payload cut anywhere decodes into a bar
+    // of plausible zeroes indistinguishable from one the venue sent.
+    let overran = std::cell::Cell::new(false);
     let read_bits = |pos: &mut usize, n: usize| -> u32 {
         let mut val: u32 = 0;
         for i in 0..n {
@@ -804,6 +851,8 @@ pub fn decode_bar_payload(payload: &[u8], min_tick: f64) -> Option<crate::types:
             let bit_idx = *pos % 8;
             if byte_idx < data.len() {
                 val |= (((data[byte_idx] >> bit_idx) & 1) as u32) << i;
+            } else {
+                overran.set(true);
             }
             *pos += 1;
         }
@@ -871,6 +920,10 @@ pub fn decode_bar_payload(payload: &[u8], min_tick: f64) -> Option<crate::types:
         low
     };
 
+    if overran.get() {
+        return None;
+    }
+
     Some(crate::types::RealTimeBar {
         timestamp: 0, // filled by caller from message header
         open, high, low, close, volume, wap, count,
@@ -888,8 +941,7 @@ pub fn build_schedule_xml(
 ) -> String {
     // The last of the query builders that described a US stock routed BEST
     // whatever contract it was asked about.
-    let exchange = if exchange.is_empty() { "BEST" } else { exchange };
-    let sec_type = if sec_type.is_empty() { "CS" } else { sec_type };
+
     let rth = if use_rth { "true" } else { "false" };
 
     format!(
@@ -963,7 +1015,11 @@ pub fn parse_schedule_response(xml: &str) -> Option<crate::types::HistoricalSche
         query_id,
         timezone,
         start_date_time,
-        end_date_time: String::new(), // filled by caller from request context
+        // The answer states where the schedule starts and not where it ends,
+        // so this stays empty here and the sender fills it with the end its
+        // own request named. Left empty all the way through, every caller was
+        // told the schedule ran to nothing.
+        end_date_time: String::new(),
         sessions,
     })
 }

@@ -12,7 +12,7 @@ use crate::error_codes::Refusal;
 use crate::client_core::ClientCore;
 use crate::types::*;
 use super::EClient;
-use super::super::contract::{Contract, Order, CommissionAndFeesReport, Execution};
+use super::super::contract::{Contract, Order, OrderState, CommissionAndFeesReport, Execution};
 
 #[pymethods]
 impl EClient {
@@ -56,9 +56,8 @@ impl EClient {
         let api_contract = crate::types::model::Contract {
             primary_exchange: contract.primary_exchange.clone(),
             combo_legs: contract.combo_legs_api(py).map_err(PyRuntimeError::new_err)?,
-            // Read, not guessed. A delta or a price that fell back to zero
-            // hedged the order against nothing while the caller had stated
-            // what to hedge against, and nothing said so.
+            // Every field is read from the caller's object. A delta or price
+            // defaulted to zero hedges the order against nothing.
             delta_neutral_contract: match contract.delta_neutral_contract.as_ref() {
                 None => None,
                 Some(d) => {
@@ -129,11 +128,10 @@ impl EClient {
             return self.report_refusal(py, order_id, why.into());
         }
 
-        // An order names its contract by the venue's own id. A caller who
-        // states a description instead — which every example written against
-        // the reference client does — has it resolved here, once the order
-        // itself is known to be one the venue would take: an order carrying no
-        // id names nothing the venue can match, and is answered by silence.
+        // An order names its contract by venue contract id. A caller who
+        // states a description instead, as the reference client's examples do,
+        // has it resolved here once the order itself validates. An order
+        // carrying no id matches nothing and is answered by silence.
         //
         // That resolution is a request and an answer the first time, so this
         // call does not return until the venue has named the contract. The GIL
@@ -148,19 +146,25 @@ impl EClient {
             let key = crate::client_core::ClientCore::description_key(&contract.to_api());
             match self.qualify_once(py, contract, &key) {
                 Ok(found) => { named = found; &named }
-                // Under the code that caused it: an order refused because the
-                // session ended is not an order for a contract that does not
-                // exist, and a caller that retries on 200 retries for ever.
+                // Reported under the code for the cause. An order refused
+                // because the session ended is not code 200, which names a
+                // contract the venue does not hold and invites a retry.
                 Err(why) => return self.report_refusal(py, order_id, why),
             }
         } else {
             contract
         };
 
-        let oid = if order_id > 0 {
-            order_id as u64
-        } else {
-            self.take_order_id()
+        // The number the caller stated, or a refusal. An id at or below zero
+        // names no order the venue will hold, and one was handed out in its
+        // place: the order went to the market under a number the caller had
+        // never seen, so every status about it arrived under an id they were
+        // not watching and their own cancel named nothing. The reference
+        // client sends what it is given and the venue answers for it.
+        let Some(oid) = u64::try_from(order_id).ok().filter(|id| *id > 0) else {
+            return self.report_refusal(py, order_id, Refusal::validation(format!(
+                "place_order: order_id {order_id} is not an order number;                  ask for one with next_order_id() or reqIds()",
+            )));
         };
 
         let instrument = self.find_or_register_instrument(py, contract)?;
@@ -208,13 +212,9 @@ impl EClient {
     /// Exercise or lapse a long option position.
     ///
     /// `exercise_action` is 1 to exercise and 2 to lapse; anything else is
-    /// refused. `_override` is taken for signature compatibility and is not
-    /// sent: it is a validation bypass the venue's own front end applies before
-    /// it builds the order, so there is no tag for it on the wire.
-    ///
-    /// `override_` is taken and not applied. It is a validation bypass the
-    /// venue's own front end applies before it builds the order, so there is no
-    /// tag for it on the wire.
+    /// refused. `_override` is taken and not applied: it selects a validation
+    /// bypass applied before the order is built, and no tag on this wire
+    /// carries it.
     #[pyo3(signature = (req_id, contract, exercise_action, exercise_quantity, account, _override))]
     fn exercise_options(
         &self, py: Python<'_>, req_id: i64, contract: &Contract, exercise_action: i32,
@@ -257,14 +257,20 @@ impl EClient {
 
     /// Cancel an order.
     ///
-    /// `manual_order_cancel_time` is taken and not applied. A cancel names five
-    /// fields on this wire and no time among them, as the counterpart's own
-    /// cancel does.
+    /// `manual_order_cancel_time` is taken and not applied. A cancel on this
+    /// wire names five fields and no time among them.
     #[pyo3(signature = (order_id, manual_order_cancel_time=""))]
     fn cancel_order(&self, py: Python<'_>, order_id: i64, manual_order_cancel_time: &str) -> PyResult<()> {
         self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
         let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: order_id as u64 }))?;
+        // As `place_order`. A negative id read as unsigned is a number above
+        // nine quintillion, and the cancel names it.
+        let Some(oid) = u64::try_from(order_id).ok().filter(|id| *id > 0) else {
+            return self.report_refusal(py, order_id, Refusal::validation(format!(
+                "cancel_order: order_id {order_id} is not an order number",
+            )));
+        };
+        Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))?;
         let _ = manual_order_cancel_time;
         Ok(())
     }
@@ -298,8 +304,21 @@ impl EClient {
         let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let count = shared.market.instrument_count();
+        // Every failed send is counted and reported. A caller answered without
+        // an error takes the account to be flat, and a send that did not reach
+        // the engine withdrew nothing.
+        let mut unsent = 0usize;
         for instrument in 0..count {
-            let _ = Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::CancelAll { instrument }));
+            if Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::CancelAll { instrument })).is_err() {
+                unsent += 1;
+            }
+        }
+        if unsent > 0 {
+            return Err(PyRuntimeError::new_err(format!(
+                "a global cancel reached the engine for {} of {count} instruments; \
+                 the rest were not sent, so orders on them are still working",
+                count as usize - unsent,
+            )));
         }
         Ok(())
     }
@@ -308,8 +327,15 @@ impl EClient {
     ///
     /// `num_ids` is taken and not applied. Ids are handed out one at a time
     /// here, as the reference client does whatever number is asked for.
+    ///
+    /// Before a session exists there is no counter to answer from: the id an
+    /// account may next use is the venue's to state. Answering announces zero,
+    /// which names no order the venue will hold and is refused on placement.
+    /// Reported the way the reference client reports every request made before
+    /// connecting.
     #[pyo3(signature = (num_ids=1))]
     fn req_ids(&self, py: Python<'_>, num_ids: i32) -> PyResult<()> {
+        let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
         let next_id = self.next_order_id.load(Ordering::Relaxed) as i64;
         self.callback(py, "next_valid_id", (next_id,))?;
         let _ = num_ids;
@@ -324,33 +350,39 @@ impl EClient {
     /// Request all open orders for this client.
     fn req_open_orders(&self, py: Python<'_>) -> PyResult<()> {
         let shared = self.shared_state()?;
+        // The venue names the working orders unprompted after a connect.
+        // Answering before that replay lands reports none of them, and a
+        // caller that reads "nothing" places the same order twice. Bounded at
+        // 3s: an account with nothing working never sees the replay end.
+        for _ in 0..300 {
+            if shared.orders.replay_done() { break; }
+            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
+        }
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
             let c_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
-            let o = Order::from_api(&tracked.order, self.client_id.load(Ordering::Acquire));
+            let o = Order::from_api(py, &tracked.order, self.client_id.load(Ordering::Acquire))?;
             let o_py = Py::new(py, o)?.into_any();
             let state = super::super::contract::OrderState {
                 status: tracked.status.clone(),
                 ..Default::default()
             };
             let state_py = Py::new(py, state)?.into_any();
-            self.wrapper.call_method(
-                py, "open_order",
-                (*order_id as i64, &c_py, &o_py, &state_py),
-                None,
-            )?;
-            self.wrapper.call_method(
-                py, "order_status",
+            self.callback(py, "open_order", (*order_id as i64, &c_py, &o_py, &state_py))?;
+            self.callback(py, "order_status",
                 (*order_id as i64, tracked.status.as_str(), tracked.filled, tracked.remaining,
-                 0.0f64, tracked.order.perm_id, tracked.order.parent_id, 0.0f64, 0i64, "", 0.0f64),
-                None,
-            )?;
+                 0.0f64, tracked.order.perm_id, tracked.order.parent_id, 0.0f64, 0i64, "", 0.0f64))?;
         }
         self.callback(py, "open_order_end", ())?;
         Ok(())
     }
 
     /// Request all open orders across all clients.
+    ///
+    /// The same answer as `req_open_orders`. The reference client splits the
+    /// two by client id; this wire carries no client id on an order, so the
+    /// venue names the orders on the account without stating who entered them.
+    /// A subset would be an attribution the venue does not supply.
     fn req_all_open_orders(&self, py: Python<'_>) -> PyResult<()> {
         self.req_open_orders(py)
     }
@@ -362,20 +394,18 @@ impl EClient {
     /// such person, so there is nothing to hand over, and this reports that
     /// rather than returning as though the binding were in place.
     ///
-    /// Returning quietly was worse than either alternative: a caller that asked
-    /// to be given those orders and was told nothing waits for orders that are
-    /// never coming, with nothing to say why.
+    /// Reported rather than returning silently: a caller told nothing waits
+    /// for orders that will not arrive.
     ///
     /// `b_auto_bind` is taken and not applied. Whether it asks to bind or to
     /// stop binding, the answer is the same: this session hears about every
     /// order on the account either way.
     #[pyo3(signature = (b_auto_bind))]
     fn req_auto_open_orders(&self, b_auto_bind: bool) -> PyResult<()> {
-        // Nothing goes to the venue: the counterpart answers this itself,
-        // refusing it for any client but zero and otherwise setting a property
-        // of its own. What that property gates does not arise here — this
-        // session is told about every order on the account whether it placed
-        // them or not — so the only observable part is the refusal.
+        // Nothing goes to the wire. The request is refused for any client id
+        // but 0, and otherwise sets state that does not apply here: this
+        // session is told about every order on the account whether or not it
+        // placed them. The refusal is the only observable part.
         if self.client_id.load(std::sync::atomic::Ordering::Acquire) != 0 {
             crate::python::compat::client::stubs::report_unserviceable_with(
                 self,
@@ -406,7 +436,14 @@ impl EClient {
                 symbol: get("symbol"),
                 sec_type: get("secType"),
                 exchange: get("exchange"),
-                side: get("side"),
+                // Stored executions carry the venue's word for the side, and a
+                // filter states the order action. Compared as written, a filter
+                // for buys matches nothing.
+                side: match get("side").to_ascii_uppercase().as_str() {
+                    "BUY" => "BOT".to_string(),
+                    "SELL" | "SSHORT" => "SLD".to_string(),
+                    other => other.to_string(),
+                },
                 acct_code: get("acctCode"),
                 // Dropping these silently replayed executions the caller had
                 // filtered out — another client's fills, or ones before the
@@ -449,11 +486,7 @@ impl EClient {
             };
             let exec_py = Py::new(py, exec_obj)?.into_any();
 
-            self.wrapper.call_method(
-                py, "exec_details",
-                (req_id, &c_py, &exec_py),
-                None,
-            )?;
+            self.callback(py, "exec_details", (req_id, &c_py, &exec_py))?;
 
             let report = CommissionAndFeesReport {
                 exec_id: se.commission_and_fees.exec_id.clone(),
@@ -486,45 +519,51 @@ impl EClient {
         // on this same mutex.
         let shared = self.shared.lock().unwrap().clone();
         if let Some(shared) = shared {
-            let completed = shared.orders.drain_completed_orders();
-            for co in &completed {
-                let status_str = crate::types::order_status::order_status_str(co.status);
-                let rich_info = shared.orders.get_order_info(co.order_id);
-
-                // The state the venue stated where it stated one, under the
-                // status this client names it by — which is the canonical one,
-                // not whatever the stored state was last left at.
-                let state = super::super::contract::OrderState {
-                    status: status_str.into(),
-                    ..rich_info.as_ref()
-                        .map(|info| super::super::contract::OrderState::from_api(&info.order_state))
-                        .unwrap_or_default()
-                };
-                let state_py = Py::new(py, state)?.into_any();
-
-                let tracked = self.core.open_orders.lock().unwrap().get(&co.order_id).map(|o| {
-                    (Contract::from_api(&o.contract), {
-                        Order::from_api(&o.order, self.client_id.load(Ordering::Acquire))
-                    })
-                });
-                if let Some((c, o)) = tracked {
-                    let c_py = Py::new(py, c)?.into_any();
-                    let o_py = Py::new(py, o)?.into_any();
-                    self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
-                } else if let Some(info) = rich_info {
-                    let c = Contract::from_api(&info.contract);
-                    let o = Order::from_api(&info.order, self.client_id.load(Ordering::Acquire));
-                    let c_py = Py::new(py, c)?.into_any();
-                    let o_py = Py::new(py, o)?.into_any();
-                    self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
-                } else {
-                    let c_py = Py::new(py, Contract::default())?.into_any();
-                    let o_py = Py::new(py, Order::default())?.into_any();
-                    self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
+            // Read off the queue once and kept. It empties as it is read and
+            // the venue does not send these again, so a second request would
+            // otherwise be answered with none of them, and with default objects
+            // for any whose record has been retired.
+            {
+                let mut archive = self.completed.lock().unwrap();
+                for co in shared.orders.drain_completed_orders() {
+                    let status_str = crate::types::order_status::order_status_str(co.status);
+                    let rich_info = shared.orders.get_order_info(co.order_id);
+                    let tracked = self.core.open_orders.lock().unwrap().get(&co.order_id).cloned();
+                    // The state the venue stated where it stated one, under the
+                    // status this client names it by, which is canonical rather
+                    // than whatever the stored state last held.
+                    let state = crate::types::model::OrderState {
+                        status: status_str.into(),
+                        ..rich_info.as_ref().map(|i| i.order_state.clone()).unwrap_or_default()
+                    };
+                    let (contract, order) = match (tracked, rich_info) {
+                        (Some(o), _) => (o.contract, o.order),
+                        (None, Some(info)) => (info.contract, info.order),
+                        (None, None) => (
+                            crate::types::model::Contract::default(),
+                            crate::types::model::Order {
+                                order_id: co.order_id as i64,
+                                ..Default::default()
+                            },
+                        ),
+                    };
+                    archive.push((contract, order, state));
+                    // Bound `order_cache` growth: terminal entries are no
+                    // longer needed once what they carried has been read out.
+                    shared.orders.remove_order_info(co.order_id);
                 }
-                // Bound `order_cache` growth: terminal entries are no longer
-                // needed once delivered through `completed_order`.
-                shared.orders.remove_order_info(co.order_id);
+            }
+            // Copied before anything is called back: a callback may ask for
+            // these again, and the lock is not re-entrant.
+            let completed = self.completed.lock().unwrap().clone();
+            for (contract, order, state) in &completed {
+                let c_py = Py::new(py, Contract::from_api(contract))?.into_any();
+                let o_py = Py::new(
+                    py,
+                    Order::from_api(py, order, self.client_id.load(Ordering::Acquire))?,
+                )?.into_any();
+                let state_py = Py::new(py, OrderState::from_api(state))?.into_any();
+                self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
             }
             self.callback(py, "completed_orders_end", ())?;
         }

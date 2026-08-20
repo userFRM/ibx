@@ -167,13 +167,19 @@ impl Context {
         self.positions[id as usize]
     }
 
+    /// The orders on this contract a cancel-all has to reach.
+    ///
+    /// Includes `Inactive`. The venue holds such an order and it can return to
+    /// working; a stop held until the session opens is the ordinary case. A
+    /// cancel for one the venue has finished with returns an unknown-order
+    /// reject, which the reject handler retires.
     pub fn open_orders_for(&self, id: InstrumentId) -> Vec<&Order> {
         self.open_orders
             .values()
             .filter(|o| o.instrument == id && matches!(o.status,
                 OrderStatus::PendingSubmit | OrderStatus::PreSubmitted | OrderStatus::Submitted |
                 OrderStatus::PendingCancel | OrderStatus::PendingReplace |
-                OrderStatus::PartiallyFilled | OrderStatus::Uncertain))
+                OrderStatus::PartiallyFilled | OrderStatus::Uncertain | OrderStatus::Inactive))
             .collect()
     }
 
@@ -394,13 +400,38 @@ impl Context {
     /// not regress the lifecycle — terminal states are absorbing, and a
     /// lower-rank status never overwrites a higher one. Deliberate
     /// regressions go through `set_order_status_forced`.
-    pub fn update_order_status(&mut self, order_id: OrderId, status: OrderStatus) -> bool {
+    ///
+    /// `replayed` marks a report that restates history: PossResend (tag 97)
+    /// or PossDupFlag (tag 43). Such a report cannot move an order out of
+    /// PendingCancel.
+    pub fn update_order_status(
+        &mut self,
+        order_id: OrderId,
+        status: OrderStatus,
+        replayed: bool,
+    ) -> bool {
         if let Some(order) = self.open_orders.get_mut(&order_id) {
             let prev = order.status;
             if prev == status {
                 return false;
             }
-            if prev.is_terminal() || status.rank() < prev.rank() {
+            // PendingCancel does not supersede the working states. The ranks
+            // are a total order and cannot express this on their own, because
+            // a partially filled order must still be able to reach
+            // PendingCancel.
+            //
+            // A report stating the order is working moves it out of
+            // PendingCancel. A remark on an order arrives as a pending cancel
+            // with the acceptance immediately behind it, and a cancel the
+            // venue declines leaves the order working.
+            //
+            // A replayed report is excluded. Recent activity is replayed when
+            // a session opens, and a replayed working status predates any
+            // cancel sent since.
+            let resumes_working = !replayed
+                && prev == OrderStatus::PendingCancel
+                && matches!(status, OrderStatus::PreSubmitted | OrderStatus::Submitted);
+            if !resumes_working && (prev.is_terminal() || status.rank() < prev.rank()) {
                 log::debug!(
                     "Order {order_id} status guard: keeping {prev:?}, dropping stale {status:?}",
                 );
@@ -422,8 +453,16 @@ impl Context {
     }
 
     pub fn update_order_filled(&mut self, order_id: OrderId, last_shares: u32) {
+        self.adjust_order_filled(order_id, last_shares as i64);
+    }
+
+    /// Move what an order has filled by a signed amount.
+    ///
+    /// A busted trade restates the order's cumulative quantity downwards, so
+    /// the delta may be negative. Saturates at zero.
+    pub fn adjust_order_filled(&mut self, order_id: OrderId, delta: i64) {
         if let Some(order) = self.open_orders.get_mut(&order_id) {
-            order.filled = order.filled.saturating_add(last_shares);
+            order.filled = (order.filled as i64 + delta).clamp(0, u32::MAX as i64) as u32;
         }
     }
 
@@ -460,7 +499,12 @@ impl Context {
         for order in self.open_orders.values_mut() {
             match order.status {
                 OrderStatus::PendingSubmit | OrderStatus::PreSubmitted | OrderStatus::Submitted |
-                OrderStatus::PendingCancel | OrderStatus::PendingReplace | OrderStatus::PartiallyFilled => {
+                OrderStatus::PendingCancel | OrderStatus::PendingReplace |
+                OrderStatus::PartiallyFilled |
+                // Includes `Inactive`: the venue holds such an order and it
+                // can return to working, so its state after a disconnect is
+                // unknown like any other.
+                OrderStatus::Inactive => {
                     order.status = OrderStatus::Uncertain;
                 }
                 _ => {}

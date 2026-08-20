@@ -46,9 +46,9 @@ pub type Qty = i64;
 /// How a price is held here: a whole number of hundred-millionths.
 ///
 /// This is not how the venue sends one. The venue sends a price as a whole
-/// number of the CONTRACT'S OWN smallest increment — the counterpart holds a
-/// price as that count beside the increment it counts, and converts only when
-/// something needs a decimal. That representation has no floor: a contract
+/// number of the contract's own smallest increment, carried alongside that
+/// increment and converted to a decimal only where one is needed. That
+/// representation has no floor: a contract
 /// quoted in millionths works exactly as well as one quoted in pennies, because
 /// the count is relative to the contract rather than to a fixed scale.
 ///
@@ -253,7 +253,7 @@ pub struct OptionComputation {
     /// The option this models.
     pub instrument: InstrumentId,
     /// The request this answers, where the computation was made here rather
-    /// than by the venue. The venue's own arrive against an instrument and are
+    /// than by the venue. Venue-sent bulletins arrive against an instrument and are
     /// reported under whichever request subscribed it; a local calculation
     /// answers the call that asked for it and has no subscription behind it,
     /// so it names that call rather than borrowing the instrument field.
@@ -321,7 +321,7 @@ pub struct TbtTrade {
     pub price: Price,
     /// How much.
     pub size: i64,
-    /// When, in seconds since the epoch — the venue's own second, handed on
+    /// When, in seconds since the epoch, as the venue states it — handed on
     /// unscaled, which is what the reference client's tick-by-tick callbacks
     /// carry.
     pub timestamp: u64,
@@ -359,7 +359,7 @@ pub struct TbtQuote {
     pub bid_size: i64,
     /// How much at the ask.
     pub ask_size: i64,
-    /// When, in seconds since the epoch — the venue's own second, handed on
+    /// When, in seconds since the epoch, as the venue states it — handed on
     /// unscaled, which is what the reference client's tick-by-tick callbacks
     /// carry.
     pub timestamp: u64,

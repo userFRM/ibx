@@ -5,12 +5,11 @@
 //! nothing. A client that counts from one on every start collides with
 //! everything it placed yesterday.
 //!
-//! The counterpart solves this by remembering. It keeps the last id it used in
-//! its own settings, keyed by the client id, hands out that value plus one,
-//! and writes the new one back. This is the same thing: a small file of
-//! `key<TAB>value` lines, one line per account and client id.
+//! The solution is to remember: keep the last id used, keyed by the client
+//! id, hand out that value plus one, and write the new one back. Stored as a
+//! small file of `key<TAB>value` lines, one line per account and client id.
 //!
-//! Where nothing is remembered, the counterpart starts at one. This cannot:
+//! Starting from one where nothing is remembered will not do:
 //! its file is new on a machine whose account may have traded for years
 //! through something else, and one is exactly the id that collides. So a first
 //! run starts from the clock instead — seconds since the epoch, which is above
@@ -36,8 +35,8 @@ fn from_the_clock() -> u64 {
 
 /// Which counter a session is counting from.
 ///
-/// The counterpart keys by client id alone, because one of its installations
-/// serves one account. This one can be pointed at several, so the account and
+/// Keying by client id alone suffices where one installation serves one
+/// account. This one can be pointed at several, so the account and
 /// the kind of session are part of the key as well: two accounts sharing a
 /// counter would each skip the other's ids for no reason, and worse, a live
 /// account would take its numbering from a paper one.

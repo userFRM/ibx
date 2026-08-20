@@ -52,7 +52,7 @@ pub struct DeltaNeutralContract {
 /// ibapi-compatible Contract. Matches C++ `Contract` struct fields.
 #[derive(Clone, Debug, Default)]
 pub struct Contract {
-    /// The venue's own id for this contract, and the only field that
+    /// Contract id assigned by the venue, and the only field that
     /// names one on its own. Every request that carries a contract is answered
     /// by id; a contract described by symbol has its id looked up first.
     pub con_id: i64,
@@ -76,7 +76,7 @@ pub struct Contract {
     pub right: String,
     /// How many units one contract is worth — 100 for most US options.
     pub multiplier: String,
-    /// The venue's own name for this contract, which is not the
+    /// The venue's name for this contract, which is not the
     /// symbol for anything but a share.
     pub local_symbol: String,
     /// Where the contract is listed, as opposed to where an
@@ -96,11 +96,11 @@ pub struct Contract {
     /// The identifier itself. A lookup carrying one rides the
     /// identifier and ignores the symbol.
     pub sec_id: String,
-    /// The venue's own description of the contract.
+    /// The venue's description of the contract.
     pub description: String,
     /// Who issued it, where the venue names an issuer.
     pub issuer_id: String,
-    /// The venue's own description of the legs, as it states
+    /// The venue's description of the legs, as it states
     /// them back.
     pub combo_legs_descrip: String,
     /// The legs of a combination. Empty for anything else.
@@ -151,7 +151,7 @@ pub struct Order {
     /// When the order should become active: `YYYYMMDD HH:MM:SS`, with an
     /// optional zone, or `YYYYMMDD` for the start of that day.
     ///
-    /// Sent on tag 168, in UTC and joined by a dash — the form the counterpart
+    /// Sent on tag 168, in UTC and joined by a dash — the form this tag
     /// writes it in, which is not the space-joined form the rest of this
     /// client's timestamps use. Written the other way the venue reads a
     /// different moment, and the order goes live at a time nobody chose.
@@ -230,20 +230,18 @@ pub struct Order {
     /// A venue precaution the caller has chosen to accept.
     pub advanced_error_override: String,
     /// A caller's own name for the algo running this order. **Not carried by
-    /// this protocol.** The counterpart declares a field for it and the venue
-    /// refuses it: previewed with one, both on an algo and without, it answered
-    /// `Invalid value in field # 8016`. Taken here and kept, so an order built
-    /// against another client reads back what it set.
+    /// this protocol.** The venue refuses tag 8016: previewed with
+    /// one, both on an algo and without, it answers `Invalid value in field #
+    /// 8016`. Accepted and retained, so an order built against another client
+    /// reads back what it set.
     pub algo_id: String,
     /// Whether the order may be worked before the venue opens.
     pub allow_pre_open: bool,
     /// Which auction an order competes in.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub auction_strategy: i32,
     /// A date on which the venue withdraws the order itself.
     pub auto_cancel_date: String,
@@ -251,29 +249,23 @@ pub struct Order {
     pub auto_cancel_parent: bool,
     /// An offset stated in basis points, and what it is measured against.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub basis_points: f64,
     /// See `basis_points`.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub basis_points_type: i32,
     /// A large order worked as a block.
     pub block_order: bool,
     /// Interest accrued on a bond since its last coupon.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub bond_accrued_interest: String,
     /// Where the trade clears.
     pub clearing_account: String,
@@ -302,72 +294,58 @@ pub struct Order {
     pub deactivate_on_disconnect: bool,
     /// The hedge ratio a delta-neutral order is worked at.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one — the delta that travels is the hedging contract's, stated on
-    /// `delta_neutral_contract`. Taken here and kept, so an order built against
-    /// another client reads back what it set.
+    /// **Not carried by this protocol.** No tag carries it; the delta that
+    /// travels is the hedging contract's, stated on `delta_neutral_contract`.
+    /// Accepted and retained, so an order built against another client reads
+    /// back what it set.
     pub delta: f64,
     /// The hedging leg's own trigger price.
     pub delta_neutral_aux_price: f64,
     /// Where the hedging leg clears.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub delta_neutral_clearing_account: String,
     /// How the hedging leg clears.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub delta_neutral_clearing_intent: String,
     /// The contract the hedge is placed in.
     pub delta_neutral_con_id: i32,
     /// Where the hedging leg's shares are held.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub delta_neutral_designated_location: String,
     /// Whether the hedging leg opens or closes a position.
     ///
-    /// **Not carried by this protocol.** The counterpart's own field for it
-    /// declares no tag at all and overrides its writer to do nothing, so it
-    /// reaches the venue from nowhere. Taken here and kept, so an order built
-    /// against another client still reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it, on any
+    /// path. Accepted and retained, so an order built against another client
+    /// still reads back what it set.
     pub delta_neutral_open_close: String,
     /// What kind of order the hedge is.
     pub delta_neutral_order_type: String,
     /// Who settles the hedging leg.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub delta_neutral_settling_firm: String,
     /// Whether the hedging leg is a short sale.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub delta_neutral_short_sale: bool,
     /// Which short-sale slot the hedging leg uses.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub delta_neutral_short_sale_slot: i32,
     /// Where a short sale's borrow is located.
     pub designated_location: String,
@@ -376,11 +354,17 @@ pub struct Order {
     pub discretionary_up_to_limit_price: bool,
     /// Whether the hedge is priced automatically.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
+    ///
+    /// False when nothing states it, as the reference client leaves it. True
+    /// stood here, and the refusal that guards an uncarried field reads a value
+    /// away from the default as one the caller asked for: an order that spelled
+    /// out the reference client's own default was refused for it, and one that
+    /// actually asked for the hedge not to be priced automatically was accepted
+    /// and had that instruction dropped. The polarity was the whole of the
+    /// fault.
     pub dont_use_auto_price_for_hedge: bool,
     /// How long a duration-limited order lives, in seconds.
     pub duration: i32,
@@ -390,12 +374,10 @@ pub struct Order {
     pub ext_operator: String,
     /// Which advisor group the order is allocated across.
     ///
-    /// **Not carried by this protocol.** The counterpart names every
-    /// field it can write, and none of the three hundred and one that
-    /// carry a tag is this one. It arrives on a report the venue sends
-    /// back, which is not the same as an order carrying it out. Taken
-    /// here and kept, so an order built against another client reads
-    /// back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it. It
+    /// arrives on a report the venue sends back, which is not the same
+    /// as an order carrying it out. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub fa_group: String,
     /// How it is divided among them.
     ///
@@ -456,10 +438,9 @@ pub struct Order {
     pub min_trade_qty: i32,
     /// Which model the order belongs to.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one — it declares which model a rebalance is of, and what kind of
-    /// change to a model an order is, but not a model an order belongs to.
+    /// **Not carried by this protocol.** No tag carries it. Tags exist for
+    /// which model a rebalance is of, and what kind of change to a model an
+    /// order is, but not for a model an order belongs to.
     /// Taken here and kept, so an order built against another client reads
     /// back what it set, and refused rather than sent, so an order meant for
     /// one model is not placed against the account at large.
@@ -473,11 +454,9 @@ pub struct Order {
     pub open_close: String,
     /// Whether smart routing is declined.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub opt_out_smart_routing: bool,
     /// A price for each leg of a combination, in the order the legs
     /// are given. The venue validates the leg order and refuses a spread it
@@ -485,45 +464,37 @@ pub struct Order {
     pub order_combo_legs: Vec<f64>,
     /// Free-form options carried alongside an order.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub order_misc_options: Vec<TagValue>,
     /// The caller's own label, carried back on every message about the
     /// order.
     pub order_ref: String,
     /// Who originated the order.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub origin: i32,
     /// Whether percentage limits are set aside.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub override_percentage_constraints: bool,
-    /// The venue's own id for a parent order.
+    /// Parent order id, as the venue assigns it.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub parent_perm_id: i64,
     /// How far it moves when the reference does.
     pub pegged_change_amount: f64,
     /// How far a relative order sits from its reference, as a
     /// percentage.
     pub percent_offset: f64,
-    /// The venue's own id for the order, stable across sessions where the
+    /// Order id assigned by the venue, stable across sessions where the
     /// caller's number is not.
     ///
     /// **Reported by the venue, not sent.** It arrives on the echo of
@@ -543,27 +514,21 @@ pub struct Order {
     pub professional_customer: bool,
     /// The profit-taking leg's id.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub pt_order_id: i32,
     /// The profit-taking leg's type.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub pt_order_type: String,
     /// Whether a ladder's prices are varied.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub randomize_price: bool,
     /// Vary the displayed size so the order is harder to read.
     pub randomize_size: bool,
@@ -608,9 +573,9 @@ pub struct Order {
     pub scale_subs_level_size: i32,
     /// The name of a scale table held by the venue.
     ///
-    /// **Not carried by this protocol.** The counterpart resolves a table into
-    /// the ladder it stands for and sends the levels, so the venue is never
-    /// told the name. Setting the ladder's own fields does the same thing.
+    /// **Not carried by this protocol.** A named table is resolved into the ladder
+    /// it stands for and the levels are sent, so the name never reaches the
+    /// venue. Setting the ladder's own fields has the same effect.
     pub scale_table: String,
     /// Whether the venue may seek a better price than the
     /// limit.
@@ -619,38 +584,30 @@ pub struct Order {
     pub settling_firm: String,
     /// The shareholder an order is placed for.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub shareholder: String,
     /// Who is lending for a short sale: 1 the account, 2 elsewhere,
     /// which is what `designated_location` then names.
     pub short_sale_slot: i32,
     /// The stop-loss leg's id.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub sl_order_id: i32,
     /// The stop-loss leg's type.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub sl_order_type: String,
     /// Routing parameters for a smart-routed combination.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub smart_combo_routing_params: Vec<TagValue>,
     /// Which soft dollar tier the commission is directed to.
     pub soft_dollar_tier_name: String,
@@ -659,7 +616,7 @@ pub struct Order {
     /// What the soft-dollar tier is called on a screen.
     ///
     /// **Not carried by this protocol.** The tier and its value are sent; the
-    /// name shown beside them is held by the counterpart and never written.
+    /// display name beside them is never written to the wire.
     pub soft_dollar_tier_display_name: String,
     /// Whether the order was solicited from the customer.
     pub solicited: bool,
@@ -684,21 +641,20 @@ pub struct Order {
     /// Where a trailing stop starts, before it has followed
     /// anything.
     pub trail_stop_price: f64,
-    /// Whether the venue's own price management algorithm works
+    /// Whether the venue's price management algorithm works
     /// the order.
     pub use_price_mgmt_algo: i32,
-    /// The volatility a volatility order is worked at.
+    /// The volatility a volatility order is worked at, as the number of
+    /// percent: 25 is a quarter. Carried to the wire as it stands.
     pub volatility: f64,
     /// Whether that volatility is daily or annual: 1 daily, 2
     /// annual.
     pub volatility_type: i32,
     /// Which kind of preview is being asked for.
     ///
-    /// **Not carried by this protocol.** The counterpart names every field it
-    /// can write, and none of the three hundred and one that carry a tag is
-    /// this one. Its siblings are among them, which is what makes the absence
-    /// a finding rather than a search that came up short. Taken here and kept, so an
-    /// order built against another client reads back what it set.
+    /// **Not carried by this protocol.** No tag in the protocol carries it,
+    /// though its siblings each have one. Accepted and retained, so an order
+    /// built against another client reads back what it set.
     pub what_if_type: i32,
 }
 
@@ -774,7 +730,7 @@ impl Default for Order {
             delta_neutral_short_sale_slot: 0,
             designated_location: String::new(),
             discretionary_up_to_limit_price: false,
-            dont_use_auto_price_for_hedge: true,
+            dont_use_auto_price_for_hedge: false,
             duration: i32::MAX,
             exempt_code: -1,
             ext_operator: String::new(),
@@ -898,6 +854,57 @@ impl Order {
         }
     }
 
+    /// The byte a preview states this order's type as.
+    ///
+    /// A preview is a question about the order the caller described, so it
+    /// names every type this client can send. [`Order::ord_type_byte`] answers
+    /// a narrower question — which types a replace may restate — and reads no
+    /// byte as "leave the resting order's type alone", so it cannot be widened
+    /// without changing what a modify does to a live order.
+    ///
+    /// Sharing the narrow set meant a trailing stop, a relative, a midprice, a
+    /// snap and a pegged order were all previewed as limits. The margin comes
+    /// back the same either way, because margin follows the resulting position
+    /// rather than the instruction that reaches it; what does not is the
+    /// venue's judgement of whether the order is allowed at all, so a security
+    /// that refuses limits refused a preview of an order that was not one.
+    ///
+    /// A type with no byte here is still previewed as a limit, which is the
+    /// only thing left to ask. Placement refuses a type it does not name, so a
+    /// preview reaches this fallback only for a type this client would not have
+    /// sent in the first place.
+    pub fn what_if_byte(&self) -> u8 {
+        match self.order_type.to_uppercase().as_str() {
+            "MKT" => b'1',
+            "LMT" => b'2',
+            "STP" => b'3',
+            "STP LMT" => b'4',
+            "MOC" => b'5',
+            "LOC" => b'B',
+            "MIT" => b'J',
+            "MTL" | "BOX TOP" => b'K',
+            "LIT" => crate::types::ORD_LIT,
+            "MKT PRT" => b'U',
+            // A relative order is sent as a peg and told apart by its
+            // ExecInst; "R" is that instruction, not a type the venue reads
+            // on tag 40.
+            "REL" => b'P',
+            "TRAIL" => b'P',
+            "TRAIL LIMIT" => crate::types::ORD_TRAIL_LIMIT,
+            "STP PRT" => crate::types::ORD_STP_PRT,
+            // Both spellings, as the placement path takes them. Naming only
+            // one here previewed the other as a limit.
+            "MIDPX" | "MIDPRICE" => crate::types::ORD_MIDPX,
+            "SNAP MKT" => crate::types::ORD_SNAP_MKT,
+            "SNAP MID" | "SNAP MIDPT" => crate::types::ORD_SNAP_MID,
+            "SNAP PRI" | "SNAP PRIM" => crate::types::ORD_SNAP_PRI,
+            "PEG MKT" => crate::types::ORD_PEG_MKT,
+            "PEG MID" | "PEG MIDPT" => crate::types::ORD_PEG_MID,
+            "PEG BENCH" => crate::types::ORD_PEG_BENCH,
+            _ => b'2',
+        }
+    }
+
     /// How long the order lives, as the single byte the wire carries it in.
     pub fn tif_byte(&self) -> u8 {
         match self.tif.as_str() {
@@ -917,8 +924,8 @@ impl Order {
         // or a calendar date (tag 432). On a parse error, log and drop the
         // expiry — the order then surfaces a visible gateway rejection rather
         // than silently carrying a wrong expiry.
-        // Not active until this moment. The counterpart carries it on tag 168
-        // as a timestamp, so a date with no time is the start of that day.
+        // Not active until this moment. Tag 168 carries a timestamp, so a
+        // date with no time is the start of that day.
         let good_after = match crate::protocol::datetime::parse_ib_expiry(&self.good_after_time) {
             Ok(None) | Err(_) => 0,
             Ok(Some(crate::protocol::datetime::IbExpiry::Instant(secs))) => secs,
@@ -974,7 +981,7 @@ impl Order {
             active_stop_time: self.active_stop_time.clone(),
             post_only: self.post_only,
             solicited: self.solicited,
-            manual_order_indicator: if self.manual_order_indicator == i32::MAX { 0 } else { self.manual_order_indicator },
+            manual_order_indicator: self.manual_order_indicator,
             route_marketable_to_bbo: self.route_marketable_to_bbo,
             imbalance_only: self.imbalance_only,
             allow_pre_open: self.allow_pre_open,
@@ -1032,10 +1039,10 @@ impl Order {
             primary_exchange: String::new(),
             delta_neutral_contract: None,
             // Valid trigger-method codes only: the raw `as u8`
-            // cast wrapped the gateway's -1 (Unknown) to 255, and
+            // cast wrapped -1 (Unknown) to 255, and
             // out-of-range codes went to the wire verbatim. Anything
             // unrecognized coerces to 0 (default = not emitted), matching
-            // the gateway's unknown->default handling.
+            // unknown->default handling.
             trigger_method: match self.trigger_method {
                 0..=4 | 7 | 8 => self.trigger_method as u8,
                 _ => 0,
@@ -1044,7 +1051,7 @@ impl Order {
             conditions: self.conditions.clone(),
             conditions_cancel_order: self.conditions_cancel_order,
             conditions_ignore_rth: self.conditions_ignore_rth,
-            // Keep 1..=4; anything else is "unset" and emits the gateway
+            // Keep 1..=4; anything else is "unset" and emits the protocol
             // default 3 (ReduceOnFillNonBlock).
             oca_type: match self.oca_type {
                 1..=4 => self.oca_type as u8,
@@ -1075,8 +1082,8 @@ impl Order {
             || self.scale_random_percent
             || self.scale_init_position != i32::MAX
             || self.scale_init_fill_qty != i32::MAX
-            // The public name for varying a ladder's component sizes, which
-            // is the same thing the counterpart carries under one tag.
+            // The public name for varying a ladder's component sizes. One
+            // tag carries it.
             || self.randomize_size;
         if !asked {
             return None;
@@ -1322,6 +1329,14 @@ impl From<&WhatIfResponse> for OrderState {
             maint_margin_after: fmt(wi.maint_margin_after),
             equity_with_loan_after: fmt(wi.equity_with_loan_after),
             commission_and_fees: wi.commission as f64 / PRICE_SCALE_F,
+            // A commission the venue quotes as a range, and what it quotes it
+            // in. Left off, a preview reported a cost of zero for every order
+            // whose commission the venue could only bound, and a warning it
+            // had attached went nowhere.
+            min_commission_and_fees: wi.min_commission as f64 / PRICE_SCALE_F,
+            max_commission_and_fees: wi.max_commission as f64 / PRICE_SCALE_F,
+            commission_and_fees_currency: wi.commission_currency.clone(),
+            warning_text: wi.warning_text.clone(),
             ..Default::default()
         }
     }
@@ -1355,7 +1370,7 @@ pub struct Execution {
     pub shares: f64,
     /// At what price.
     pub price: f64,
-    /// The venue's own id for the order, stable across sessions.
+    /// Order id assigned by the venue, stable across sessions.
     pub perm_id: i64,
     /// Which client placed the order.
     pub client_id: i64,
@@ -1539,7 +1554,7 @@ impl Default for BarData {
 pub struct ContractDetails {
     /// The contract these details are about.
     pub contract: Contract,
-    /// The venue's own name for the market it trades on.
+    /// The venue's name for the market it trades on.
     pub market_name: String,
     /// The smallest amount its price can move. What every price on it is
     /// rounded to.
@@ -2280,7 +2295,7 @@ impl Contract {
         self
     }
 
-    /// State the venue's own name for this contract, where the symbol is
+    /// State the venue's name for this contract, where the symbol is
     /// ambiguous without it.
     #[must_use]
     pub fn named(mut self, local_symbol: &str) -> Self {
@@ -2297,7 +2312,7 @@ impl Contract {
 /// rest alone, so what a reader sees is the order and not the form it was
 /// written on.
 ///
-/// `side` is `"BUY"` or `"SELL"`, the venue's own words. Every one of these is
+/// `side` is `"BUY"` or `"SELL"`, as the venue spells them. Every one of these is
 /// a plain [`Order`], so a field this shorthand does not reach is set on the
 /// value it returns.
 ///

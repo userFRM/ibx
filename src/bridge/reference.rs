@@ -57,7 +57,7 @@ pub struct ReferenceState {
     white_branding_id: Mutex<String>,
     /// Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
     ccp_session_id: Mutex<String>,
-    /// Logical-name → host URL map pushed by the gateway during logon.
+    /// Logical-name → host URL map pushed by the venue during logon.
     misc_urls: Mutex<HashMap<String, String>>,
     /// Another session already on this account at connect: address, login time,
     /// and whether this one is held to reading only.
@@ -145,7 +145,7 @@ impl ReferenceState {
     }
 
     /// Whether the venue map held is this client's guess or
-    /// the venue's own statement.
+    /// the venue's statement.
     pub fn note_smart_components_provisional(&self, provisional: bool) {
         self.smart_components_provisional
             .store(provisional, Ordering::Relaxed);
@@ -231,15 +231,28 @@ impl ReferenceState {
 
     /// The first id this client's own answering calls ask under.
     ///
-    /// Far above what a caller is likely to use, so an answer to one of these
-    /// is never mistaken for an answer to theirs — and, more importantly, so a
-    /// dispatch loop can tell them apart from a caller's own requests and leave
-    /// them where the waiting call will find them.
-    pub const ASK_ID_BASE: u32 = 0x3000_0000;
+    /// A dispatch loop tells these apart from a caller's own requests and
+    /// leaves them where the waiting call will find them, so the band has to
+    /// sit above every id a caller can present. "Far above what a caller is
+    /// likely to use" was not that: a session numbers its orders from the
+    /// account's own counter so a restart does not reissue an id the account
+    /// has already used, which puts a caller's ids near the epoch in seconds —
+    /// past `0x6A00_0000` today and climbing, where the old base was
+    /// `0x3000_0000`. Every request a program made through that counter was
+    /// read as this client's own and its answer withheld, so the request never
+    /// completed and nothing said why.
+    ///
+    /// Above that counter, and below [`ENGINE_ID_BASE`], where the engine's own
+    /// requests (cache auto-fetch, scanner enrichment) start.
+    pub const ASK_ID_BASE: u32 = 0xC000_0000;
 
     /// Whether a request id belongs to one of this client's answering calls.
+    ///
+    /// The band, not everything above its floor: the engine's own requests are
+    /// nobody's answering call, and their replies are taken by the engine
+    /// rather than left for a call that is going to want them.
     pub fn is_ask_id(req_id: u32) -> bool {
-        req_id >= Self::ASK_ID_BASE
+        (Self::ASK_ID_BASE..ENGINE_ID_BASE).contains(&req_id)
     }
 
     /// Drain what a dispatch loop should deliver, leaving behind what a waiting
@@ -248,8 +261,9 @@ impl ReferenceState {
     /// Only for a dispatch loop whose answering calls take their replies out of
     /// these queues by id. A dispatch loop that *is* how its answering calls
     /// receive must use the plain drain, or it withholds from itself — which is
-    /// what happened, and no offline test could see it, because the queues were
-    /// filled by hand rather than by a venue.
+    /// what happened, and the tests of the day could not see it: they filled
+    /// the queues by hand, with ids of their own choosing, so the band was
+    /// never the one a session hands out.
     pub fn drain_dispatchable<T>(q: &Mutex<Vec<(u32, T)>>) -> Vec<(u32, T)> {
         let mut g = q.lock().unwrap();
         let mut out = Vec::new();
@@ -336,7 +350,7 @@ impl ReferenceState {
         q.len() != before
     }
 
-    /// The venue's own words about one request, if it refused it.
+    /// The venue's words about one request, if it refused it.
     pub fn take_error_for(&self, req_id: u32) -> Option<(i32, String)> {
         let mut q = self.historical_errors.lock().unwrap();
         let at = q.iter().position(|(id, _, _)| *id == req_id)?;
@@ -627,7 +641,7 @@ impl ReferenceState {
         self.ccp_session_id.lock().unwrap().clone()
     }
 
-    /// Logical-name → host URL map pushed by the gateway during logon. Empty when
+    /// Logical-name → host URL map pushed by the venue during logon. Empty when
     /// no URL set was pushed; consumers should fall back to a documented literal
     /// (e.g. `api.ibkr.com` for `region_dam`).
     pub fn misc_urls(&self) -> HashMap<String, String> {
@@ -694,7 +708,7 @@ impl ReferenceState {
         self.settle_island_grant(&have);
     }
 
-    /// The token that grants the older spelling of Nasdaq, as the counterpart
+    /// The token that grants the older spelling of Nasdaq, as the venue
     /// reads it: off the granted list at logon, held on its own from then on.
     fn settle_island_grant(&self, granted: &[String]) {
         self.island_granted.store(
@@ -760,8 +774,19 @@ impl ReferenceState {
         *self.session_over.lock().unwrap()
     }
 
+    /// Record why this session ended. The first reason stands.
+    ///
+    /// A session ends once, and what ended it is the first thing that did. The
+    /// tidying that follows is not a second reason: a session taken away by a
+    /// login elsewhere, or refused by the venue, is shut down afterwards like
+    /// any other. A shutdown overwriting the reason reports "the caller asked
+    /// to stop" for a session the caller did not stop, and discards the reason
+    /// there was something to say about.
     #[doc(hidden)] pub fn set_session_over(&self, why: &'static str) {
-        *self.session_over.lock().unwrap() = Some(why);
+        let mut over = self.session_over.lock().unwrap();
+        if over.is_none() {
+            *over = Some(why);
+        }
     }
 
     #[doc(hidden)] pub fn clear_session_over(&self) {
@@ -774,5 +799,56 @@ impl ReferenceState {
 
     #[doc(hidden)] pub fn set_misc_urls(&self, urls: HashMap<String, String>) {
         *self.misc_urls.lock().unwrap() = urls;
+    }
+}
+
+/// The first id the engine asks its own questions under — a cold-cache
+/// auto-fetch, a scanner enrichment. Nothing a caller or an answering call
+/// issues reaches this far.
+pub const ENGINE_ID_BASE: u32 = 0xF000_0000;
+
+/// The band stays clear of the engine's own requests. Ordered by construction,
+/// so a base moved into them fails the build rather than a test that might not
+/// be run.
+const _: () = assert!(ReferenceState::ASK_ID_BASE < ENGINE_ID_BASE);
+
+#[cfg(test)]
+mod ask_id_band {
+    use super::ReferenceState;
+
+    /// A caller's id is not one of this client's own.
+    ///
+    /// A session numbers its requests from the account's order counter, which
+    /// is seeded near the epoch in seconds. Those ids sat inside the old band,
+    /// so every answer to them was held back for a waiting internal call that
+    /// did not exist, and the request hung with nothing reported. The failure
+    /// was invisible offline because the queues were filled by hand.
+    #[test]
+    fn an_id_seeded_from_the_account_counter_is_the_callers() {
+        // What a session hands out today, and will for decades.
+        for seeded in [1_786_766_504_u32, 1_900_000_000, 2_500_000_000] {
+            assert!(
+                !ReferenceState::is_ask_id(seeded),
+                "{seeded} is a caller's id, so its answer must be delivered",
+            );
+        }
+        // The floor itself, and the id just under it, which is still theirs.
+        assert!(ReferenceState::is_ask_id(ReferenceState::ASK_ID_BASE));
+        assert!(!ReferenceState::is_ask_id(ReferenceState::ASK_ID_BASE - 1));
+        // And the ceiling: the engine's own questions are not answering calls,
+        // so their replies are not withheld for one.
+        assert!(!ReferenceState::is_ask_id(super::ENGINE_ID_BASE));
+        assert!(ReferenceState::is_ask_id(super::ENGINE_ID_BASE - 1));
+    }
+
+    /// And such an answer actually leaves the queue a dispatch loop drains.
+    #[test]
+    fn the_dispatch_loop_delivers_it() {
+        let q = std::sync::Mutex::new(vec![(1_786_766_504_u32, "theirs"),
+                                           (ReferenceState::ASK_ID_BASE, "ours")]);
+        let out = ReferenceState::drain_dispatchable(&q);
+        assert_eq!(out.len(), 1, "the caller's answer is delivered");
+        assert_eq!(out[0].1, "theirs");
+        assert_eq!(q.lock().unwrap().len(), 1, "and ours is left for the waiting call");
     }
 }

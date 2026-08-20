@@ -135,7 +135,17 @@ impl RecoveryBudget {
     }
 
     /// Give the budget back once the session has held together long enough.
-    pub fn settle(&mut self, now: std::time::Instant, stable_window: Duration) {
+    ///
+    /// `whole` is whether every transport this budget bounds is carrying
+    /// traffic. One of them coming back while another is still down is not a
+    /// session that held: the budget is one between them, and refunding it on
+    /// the first recovery let the transport that never came back retry for
+    /// ever, past every limit the caller set.
+    pub fn settle(&mut self, now: std::time::Instant, stable_window: Duration, whole: bool) {
+        if !whole {
+            self.healthy_since = None;
+            return;
+        }
         if let Some(since) = self.healthy_since
             && now.duration_since(since) >= stable_window {
                 self.attempts = 0;
@@ -206,9 +216,36 @@ mod tests {
         assert!(!budget.may_retry(&cfg, t));
 
         budget.record_connected(t);
-        budget.settle(t + cfg.stable_window, cfg.stable_window);
+        budget.settle(t + cfg.stable_window, cfg.stable_window, true);
         assert!(budget.may_retry(&cfg, t), "an hour of health is a fresh start");
         assert_eq!(budget.attempts(), 0);
+    }
+
+    /// Half a session is not a session that held.
+    ///
+    /// The budget bounds the recovery of both transports together. One coming
+    /// back started the clock on its own, and the refund that followed put the
+    /// whole budget back while the other was still down and still being
+    /// retried, so a caller who bounded the effort never saw it stop.
+    #[test]
+    fn a_session_that_is_half_back_does_not_get_its_budget_back() {
+        let cfg = ReconnectConfig::default().with_max_attempts(2);
+        let mut budget = RecoveryBudget::new();
+        let t = Instant::now();
+        budget.record_attempt(t);
+        budget.record_attempt(t);
+        // One transport is carrying traffic again; the other is not.
+        budget.record_connected(t);
+        budget.settle(t + cfg.stable_window, cfg.stable_window, false);
+        assert!(!budget.may_retry(&cfg, t), "the budget came back on half a session");
+
+        // And once it is whole, the clock starts from there rather than from
+        // the half-recovery that preceded it.
+        budget.record_connected(t + cfg.stable_window);
+        budget.settle(t + cfg.stable_window, cfg.stable_window, true);
+        assert!(!budget.may_retry(&cfg, t), "the window had not passed yet");
+        budget.settle(t + cfg.stable_window * 2, cfg.stable_window, true);
+        assert!(budget.may_retry(&cfg, t), "a whole session that held is a fresh start");
     }
 
     /// Coming back for a moment is not recovering.
@@ -221,7 +258,7 @@ mod tests {
         budget.record_attempt(t);
         budget.record_connected(t);
         // Down again well inside the window.
-        budget.settle(t + Duration::from_secs(1), cfg.stable_window);
+        budget.settle(t + Duration::from_secs(1), cfg.stable_window, true);
         assert!(!budget.may_retry(&cfg, t), "a second up is not a stable session");
     }
 

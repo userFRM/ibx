@@ -29,12 +29,9 @@ use crate::protocol::fixcomp;
 /// window at any hour of the day.
 const EXECUTIONS_REACH_BACK_DAYS: u64 = 6;
 
-/// Ninety-two of these, which is what the counterpart sends and not a number
-/// the venue states anywhere. Transcribed from its own opening burst rather
-/// than derived, so it is a constant here for the same reason it is one there.
-/// What would settle it is a session opened with fewer and a comparison of
-/// what the venue sends back; until someone does that, sending what the
-/// counterpart sends is the answer with evidence behind it.
+/// Count of priming messages in the opening burst. The venue states no value
+/// for this anywhere, and it is not derivable from the session; 92 is the
+/// count observed to be accepted. Sending fewer is untested.
 const PRIMING_MESSAGES: usize = 92;
 
 /// What the auth server's logon answer states about this login.
@@ -76,9 +73,8 @@ pub(super) struct LogonAck {
     pub mktdata_route: String,
     /// Contract definitions, tag 8008.
     pub secdef_route: String,
-    /// The trading port, stated on its own tag. Where it is stated it wins
-    /// over the one in the route, which is the order the counterpart reads
-    /// them in.
+    /// The trading port, tag 6146. Takes precedence over a port carried in
+    /// the route string.
     pub trading_port: Option<u16>,
 }
 
@@ -269,7 +265,13 @@ impl LogonAck {
         for part in init_str.split('\x01') {
             if part.starts_with("1=") && part.len() > 2 {
                 let val = &part[2..];
-                if val.starts_with("DU") || val.starts_with("DF") || val.starts_with("U") {
+                // Tag 1 is the account, whatever the account is spelled
+                // like. Admitting only the prefixes a paper and a plain
+                // individual account start with discards an advisor's or an
+                // institution's account, and the username then stands in as
+                // the account on every request that names one. The username
+                // is the only value this has to tell apart.
+                if val != username {
                     note_account(&mut self.accounts, val);
                     if self.account_id.is_empty() || self.account_id == username {
                         self.account_id = val.to_string();
@@ -294,6 +296,14 @@ impl LogonAck {
             } else if part.starts_with("6145=") && self.trading_route.is_empty() {
                 self.trading_route = part[5..].to_string();
                 log::info!("Found trading farm route in init response: {}", self.trading_route);
+            } else if let Some(port) = part.strip_prefix("6146=")
+                && self.trading_port.is_none()
+                && let Ok(p) = port.trim().parse::<u16>() {
+                    // Read here as well as from the acknowledgement: a port
+                    // stated only in the burst is otherwise dropped and the
+                    // configured one dialled in its place.
+                    self.trading_port = Some(p);
+                    log::info!("Found trading farm port in init response: {p}");
             } else if part.starts_with("6171=") && self.mktdata_route.is_empty() {
                 self.mktdata_route = part[5..].to_string();
                 log::info!("Found market-data farm route in init response: {}", self.mktdata_route);
@@ -324,14 +334,12 @@ pub(super) fn send_init_sequence(
     send(&[(35, "U"), (52, now), (6040, "193"), (6556, "OPR.2"), (8166, "L"), (8176, "1")])?;
     send(&[(35, "U"), (52, now), (6040, "101")])?;
     send(&[(35, "U"), (52, now), (6040, "209"), (1, account), (6556, "AcctConfig3")])?;
-    // Which executions a session opens with. The counterpart asks for every
-    // one the venue still holds; asking only for today's leaves a caller that
-    // had history under the counterpart with none here.
+    // Which executions a session opens with. Asking for every execution the
+    // venue still holds; asking only for today's returns no earlier history.
     //
-    // The window is what narrows it: stated, the venue answers within it;
-    // left off, it answers with what it has. The counterpart writes the window
-    // only under its own condition, so leaving it off is a path the venue
-    // takes rather than one invented here.
+    // The window narrows the answer: stated, the venue answers within it;
+    // omitted, it answers with everything it holds. Omitting it is a
+    // request shape the venue accepts.
     //
     // The window is not optional: without it the venue rejects the whole
     // message ("Message must contain field # 6536") and the session opens with
@@ -357,7 +365,7 @@ pub(super) fn send_init_sequence(
 /// The CCP server FINs the connection ~12 s after the init-burst response if
 /// no application-level traffic arrives in the grace window — heartbeats alone
 /// do not satisfy "client alive". Five messages satisfy it, in the order the
-/// counterpart sends them: account register, a wildcard order-status request,
+/// protocol defines: account register, a wildcard order-status request,
 /// the portfolio logon, a second data request, and the core account subscribe.
 ///
 /// Returns the sequence number the next message takes.
@@ -380,6 +388,31 @@ pub(super) fn send_post_burst_grace(
     send(&[(35, "U"), (52, now), (6040, "74"), (1, account), (6700, "Core"), (6544, "2")])?;
     w.flush()?;
     Ok(seq)
+}
+
+/// The opening a rebuilt connection states, which is the opening a first
+/// logon states.
+///
+/// A reconnect once sent a mass status request and nothing else, which reads
+/// as complete — the session logs on, takes orders and acknowledges them — and
+/// is not: the executions subscription lives in the init sequence, so a
+/// rebuilt connection reported no fill for anything placed on it, for as long
+/// as it lasted. The grace burst belongs here for the same reason it belongs
+/// after a logon: the venue closes a connection that has sent nothing but
+/// heartbeats.
+///
+/// It also carries the mass status request, in the position a logon gives it.
+/// Written here a second time as well, the venue was asked to replay every
+/// order twice and this connection numbered every message one ahead of the
+/// ones a first logon takes.
+pub(super) fn send_reconnect_opening(
+    w: &mut impl Write,
+    scope: ExecutionReportScope,
+    account: &str,
+    now: &str,
+) -> io::Result<u32> {
+    let seq = send_init_sequence(w, scope, account, now, 1)?;
+    send_post_burst_grace(w, account, now, seq)
 }
 
 /// Split the venue's per-security-type order permissions, logon tag 6652.
@@ -434,11 +467,10 @@ pub fn parse_misc_urls(s: &str) -> std::collections::HashMap<String, String> {
 ///   `"<host>/<farm>"`            — tag 6145 (trading)
 ///   `"<host>/<farm>/<port>"`     — tags 6171 (mktdata) / 8008 (secdef)
 ///
-/// The port is the venue's, where it states one. A route names the port to
-/// reach that farm on, and the counterpart takes it from there when no tag
-/// carries it separately — it treats a route with neither as an error rather
-/// than substituting a default. `None` here means the route stated no port,
-/// which is the only case the configured one applies to.
+/// A route may name the port to reach that farm on. Where no separate tag
+/// carries the port, the one in the route applies; a route carrying neither is
+/// an error rather than a case for a default. `None` means the route stated no
+/// port, which is the only case the configured port applies to.
 ///
 /// Returns `None` for empty or malformed input.
 pub fn parse_farm_route(route: &str) -> Option<(String, String, Option<u16>)> {
@@ -856,10 +888,9 @@ pub(super) fn note_account(accounts: &mut Vec<String>, account: &str) {
 
 /// Another session already logged in on this account when this one connected.
 ///
-/// The venue states this in its answer to the connect, and the counterpart
-/// reads it there: a session that arrives second is told who was already here.
-/// Whether that matters is the caller's to decide — the venue may serve both,
-/// or may hold this one to reading only.
+/// Stated in the venue's answer to the connect: a session that arrives second
+/// is told which session was already logged in. The venue may serve both
+/// sessions, or hold this one to reading only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompetingSession {
     /// Where the session that was already logged in connected from.
@@ -1179,12 +1210,72 @@ mod tests {
         assert_eq!(ack.account_id, "U333333");
     }
 
+    /// A rebuilt connection opens exactly as a first logon does.
+    ///
+    /// The mass status request is stated once, in the position the logon gives
+    /// it. Written a second time before the burst, the venue was asked to
+    /// replay every order twice and the connection numbered every message one
+    /// ahead of a first logon's.
+    #[test]
+    fn a_reconnect_opens_the_way_a_logon_opens() {
+        let mut reconnect = Vec::new();
+        let end = send_reconnect_opening(
+            &mut reconnect, ExecutionReportScope::Today, "DU111111", "20260101-12:00:00",
+        )
+        .unwrap();
+
+        let mut logon = Vec::new();
+        let seq = send_init_sequence(
+            &mut logon, ExecutionReportScope::Today, "DU111111", "20260101-12:00:00", 1,
+        )
+        .unwrap();
+        let logon_end =
+            send_post_burst_grace(&mut logon, "DU111111", "20260101-12:00:00", seq).unwrap();
+
+        assert_eq!(reconnect, logon, "a reconnect states what a logon states");
+        assert_eq!(end, logon_end, "and numbers its messages the same way");
+
+        let text = String::from_utf8_lossy(&reconnect);
+        assert_eq!(
+            text.matches("\u{1}35=H\u{1}").count(),
+            1,
+            "the mass status request is stated once: {text:?}",
+        );
+    }
+
+    /// An account is whatever the venue spells it, and the port it names in
+    /// the burst is the port the session dials.
+    ///
+    /// Admitting only the prefixes a paper and a plain individual account
+    /// start with discards an advisor's or an institution's account, and the
+    /// username stands in as the account on every request that names one.
+    /// Reading the port from the acknowledgement alone leaves the configured
+    /// port standing when the burst is the only place it is stated.
+    #[test]
+    fn the_burst_names_the_account_and_the_port_whatever_they_are() {
+        let mut ack = LogonAck { account_id: "someone".into(), ..Default::default() };
+        ack.scan_init(b"\x011=F1234567\x016146=4001\x01", "someone");
+        assert_eq!(ack.account_id, "F1234567", "the account the venue named");
+        assert_eq!(ack.accounts, ["F1234567"]);
+        assert_eq!(ack.trading_port, Some(4001), "the port the venue named");
+    }
+
+    /// The username is not an account, and a burst that repeats it does not
+    /// make it one.
+    #[test]
+    fn the_username_is_not_taken_for_an_account() {
+        let mut ack = LogonAck::default();
+        ack.scan_init(b"\x011=someone\x01", "someone");
+        assert!(ack.account_id.is_empty(), "got {:?}", ack.account_id);
+        assert!(ack.accounts.is_empty(), "got {:?}", ack.accounts);
+    }
+
     /// Every message of the opening burst, in order, with the sequence numbers
     /// it takes. Written out rather than compared against a capture of itself:
     /// a burst that loses a message still parses, and only a statement of what
     /// belongs in it notices.
     #[test]
-    fn init_sequence_writes_the_burst_the_counterpart_writes() {
+    fn the_opening_burst_states_five_messages_in_order() {
         let mut wire = Vec::new();
         let end = send_init_sequence(
             &mut wire, ExecutionReportScope::Today, "DU111111", "20260101-12:00:00", 1,
@@ -1228,8 +1319,8 @@ mod tests {
         assert_ne!(start, "20260101-00:00:00");
     }
 
-    /// The five that keep the socket, in the order the counterpart sends them,
-    /// carrying the account in the tag each one carries it in.
+    /// The five messages that keep the socket, in order, each carrying the
+    /// account in its own tag.
     #[test]
     fn post_burst_grace_writes_five_messages_carrying_the_account() {
         let mut wire = Vec::new();

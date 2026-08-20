@@ -1,4 +1,4 @@
-//! The venue's own way of writing a date and a time.
+//! The date and time format the venue uses.
 //!
 //! Every stamp on the wire is `yyyyMMdd-HH:mm:ss`, or a date on its own, or a
 //! date with a zone after it. Reading and writing them is a codec like every
@@ -81,7 +81,18 @@ fn write_u2(buf: &mut [u8], val: u8) {
     buf[1] = b'0' + val % 10;
 }
 
-/// Read the venue's own timestamp back to unix seconds (UTC).
+/// How many days that month has, leap years included.
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+/// Read the venue's timestamp back to unix seconds (UTC).
 ///
 /// It stamps `YYYYMMDD-HH:MM:SS`, sometimes with a fractional part after the
 /// seconds, and sometimes joined by a space rather than a dash. All three are
@@ -96,7 +107,11 @@ pub fn ib_datetime_to_unix(stamped: &str) -> Option<i64> {
     let year: i64 = date[0..4].parse().ok()?;
     let month: u32 = date[4..6].parse().ok()?;
     let day: u32 = date[6..8].parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+        // A day past the end of its month is not a date. Admitted on a bare
+        // 1..=31, the thirty-first of February reads as the second or third of
+        // March: a plausible instant, days from the one stated, which is what
+        // a clock comparison must not be given.
         return None;
     }
 
@@ -143,7 +158,7 @@ pub fn unix_to_ib_datetime(secs: i64) -> String {
 }
 
 /// Format unix timestamp (UTC seconds) to "YYYYMMDD-HH:MM:SS" — the dash-joined
-/// form the gateway requires for a time-precise good-till expiry (tag 126).
+/// form required for a time-precise good-till expiry (tag 126).
 /// Distinct from `unix_to_ib_datetime` (space-joined) which other callers use.
 pub fn unix_to_ib_utc_dash(secs: i64) -> String {
     let secs = secs.max(0) as u64;
@@ -176,10 +191,9 @@ pub enum IbExpiry {
 ///   - `YYYYMMDD-HH:MM:SS`                 → time, no timezone (dash separator)
 ///   - `YYYYMMDD HH:MM:SS <IANA zone>`     → time in a named zone (e.g. `US/Eastern`)
 ///
-/// A named timezone is converted to UTC with DST applied (matching what the
-/// gateway does). A time with no timezone is interpreted as UTC and logged —
-/// the gateway's implied-timezone behavior is deprecated, so callers should
-/// pass an explicit zone or UTC.
+/// A named timezone is converted to UTC with DST applied. A time with no
+/// timezone is interpreted as UTC and logged. Implied timezones are deprecated
+/// in the API, so callers should pass an explicit zone or UTC.
 pub fn parse_ib_expiry(input: &str) -> Result<Option<IbExpiry>, String> {
     let s = input.trim();
     if s.is_empty() {
@@ -311,7 +325,7 @@ mod expiry_tests {
     #[test]
     fn named_zone_converts_with_dst() {
         // June -> US/Eastern is EDT (UTC-4): 18:00 local == 22:00 UTC.
-        // Matches the gateway capture.
+        // Matches the captured value.
         let eastern = instant("20260620 18:00:00 US/Eastern");
         let utc = instant("20260620 22:00:00 UTC");
         assert_eq!(eastern, utc, "EDT 18:00 must equal 22:00 UTC");
@@ -433,6 +447,28 @@ mod venue_clock_tests {
     fn something_that_is_not_a_timestamp_is_refused() {
         for bad in ["", "not a time", "20260101", "2026010-12:00:00", "20261301-00:00:00", "20260101-25:00:00"] {
             assert_eq!(ib_datetime_to_unix(bad), None, "{bad}");
+        }
+    }
+
+    /// A day past the end of its month is not a date. Admitted on a bare
+    /// 1..=31, the thirty-first of February reads as the second or third of
+    /// March: a plausible instant, days from the one stated, which is what a
+    /// clock comparison must not be given.
+    #[test]
+    fn a_day_its_month_does_not_have_is_refused() {
+        for bad in [
+            "20260231-00:00:00", "20260230-00:00:00", "20260431-00:00:00",
+            "20260631-00:00:00", "20260931-00:00:00", "20261131-00:00:00",
+            "20260229-00:00:00", "21000229-00:00:00", "20260100-00:00:00",
+        ] {
+            assert_eq!(ib_datetime_to_unix(bad), None, "{bad}");
+        }
+        // And the days those months do have still read.
+        for good in [
+            "20260228-00:00:00", "20240229-00:00:00", "20000229-00:00:00",
+            "20260131-00:00:00", "20260430-00:00:00", "20261231-23:59:59",
+        ] {
+            assert!(ib_datetime_to_unix(good).is_some(), "{good}");
         }
     }
 }

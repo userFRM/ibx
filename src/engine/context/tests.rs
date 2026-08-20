@@ -222,7 +222,7 @@ fn update_order_status() {
         tif: b'0',
         stop_price: 0,
     });
-    ctx.update_order_status(1, OrderStatus::Cancelled);
+    ctx.update_order_status(1, OrderStatus::Cancelled, false);
     assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Cancelled);
 
     // Cancelled orders not in open_orders_for (filters by Submitted)
@@ -243,7 +243,7 @@ fn submitted_order(ctx: &mut Context, oid: u64) {
 fn stale_presubmitted_does_not_regress_submitted() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(!ctx.update_order_status(1, OrderStatus::PreSubmitted),
+    assert!(!ctx.update_order_status(1, OrderStatus::PreSubmitted, false),
         "regression must be rejected");
     assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Submitted);
 }
@@ -252,10 +252,10 @@ fn stale_presubmitted_does_not_regress_submitted() {
 fn terminal_states_are_absorbing() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(ctx.update_order_status(1, OrderStatus::Filled));
+    assert!(ctx.update_order_status(1, OrderStatus::Filled, false));
     // A late mass-status snapshot must not resurrect the order.
     for stale in [OrderStatus::Submitted, OrderStatus::Cancelled, OrderStatus::PendingCancel] {
-        assert!(!ctx.update_order_status(1, stale), "{stale:?} must not overwrite Filled");
+        assert!(!ctx.update_order_status(1, stale, false), "{stale:?} must not overwrite Filled");
     }
     assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Filled);
 }
@@ -266,28 +266,56 @@ fn cancel_and_fill_progressions_still_flow() {
     submitted_order(&mut ctx, 1);
     // Cancel of a partially filled order, and a fill landing while the
     // cancel is pending, are both legitimate.
-    assert!(ctx.update_order_status(1, OrderStatus::PartiallyFilled));
-    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel));
-    assert!(ctx.update_order_status(1, OrderStatus::Filled));
+    assert!(ctx.update_order_status(1, OrderStatus::PartiallyFilled, false));
+    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel, false));
+    assert!(ctx.update_order_status(1, OrderStatus::Filled, false));
 }
 
 #[test]
 fn modify_ack_returns_to_submitted() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(ctx.update_order_status(1, OrderStatus::PendingReplace));
-    assert!(ctx.update_order_status(1, OrderStatus::Submitted),
+    assert!(ctx.update_order_status(1, OrderStatus::PendingReplace, false));
+    assert!(ctx.update_order_status(1, OrderStatus::Submitted, false),
         "modify ack returns the order to working");
+}
+
+/// A cancel in flight is not undone by the venue restating the past.
+///
+/// A report stating the order is working moves it out of PendingCancel. A
+/// replayed report does not: recent activity is replayed when a session opens,
+/// and a replayed working status predates any cancel sent since.
+#[test]
+fn a_replay_does_not_undo_a_cancel_in_flight() {
+    let mut ctx = Context::new();
+    submitted_order(&mut ctx, 1);
+    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel, false));
+
+    for replayed in [OrderStatus::PreSubmitted, OrderStatus::Submitted] {
+        assert!(
+            !ctx.update_order_status(1, replayed, true),
+            "{replayed:?} restating history must leave the cancel standing",
+        );
+        assert_eq!(ctx.order(1).unwrap().status, OrderStatus::PendingCancel);
+    }
+
+    // The report that announces something new still gets the order back.
+    assert!(ctx.update_order_status(1, OrderStatus::Submitted, false));
 }
 
 #[test]
 fn forced_setter_bypasses_guard() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel));
-    // The guard blocks the ordinary path,
-    assert!(!ctx.update_order_status(1, OrderStatus::Submitted));
-    // ...but a cancel reject restores the working status deliberately.
+    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel, false));
+    // PendingCancel does not supersede the working states, so a report
+    // stating the order is working moves it out on the ordinary path.
+    assert!(ctx.update_order_status(1, OrderStatus::Submitted, false));
+
+    // The guard blocks leaving a terminal state. The forced setter exists for
+    // a cancel this session reported and the venue then refused.
+    assert!(ctx.update_order_status(1, OrderStatus::Cancelled, false));
+    assert!(!ctx.update_order_status(1, OrderStatus::Submitted, false));
     ctx.set_order_status_forced(1, OrderStatus::Submitted);
     assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Submitted);
 }
@@ -296,8 +324,8 @@ fn forced_setter_bypasses_guard() {
 fn unchanged_status_reports_no_change() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(!ctx.update_order_status(1, OrderStatus::Submitted));
-    assert!(!ctx.update_order_status(999, OrderStatus::Cancelled), "unknown order");
+    assert!(!ctx.update_order_status(1, OrderStatus::Submitted, false));
+    assert!(!ctx.update_order_status(999, OrderStatus::Cancelled, false), "unknown order");
     }
 
 #[test]
@@ -519,7 +547,7 @@ fn multiple_orders_same_instrument() {
 fn update_order_status_nonexistent_no_panic() {
     let mut ctx = Context::new();
     // Should not panic when order doesn't exist
-    ctx.update_order_status(999, OrderStatus::Cancelled);
+    ctx.update_order_status(999, OrderStatus::Cancelled, false);
 }
 
 #[test]
@@ -667,7 +695,7 @@ fn submit_box_top_reuses_mtl() {
 #[test]
 fn submit_what_if_drains_correctly() {
     let mut ctx = Context::new();
-    let id = ctx.submit(0, Side::Buy, 100, OrderKind::WhatIf { price: 25620 * (PRICE_SCALE / 100), ord_type: b'2' },
+    let id = ctx.submit(0, Side::Buy, 100, OrderKind::WhatIf { price: 25620 * (PRICE_SCALE / 100), aux: 0, ord_type: b'2' },
         b'0', OrderAttrs::default());
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
@@ -740,4 +768,28 @@ fn submit_adjustable_stop_drains_correctly() {
         }
         _ => panic!("expected SubmitEx carrying AdjustableStop"),
     }
+}
+
+/// A disconnect makes every held order's state unknown, `Inactive` included:
+/// the venue holds such an order and it can return to working.
+#[test]
+fn an_inactive_order_is_one_the_reconnect_has_to_account_for() {
+    let mut ctx = Context::new();
+    let instrument = ctx.register_instrument(756733);
+    let held = crate::types::Order::new(
+        7, instrument, Side::Buy, 1, 100 * PRICE_SCALE, b'2', b'0', 0,
+    );
+    ctx.insert_order(held);
+    ctx.set_order_status_forced(7, OrderStatus::Inactive);
+    assert_eq!(
+        ctx.open_orders_for(instrument).len(), 1,
+        "a cancel-all already reaches it, so it is an order the venue holds",
+    );
+
+    ctx.mark_orders_uncertain();
+    assert_eq!(
+        ctx.order(7).map(|o| o.status), Some(OrderStatus::Uncertain),
+        "so the reconnect has to say what became of it",
+    );
+    assert_eq!(ctx.uncertain_orders().len(), 1, "and it is reported as one of them");
 }

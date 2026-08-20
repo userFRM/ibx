@@ -1590,7 +1590,7 @@ fn reference_and_account_calls_live() {
 /// This client claims to replace the vendor's gateway. That is a claim about
 /// messages, and it is checkable: exercise every path a caller has, then ask
 /// what arrived that nothing read. Anything listed is a wire this client is
-/// discarding — which is how the option chain, the venue's own error channel,
+/// discarding — which is how the option chain, the venue's error channel,
 /// the algorithms it offers and the holdings held away were all found, each
 /// having arrived unread for as long as this client has existed.
 #[test]

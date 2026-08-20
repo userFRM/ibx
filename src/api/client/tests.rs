@@ -12,7 +12,7 @@ use crate::control::news::NewsHeadline;
 use crate::control::histogram::HistogramEntry;
 
 /// Helper: create a test EClient backed by SharedState + channel.
-fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>) {
+pub(crate) fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>) {
     let shared = Arc::new(SharedState::new());
     let (tx, rx) = std::sync::mpsc::sync_channel(4096);
     let handle = std::thread::spawn(|| {});
@@ -20,6 +20,26 @@ fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<Sha
     // Pre-seed SPY so find_or_register_instrument hits the fast path.
     client.core.con_id_to_instrument.lock().unwrap().insert(756733, 0);
     (client, rx, shared)
+}
+
+/// A short bracket is a sell, and its exits take the selling orientation:
+/// take-profit below the entry, stop-loss above.
+#[test]
+fn a_short_bracket_reads_its_exits_the_way_a_sell_does() {
+    let (client, _rx, _shared) = test_client();
+    let c = spy();
+    // Selling at 100: take profit below, stop out above.
+    assert!(
+        client.place_bracket(&c, "SSHORT", 1.0, 100.0, 90.0, 110.0).is_ok(),
+        "a short bracket with its exits the right way round is placed",
+    );
+    assert!(
+        client.place_bracket(&c, "SSHORT", 1.0, 100.0, 110.0, 90.0).is_err(),
+        "and one with them the wrong way round is refused",
+    );
+    // The plain sell it must agree with.
+    assert!(client.place_bracket(&c, "SELL", 1.0, 100.0, 90.0, 110.0).is_ok());
+    assert!(client.place_bracket(&c, "SELL", 1.0, 100.0, 110.0, 90.0).is_err());
 }
 
 /// Helper: SPY contract.
@@ -39,7 +59,7 @@ type OrderCase = (&'static str, fn(&mut Order));
 
 /// Re-placing a tracked id is a modify, and a stop order's price lives in
 /// `aux_price`. Reading only `lmt_price` sent a limit price of zero for an
-/// order that has no limit leg, which the gateway rejects outright.
+/// order that has no limit leg, which the venue rejects outright.
 #[test]
 fn modifying_a_stop_carries_the_new_trigger() {
     let (client, rx, _shared) = test_client();
@@ -268,9 +288,8 @@ fn a_whole_quantity_still_places() {
 }
 /// A replace carries the order type, the limit price and the trigger — not the
 /// peg offset, the trailing amount or the execution instruction. Sent for a
-/// trailing stop it describes a pegged order with no offset, the gateway
-/// rejects it, and the caller is left with no stop at all. Refusing keeps the
-/// order they already have.
+/// trailing stop it describes a pegged order with no offset, which the venue
+/// rejects, leaving the caller with no stop. Refusing keeps the resting order.
 #[test]
 fn a_type_the_replace_cannot_restate_is_not_modified() {
     for order_type in ["TRAIL", "TRAIL LIMIT", "REL", "PEG MID", "MIDPX", "SNAP MID"] {
@@ -638,8 +657,8 @@ fn parse_algo_pct_vol() {
 /// not offer, and is not refused as though it were.
 ///
 /// Which strategies an account may use is stated at logon and enforced by the
-/// venue, so refusing here would be a narrower answer than the venue's own.
-/// The reference client forwards these without reading them.
+/// venue, so refusing here would be narrower than the venue's answer. The
+/// reference client forwards these without reading them.
 #[test]
 fn parse_algo_unsupported() {
     let carried = parse_algo_params("unknown", &[]).expect("carried, not refused");
@@ -740,13 +759,29 @@ fn parse_algo_dark_ice_rejects_negative_display_size() {
     assert!(err.message.contains("displaySize"), "got: {err}");
 }
 
+/// Tag 111 display size is how much of the order the book shows. It is required
+/// rather than defaulted, since any default publishes a size the caller did not
+/// choose.
 #[test]
-fn parse_algo_dark_ice_defaults_display_size_when_absent() {
-    let algo = parse_algo_params("darkice", &[]).unwrap();
-    match algo {
-        AlgoParams::DarkIce { display_size, .. } => assert_eq!(display_size, 100),
-        _ => panic!("wrong variant"),
-    }
+fn parse_algo_dark_ice_needs_a_display_size() {
+    let err = parse_algo_params("darkice", &[]).unwrap_err();
+    assert!(err.message.contains("displaySize"), "got: {err}");
+}
+
+/// A key the strategy does not carry is refused. A modelled strategy is encoded
+/// from the fields it names, so any other key would not reach the venue.
+#[test]
+fn parse_algo_says_when_a_parameter_would_not_be_carried() {
+    let params = vec![
+        TagValue { tag: "displaySize".into(), value: "100".into() },
+        TagValue { tag: "speedUp".into(), value: "1".into() },
+    ];
+    let err = parse_algo_params("darkice", &params).unwrap_err();
+    assert!(err.message.contains("speedUp"), "got: {err}");
+
+    // A strategy this client does not model is handed over as written, so
+    // every key the caller set goes with it.
+    assert!(parse_algo_params("Balanced", &params).is_ok());
 }
 
 #[test]
@@ -1839,11 +1874,62 @@ fn place_order_unsupported_type_returns_error() {
     assert!(result.unwrap_err().message.contains("Unsupported order type"));
 }
 
+/// A preview states the order type it asks about. An unrecognised type is
+/// refused; encoded as a limit, the answer would describe a different order.
+#[test]
+fn a_preview_is_refused_for_a_type_this_client_cannot_send() {
+    let (client, _rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let order = Order {
+        action: "BUY".into(), total_quantity: 100.0,
+        order_type: "SOMETHING NEW".into(), what_if: true,
+        ..Default::default()
+    };
+    let err = client.place_order(1, &spy(), &order).unwrap_err();
+    assert!(err.message.contains("Unsupported order type"), "got: {err}");
+}
+
+/// An algorithm rides on a limit order: tag 40 is written once, as `2`. Any
+/// other order type carrying an algorithm is refused.
+#[test]
+fn an_algo_order_states_the_limit_it_is_sent_as() {
+    let (client, rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let market_with_algo = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "MKT".into(),
+        algo_strategy: "Adaptive".into(),
+        algo_params: vec![TagValue { tag: "adaptivePriority".into(), value: "Normal".into() }],
+        ..Default::default()
+    };
+    let err = client.place_order(1, &spy(), &market_with_algo).unwrap_err();
+    assert!(err.message.contains("limit order"), "got: {err}");
+
+    let limit_with_algo = Order {
+        order_type: "LMT".into(), lmt_price: 100.0, ..market_with_algo
+    };
+    client.place_order(2, &spy(), &limit_with_algo).expect("a limit carries the algo");
+    assert!(matches!(rx.try_recv().unwrap(), ControlCommand::Order(OrderRequest::SubmitEx {
+        kind: OrderKind::Adaptive { .. }, .. })));
+}
+
+/// A pegged-to-benchmark order encodes and previews.
+#[test]
+fn a_pegged_to_benchmark_order_reaches_the_builder() {
+    let (client, rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let order = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "PEG BENCH".into(),
+        lmt_price: 100.0, reference_contract_id: 265598, ..Default::default()
+    };
+    client.place_order(1, &spy(), &order).expect("PEG BENCH is placeable");
+    assert!(matches!(rx.try_recv().unwrap(), ControlCommand::Order(OrderRequest::SubmitEx {
+        kind: OrderKind::PegBench { .. }, .. })));
+}
+
 #[test]
 fn place_order_non_stk_contract_rejected() {
     // An option's symbol names a whole chain. Without an expiry, strike or
-    // right the order cannot say which contract it means, and the gateway would
-    // fill whichever one it picked.
+    // right the order cannot say which contract it means.
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
     // No contract id: an id names one contract on its own and the venue takes
@@ -2533,9 +2619,8 @@ fn a_request_with_no_engine_behind_it_says_so_under_its_own_code() {
 
 /// A req_id reaches these requests' wire form as u32. `next_order_id()` hands
 /// out ids near 1.7e12, so a caller running one counter for orders and
-/// requests — the ibapi idiom — had every one of these wrap: the gateway saw
-/// an id nobody chose, and the callback came back tagged with that id instead
-/// of the one the caller asked under.
+/// requests — the ibapi idiom — wraps every one of these: the venue receives an
+/// id nobody chose, and the callback carries that id.
 #[test]
 fn an_unwireable_req_id_is_refused() {
     type Call = fn(&EClient, i64) -> Result<(), Refusal>;
@@ -2699,8 +2784,14 @@ fn req_matching_symbols_sends_fetch() {
 #[test]
 fn req_positions_delivers_via_wrapper() {
     let (client, _rx, shared) = test_client();
-    shared.portfolio.set_position_info(PositionInfo { con_id: 265598, position: 100.0, avg_cost: 150 * PRICE_SCALE, ..Default::default() });
-    shared.portfolio.set_position_info(PositionInfo { con_id: 756733, position: -50.0, avg_cost: 400 * PRICE_SCALE, ..Default::default() });
+    // The account has stated everything it holds. Without it this waits out
+    // the whole ten seconds for a signal no engine is here to send, and comes
+    // back through the timeout rather than through delivery.
+    shared.portfolio.set_account_download_complete();
+    // Named, as a holding off the wire is: nameless, delivery waits three
+    // seconds for a definition to arrive from an engine that is not here.
+    shared.portfolio.set_position_info(PositionInfo { con_id: 265598, position: 100.0, avg_cost: 150 * PRICE_SCALE, symbol: "AAPL".into(), ..Default::default() });
+    shared.portfolio.set_position_info(PositionInfo { con_id: 756733, position: -50.0, avg_cost: 400 * PRICE_SCALE, symbol: "SPY".into(), ..Default::default() });
     let mut w = RecordingWrapper::default();
     client.req_positions(&mut w);
     let positions: Vec<_> = w.events.iter().filter(|e| e.starts_with("position:")).collect();
@@ -2708,9 +2799,70 @@ fn req_positions_delivers_via_wrapper() {
     assert!(w.events.last().unwrap() == "position_end");
 }
 
+/// Account values are reported as the venue states them: every figure it sends,
+/// in the currency it names, labelled with the account holding them rather than
+/// the account the caller asked about.
+#[test]
+fn the_account_figures_are_the_ones_the_venue_stated() {
+    #[derive(Default)]
+    struct Rows(Vec<(String, String, String, String)>);
+    impl crate::api::wrapper::Wrapper for Rows {
+        fn account_update_multi(
+            &mut self, _req_id: i64, account: &str, _model: &str,
+            key: &str, value: &str, currency: &str,
+        ) {
+            self.0.push((
+                account.to_string(), key.to_string(), value.to_string(), currency.to_string(),
+            ));
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.note_account_value("NetLiquidation", "12345.678", "CHF");
+    shared.portfolio.note_account_value("SettledCash", "42.5", "CHF");
+
+    let mut rows = Rows::default();
+    client.req_account_updates_multi(1, "DU999", "", true, &mut rows);
+
+    assert!(
+        rows.0.iter().any(|(account, key, value, currency)| {
+            account == "DU123" && key == "NetLiquidation" && value == "12345.678"
+                && currency == "CHF"
+        }),
+        "the figure, currency and account as stated: {:?}",
+        rows.0,
+    );
+    assert!(
+        rows.0.iter().any(|(_, key, ..)| key == "SettledCash"),
+        "a figure the venue states outside the eight that were worked out here",
+    );
+    assert!(
+        rows.0.iter().all(|(account, ..)| account == "DU123"),
+        "an account that was asked about is not the account these are for",
+    );
+}
+
+/// A holding is labelled with the account that holds it.
+#[test]
+fn holdings_are_labelled_with_the_account_that_holds_them() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 756733, position: 100.0, avg_cost: 400 * PRICE_SCALE, ..Default::default()
+    });
+    let mut w = RecordingWrapper::default();
+    client.req_positions_multi(2, "DU999", "", &mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("position_multi:2:DU123:")),
+        "another account's name sat on this account's holdings: {:?}",
+        w.events,
+    );
+}
+
 #[test]
 fn req_positions_empty_still_calls_position_end() {
-    let (client, _rx, _shared) = test_client();
+    let (client, _rx, shared) = test_client();
+    // As above: the account has spoken, and it holds nothing.
+    shared.portfolio.set_account_download_complete();
     let mut w = RecordingWrapper::default();
     client.req_positions(&mut w);
     assert_eq!(w.events, vec!["position_end"]);
@@ -2760,7 +2912,10 @@ fn cancel_scanner_subscription_sends_cancel() {
 #[test]
 fn req_historical_news_sends_fetch() {
     let (client, rx, _shared) = test_client();
-    client.req_historical_news(4, 265598, "BRFG", "2026-01-01", "2026-03-01", 10).unwrap();
+    // The query carries no time bounds, so a window is refused rather than
+    // dropped: the answer is the most recent headlines, not the window's.
+    assert!(client.req_historical_news(4, 265598, "BRFG", "2026-01-01", "2026-03-01", 10).is_err());
+    client.req_historical_news(4, 265598, "BRFG", "", "", 10).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
         ControlCommand::FetchHistoricalNews { req_id, con_id, provider_codes, max_results, .. } => {
@@ -2848,7 +3003,10 @@ fn cancel_histogram_data_sends_cancel() {
 #[test]
 fn req_historical_ticks_sends_fetch() {
     let (client, rx, _shared) = test_client();
-    client.req_historical_ticks(8, &spy(), "20260101 09:30:00", "", 1000, "TRADES", true).unwrap();
+    // Bounded at its end. A start alone asked for the ticks before the moment
+    // the caller wanted the ticks after.
+    assert!(client.req_historical_ticks(8, &spy(), "20260101 09:30:00", "", 1000, "TRADES", true).is_err());
+    client.req_historical_ticks(8, &spy(), "", "20260101 16:00:00", 1000, "TRADES", true).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
         ControlCommand::FetchHistoricalTicks { contract: ContractRef { con_id, .. }, req_id, number_of_ticks, what_to_show, .. } => {
@@ -2864,6 +3022,14 @@ fn req_historical_ticks_sends_fetch() {
 // ═══════════════════════════════════════════════════════════════════
 //  Real-time bars
 // ═══════════════════════════════════════════════════════════════════
+
+/// An unrecognised `what_to_show` is refused rather than encoded as TRADES.
+#[test]
+fn a_real_time_bar_request_states_a_series_the_venue_serves() {
+    let (client, _rx, _shared) = test_client();
+    let err = client.req_real_time_bars(9, &spy(), 5, "BDI", true).unwrap_err();
+    assert!(err.message.contains("Unsupported what_to_show"), "got: {err}");
+}
 
 #[test]
 fn req_real_time_bars_sends_subscribe() {
@@ -3003,7 +3169,13 @@ fn process_msgs_dispatches_partial_fill() {
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
-    assert!(w.events.iter().any(|e| e.starts_with("order_status:42:PartiallyFilled")));
+    // A partly filled working order is Submitted: the vocabulary has no
+    // status of its own for it, and a program reading one finds it in neither
+    // the active set nor the done set.
+    assert!(
+        w.events.iter().any(|e| e.starts_with("order_status:42:Submitted:")),
+        "{:?}", w.events,
+    );
 }
 
 /// IB's `orderStatus` contract: `filled` is cumulative across the order and
@@ -3028,7 +3200,7 @@ fn order_status_reports_the_order_total_not_the_last_print() {
     let status = w.events.iter().find(|e| e.starts_with("order_status:42:"))
         .expect("order_status was dispatched");
     assert_eq!(
-        status, "order_status:42:PartiallyFilled:200:100:150.5",
+        status, "order_status:42:Submitted:200:100:150.5",
         "filled and avgFillPrice must describe the order, not the print",
     );
 }
@@ -3117,12 +3289,19 @@ fn process_msgs_then_open_orders_admits_inactive_excludes_rejected() {
 #[test]
 fn process_msgs_dispatches_cancel_reject_type_1() {
     let (client, _rx, shared) = test_client();
+    // Reason 0 is too-late-to-cancel: the venue found the order and would not
+    // act on it. Reported as 202 this read as "Order Cancelled" — the opposite
+    // of what happened, and a caller would replace an order still working.
     shared.orders.push_cancel_reject(CancelReject {
         order_id: 44, instrument: 0, reject_type: 1, reason_code: 0, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
-    assert!(w.events.iter().any(|e| e.starts_with("error:44:202:")));
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:44:10148:")),
+        "{:?}", w.events,
+    );
+    assert!(!w.events.iter().any(|e| e.starts_with("error:44:202:")));
 }
 
 #[test]
@@ -3133,7 +3312,26 @@ fn process_msgs_dispatches_cancel_reject_type_2() {
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
-    assert!(w.events.iter().any(|e| e.starts_with("error:44:10147:")));
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:44:10148:")),
+        "{:?}", w.events,
+    );
+}
+
+/// Cancel-reject reason 1 is an unknown order. Every other reason describes an
+/// order the venue found and declined to act on.
+#[test]
+fn an_unknown_order_is_the_only_cancel_reject_reported_as_not_found() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.push_cancel_reject(CancelReject {
+        order_id: 44, instrument: 0, reject_type: 1, reason_code: 1, timestamp_ns: 0,
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:44:10147:")),
+        "{:?}", w.events,
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3342,6 +3540,49 @@ fn process_msgs_dispatches_news_bulletin() {
     assert!(w.events.iter().any(|e| e == "news_bulletin:1:1:Exchange notice:NYSE"));
 }
 
+/// A bulletin subscription starts from the moment it is made unless `all_msgs`
+/// is set.
+///
+/// Bulletins are broadcast at the session whether or not anything is subscribed,
+/// so those already queued are discarded on subscribing unless asked for.
+#[test]
+fn a_bulletin_subscription_starts_where_the_caller_says_it_does() {
+    let earlier = || NewsBulletin {
+        msg_id: 7, msg_type: 1, message: "Published before anyone asked".into(),
+        exchange: "NYSE".into(),
+    };
+
+    let (client, _rx, shared) = test_client();
+    shared.market.push_news_bulletin(earlier());
+    client.req_news_bulletins(false);
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        !w.events.iter().any(|e| e.starts_with("news_bulletin:7")),
+        "a subscription for what follows opened with what came before: {:?}",
+        w.events,
+    );
+
+    // And what is published after it started arrives.
+    shared.market.push_news_bulletin(NewsBulletin {
+        msg_id: 8, msg_type: 1, message: "Published after".into(), exchange: "NYSE".into(),
+    });
+    client.process_msgs(&mut w);
+    assert!(w.events.iter().any(|e| e.starts_with("news_bulletin:8")));
+
+    // Asking for the day's own is answered with the ones already held.
+    let (asks_for_all, _rx, shared) = test_client();
+    shared.market.push_news_bulletin(earlier());
+    asks_for_all.req_news_bulletins(true);
+    let mut w = RecordingWrapper::default();
+    asks_for_all.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("news_bulletin:7")),
+        "the day's own were asked for and not delivered: {:?}",
+        w.events,
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  process_msgs — what-if
 // ═══════════════════════════════════════════════════════════════════
@@ -3456,6 +3697,106 @@ fn process_msgs_dispatches_head_timestamp() {
     assert!(w.events.iter().any(|e| e == "head_timestamp:10:20200101"));
 }
 
+/// A head timestamp is returned in the form `format_date` asked for, as bars
+/// are. 2 = seconds since the epoch.
+#[test]
+fn a_head_timestamp_is_written_the_way_it_was_asked_for() {
+    let (client, _rx, shared) = test_client();
+    client.req_head_time_stamp(11, &spy(), "TRADES", true, 2).expect("the request is sent");
+    shared.reference.push_head_timestamp(11, HeadTimestampResponse {
+        head_timestamp: "20200101-00:00:00".into(), timezone: String::new(),
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e == "head_timestamp:11:1577836800"),
+        "asked for in seconds since the epoch: {:?}",
+        w.events,
+    );
+
+    // A request asking for format 1 keeps the wire's own spelling.
+    client.req_head_time_stamp(12, &spy(), "TRADES", true, 1).expect("the request is sent");
+    shared.reference.push_head_timestamp(12, HeadTimestampResponse {
+        head_timestamp: "20200101-00:00:00".into(), timezone: String::new(),
+    });
+    client.process_msgs(&mut w);
+    assert!(w.events.iter().any(|e| e == "head_timestamp:12:20200101-00:00:00"));
+}
+
+/// A reused request id starts a new request: its completion latch is cleared, so
+/// the bars arrive as initial data and `historical_data_end` fires again.
+#[test]
+fn a_historical_request_under_a_used_id_answers_from_the_beginning() {
+    let (client, _rx, shared) = test_client();
+    // As the first request left it.
+    client.core.hist_initial_complete.lock().unwrap().insert(13);
+
+    client
+        .req_historical_data(13, &spy(), "", "1 D", "1 hour", "TRADES", true, 1, false)
+        .expect("the request is sent");
+    shared.reference.push_historical_data(13, HistoricalResponse {
+        query_id: String::new(), timezone: String::new(),
+        bars: vec![HistoricalBar {
+            time: "20200101-00:00:00".into(), open: 1.0, high: 1.0, low: 1.0, close: 1.0,
+            volume: 1, wap: 1.0, count: 1,
+        }],
+        is_complete: true,
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("historical_data:13:")),
+        "the bars answering a new request arrived as updates to the old one: {:?}",
+        w.events,
+    );
+    assert!(
+        w.events.iter().any(|e| e.starts_with("historical_data_end:13")),
+        "and the request never ended: {:?}",
+        w.events,
+    );
+}
+
+/// A trade callback names the stream it carries: tick type 1 = Last,
+/// 2 = AllLast. The trade record does not carry it, so the request's kind is.
+#[test]
+fn a_trade_stream_says_which_of_the_two_it_is() {
+    let (client, rx, shared) = test_client();
+    // Long enough for the stand-in below to be scheduled. The tests default to
+    // a millisecond, which is a real engine answering from another thread and
+    // a flake when the machine is busy.
+    client.core.set_registration_timeout(std::time::Duration::from_secs(5));
+    // Standing in for the engine, which answers a subscription by naming the
+    // slot it took. Without an answer the call waits out its registration.
+    let engine = std::thread::spawn(move || {
+        while let Ok(cmd) = rx.recv() {
+            if let ControlCommand::SubscribeTbt { reply_tx: Some(reply), .. } = cmd {
+                let _ = reply.try_send(Ok(0));
+            }
+        }
+    });
+    client.req_tick_by_tick_data(20, &spy(), "AllLast", 0, false).expect("subscribed");
+    client.req_tick_by_tick_data(21, &spy(), "Last", 0, false).expect("subscribed");
+
+    for req_id in [20, 21] {
+        shared.market.push_tbt_trade(crate::types::TbtTrade {
+            instrument: 0, req_id, price: PRICE_SCALE, size: 1, timestamp: 0,
+            exchange: "NYSE".into(), conditions: String::new(),
+            past_limit: false, unreported: false,
+        });
+    }
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("tbt_last:20:2:")),
+        "every trade was reported as the exchange's own: {:?}",
+        w.events,
+    );
+    assert!(w.events.iter().any(|e| e.starts_with("tbt_last:21:1:")));
+
+    drop(client);
+    engine.join().expect("the stand-in engine");
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  process_msgs — contract details
 // ═══════════════════════════════════════════════════════════════════
@@ -3560,6 +3901,7 @@ fn process_msgs_dispatches_scanner_data() {
             ScannerEntry { con_id: 756733, ..Default::default() },
         ],
         scan_time: "2026-03-13".into(),
+        error_text: String::new(),
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -3753,11 +4095,13 @@ fn process_msgs_drains_on_first_call_empty_on_second() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  process_msgs — exec_details uses correct req_id from mapping
+//  process_msgs — a fill answers no request unless one asked for it
 // ═══════════════════════════════════════════════════════════════════
 
+/// An unsolicited fill is reported against request id -1. A market-data
+/// subscription id does not identify a `reqExecutions` request.
 #[test]
-fn process_msgs_fill_uses_instrument_to_req_mapping() {
+fn a_fill_that_answers_no_request_is_reported_against_none() {
     let (client, _rx, shared) = test_client();
     client.core.instrument_to_req.lock().unwrap().insert(0, 42);
     shared.orders.push_fill(Fill {
@@ -3768,8 +4112,11 @@ fn process_msgs_fill_uses_instrument_to_req_mapping() {
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
-    // exec_details should use req_id=42 (not -1)
-    assert!(w.events.iter().any(|e| e.starts_with("exec_details:42:")));
+    assert!(
+        w.events.iter().any(|e| e.starts_with("exec_details:-1:")),
+        "the fill was numbered after a quote subscription: {:?}",
+        w.events.iter().filter(|e| e.starts_with("exec_details")).collect::<Vec<_>>(),
+    );
 }
 
 // ── Order modification edge cases ─────────────────────────────────
@@ -3950,7 +4297,7 @@ fn modify_price_and_qty_simultaneously() {
 /// A zero order-type states nothing and keeps the resting type, so a modify to
 /// a type the replace cannot express must be refused rather than reaching the
 /// encoder — otherwise the caller's new type is silently restated as the old
-/// one and the client caches an order the gateway does not have.
+/// one and the client caches an order the venue does not have.
 #[test]
 fn a_modify_to_an_unrepresentable_type_is_refused() {
     for order_type in ["REL", "TRAIL", "LIT", "MIDPX", "SNAP MKT"] {
@@ -4238,9 +4585,9 @@ fn queued_data_is_dispatched_before_connection_closed() {
     assert_eq!(w.events, vec!["contract_details_end:7", "connection_closed"]);
 }
 
-/// The provider reaching the gateway is the whole of what makes the
-/// authenticator factor usable from this client, and it is one line in a
-/// struct literal. Reverting it to `None` broke nothing that was tested.
+/// The code provider must reach the session config for the authenticator factor
+/// to be usable. It is one field in a struct literal and no other test covers
+/// it.
 #[test]
 fn the_second_factor_provider_reaches_the_gateway_config() {
     use crate::api::client::gateway_config;
@@ -4660,22 +5007,22 @@ fn one_contract_has_one_owner_however_many_ask_at_once() {
     );
 }
 
-/// Solving an option is answered here, against the model the venue published
-/// for that contract — which is what the counterpart does with it. The wire
-/// carries no such request, so the alternative is refusing a question the
-/// counterpart answers.
+/// An option solve is computed locally against the model the venue published for
+/// that contract. The protocol carries no request for one.
 #[test]
 fn solving_an_option_answers_against_the_venues_own_model() {
     #[derive(Default)]
     struct Heard {
         computed: Vec<(i64, f64)>,
+        greeks: Vec<(f64, f64, f64, f64)>,
         errors: Vec<String>,
     }
     impl Wrapper for Heard {
         fn tick_option_computation(&mut self, req_id: i64, _t: i32, _a: i32, _iv: f64,
-                                   _d: f64, opt_price: f64, _pv: f64, _g: f64,
-                                   _v: f64, _th: f64, _up: f64) {
+                                   delta: f64, opt_price: f64, _pv: f64, gamma: f64,
+                                   vega: f64, theta: f64, _up: f64) {
             self.computed.push((req_id, opt_price));
+            self.greeks.push((delta, gamma, vega, theta));
         }
         fn error(&mut self, _req_id: i64, _code: i64, msg: &str, _adv: &str) {
             self.errors.push(msg.to_string());
@@ -4692,8 +5039,8 @@ fn solving_an_option_answers_against_the_venues_own_model() {
     option.right = "C".into();
     option.last_trade_date_or_contract_month = "20270115".into();
 
-    // Without the venue's own model there is nothing to solve against, and
-    // the call says so rather than inventing one.
+    // With no published model there is nothing to solve against; the call reports
+    // that rather than inventing a rate.
     client.calculate_option_price(5, &option, 0.25, 505.0);
     client.process_msgs(&mut heard);
     assert!(heard.computed.is_empty(), "no model, no answer");
@@ -4728,11 +5075,87 @@ fn solving_an_option_answers_against_the_venues_own_model() {
     assert!(heard.errors.is_empty(), "{:?}", heard.errors);
     assert_eq!(heard.computed.len(), 1, "the volatility was answered");
     assert_eq!(heard.computed[0].0, 7);
+
+    // Fields this does not compute carry the unset sentinel. Zero is a valid
+    // greek and cannot stand for one.
+    let (delta, gamma, vega, theta) = heard.greeks[0];
+    for (name, stated) in [("delta", delta), ("gamma", gamma), ("vega", vega), ("theta", theta)] {
+        assert_eq!(stated, f64::MAX, "{name} was answered as a number nobody worked out");
+    }
+}
+
+/// Completed orders are retained: the arrival queue empties on read and the
+/// venue does not resend them, so later calls answer from the archive.
+#[test]
+fn completed_orders_are_still_there_when_they_are_asked_for_again() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.push_completed_order(crate::types::CompletedOrder {
+        order_id: 31, instrument: 0, status: crate::types::OrderStatus::Filled,
+        filled_qty: 100, timestamp_ns: 0,
+    });
+
+    let mut w = RecordingWrapper::default();
+    client.req_completed_orders(false, &mut w);
+    assert_eq!(w.events.iter().filter(|e| *e == "completed_order").count(), 1);
+
+    let mut again = RecordingWrapper::default();
+    client.req_completed_orders(false, &mut again);
+    assert_eq!(
+        again.events.iter().filter(|e| *e == "completed_order").count(),
+        1,
+        "asked a second time, the account read as having completed nothing: {:?}",
+        again.events,
+    );
+}
+
+/// A request that names its contract by contract id refuses one carrying none.
+///
+/// These carry tag 6008 and nothing else of the contract. Contract id 0 and a
+/// negative id are both answered with silence, which reads as no data.
+#[test]
+fn a_request_named_by_id_refuses_a_contract_that_has_none() {
+    let (client, _rx, _shared) = test_client();
+    let described = crate::types::model::Contract {
+        symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(),
+        ..Default::default()
+    };
+    assert!(client.req_fundamental_data(1, &described, "ReportSnapshot").is_err());
+    assert!(client.req_histogram_data(2, &described, true, "3 days").is_err());
+    assert!(client.req_historical_news(3, -1, "BRFG", "", "", 5).is_err());
+    assert!(
+        client.req_historical_ticks(4, &spy(), "", "", -1, "TRADES", true).is_err(),
+        "a count below zero asked for four billion ticks",
+    );
+
+    // And one that carries the id is sent.
+    assert!(client.req_fundamental_data(5, &spy(), "ReportSnapshot").is_ok());
+    assert!(client.req_histogram_data(6, &spy(), true, "3 days").is_ok());
+}
+
+/// A depth request on a contract naming no exchange and no security type is sent
+/// as it stands.
+///
+/// An unnamed exchange is already routed as SMART, and a named security type is
+/// checked against the routing table, so writing STK in refuses books that
+/// exist for other types.
+#[test]
+fn a_depth_request_states_the_contract_it_was_given() {
+    let (client, rx, _shared) = test_client();
+    let by_id = crate::types::model::Contract { con_id: 495512563, ..Default::default() };
+    client.req_mkt_depth(1, &by_id, 5, false).expect("the request is sent");
+    match rx.try_recv().expect("the subscription") {
+        ControlCommand::SubscribeDepth { contract, .. } => {
+            assert_eq!(contract.sec_type, "", "a security type nobody stated");
+            assert_eq!(contract.exchange, "", "a venue nobody stated");
+            assert_eq!(contract.con_id, 495512563);
+        }
+        other => panic!("expected SubscribeDepth, got {other:?}"),
+    }
 }
 
 /// A caller chooses how its bar times are written, and the choice is per
 /// request. Discarded, a caller that asked for seconds since the epoch is
-/// handed the venue's own spelling and reads a date where it expects a number.
+/// handed the wire's spelling and reads a date where it expects a number.
 #[test]
 fn a_request_gets_its_bar_times_written_the_way_it_asked() {
     #[derive(Default)]
@@ -4755,7 +5178,7 @@ fn a_request_gets_its_bar_times_written_the_way_it_asked() {
         time: "20260815-12:00:00".into(), open: 1.0, high: 2.0, low: 0.5,
         close: 1.5, volume: 10, wap: 1.2, count: 3,
     };
-    // The venue's own spelling, which is what a caller asking for nothing gets.
+    // Format 1 is the wire's own spelling.
     let _ = client.req_historical_data(
         1, &spy(), "", "1 D", "1 day", "TRADES", true, 1, false,
     );
@@ -4764,7 +5187,7 @@ fn a_request_gets_its_bar_times_written_the_way_it_asked() {
         bars: vec![bar.clone()], is_complete: true,
     });
     client.process_msgs(&mut heard);
-    assert_eq!(heard.0[0].1, "20260815-12:00:00", "the venue's own spelling");
+    assert_eq!(heard.0[0].1, "20260815-12:00:00", "the wire's own spelling");
 
     // And seconds since the epoch for the request that asked for them.
     let _ = client.req_historical_data(
@@ -5072,4 +5495,175 @@ fn bars_ask_for_what_the_instrument_has() {
             .unwrap_or_else(|| panic!("{sec_type}: a request reaches the engine"));
         assert_eq!(asked, wanted, "{sec_type} bars");
     }
+}
+
+/// Non-finite prices are refused before scaling. A saturating cast turns NaN
+/// into 0 and infinity into the largest representable price, both of which the
+/// venue accepts as real values.
+#[test]
+fn a_number_the_wire_cannot_carry_is_refused_wherever_it_sits() {
+    let (client, _rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let base = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 150.0, ..Default::default()
+    };
+
+    let cases: Vec<(&str, Order)> = vec![
+        ("scale_price_increment", Order { scale_price_increment: f64::NAN, ..base.clone() }),
+        ("scale_profit_offset", Order { scale_profit_offset: f64::INFINITY, ..base.clone() }),
+        ("stock_range_lower", Order { stock_range_lower: f64::NAN, ..base.clone() }),
+        ("volatility", Order { volatility: f64::NAN, ..base.clone() }),
+        ("percent_offset", Order { percent_offset: f64::NEG_INFINITY, ..base.clone() }),
+        ("starting_price", Order { starting_price: f64::NAN, ..base.clone() }),
+        ("delta_neutral_aux_price", Order {
+            delta_neutral_order_type: "MKT".into(),
+            delta_neutral_aux_price: f64::NAN, ..base.clone()
+        }),
+        ("order_combo_legs", Order {
+            order_combo_legs: vec![f64::NAN], ..base.clone()
+        }),
+    ];
+    for (named, order) in cases {
+        let err = match client.place_order(1, &spy(), &order) {
+            Err(e) => e,
+            Ok(()) => panic!("{named} was accepted"),
+        };
+        assert!(err.message.contains(named), "{named}: got {err}");
+    }
+}
+
+/// Two reports on one order in a single pass are two callbacks, in arrival
+/// order. Each status change is stated separately on the wire.
+#[test]
+fn each_report_on_an_order_is_delivered() {
+    #[derive(Default)]
+    struct Statuses(Vec<String>);
+    impl Wrapper for Statuses {
+        fn order_status(
+            &mut self, _order_id: i64, status: &str, _filled: f64, _remaining: f64,
+            _avg: f64, _perm_id: i64, _parent_id: i64, _last: f64, _client_id: i64,
+            _why_held: &str, _mkt_cap_price: f64,
+        ) {
+            self.0.push(status.to_string());
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    for status in [OrderStatus::PreSubmitted, OrderStatus::Submitted, OrderStatus::Cancelled] {
+        shared.orders.push_order_update(crate::types::OrderUpdate {
+            order_id: 4, instrument: 0, status, filled_qty: 0.0, remaining_qty: 100.0,
+            avg_price: 0, perm_id: 77, parent_id: 0, timestamp_ns: 0,
+        });
+    }
+    let mut seen = Statuses::default();
+    client.process_msgs(&mut seen);
+    assert_eq!(
+        seen.0, ["PreSubmitted", "Submitted", "Cancelled"],
+        "a report was replaced by the one that followed it",
+    );
+}
+
+/// A replace names the order, so it cannot name another contract.
+///
+/// The message carries the order id and its fields, not the instrument, so the
+/// order stays on the contract it was placed on. A contract naming a different
+/// instrument is refused rather than recorded.
+#[test]
+fn a_replace_does_not_move_an_order_to_another_contract() {
+    let (client, _rx, shared) = test_client();
+    shared.market.set_instrument_count(2);
+    let order = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 150.0, ..Default::default()
+    };
+    client.place_order(1, &spy(), &order).expect("the first placement");
+
+    let elsewhere = Contract {
+        con_id: 265598, symbol: "AAPL".into(), exchange: "SMART".into(),
+        ..Default::default()
+    };
+    client.core.con_id_to_instrument.lock().unwrap().insert(elsewhere.con_id, 1);
+    let err = client
+        .place_order(1, &elsewhere, &Order { lmt_price: 151.0, ..order.clone() })
+        .expect_err("an order working on one contract is not replaced onto another");
+    assert!(err.message.contains("another contract"), "{err}");
+
+    // And the record is the contract the venue is working, not the one refused.
+    assert_eq!(
+        client.core.open_orders.lock().unwrap()[&1].contract.symbol, "SPY",
+        "the refused contract was recorded against the order",
+    );
+
+    // The same order on the same contract still replaces.
+    client
+        .place_order(1, &spy(), &Order { lmt_price: 151.0, ..order })
+        .expect("a replace naming the contract it was placed on");
+}
+
+/// A bracket is held to the checks a single order is held to.
+///
+/// An order on a security type the account is not permitted is returned Inactive
+/// with tag 58 empty, so the reason is stated here instead.
+#[test]
+fn a_bracket_is_refused_on_a_security_type_the_venue_does_not_permit() {
+    let (client, _rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    shared.reference.set_order_permissions(
+        [("STK".to_string(), vec!["LMT".to_string()])].into_iter().collect(),
+    );
+    let bond = Contract {
+        con_id: 15547841, symbol: "IBM".into(), sec_type: "BOND".into(),
+        exchange: "SMART".into(), ..Default::default()
+    };
+    let err = client
+        .place_bracket(&bond, "BUY", 1000.0, 100.0, 110.0, 90.0)
+        .expect_err("a bracket on an unpermitted security type is refused before it is sent");
+    assert!(err.message.to_uppercase().contains("BOND"), "{err}");
+
+    // And a permitted one still goes.
+    client
+        .place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0)
+        .expect("a bracket on a permitted security type");
+}
+
+/// Asking for the account's P&L sends the subscription.
+///
+/// The figures on `pnl` are computed against each holding's midnight value and
+/// realised amount, which the venue states only in answer to this request.
+#[test]
+fn asking_for_the_accounts_pnl_asks_the_venue() {
+    let (client, rx, _shared) = test_client();
+    client.req_pnl(9, "", "");
+    let asked = rx.try_iter().find_map(|cmd| match cmd {
+        ControlCommand::SubscribePnl { req_id, account } => Some((req_id, account)),
+        _ => None,
+    });
+    assert_eq!(
+        asked,
+        Some((9, "DU123".to_string())),
+        "the venue was not asked for the account's P&L",
+    );
+
+    // And under the account named, where one is.
+    client.req_pnl(10, "DU999", "");
+    assert!(rx.try_iter().any(|cmd| matches!(
+        cmd, ControlCommand::SubscribePnl { account, .. } if account == "DU999"
+    )));
+}
+
+/// `regulatory_snapshot` is refused: the subscription carries no field for it,
+/// and an ordinary subscription is a different, unchargeable request.
+#[test]
+fn a_regulatory_snapshot_is_refused_rather_than_answered_with_an_ordinary_one() {
+    let (client, _rx, _shared) = test_client();
+    let err = client
+        .req_mkt_data(1, &spy(), "", false, true)
+        .expect_err("a request this protocol does not carry is refused");
+    assert!(err.message.contains("regulatory_snapshot"), "{err}");
+    // An ordinary subscription on the same contract still goes.
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+    client.core.req_to_instrument.lock().unwrap().insert(1, 0);
+    client.req_mkt_data(2, &spy(), "", false, false).expect("an ordinary subscription");
 }

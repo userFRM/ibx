@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Write down which wires this client speaks, from the source that speaks them.
 
-A claim to replace the gateway is a claim about messages, not about method
-names. This reads the dispatch tables and the message builders and publishes
-what they actually cover, so the claim can be checked rather than believed.
+A drop-in claim is a claim about messages, not about method names. This reads
+the dispatch tables and the message builders and publishes what they cover, so
+the claim can be checked rather than believed.
 
 The page carries a completeness claim, so this errs toward failing loudly:
 an unknown constant, an unbalanced block or a dispatch table it cannot find

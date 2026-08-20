@@ -5,9 +5,8 @@
 //! file belongs to.
 
 
-/// A stock is named by its symbol. Everything else names one contract by
-/// the venue's own identifier, which is what tells a member of a family
-/// from the family itself.
+/// A stock is named by its symbol. Everything else names one contract by IB's
+/// local symbol, which distinguishes a member of a family from the family.
 #[test]
 fn only_a_stock_leaves_the_contract_unnamed() {
     for (sec_type, key, wants_id) in [
@@ -231,11 +230,10 @@ fn a_modify_states_the_type_tif_and_trigger_it_carries() {
     assert_eq!(tag("6210=").as_deref(), Some("BEST"), "and its second statement: {msg}");
 }
 
-/// The trigger is a price and lands on the instrument's grid like any
-/// other. `Modify` carries no instrument, so the generic snapping cannot
-/// reach it and both fields are snapped against the tracked order instead.
+/// A moved trigger is sent as stated, on the contract's tick grid or not.
+/// The venue rejects an off-grid price rather than adjusting it.
 #[test]
-fn a_moved_trigger_is_snapped_to_the_tick_grid() {
+fn a_moved_trigger_is_sent_at_the_price_the_caller_stated() {
     use std::io::Read;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -278,11 +276,8 @@ fn a_moved_trigger_is_snapped_to_the_tick_grid() {
     let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
     assert_eq!(
         tag("99="),
-        Some(
-            format_price(149 * crate::types::PRICE_SCALE + 5 * crate::types::PRICE_SCALE / 100)
-                .to_string()
-        ),
-        "the trigger must be on the grid: {msg}",
+        Some(format_price(off_grid).to_string()),
+        "the trigger the caller stated, unmoved: {msg}",
     );
 }
 
@@ -843,7 +838,7 @@ fn algo_wire_carries_the_attributes_and_keeps_its_algo_tags() {
 #[test]
 fn what_if_wire_carries_the_attributes_and_keeps_its_preview_flag() {
     let msg = send_kind_for_test(
-        crate::types::OrderKind::WhatIf { price: 100 * crate::types::PRICE_SCALE, ord_type: b'2' },
+        crate::types::OrderKind::WhatIf { price: 100 * crate::types::PRICE_SCALE, aux: 0, ord_type: b'2' },
         b'1',
         bracket_child_attrs(),
     );
@@ -893,7 +888,7 @@ fn a_market_preview_states_market_and_no_price() {
     // Previewing every order as a limit is refused outright by a security
     // that only trades at market.
     let msg = send_kind_for_test(
-        crate::types::OrderKind::WhatIf { price: 0, ord_type: b'1' },
+        crate::types::OrderKind::WhatIf { price: 0, aux: 0, ord_type: b'1' },
         b'1',
         bracket_child_attrs(),
     );
@@ -913,6 +908,11 @@ fn bracket_child_attrs() -> crate::types::OrderAttrs {
     }
 }
 
+/// The shared state an encoder reads a contract's own currency out of.
+fn shared_for_test() -> std::sync::Arc<SharedState> {
+    std::sync::Arc::new(SharedState::new())
+}
+
 /// Encode one kind and return the frame as text.
 fn send_kind_for_test(
     kind: crate::types::OrderKind,
@@ -922,7 +922,7 @@ fn send_kind_for_test(
     use std::io::Read;
     let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
     let mut context = Context::new();
-    send_order_ex(&mut conn, &mut context, "DU123456", 7, 0, Side::Buy, 1, kind, tif, &attrs)
+    send_order_ex(&mut conn, &mut context, &shared_for_test(), "DU123456", 7, 0, Side::Buy, 1, kind, tif, &attrs)
         .unwrap();
     let mut buf = [0u8; 4096];
     let n = peer.read(&mut buf).unwrap();
@@ -940,7 +940,7 @@ fn a_short_sale_states_its_own_side() {
     let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
     let mut context = Context::new();
     send_order_ex(
-        &mut conn, &mut context, "DU123456", 7, 0, Side::ShortSell, 1,
+        &mut conn, &mut context, &shared_for_test(), "DU123456", 7, 0, Side::ShortSell, 1,
         crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
         b'1', &crate::types::OrderAttrs::default(),
     ).unwrap();
@@ -1116,6 +1116,7 @@ fn adjustable_stop_wire_carries_parent_oca_and_tif() {
     send_order_ex(
         &mut conn,
         &mut context,
+        &shared_for_test(),
         "DU123456",
         7,
         0,
@@ -1160,10 +1161,12 @@ fn adjustable_stop_wire_carries_parent_oca_and_tif() {
     );
 }
 
-/// A contract is priced in what it is priced in. The field was a constant,
-/// which names the right currency for a US instrument and the wrong one for
-/// every other, and an order naming the wrong currency names a different
-/// contract. A caller that says nothing still gets the constant.
+/// Tag 15 carries the currency the contract was registered with.
+///
+/// A constant here names the right currency for a US instrument and the wrong
+/// one for every other, and an order naming the wrong currency names a
+/// different contract. Where the caller states none, the tag is empty: the
+/// venue infers the currency from the contract id.
 #[test]
 fn an_order_states_the_currency_the_contract_is_priced_in() {
     use std::io::Read;
@@ -1178,6 +1181,7 @@ fn an_order_states_the_currency_the_contract_is_priced_in() {
         send_order_ex(
             &mut conn,
             &mut context,
+            &shared_for_test(),
             "DU123456",
             12,
             id,
@@ -1195,7 +1199,51 @@ fn an_order_states_the_currency_the_contract_is_priced_in() {
     };
 
     assert_eq!(sent(Some("|0|||||EUR")), "EUR", "what the caller said");
-    assert_eq!(sent(None), "USD", "and the old constant when nobody said");
+    assert_eq!(sent(None), "", "and nothing where the caller stated nothing");
+}
+
+/// A contract named by conId alone carries no currency in its registration.
+/// Tag 15 comes from the venue's definition of that contract instead of
+/// defaulting to USD.
+#[test]
+fn an_order_falls_back_to_the_currency_the_venue_states() {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    let id = context.register_instrument(12087792);
+    context.set_symbol(id, "EUR".to_string());
+    let shared = shared_for_test();
+    shared.reference.cache_contract(12087792, crate::types::model::Contract {
+        con_id: 12087792,
+        symbol: "EUR".into(),
+        sec_type: "CASH".into(),
+        currency: "GBP".into(),
+        ..Default::default()
+    });
+    send_order_ex(
+        &mut conn, &mut context, &shared, "DU123456", 13, id, Side::Buy, 1,
+        crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+        b'0', &crate::types::OrderAttrs::default(),
+    )
+    .unwrap();
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let stated = msg.split('\u{1}').find_map(|f| f.strip_prefix("15=").map(str::to_string));
+    assert_eq!(stated.as_deref(), Some("GBP"), "tag 15 from the definition: {msg}");
+}
+
+/// A preview states its price on the tag its own type carries it on. A stop
+/// carries its price as the trigger on tag 99, not as a limit on tag 44.
+#[test]
+fn a_stop_preview_states_its_trigger_and_no_limit() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::WhatIf { price: 0, aux: 90 * crate::types::PRICE_SCALE, ord_type: b'3' },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert!(msg.contains("\u{1}99=90\u{1}"), "the trigger is stated: {msg}");
+    assert!(!msg.contains("\u{1}44="), "no limit price is stated: {msg}");
 }
 
 /// The trail percentage and the unit it is expressed in are different
@@ -1210,6 +1258,7 @@ fn a_percent_trail_states_the_percent_and_the_unit_separately() {
     send_order_ex(
         &mut conn,
         &mut context,
+        &shared_for_test(),
         "DU123456",
         9,
         0,
@@ -1241,6 +1290,7 @@ fn adjustable_stop_wire_carries_trail_and_limit_tags() {
     send_order_ex(
         &mut conn,
         &mut context,
+        &shared_for_test(),
         "DU123456",
         8,
         0,
@@ -1570,10 +1620,9 @@ mod modify_wire_tests {
         }
     }
 
-    /// A stock names itself with its symbol, so none of those tags belong on it.
-    /// A contract known by conId still has to restate its identity on the wire.
-    /// Recording it only on the conId-less path sent a future naming its
-    /// exchange and not its month, which the gateway parked.
+    /// A stock names itself with its symbol, so none of those tags belong on
+    /// it. A contract known by conId still restates its identity on the wire: a
+    /// future naming its exchange and not its month is not accepted.
     #[test]
     fn a_future_known_by_con_id_still_names_its_month() {
         let mut context = Context::new();
@@ -1654,7 +1703,9 @@ mod modify_wire_tests {
 
     #[test]
     fn a_supplied_trigger_moves_a_two_legged_order() {
-        for (ord_type, name) in [(b'4', "STP LMT"), (b'K', "LIT")] {
+        for (ord_type, name, fix_type) in
+            [(b'4', "STP LMT", "4"), (crate::types::ORD_LIT, "LIT", "LT")]
+        {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
             context.insert_order(crate::types::Order::new(
@@ -1681,6 +1732,11 @@ mod modify_wire_tests {
 
             assert!(sent.contains("|44=610|"), "{name}: the limit moves: {sent}");
             assert!(sent.contains("|99=590|"), "{name}: and so does the trigger: {sent}");
+            // The replace restates the tag 40 value the submit wrote.
+            assert!(
+                sent.contains(&format!("|40={fix_type}|")),
+                "{name}: the replace restates OrdType {fix_type}: {sent}",
+            );
         }
     }
 
@@ -1779,6 +1835,7 @@ mod modify_wire_tests {
 }
 mod outside_rth_polarity_tests {
     use super::super::*;
+    use super::shared_for_test;
     use crate::protocol::connection::Connection;
     use std::io::Read;
 
@@ -1903,6 +1960,7 @@ mod outside_rth_polarity_tests {
         send_order_ex(
             &mut conn,
             &mut context,
+            &shared_for_test(),
             "DU123456",
             31,
             instrument,
@@ -1952,7 +2010,7 @@ mod outside_rth_polarity_tests {
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 41, instrument, Side::Buy, 1,
+            &mut conn, &mut context, &shared_for_test(), "DU123456", 41, instrument, Side::Buy, 1,
             crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
             b'0', &attrs,
         )
@@ -1978,7 +2036,7 @@ mod outside_rth_polarity_tests {
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 42, instrument, Side::Buy, 1,
+            &mut conn, &mut context, &shared_for_test(), "DU123456", 42, instrument, Side::Buy, 1,
             crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
             b'0', &attrs,
         )
@@ -2004,7 +2062,7 @@ mod outside_rth_polarity_tests {
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 43, instrument, Side::Buy, 1,
+            &mut conn, &mut context, &shared_for_test(), "DU123456", 43, instrument, Side::Buy, 1,
             crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
             b'0', &attrs,
         )
@@ -2026,7 +2084,7 @@ mod outside_rth_polarity_tests {
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 44, instrument, Side::Buy, 1,
+            &mut conn, &mut context, &shared_for_test(), "DU123456", 44, instrument, Side::Buy, 1,
             crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
             b'0', &attrs,
         )
@@ -2061,7 +2119,7 @@ mod outside_rth_polarity_tests {
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 32, instrument, Side::Buy, 1,
+            &mut conn, &mut context, &shared_for_test(), "DU123456", 32, instrument, Side::Buy, 1,
             crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
             b'0', &attrs,
         )
@@ -2092,7 +2150,7 @@ mod outside_rth_polarity_tests {
             ..Default::default()
         };
         send_order_ex(
-            &mut conn, &mut context, "DU123456", 33, instrument, Side::Buy, 1,
+            &mut conn, &mut context, &shared_for_test(), "DU123456", 33, instrument, Side::Buy, 1,
             crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
             b'0', &attrs,
         )
@@ -2138,6 +2196,7 @@ mod outside_rth_polarity_tests {
         send_order_ex(
             &mut conn,
             &mut context,
+            &shared_for_test(),
             "DU123456",
             21,
             instrument,
@@ -2203,15 +2262,31 @@ mod outside_rth_polarity_tests {
             submit(&mut context, instrument, false);
             let sent = drain(&mut context);
 
-            // A future states its contract month. The order path carries no
-            // MaturityDate at all, and a full date on the month tag named a
-            // contract the venue could not settle on.
-            assert!(sent.contains("|200=202709|"), "{label} states the contract month: {sent}");
-            assert!(!sent.contains("|541="), "{label} states no maturity date: {sent}");
+            // A future states its maturity on the tag carrying the form it was
+            // given: a contract month on tag 200, a full date on tag 541. A
+            // future does not always stop trading in the month it is named for,
+            // so a truncated date names a different contract.
+            assert!(sent.contains("|541=20270917|"), "{label} states the maturity date: {sent}");
+            assert!(!sent.contains("|200="), "{label} states no contract month: {sent}");
             assert!(sent.contains("|231=5|"), "{label} states the multiplier: {sent}");
+
+            // The same contract named by its month rides the month tag.
+            let mut by_month = Context::new();
+            let monthly = by_month
+                .market
+                .try_register_contract(893091670, "MES", "FUT", "CME", "202709|0||5|MES|MESU7")
+                .expect("register a future by its month");
+            by_month.set_symbol(monthly, "MES".to_string());
+            submit(&mut by_month, monthly, false);
+            let monthly_sent = drain(&mut by_month);
+            assert!(
+                monthly_sent.contains("|200=202709|"),
+                "{label} states a month on the month tag: {monthly_sent}",
+            );
+            assert!(!monthly_sent.contains("|541="), "{label} states no date: {monthly_sent}");
             assert!(sent.contains("|167=FUT|"), "{label} states the security type: {sent}");
-            // The member, not the family: the local symbol under the source
-            // that says the identifier is the venue's own.
+            // The member, not the family: the local symbol on tag 48 under
+            // source `101`.
             assert!(!sent.contains("|6058="), "{label} states no trading class: {sent}");
             assert!(sent.contains("|48=MESU7|"), "{label} names the contract: {sent}");
             assert!(sent.contains("|22=101|"), "{label} says what the identifier is: {sent}");
@@ -2224,12 +2299,129 @@ mod outside_rth_polarity_tests {
             assert!(sent.contains("|204=0|"), "{label} says who the order is for: {sent}");
         }
     }
+
+    /// The paths that build their own frame rather than going through the
+    /// shared encoder. Each states the contract identity tags, so a bracket on
+    /// a future names the contract and not the family.
+    #[test]
+    fn a_bracket_and_a_fraction_name_the_contract_on_every_leg() {
+        let mut context = Context::new();
+        let instrument = context
+            .market
+            .try_register_contract(893091670, "MES", "FUT", "CME", "20270917|0||5|MES|MESU7")
+            .expect("register a future");
+        context.set_symbol(instrument, "MES".to_string());
+        context.pending_orders.push(crate::types::OrderRequest::SubmitBracket {
+            parent_id: 1,
+            tp_id: 2,
+            sl_id: 3,
+            instrument,
+            side: Side::Buy,
+            qty: 1,
+            entry_price: 100 * crate::types::PRICE_SCALE,
+            take_profit: 110 * crate::types::PRICE_SCALE,
+            stop_loss: 90 * crate::types::PRICE_SCALE,
+        });
+        let sent = drain(&mut context);
+        assert_eq!(
+            sent.matches("|48=MESU7|").count(),
+            3,
+            "all three bracket legs name the contract: {sent}",
+        );
+        assert_eq!(
+            sent.matches("|6008=893091670|").count(),
+            3,
+            "all three bracket legs carry the contract id: {sent}",
+        );
+
+        context.pending_orders.push(crate::types::OrderRequest::SubmitLimitFractional {
+            order_id: 4,
+            instrument,
+            side: Side::Buy,
+            qty: crate::types::QTY_SCALE / 2,
+            price: 100 * crate::types::PRICE_SCALE,
+        });
+        let sent = drain(&mut context);
+        assert!(sent.contains("|48=MESU7|"), "the fraction names the contract: {sent}");
+        assert!(sent.contains("|6008=893091670|"), "the fraction carries the id: {sent}");
+    }
+
+    /// A cancel states tag 38 when the quantity is known. A fractional order
+    /// tracks `qty` as 0, so the tag is omitted rather than sent as `38=0`.
+    #[test]
+    fn a_fractional_cancel_states_no_quantity_rather_than_zero() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(893091670);
+        context.set_symbol(instrument, "MES".to_string());
+        context.pending_orders.push(crate::types::OrderRequest::SubmitLimitFractional {
+            order_id: 9,
+            instrument,
+            side: Side::Buy,
+            qty: crate::types::QTY_SCALE / 2,
+            price: 100 * crate::types::PRICE_SCALE,
+        });
+        drain(&mut context);
+        context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 9 });
+        let sent = drain(&mut context);
+        assert!(!sent.contains("|38=0|"), "the cancel states no zero quantity: {sent}");
+    }
+
+    /// A replace restates the order's terms, not its history: `filled` carries
+    /// forward across the replacement.
+    #[test]
+    fn a_replace_keeps_what_the_order_has_already_filled() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 11,
+            instrument,
+            side: Side::Buy,
+            qty: 100,
+            kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: Default::default(),
+        });
+        drain(&mut context);
+        context.update_order_status(11, OrderStatus::Submitted, false);
+        context.update_order_filled(11, 40);
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 11,
+            price: 151 * crate::types::PRICE_SCALE,
+            qty: 100,
+            outside_rth: false,
+            ord_type: 0,
+            tif: 0,
+            stop_price: 0,
+        });
+        drain(&mut context);
+        assert_eq!(
+            context.order(11).map(|o| o.filled),
+            Some(40),
+            "the replace kept the 40 already filled",
+        );
+    }
+
+    /// An order the venue is holding can go back to working, so a request to
+    /// withdraw everything on a contract has to reach it.
+    #[test]
+    fn cancelling_everything_reaches_an_order_the_venue_is_holding() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        context.insert_order(crate::types::Order::new(
+            21, instrument, Side::Buy, 1, 100 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+        ));
+        context.update_order_status(21, OrderStatus::Inactive, false);
+        context.pending_orders.push(crate::types::OrderRequest::CancelAll { instrument });
+        let sent = drain(&mut context);
+        assert!(sent.contains("|11=C21|"), "the held order was cancelled: {sent}");
+    }
 }
 
-/// A delayed activation goes out under tag 168, joined by a dash and in UTC,
-/// which is how the counterpart writes it and not how this client writes its
-/// other timestamps. Read the other way round the venue holds the order to a
-/// different moment, and it goes live at a time nobody chose.
+/// A delayed activation goes out on tag 168, dash-joined and in UTC. That is
+/// not the form this client's other timestamps take; the space-joined form is
+/// read as a different moment.
 #[test]
 fn a_delayed_activation_is_written_the_way_it_is_read() {
     let order = crate::types::model::Order {
@@ -2248,4 +2440,250 @@ fn a_delayed_activation_is_written_the_way_it_is_read() {
     );
     let stated = fields.iter().find(|(t, _)| *t == 168).map(|(_, v)| v.as_str());
     assert_eq!(stated, Some("20260311-09:30:00"), "sent on 168: {fields:?}");
+}
+
+/// A block order states tag 9801 as the character `Y`.
+///
+/// A numeric `1` is not read on this tag, and the tag is omitted when the flag
+/// is off.
+#[test]
+fn a_block_order_states_the_character_the_protocol_defines() {
+    let stated = |block: bool| {
+        let attrs = crate::types::OrderAttrs { block_order: block, ..Default::default() };
+        let mut fields: Vec<(u32, String)> = Vec::new();
+        super::push_order_attrs(
+            &mut fields,
+            &attrs,
+            &crate::types::OrderKind::Market,
+            Side::Buy,
+            String::new(),
+        );
+        fields
+    };
+    let on = stated(true);
+    assert!(
+        on.iter().any(|(t, v)| *t == 9801 && v == "Y"),
+        "a block order states Y, got {:?}",
+        on.iter().filter(|(t, _)| *t == 9801).collect::<Vec<_>>(),
+    );
+
+    let off = stated(false);
+    assert!(
+        !off.iter().any(|(t, _)| *t == 9801),
+        "an order that is not a block order states nothing",
+    );
+}
+
+/// A manual order states tag 1028 as the character `Y` or `N`.
+///
+/// Tag 1028 carries a character, not a number: any other value reads as
+/// unstated. The tag is omitted when the caller states nothing.
+#[test]
+fn a_manual_order_states_the_character_the_protocol_defines() {
+    let stated = |indicator: i32| {
+        let mut fields: Vec<(u32, String)> = Vec::new();
+        let attrs = crate::types::OrderAttrs {
+            manual_order_indicator: indicator,
+            ..crate::types::OrderAttrs::default()
+        };
+        push_order_attrs(
+            &mut fields,
+            &attrs,
+            &crate::types::OrderKind::Market,
+            Side::Buy,
+            String::new(),
+        );
+        fields.iter().find(|(t, _)| *t == 1028).map(|(_, v)| v.clone())
+    };
+    assert_eq!(stated(1).as_deref(), Some("Y"), "entered by hand");
+    assert_eq!(stated(0).as_deref(), Some("N"), "entered by a program");
+    assert_eq!(stated(i32::MAX), None, "the caller stated nothing");
+}
+
+/// An adjustable stop names the type it becomes by that type's own code.
+///
+/// Tag 6261 carries the order-type code: `3` for a stop, `4` for a stop limit,
+/// `T` for a trailing stop and `TSL` for a trailing stop limit. `7` and `8` are
+/// not order-type codes.
+#[test]
+fn an_adjustable_conversion_names_the_type_the_registry_names() {
+    use crate::types::AdjustedOrderType as A;
+    let stated = |adjusted: A| {
+        let msg = send_kind_for_test(
+            crate::types::OrderKind::AdjustableStop {
+                stop_price: 11 * crate::types::PRICE_SCALE,
+                trigger_price: 12 * crate::types::PRICE_SCALE,
+                adjusted_order_type: adjusted,
+                adjusted_stop_price: 11 * crate::types::PRICE_SCALE,
+                adjusted_stop_limit_price: 0,
+                adjusted_trailing_amount: crate::types::PRICE_SCALE,
+                adjustable_trailing_unit: 0,
+            },
+            b'1',
+            crate::types::OrderAttrs::default(),
+        );
+        msg.split('\u{1}').find_map(|f| f.strip_prefix("6261=").map(str::to_string))
+    };
+    assert_eq!(stated(A::Stop).as_deref(), Some("3"));
+    assert_eq!(stated(A::StopLimit).as_deref(), Some("4"));
+    assert_eq!(stated(A::Trail).as_deref(), Some("T"));
+    assert_eq!(stated(A::TrailLimit).as_deref(), Some("TSL"));
+}
+
+/// A stop limit is previewed with both of its prices.
+///
+/// The limit rides tag 44 and the trigger tag 99. A preview stating only one of
+/// them describes an order the venue will not accept.
+#[test]
+fn a_stop_limit_preview_states_both_of_its_prices() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::WhatIf {
+            price: 95 * crate::types::PRICE_SCALE,
+            aux: 90 * crate::types::PRICE_SCALE,
+            ord_type: b'4',
+        },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert!(msg.contains("\u{1}44=95\u{1}"), "the limit is stated: {msg}");
+    assert!(msg.contains("\u{1}99=90\u{1}"), "the trigger is stated: {msg}");
+}
+
+/// A pegged-to-benchmark order states on tag 44 the limit its peg may not
+/// cross.
+#[test]
+fn a_benchmark_peg_states_the_limit_it_may_not_cross() {
+    let msg = send_kind_for_test(
+        crate::types::OrderKind::PegBench {
+            price: 150 * crate::types::PRICE_SCALE,
+            ref_con_id: 756733,
+            is_peg_decrease: false,
+            pegged_change_amount: crate::types::PRICE_SCALE,
+            ref_change_amount: crate::types::PRICE_SCALE,
+            starting_price: 149 * crate::types::PRICE_SCALE,
+            stock_ref_price: 149 * crate::types::PRICE_SCALE,
+            ref_exchange: "SMART".into(),
+        },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert!(msg.contains("\u{1}44=150\u{1}"), "the limit is stated: {msg}");
+    assert!(msg.contains("\u{1}40=PB\u{1}"), "and it is still a benchmark peg: {msg}");
+}
+
+/// A cancel-all sends one frame per order and reports one outcome per order.
+/// `CancelAll` carries no order id of its own, so a single result for the set
+/// cannot name the order whose cancel failed.
+#[test]
+fn a_cancel_all_names_every_order_whose_cancel_did_not_leave() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    // The send fails on the call rather than after a buffer fills.
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    for id in [41u64, 42, 43] {
+        context.insert_order(crate::types::Order::new(
+            id, instrument, Side::Buy, 100, 150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+        ));
+        context.set_order_status_forced(id, OrderStatus::Submitted);
+    }
+    context.cancel_all(instrument);
+
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+
+    for id in [41u64, 42, 43] {
+        assert_eq!(
+            context.order(id).map(|o| o.status),
+            Some(OrderStatus::Uncertain),
+            "order {id} was not cancelled and is not known to be working",
+        );
+    }
+    let told = shared.orders.drain_order_updates();
+    for id in [41u64, 42, 43] {
+        let update = told.iter().find(|u| u.order_id == id).expect("every order is reported");
+        assert_eq!(update.status, OrderStatus::Uncertain);
+        // Instrument 0 is a valid instrument id, so a zeroed update names
+        // another contract's order.
+        assert_eq!(update.instrument, instrument, "the contract it is on");
+        assert_eq!(update.remaining_qty, 100.0, "and what is still outstanding on it");
+    }
+}
+
+/// A price is sent as stated, on the contract's tick grid or not. The venue
+/// rejects an off-grid price rather than adjusting it.
+#[test]
+fn an_off_grid_price_reaches_the_venue_as_the_caller_stated_it() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.market.set_min_tick(instrument, 0.05);
+
+    // 149.03 is off a five-cent grid.
+    let off_grid = 149 * crate::types::PRICE_SCALE + 3 * crate::types::PRICE_SCALE / 100;
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        order_id: 7,
+        instrument,
+        side: Side::Buy,
+        qty: 1,
+        kind: crate::types::OrderKind::Limit { price: off_grid },
+        tif: b'0',
+        attrs: crate::types::OrderAttrs::default(),
+    });
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(msg.contains("|44=149.03|"), "the price the caller stated: {msg}");
+}
+
+/// A replace states the whole order, so an untracked order has nothing to
+/// restate. The request is refused rather than sent under defaults that name no
+/// order the venue holds.
+#[test]
+fn a_replace_for_an_untracked_order_is_refused_rather_than_invented() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 4242,
+        price: 100 * crate::types::PRICE_SCALE,
+        qty: 1,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+
+    let mut buf = [0u8; 4096];
+    assert!(
+        matches!(peer.read(&mut buf), Err(_) | Ok(0)),
+        "nothing reaches the wire: {}",
+        String::from_utf8_lossy(&buf),
+    );
+    let told = shared.orders.drain_order_inactive();
+    assert!(
+        told.iter().any(|(id, _, _)| *id == 4242),
+        "and the caller is told which order could not be replaced: {told:?}",
+    );
 }

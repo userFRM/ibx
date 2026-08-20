@@ -125,7 +125,11 @@ impl MarketState {
     /// keeps it, and an id already held by another slot is not stolen: either
     /// would leave two slots claiming one contract.
     pub fn adopt_con_id(&mut self, id: InstrumentId, con_id: i64) -> bool {
-        if con_id == 0 || id as usize >= MAX_INSTRUMENTS {
+        // Bounded by the number of slots handed out, not by the array size.
+        // An unallocated slot is still within the arrays, and adopting one
+        // writes a contract the count, the live list and the reverse map
+        // cannot see.
+        if con_id == 0 || id >= self.active_count {
             return false;
         }
         if self.instrument_to_con_id[id as usize] != 0 {
@@ -158,7 +162,9 @@ impl MarketState {
             // option key and dropping the rest left every order on it going out
             // as a stock on the default venue, because that is what an unset
             // security type reads as.
-            if !symbol.is_empty() && self.symbol(id).is_empty() {
+            // Tests the stored value rather than the accessor, which
+            // substitutes a placeholder for an unregistered symbol.
+            if !symbol.is_empty() && self.symbols[id as usize].is_none() {
                 self.set_symbol(id, symbol.to_string());
             }
             self.set_routing(id, sec_type, exchange);
@@ -183,6 +189,12 @@ impl MarketState {
         self.instrument_to_con_id[id as usize] = 0;
         self.option_keys[id as usize] =
             if option_key.is_empty() { None } else { Some(option_key.to_string()) };
+        // The descriptor this slot holds. Without it the slot matches no
+        // descriptor and the same contract requested twice takes two slots.
+        if !symbol.is_empty() {
+            self.set_symbol(id, symbol.to_string());
+        }
+        self.set_routing(id, sec_type, exchange);
         Some(id)
     }
 
@@ -368,19 +380,18 @@ impl MarketState {
     /// a literal instead put every leg of a bracket on a European or Japanese
     /// contract into dollars.
     ///
-    /// Dollars where the contract never said otherwise, which is what an
-    /// unstated currency has always meant here.
+    /// Empty where the contract stated none. Tag 15 carries what the contract
+    /// was registered with; substituting a currency states one the caller did
+    /// not, and the venue reads the order as being for a different listing.
     pub fn order_currency(&self, id: InstrumentId) -> String {
-        self.order_identity(id)
-            .map(|identity| identity.currency)
-            .unwrap_or_else(|| "USD".to_string())
+        self.order_identity(id).map(|identity| identity.currency).unwrap_or_default()
     }
 
     /// The currency this contract was registered with, where one was stated.
     ///
     /// Apart from `order_currency`, which answers dollars when nothing was
     /// said. A caller that registered a contract by its id alone stated no
-    /// currency, and the venue's own definition of that contract knows one —
+    /// currency, and the venue's definition of that contract knows one —
     /// so the two are worth telling apart before either is put on an order.
     pub fn order_currency_stated(&self, id: InstrumentId) -> Option<String> {
         let key = self.option_keys.get(id as usize)?.as_deref()?;
@@ -397,10 +408,7 @@ impl MarketState {
         // A key written before these existed simply has neither.
         let trading_class = it.next().unwrap_or("").to_string();
         let local_symbol = it.next().unwrap_or("").to_string();
-        let currency = match it.next().unwrap_or("") {
-            "" => "USD".to_string(),
-            c => c.to_string(),
-        };
+        let currency = it.next().unwrap_or("").to_string();
         // No guard on "does this look like an option": every field is checked
         // for emptiness where it is written, and a stock that states only its
         // currency has an identity worth returning.
@@ -409,10 +417,13 @@ impl MarketState {
         })
     }
 
+    /// The security type and destination an order for this instrument states.
+    ///
+    /// Both are empty where the contract stated neither. A substituted type
+    /// describes a different instrument, and tag 167 carries the contract's own
+    /// or nothing.
     pub fn order_routing(&self, id: InstrumentId) -> (String, String) {
-        let sec_type = self.sec_types[id as usize]
-            .clone()
-            .unwrap_or_else(|| "STK".to_string());
+        let sec_type = self.sec_types[id as usize].clone().unwrap_or_default();
         let sec_type = crate::control::contracts::SecurityType::from_fix(&sec_type)
             .to_fix()
             .to_string();
@@ -433,9 +444,12 @@ impl MarketState {
         (sec_type, destination)
     }
 
-    /// Get symbol name for an instrument. O(1) flat array lookup.
+    /// The symbol an instrument was registered under, or nothing.
+    ///
+    /// `None` when unregistered. A placeholder here reaches tag 55 as the
+    /// contract's name; the order path refuses a contract it cannot name.
     pub fn symbol(&self, id: InstrumentId) -> &str {
-        self.symbols[id as usize].as_deref().unwrap_or("?")
+        self.symbols[id as usize].as_deref().unwrap_or("")
     }
 
     /// Set minTick for an instrument (from 35=Q). Price ticks = magnitude * min_tick.
@@ -695,9 +709,9 @@ mod tests {
     fn an_order_is_denominated_in_the_contracts_own_currency() {
         let mut ms = MarketState::new();
 
-        // Nothing stated is dollars, which is what it has always meant here.
+        // An instrument registered by id alone states no currency.
         let bare = ms.register(101);
-        assert_eq!(ms.order_currency(bare), "USD");
+        assert_eq!(ms.order_currency(bare), "");
 
         // expiry|strike|right|multiplier|trading class|local symbol|currency
         let eu = ms
@@ -711,17 +725,17 @@ mod tests {
             .expect("registers");
         assert_eq!(ms.order_currency(jp), "JPY");
 
-        // An identity that names no currency is dollars rather than empty: an
-        // order carrying an empty tag 15 is worse than one carrying the
-        // default that was there before.
+        // A contract that names no currency states none. The venue infers it
+        // from the contract id, and a substituted currency describes a
+        // different listing.
         let unstated = ms
             .try_register_contract(104, "AAPL", "STK", "SMART", "|||||")
             .expect("registers");
-        assert_eq!(ms.order_currency(unstated), "USD");
+        assert_eq!(ms.order_currency(unstated), "");
         assert_eq!(
             ms.order_currency_stated(unstated), None,
             "a contract registered without a currency stated none, which is not the \
-             same as stating dollars: the venue's own definition is asked next",
+             same as stating dollars: the venue's definition is asked next",
         );
     }
 
@@ -729,11 +743,10 @@ mod tests {
     fn order_routing_rules() {
         let mut ms = MarketState::new();
         let stk = ms.register(1);
-        // Unset routing = the historical defaults: a stock on SMART. The
-        // security type comes back in its wire spelling — the gateway answers
-        // `CS` on every execution report, and the rest of the client already
-        // converts before sending.
-        assert_eq!(ms.order_routing(stk), ("CS".into(), "BEST".into()));
+        // An instrument registered without a security type states none. The
+        // destination still resolves, because an unnamed venue is the smart
+        // one; the type is the contract's own or nothing.
+        assert_eq!(ms.order_routing(stk), (String::new(), "BEST".into()));
 
         // The registered security type is what goes on the wire.
         let fx = ms.register(2);
@@ -768,7 +781,7 @@ mod tests {
         ms.unregister(fx);
         let reused = ms.register(6);
         assert_eq!(reused, fx);
-        assert_eq!(ms.order_routing(reused), ("CS".into(), "BEST".into()));
+        assert_eq!(ms.order_routing(reused), (String::new(), "BEST".into()));
     }
 
     // ── unregister + slot reuse ──
@@ -823,7 +836,9 @@ mod tests {
         ms.try_register_contract(100, "AAPL", "OPT", "SMART", "20260918|150|C|100");
 
         assert_eq!(ms.unregister(id), Some(100));
-        assert_eq!(ms.symbol(id), "?");
+        // `None` rather than a placeholder, which would reach tag 55 as the
+        // contract's name.
+        assert_eq!(ms.symbol(id), "");
         assert_eq!(ms.min_tick(id), 0.0);
         assert_eq!(ms.min_tick_scaled(id), 0);
         assert_eq!(ms.instrument_by_server_tag(42), None);
@@ -1064,6 +1079,27 @@ mod tests {
         assert!(!m.adopt_con_id(other, 756733), "and an id is not taken from the slot holding it");
         assert_eq!(m.instrument_by_con_id(756733), Some(id));
         assert!(!m.adopt_con_id(other, 0), "nothing is not an identity");
+
+        // An unallocated slot is still within the arrays. Adopting one writes
+        // a contract the count and the live list cannot see.
+        let unhandled = m.count() as crate::types::InstrumentId;
+        assert!(
+            !m.adopt_con_id(unhandled, 111_111),
+            "a slot nobody holds adopts nothing",
+        );
+        assert_eq!(m.instrument_by_con_id(111_111), None, "and nothing points at it");
+    }
+
+    /// A slot taken for a descriptor is matched by that descriptor. Without
+    /// it, the same contract requested twice takes two slots.
+    #[test]
+    fn a_slot_taken_for_a_descriptor_is_the_slot_that_descriptor_finds() {
+        let mut m = MarketState::new();
+        let first = m.try_register_contract(0, "SPY", "STK", "SMART", "").unwrap();
+        let again = m.try_register_contract(0, "SPY", "STK", "SMART", "").unwrap();
+        assert_eq!(first, again, "the same contract is the same instrument");
+        assert_eq!(m.count(), 1, "and it took one slot: {}", m.count());
+        assert_eq!(m.symbol(first), "SPY", "the slot knows what it was taken for");
     }
 }
 
@@ -1071,7 +1107,7 @@ mod tests {
 mod routing_name_tests {
     use super::MarketState;
 
-    /// A contract is handed to a caller under the name the counterpart uses,
+    /// A contract is handed to a caller under the name the venue uses,
     /// and a caller passing it straight back must still be routed under the
     /// name the venue knows. Routed under the one it was handed, a request for
     /// a Nasdaq listing reaches nothing.
@@ -1082,5 +1118,22 @@ mod routing_name_tests {
         market.set_routing(instrument, "STK", "ISLAND");
         let (_, destination) = market.order_routing(instrument);
         assert_eq!(destination, "NASDAQ", "routed under a name that reaches nothing");
+    }
+}
+
+#[cfg(test)]
+mod registration_symbol_tests {
+    use super::MarketState;
+
+    /// A contract registered by its id keeps the symbol it was registered
+    /// with. The accessor substitutes a placeholder for an unregistered
+    /// symbol, so the check tests the stored value.
+    #[test]
+    fn a_contract_registered_by_id_keeps_its_symbol() {
+        let mut market = MarketState::new();
+        let instrument = market
+            .try_register_contract(756733, "SPY", "STK", "SMART", "")
+            .expect("register a contract");
+        assert_eq!(market.symbol(instrument), "SPY");
     }
 }

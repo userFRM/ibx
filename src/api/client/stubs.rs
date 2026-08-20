@@ -34,7 +34,7 @@ impl EClient {
 
     // ── Server Time ──
 
-    /// The venue's own clock, as `reqCurrentTime` reports it.
+    /// The venue's clock, as `reqCurrentTime` reports it.
     ///
     /// Every message the venue sends is stamped with the time it sent it, and
     /// the last one is held. A caller asking for the server's time is asking
@@ -104,14 +104,12 @@ impl EClient {
     // the call and is told why it cannot be served, rather than finding
     // nothing at all.
 
-    /// Not served. Reports why on the error callback.
-    /// What volatility a price implies, under the venue's own model.
+    /// What volatility a price implies, under the venue's model.
     ///
-    /// This protocol carries no request for it — the counterpart works it out
-    /// in its own process — so it is worked out here, anchored to what the
-    /// venue last said its own model made of this contract. Where it has said
-    /// nothing, nothing is answered: a number from a rate nobody stated would
-    /// be this library's invention.
+    /// This protocol carries no request for it, so the value is computed
+    /// here, anchored to the venue's last stated model output for this
+    /// contract. Where the venue has stated no model, nothing is answered rather
+    /// than a number derived from an unstated rate.
     pub fn calculate_implied_volatility(
         &self, req_id: i64, contract: &super::Contract,
         option_price: f64, under_price: f64,
@@ -127,7 +125,7 @@ impl EClient {
                     implied_vol: volatility,
                     opt_price: option_price,
                     und_price: under_price,
-                    ..Default::default()
+                    ..unstated()
                 },
             ),
             Err(why) => self.report_reason(req_id, &why),
@@ -148,14 +146,14 @@ impl EClient {
                     implied_vol: volatility,
                     opt_price: price,
                     und_price: under_price,
-                    ..Default::default()
+                    ..unstated()
                 },
             ),
             Err(why) => self.report_reason(req_id, &why),
         }
     }
 
-    /// The contract's terms and the venue's own model for it, or why neither
+    /// The contract's terms and the venue's model for it, or why neither
     /// question can be answered.
     fn solve_option(
         &self,
@@ -227,6 +225,12 @@ impl EClient {
     // ── Server Log Level ──
 
     /// Set server log level. Matches `setServerLogLevel` in C++.
+    ///
+    /// Taken and not applied. The session holds no log level of its own and this
+    /// protocol carries no message asking the venue to change one, so what a
+    /// caller states here is written to this client's log and nothing else.
+    /// This client's own logging is set where the process sets it, through
+    /// `IBX_LOG_LEVEL` or `RUST_LOG`.
     pub fn set_server_log_level(&self, log_level: i32) {
         let level = match log_level {
             1 => "error",
@@ -252,20 +256,40 @@ impl EClient {
     /// waiting on a callback that will never come cannot tell that apart from
     /// a slow gateway, so it is told on the channel a venue uses to say it
     /// will not act on a request.
-    fn report_reason(&self, req_id: i64, reason: &Refusal) {
+    pub(crate) fn report_reason(&self, req_id: i64, reason: &Refusal) {
         self.shared.reference.push_historical_error(
             req_id.max(0) as u32, reason.code, reason.message.clone(),
         );
     }
 }
 
+/// A computation with nothing worked out yet.
+///
+/// Fields these two calls do not compute carry the unset sentinel, `f64::MAX`,
+/// which is the reference client's mark for a field that was not sent. Zero is a
+/// valid greek and cannot stand for one.
+fn unstated() -> crate::types::OptionComputation {
+    crate::types::OptionComputation {
+        delta: f64::MAX,
+        gamma: f64::MAX,
+        vega: f64::MAX,
+        theta: f64::MAX,
+        pv_dividend: f64::MAX,
+        ..Default::default()
+    }
+}
+
 /// The word the venue names an advisor's configuration partition by, from the
 /// number the reference client names it by.
 fn advisor_partition(fa_data_type: i32) -> Option<&'static str> {
+    // The order the venue reads them in. Rotated by one here, every
+    // advisor request asked for a different partition than the caller named:
+    // a request for groups returned aliases, and one for aliases returned
+    // nothing the caller could use.
     match fa_data_type {
-        1 => Some("Aliases"),
-        2 => Some("Group"),
-        3 => Some("Profile"),
+        1 => Some("Group"),
+        2 => Some("Profile"),
+        3 => Some("Aliases"),
         _ => None,
     }
 }
@@ -280,11 +304,15 @@ mod advisor_partition_tests {
     /// The reference client names a partition by a number and the venue names
     /// it by a word. Both clients here send the word, and a number that
     /// stands for nothing is refused rather than sent as an empty partition.
+    ///
+    /// The order the venue reads: one names the group, two the
+    /// profile, three the aliases. Rotated by one, every advisor request asked
+    /// for a partition the caller had not named, and this test agreed with it.
     #[test]
     fn each_number_names_the_partition_the_venue_knows() {
-        assert_eq!(advisor_partition(1), Some("Aliases"));
-        assert_eq!(advisor_partition(2), Some("Group"));
-        assert_eq!(advisor_partition(3), Some("Profile"));
+        assert_eq!(advisor_partition(1), Some("Group"));
+        assert_eq!(advisor_partition(2), Some("Profile"));
+        assert_eq!(advisor_partition(3), Some("Aliases"));
     }
 
     #[test]

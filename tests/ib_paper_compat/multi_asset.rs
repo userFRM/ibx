@@ -34,15 +34,10 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
             Ok(_) => {}
         }
         for frame in ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => {
-                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
+            // Every frame is unsigned, whatever kind it is. On a signed session a
+            // frame read as it stands parses distorted, and unsigning is what
+            // advances the read chain, so skipping one leaves the rest unreadable.
+            for msg in messages_in(&mut ccp, &frame) {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
                     && let Some(def) = contracts::parse_secdef_response(&msg, true)
@@ -202,8 +197,8 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     // What this phase is really for. A futures order is refused as ambiguous
     // unless it names one member of the family rather than the family: the
     // contract month on MaturityMonthYear with no maturity date at all, and
-    // the venue's own local symbol on SecurityID under the source that says
-    // the identifier is the venue's own. A trading class describes the family
+    // the local symbol on SecurityID, under the source code that marks the
+    // identifier as venue-assigned. A trading class describes the family
     // and is not stated on an order. Placing the order here is what keeps that
     // shape honest, because a definition lookup alone never exercises it.
 
@@ -406,6 +401,10 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     // Register SPY
     let spy_inst = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(spy_inst, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(spy_inst, "STK", "SMART");
 
     // Submit 3 limit orders simultaneously at $1.00 (far below market)
     let oid1 = next_order_id();
@@ -416,7 +415,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid2, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid3, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);

@@ -330,10 +330,9 @@ fn parse_farm_route_two_segments() {
     assert_eq!(parsed, ("zdc1.ibllc.com".to_string(), "eufarm".to_string(), None));
 }
 
-/// A route that states a port states where that farm answers. The
-/// counterpart reads it from here when no tag carries it, and treats a
-/// route with neither as an error rather than substituting a default —
-/// so a stated port is not something to discard in favour of a constant.
+/// A route that states a port states where that farm answers. It is read from
+/// here when no tag carries it, and a route with neither is an error rather
+/// than a default: a stated port is not discarded in favour of a constant.
 #[test]
 fn parse_farm_route_takes_the_port_the_venue_states() {
     let parsed = parse_farm_route("zdc1.ibllc.com/euhmds/4002").unwrap();
@@ -625,6 +624,7 @@ fn gateway_config_fields() {
 
 fn auth_with(host: &str, trading_host: &str, trading_farm: &str) -> ReconnectAuth {
     ReconnectAuth {
+        account_id: String::new(),
         trading_port: None,
         hmds_port: None,
         secdef_port: None,
@@ -782,5 +782,53 @@ mod soft_dollar_tier_tests {
     #[test]
     fn no_tiers_stated_is_no_tiers() {
         assert!(parse("").is_empty());
+    }
+}
+
+/// The frame that finishes authentication has to say so.
+///
+/// Read as "whatever arrives next", a refusal and a receive failure both
+/// count as a session, and the farm logons behind them authenticate with a key
+/// the venue has not accepted.
+mod auth_finish_tests {
+    use super::super::second_factor::expect_auth_finish;
+    use crate::protocol::xyz::{xyz_build, xyz_wrap, XYZ_MSG_SOFT_TOKEN, XYZ_MSG_TOKEN_AUTH};
+    use std::io;
+
+    fn framed(msg_id: u32, state: u32, fields: &[&str]) -> io::Cursor<Vec<u8>> {
+        io::Cursor::new(xyz_wrap(&xyz_build(msg_id, state, "", fields)))
+    }
+
+    #[test]
+    fn a_finish_that_passed_finishes_the_authentication() {
+        for state in [3u32, 5] {
+            let mut frame = framed(XYZ_MSG_TOKEN_AUTH, state, &["PASSED"]);
+            expect_auth_finish(&mut frame, "test")
+                .unwrap_or_else(|e| panic!("state {state} passed and was refused: {e}"));
+        }
+    }
+
+    #[test]
+    fn a_finish_that_did_not_pass_is_not_a_session() {
+        let mut refused = framed(XYZ_MSG_TOKEN_AUTH, 3, &["FAILED"]);
+        let err = expect_auth_finish(&mut refused, "test").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+
+        // The right word in a state AUTH_FINISH is not sent in.
+        let mut wrong_state = framed(XYZ_MSG_TOKEN_AUTH, 2, &["PASSED"]);
+        assert!(expect_auth_finish(&mut wrong_state, "test").is_err());
+
+        // The right word on a message that is not this one.
+        let mut wrong_message = framed(XYZ_MSG_SOFT_TOKEN, 3, &["PASSED"]);
+        assert!(expect_auth_finish(&mut wrong_message, "test").is_err());
+    }
+
+    #[test]
+    fn a_frame_that_never_arrived_is_not_a_session() {
+        let mut nothing = io::Cursor::new(Vec::new());
+        assert!(
+            expect_auth_finish(&mut nothing, "test").is_err(),
+            "nothing said the authentication finished",
+        );
     }
 }

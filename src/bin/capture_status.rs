@@ -1,9 +1,8 @@
 //! Subscribe to prices on contracts a venue states a trading status for, and
 //! keep every message the market-data connection carries.
 //!
-//! The status decoder was written from the counterpart and is checked against
-//! bodies this client made up, which proves the reading and not the arrival.
-//! This asks the venue for real ones.
+//! The status decoder is otherwise exercised only against synthetic bodies,
+//! which tests the decoding and not the arrival. This captures real ones.
 //!
 //! Reads only. It places nothing.
 //!

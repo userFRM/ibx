@@ -64,6 +64,7 @@ impl EClient {
                 what_to_show: what_to_show.to_string(),
                 use_rth: use_rth != 0,
                 keep_up_to_date,
+                include_expired: contract.include_expired,
                 filters: contract.lookup_filters(),
             })?;
         }
@@ -139,7 +140,12 @@ impl EClient {
     }
 
     /// Request option chain parameters.
-    #[pyo3(signature = (req_id, underlying_symbol, fut_fop_exchange="", underlying_sec_type="STK", underlying_con_id=0))]
+    ///
+    /// Every argument is stated by the caller, as the reference client requires
+    /// them to be. With `underlying_sec_type` defaulted to stocks, a caller who
+    /// left it off asked about the chains of a stock by that name rather than
+    /// being told they had left it off.
+    #[pyo3(signature = (req_id, underlying_symbol, fut_fop_exchange, underlying_sec_type, underlying_con_id))]
     pub(crate) fn req_sec_def_opt_params(
         &self,
         py: Python<'_>,
@@ -177,14 +183,38 @@ impl EClient {
         let _ = scanner_subscription_options;
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Python::attach(|py| {
-            let instrument = subscription.getattr(py, "instrument")
-                .and_then(|v| v.extract::<String>(py)).unwrap_or_else(|_| "STK".to_string());
-            let location_code = subscription.getattr(py, "locationCode")
-                .and_then(|v| v.extract::<String>(py)).unwrap_or_else(|_| "STK.US.MAJOR".to_string());
-            let scan_code = subscription.getattr(py, "scanCode")
-                .and_then(|v| v.extract::<String>(py)).unwrap_or_else(|_| "TOP_PERC_GAIN".to_string());
-            let max_items = subscription.getattr(py, "numberOfRows")
-                .and_then(|v| v.extract::<u32>(py)).unwrap_or(50);
+            // An absent attribute takes the default. One that is present and
+            // cannot be read is a value the caller stated, and is refused
+            // rather than run as a different scan under their request id.
+            macro_rules! stated {
+                ($attr:literal, $kind:ty, $default:expr) => {
+                    match subscription.getattr(py, $attr) {
+                        Err(_) => $default,
+                        Ok(held) if held.is_none(py) => $default,
+                        Ok(held) => match held.extract::<$kind>(py) {
+                            Ok(value) => value,
+                            Err(why) => return self.report_refusal(py, req_id,
+                                crate::error_codes::Refusal::validation(format!(
+                                    "the scan's {} cannot be read: {why}. Left off it would \
+                                     be the default, but stated it names the scan, and one \
+                                     run under a different one is not the scan asked for",
+                                    $attr,
+                                ))),
+                        },
+                    }
+                };
+            }
+            // Empty, which is what the reference client's own subscription
+            // holds for a field nobody set. Named as stocks and top gainers
+            // here, a scan nobody described ran as a different scan.
+            let instrument = stated!("instrument", String, String::new());
+            let location_code = stated!("locationCode", String, String::new());
+            let scan_code = stated!("scanCode", String, String::new());
+            // Their own "no number stated" is a negative one, which is not a
+            // count and is not an unreadable value either: it means the venue
+            // picks, and so does its absence here.
+            let rows = stated!("numberOfRows", i64, -1);
+            let max_items = if rows < 0 { 50 } else { rows.min(u32::MAX as i64) as u32 };
             let filters = scanner_filters(py, &subscription, &scanner_subscription_filter_options);
             Self::send_control(py, &tx, ControlCommand::SubscribeScanner {
                 req_id: wire_req_id(req_id)?, instrument, location_code, scan_code, max_items, filters,
@@ -250,13 +280,18 @@ impl EClient {
     ) -> PyResult<()> {
         let _ = historical_news_options;
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        if let Err(why) = crate::control::news::validate_news_window(
+            start_date_time, end_date_time,
+        ) {
+            return self.report_refusal(py, req_id, why.into());
+        }
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalNews {
             req_id: wire_req_id(req_id)?,
-            con_id: con_id as u32,
+            con_id: super::wire_u32("con_id", con_id)?,
             provider_codes: provider_codes.to_string(),
             start_time: start_date_time.to_string(),
             end_time: end_date_time.to_string(),
-            max_results: total_results as u32,
+            max_results: super::wire_u32("total_results", total_results as i64)?,
         })?;
         Ok(())
     }
@@ -280,7 +315,7 @@ impl EClient {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchFundamentalData {
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id as u32,
+            con_id: super::wire_u32("con_id", contract.con_id)?,
             report_type: report_type.to_string(),
         })?;
         Ok(())
@@ -314,14 +349,23 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = (ignore_size, misc_options);
+        if let Err(why) = crate::control::historical::tick_data_type(what_to_show)
+            .map(|_| ())
+            .and_then(|()| crate::control::historical::validate_tick_window(
+                start_date_time, end_date_time,
+            ))
+        {
+            return self.report_refusal(py, req_id, why.into());
+        }
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalTicks {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,
             start_date_time: start_date_time.to_string(),
             end_date_time: end_date_time.to_string(),
-            number_of_ticks: number_of_ticks as u32,
+            number_of_ticks: super::wire_u32("number_of_ticks", number_of_ticks as i64)?,
             what_to_show: what_to_show.to_string(),
             use_rth: use_rth != 0,
+            include_expired: contract.include_expired,
             filters: contract.lookup_filters(),
         })?;
         Ok(())
@@ -373,7 +417,9 @@ impl EClient {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchHistogramData {
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id as u32,
+            con_id: super::wire_u32("con_id", contract.con_id)?,
+            sec_type: contract.sec_type.clone(),
+            exchange: contract.exchange.clone(),
             use_rth,
             period: time_period.to_string(),
         })?;

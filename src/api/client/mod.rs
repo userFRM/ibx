@@ -172,7 +172,7 @@ pub struct EClientConfig {
     ///
     /// An order id belongs to the account rather than to the process: the
     /// venue answers an order under an id it already holds with "Duplicate ID"
-    /// and places nothing. The counterpart remembers its last id in its own
+    /// and places nothing. The last id is remembered in the session's own
     /// settings and hands out that value plus one; this is the same, in a file
     /// keyed by account, kind of session and client id. Left unset the counter
     /// lives as long as the process, which is enough for one run and not for
@@ -225,6 +225,20 @@ pub struct EClient {
     pub(crate) asking: Mutex<()>,
     /// How many events the channel above discarded, if one is attached.
     pub(crate) discarded: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The orders the venue has finished with, as they were reported.
+    ///
+    /// The queue they arrive on empties as it is read and the venue does not
+    /// send them again, so what has been read once is kept here: asked a
+    /// second time, this client answered with none of them, which reads as an
+    /// account that completed nothing today.
+    pub(crate) completed: Mutex<Vec<(ApiContract, ApiOrder, crate::types::model::OrderState)>>,
+    /// Which kind of trade stream each tick-by-tick request asked for.
+    ///
+    /// Every trade and the exchange's own are two streams, and the callback
+    /// names which one it is carrying. Nothing on the record the venue sends
+    /// says which, because the subscription decided it, so what the caller
+    /// asked for is kept here and read back when the trades arrive.
+    pub(crate) tbt_kinds: Mutex<std::collections::HashMap<i64, TbtType>>,
     pub(crate) core: ClientCore,
     pub(crate) session_token_bytes: Vec<u8>,
     pub(crate) session: crate::auth::resume::ResumableSession,
@@ -296,6 +310,27 @@ fn gateway_config(config: &EClientConfig) -> GatewayConfig {
     }
 }
 
+/// What a reconnect logs in with.
+///
+/// Extracted for the reason [`gateway_config`] is: the settings a session
+/// opened under have to reach the reconnect, and building this inline left
+/// them as `Default::default()`. Nothing failed until a connection went away,
+/// and then the session came back announcing a different build, locale and
+/// timezone, and asked the venue for every execution it holds where the caller
+/// had asked for today's.
+fn caller_auth(config: &EClientConfig, gateway: &GatewayConfig) -> crate::gateway::CallerAuth {
+    crate::gateway::CallerAuth {
+        settings: gateway.settings.clone(),
+        host: config.host.clone(),
+        username: config.username.clone(),
+        password: zeroize::Zeroizing::new(config.password.clone()),
+        paper: config.paper,
+        code_provider: gateway.code_provider.clone(),
+        ib_key_timeout_secs: gateway.ib_key_timeout_secs,
+        ib_key_token_sub_type: gateway.ib_key_token_sub_type.clone(),
+    }
+}
+
 impl EClient {
     /// Connect to IB and start the engine.
     pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error>> {
@@ -311,12 +346,15 @@ impl EClient {
     /// [`events_lost`](EClient::events_lost) to learn whether that happened.
     ///
     /// One reader, and it is told what it drains and nothing else. For a
-    /// program that wants more than one thing told about a message, or wants
-    /// none of it dropped, hand a handler to [`Client`](crate::Client) instead: a
-    /// handler is called with the message rather than sent a copy of it, so
-    /// there is no queue to fill and no reader to be the only one. This is a second, optional delivery path that runs alongside
-    /// [`process_msgs()`](EClient::process_msgs) — it does not replace it, and
-    /// nothing is removed from the wrapper callbacks when it is in use.
+    /// program that wants none of it dropped, drive
+    /// [`process_msgs`](EClient::process_msgs) with a
+    /// [`Wrapper`](crate::api::wrapper::Wrapper) instead: its callbacks are
+    /// called with the message rather than sent a copy of it, so there is no
+    /// queue to fill and nothing to fall out of one.
+    ///
+    /// This is a second, optional delivery path that runs alongside
+    /// `process_msgs` — it does not replace it, and nothing is removed from the
+    /// wrapper callbacks when it is in use.
     ///
     /// The channel is bounded by `capacity`; the engine never blocks on it, so
     /// a consumer that falls behind loses events rather than slowing the hot
@@ -367,16 +405,7 @@ impl EClient {
         let (mut hot_loop, control_tx) = crate::engine::hot_loop::HotLoop::for_session(
             gw,
             shared.clone(), event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn, config.core_id,
-            crate::gateway::CallerAuth {
-                settings: Default::default(),
-                host: config.host.clone(),
-                username: config.username.clone(),
-                password: zeroize::Zeroizing::new(config.password.clone()),
-                paper: config.paper,
-                code_provider: gw_config.code_provider.clone(),
-                ib_key_timeout_secs: gw_config.ib_key_timeout_secs,
-                ib_key_token_sub_type: gw_config.ib_key_token_sub_type.clone(),
-            },
+            caller_auth(config, &gw_config),
         );
         hot_loop.set_reconnect_config(config.reconnect.clone());
 
@@ -410,6 +439,8 @@ impl EClient {
             order_id_store,
             asking: Mutex::new(()),
             discarded: Default::default(),
+            completed: Mutex::new(Vec::new()),
+            tbt_kinds: Mutex::new(std::collections::HashMap::new()),
             core,
             session_token_bytes,
             session,
@@ -442,6 +473,8 @@ impl EClient {
             order_id_store: None,
             asking: Mutex::new(()),
             discarded: Default::default(),
+            completed: Mutex::new(Vec::new()),
+            tbt_kinds: Mutex::new(std::collections::HashMap::new()),
             core: ClientCore::new(),
             session_token_bytes: Vec::new(),
             session: Default::default(),
@@ -590,6 +623,35 @@ mod host_default_tests {
         assert_eq!(resolved.host, crate::config::CCP_HOSTS[0]);
     }
 
+    /// And a reconnect logs in under the settings the session opened under.
+    ///
+    /// Built inline, they were `Default::default()`: the first login announced
+    /// what the caller stated and every login after a drop announced whatever
+    /// the environment held, on the same session.
+    #[test]
+    fn a_reconnect_states_what_the_session_opened_under() {
+        let config = EClientConfig {
+            username: "someone".to_string(),
+            password: "secret".to_string(),
+            gateway: crate::settings::GatewaySettings {
+                timezone: Some("America/New_York".to_string()),
+                build: Some("10999".to_string()),
+                execution_reports: Some(crate::settings::ExecutionReportScope::Today),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let auth = caller_auth(&config, &gateway_config(&config));
+        assert_eq!(auth.settings.timezone, "America/New_York");
+        assert_eq!(auth.settings.build, "10999");
+        assert_eq!(
+            auth.settings.execution_reports,
+            crate::settings::ExecutionReportScope::Today,
+            "a reconnect asking for every execution the venue holds is a request \
+             the caller did not make",
+        );
+    }
+
     /// One that is named is used as given.
     #[test]
     fn a_host_that_is_named_is_used() {
@@ -606,6 +668,47 @@ mod host_default_tests {
 #[cfg(test)]
 mod readonly_tests {
     use super::*;
+
+    /// And the calls a caller actually makes are the ones that refuse.
+    ///
+    /// The guard existed and every trading call on this surface reached the
+    /// venue without consulting it: the flag was stored, the helper was tested
+    /// directly, and a session opened read-only placed orders.
+    #[test]
+    fn the_trading_calls_are_the_ones_that_refuse() {
+        let (client, _rx, _shared) = crate::api::client::tests::test_client();
+        client.core.set_readonly(true);
+        let spy = Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() };
+        let order = crate::types::model::Order::limit("BUY", 1.0, 1.00);
+
+        assert!(client.place_order(1, &spy, &order).is_err(), "an order is refused");
+        assert!(client.cancel_order(1, "").is_err(), "a cancel is refused");
+        assert!(client.cancel_order_by_perm_id(1).is_err(), "a cancel by permanent id is refused");
+        assert!(client.req_global_cancel().is_err(), "a global cancel is refused");
+        assert!(
+            client.exercise_options(1, &spy, 1, 1, "", false).is_err(),
+            "an exercise is refused",
+        );
+        // Three orders under one call, and the only trading call that reached
+        // the engine without consulting the flag: it sends through a path of
+        // its own, which the guard did not sit on.
+        assert!(
+            client.place_bracket(&spy, "BUY", 1.0, 100.0, 110.0, 90.0).is_err(),
+            "a bracket is refused",
+        );
+    }
+
+    /// An order is named on the wire by its number, and a cancel that names
+    /// one the venue cannot have holds nothing back: cast unchecked, -1 left
+    /// as a cancel for the largest number there is.
+    #[test]
+    fn a_cancel_names_a_number_the_venue_could_have_handed_out() {
+        let (client, _rx, _shared) = crate::api::client::tests::test_client();
+        for absurd in [-1_i64, 0, i64::MIN] {
+            assert!(client.cancel_order(absurd, "").is_err(), "{absurd} was sent");
+        }
+        assert!(client.cancel_order(1, "").is_ok(), "an ordinary one still goes");
+    }
 
     /// A session meant only to look refuses to place, change or withdraw an
     /// order. The other client here has taken this on connect all along; a

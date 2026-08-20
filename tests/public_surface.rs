@@ -45,11 +45,9 @@ fn every_published_name_still_resolves() {
     let _ = ibx::client_core::parse_algo_params("", &[]);
     let _ = ibx::types::model::contract_identity("", 0.0, "", "", "");
 
-    // Handing the open connections to the loop. `Gateway::into_hot_loop` was
-    // the name for this and is gone: it returned a hidden type a caller can do
-    // nothing with, and keeping it made the session module name the engine
-    // while the engine was already naming the session — a cycle for a method
-    // nobody could call.
+    // Handing the open connections to the loop is named on the engine, where
+    // what it builds lives. Named on the session module instead, that module
+    // named the engine while the engine was already naming the session.
     let _built_by_the_engine = ibx::engine::hot_loop::HotLoop::for_session;
 }
 

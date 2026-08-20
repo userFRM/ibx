@@ -18,6 +18,9 @@ use super::super::contract::{Contract, ContractDescription, ContractDetails, Bar
 use super::super::tick_types::*;
 use super::super::super::types::PRICE_SCALE_F;
 
+/// Tick type 13: the venue's model computation.
+const MODEL_OPTION_COMPUTATION: i32 = 13;
+
 /// Call a Python wrapper method, catching and logging an ordinary exception instead of
 /// propagating it so one bad callback cannot kill the dispatch loop.
 /// `KeyboardInterrupt`,
@@ -67,6 +70,13 @@ impl EClient {
             // and sets connected=true; storing false afterwards would clobber
             // the new session's state.
             self.connected.store(false, Ordering::Release);
+            // A loss the engine is still working on and one it has abandoned
+            // are the same event; only the second records why the session
+            // finished. Taken as the end either way, a caller lost the
+            // recovery the engine was in the middle of.
+            if shared.reference.session_over().is_some() {
+                self.session_ended.store(true, Ordering::Release);
+            }
             call_wrapper!(self.wrapper, py, "error", (-1i64, 1100i64, "Connectivity between client and server has been lost", ""));
         }
         // A session the caller ended is not a session that was lost, and is
@@ -76,6 +86,7 @@ impl EClient {
         // down on connectivity loss stood down on the session it had closed.
         if events.iter().any(|e| matches!(e, Event::Stopped)) {
             self.connected.store(false, Ordering::Release);
+            self.session_ended.store(true, Ordering::Release);
         }
         // 1102 rather than 1101: the reconnect re-establishes the
         // subscriptions itself, so the caller has nothing to re-request. A
@@ -85,22 +96,56 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "error", (-1i64, 1102i64, "Connectivity between client and server has been restored - data maintained", ""));
         }
 
+        // The status that came with the same report, so one execution report
+        // produces one `orderStatus` and not two. The engine announces the fill
+        // and the order's resulting status together; emitting them separately
+        // reports one execution twice, the second at no price.
+        let mut paired: std::collections::HashMap<u64, crate::types::OrderUpdate> =
+            shared.orders.drain_order_updates().into_iter()
+                .map(|u| (u.order_id, u))
+                .collect();
+
         // Drain fills -> execDetails + orderStatus
         let fills = shared.orders.drain_fills();
         for fill in fills {
-            let req_id = self.core.instrument_to_req.lock().unwrap()
-                .get(&fill.instrument).copied().unwrap_or(-1);
+            // A fill nobody asked for is numbered -1. The reference wrapper
+            // decides a fill is live by the request id not matching one it is
+            // waiting on, so any other id files the fill as the answer to that
+            // request and suppresses the fill event.
+            let req_id = -1i64;
+            // The venue's two words for a side, which is what the reference
+            // client hands a caller and what the rest of this client already
+            // reports. A short sale is sold: the venue states no third word.
             let side_str = match fill.side {
-                Side::Buy => "BUY",
-                Side::Sell => "SELL",
-                Side::ShortSell => "SSHORT",
+                Side::Buy => "BOT",
+                Side::Sell | Side::ShortSell => "SLD",
             };
             let price = fill.price as f64 / PRICE_SCALE_F;
             let commission = fill.commission as f64 / PRICE_SCALE_F;
 
-            let status = if fill.remaining == 0 { "Filled" } else { "PartiallyFilled" };
-            // A fill emits its own order_status and never reaches the branch
-            // below, so the client's record has to be preferred here too.
+            // Same report, not merely the same order. A pass can carry an
+            // acknowledgement and a fill for one order, and those are two
+            // reports: paired on the order alone, the fill took the
+            // acknowledgement's status and the order never reported as filled.
+            // The report they share is the one whose quantities agree.
+            let with_it = paired
+                .get(&fill.order_id)
+                .filter(|u| {
+                    u.remaining_qty == fill.remaining as f64
+                        && u.filled_qty == fill.cum_qty as f64
+                })
+                .map(|u| u.order_id)
+                .and_then(|id| paired.remove(&id));
+            // The status the report carries. Derived from the remaining
+            // quantity only when the report states none.
+            let status = with_it
+                .map(|u| order_status_str(u.status))
+                .unwrap_or(if fill.remaining == 0 { "Filled" } else { "Submitted" });
+            if let Some(u) = with_it {
+                self.core.update_order_status(
+                    shared, u.order_id, u.status, u.filled_qty, u.remaining_qty,
+                );
+            }
             let (perm_id, parent_id) = self.core.perm_and_parent(shared, fill.order_id);
             // `filled` and `avgFillPrice` describe the order so far;
             // `lastFillPrice` describes this print.
@@ -149,12 +194,23 @@ impl EClient {
                 shares: fill.qty as f64,
                 price,
                 order_id: fill.order_id as i64,
+                // The order's own permanent number and the client that placed
+                // it, as the callback below carries them. Stored as zero, a
+                // request filtered by client matched nothing at all, and the
+                // same fill replayed named no client and no permanent id.
+                perm_id,
+                client_id: self.client_id.load(Ordering::Acquire) as i64,
                 cum_qty,
                 avg_price,
                 ..Default::default()
             };
+            // What the contract is priced in, which is what its costs are
+            // charged in. Named as dollars regardless, a fill on a contract
+            // priced in anything else carried a figure and a currency that
+            // never went together.
+            let commission_currency = api_contract.currency.clone();
             let api_commission = ApiCommissionAndFeesReport::charged(
-                &exec_id, commission, &api_contract.currency,
+                &exec_id, commission, &commission_currency,
             );
 
             // Build Python contract for callback
@@ -193,7 +249,7 @@ impl EClient {
             let report = CommissionAndFeesReport {
                 exec_id,
                 commission_and_fees: commission,
-                currency: "USD".to_string(),
+                currency: commission_currency,
                 realized_pnl: f64::MAX,
                 yield_amount: f64::MAX,
                 yield_redemption_date: String::new(),
@@ -202,8 +258,9 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "commission_and_fees_report", (&report_py,));
         }
 
-        // Drain order updates -> orderStatus
-        let updates = shared.orders.drain_order_updates();
+        // What is left: a status change with no fill on the same report.
+        let mut updates: Vec<_> = paired.into_values().collect();
+        updates.sort_by_key(|u| u.order_id);
         for update in updates {
             let status = order_status_str(update.status);
             // The engine reads no parent from the report, but this client
@@ -229,7 +286,7 @@ impl EClient {
                 let contract_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
                 let order_py = Py::new(
                     py,
-                    Order::from_api(&tracked.order, self.client_id.load(Ordering::Acquire)),
+                    Order::from_api(py, &tracked.order, self.client_id.load(Ordering::Acquire))?,
                 )?.into_any();
                 let state_py = Py::new(py, OrderState {
                     status: status.to_string(),
@@ -268,11 +325,24 @@ impl EClient {
         }
 
         for comp in shared.market.drain_option_computations() {
-            let req_id = comp.answers
-                .unwrap_or_else(|| self.core.req_id_for_instrument(comp.instrument));
-            call_wrapper!(self.wrapper, py, "tick_option_computation",
-                (req_id, 13i32, 0i32, comp.implied_vol, comp.delta, comp.opt_price,
-                 comp.pv_dividend, comp.gamma, comp.vega, comp.theta, comp.und_price));
+            // A locally solved calculation answers the request that asked for
+            // it. The venue's model belongs to the contract, so it goes to
+            // every request watching that contract.
+            let to: Vec<i64> = match comp.answers {
+                Some(asked) => vec![asked],
+                None => {
+                    let owner = self.core.req_id_for_instrument(comp.instrument);
+                    std::iter::once(owner)
+                        .chain(self.core.followers_of(comp.instrument))
+                        .collect()
+                }
+            };
+            for req_id in to {
+                call_wrapper!(self.wrapper, py, "tick_option_computation",
+                    (req_id, MODEL_OPTION_COMPUTATION, 0i32, comp.implied_vol, comp.delta,
+                     comp.opt_price, comp.pv_dividend, comp.gamma, comp.vega, comp.theta,
+                     comp.und_price));
+            }
         }
 
         // Drain cancel rejects -> error
@@ -317,6 +387,11 @@ impl EClient {
                     }
                 }
             }
+            for tick in &result.generic_ticks {
+                for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
+                    call_wrapper!(self.wrapper, py, "tick_generic", (id, tick.tick_type, tick.value));
+                }
+            }
             for st in &result.string_ticks {
                 for id in std::iter::once(st.req_id).chain(watchers.iter().copied()) {
                     call_wrapper!(self.wrapper, py, "tick_string", (id, st.tick_type, st.value.as_str()));
@@ -324,7 +399,14 @@ impl EClient {
             }
             if let Some(ts) = &result.timestamp {
                 let ts_secs = ts.timestamp_ns / 1_000_000_000;
-                call_wrapper!(self.wrapper, py, "tick_string", (ts.req_id, TICK_LAST_TIMESTAMP, ts_secs.to_string().as_str()));
+                // To everyone watching this contract, as the prices and the
+                // other strings above are. Sent to the request that made the
+                // subscription alone, a second caller on the same contract had
+                // every tick but the one that says when the last trade
+                // happened, and could not tell a live print from a stale one.
+                for id in std::iter::once(ts.req_id).chain(watchers.iter().copied()) {
+                    call_wrapper!(self.wrapper, py, "tick_string", (id, TICK_LAST_TIMESTAMP, ts_secs.to_string().as_str()));
+                }
             }
             if self.core.check_snapshot_done(
                 req_id, result.delivered,
@@ -353,7 +435,12 @@ impl EClient {
                 unreported: trade.unreported,
             };
             let attrib_obj = Py::new(py, attrib)?.into_any();
-            call_wrapper!(self.wrapper, py, "tick_by_tick_all_last", (req_id, 1i32, trade.timestamp as i64, price, size,
+            // The stream this request asked for. Stated as 1 whichever it was,
+            // a caller subscribed to every print was told each of them came
+            // from the exchange, and one holding both subscriptions could not
+            // tell the two apart.
+            let kind = self.tbt_kind.lock().unwrap().get(&req_id).copied().unwrap_or(1);
+            call_wrapper!(self.wrapper, py, "tick_by_tick_all_last", (req_id, kind, trade.timestamp as i64, price, size,
                  &attrib_obj, trade.exchange.as_str(), trade.conditions.as_str()));
         }
 
@@ -390,8 +477,14 @@ impl EClient {
         let news_items = shared.market.drain_tick_news();
         for news in news_items {
             let req_id = self.core.req_id_for_instrument(news.instrument);
-            call_wrapper!(self.wrapper, py, "tick_news", (req_id, news.timestamp as i64, news.provider_code.as_str(),
-                 news.article_id.as_str(), news.headline.as_str(), ""));
+            // Once per caller watching the contract, as its quotes already
+            // are. The owner alone was told, so a second subscription on the
+            // same contract heard no news at all.
+            let watchers = self.core.followers_of(news.instrument);
+            for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
+                call_wrapper!(self.wrapper, py, "tick_news", (id, news.timestamp as i64, news.provider_code.as_str(),
+                     news.article_id.as_str(), news.headline.as_str(), ""));
+            }
         }
 
         // Drain news bulletins -> updateNewsBulletin
@@ -412,7 +505,7 @@ impl EClient {
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {
                 let c = Contract::from_api(&t.contract);
-                let o = Order::from_api(&t.order, self.client_id.load(Ordering::Acquire));
+                let o = Order::from_api(py, &t.order, self.client_id.load(Ordering::Acquire))?;
                 (Py::new(py, c)?.into_any(), Py::new(py, o)?.into_any())
             } else {
                 (Py::new(py, Contract::default())?.into_any(),
@@ -605,45 +698,63 @@ impl EClient {
         let hist_ticks = shared.reference.drain_historical_ticks();
         for (req_id, data, _what, done) in hist_ticks {
             // The venue states the moment as it spells it; the reference client
-            // states it in seconds. One that cannot be read back is handed over
-            // as nothing rather than as an instant in 1970.
-            let at = |stated: &str| crate::protocol::datetime::ib_datetime_to_unix(stated).unwrap_or(0);
+            // states it in seconds, and a record's moment is an integer there
+            // with no room to say "unreadable". A stamp that cannot be read
+            // back leaves the tick out rather than putting it in 1970: a
+            // caller charting the series would otherwise see a print half a
+            // century before the market it asked about.
+            let at = crate::protocol::datetime::ib_datetime_to_unix;
+            let dropped = std::cell::Cell::new(0usize);
             match data {
                 crate::types::HistoricalTickData::Midpoint(ticks) => {
-                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTick> = ticks.iter().map(|t| crate::python::compat::tick_types::HistoricalTick {
-                        time: at(&t.time),
+                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTick> = ticks.iter().filter_map(|t| Some(crate::python::compat::tick_types::HistoricalTick {
+                        time: at(&t.time).or_else(|| { dropped.set(dropped.get() + 1); None })?,
                         price: t.price,
                         // A midpoint has no size, and the reference client
                         // states zero for it.
                         size: 0.0,
-                    }).collect();
+                    })).collect();
                     let list = pyo3::types::PyList::new(py, py_ticks)?;
                     call_wrapper!(self.wrapper, py, "historical_ticks", (req_id as i64, list, done));
                 }
                 crate::types::HistoricalTickData::Last(ticks) => {
-                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTickLast> = ticks.iter().map(|t| crate::python::compat::tick_types::HistoricalTickLast {
-                        time: at(&t.time),
+                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTickLast> = ticks.iter().filter_map(|t| Some(crate::python::compat::tick_types::HistoricalTickLast {
+                        time: at(&t.time).or_else(|| { dropped.set(dropped.get() + 1); None })?,
                         tick_attrib_last: Default::default(),
                         price: t.price,
                         size: t.size as f64,
                         exchange: t.exchange.clone(),
                         special_conditions: t.special_conditions.clone(),
-                    }).collect();
+                    })).collect();
                     let list = pyo3::types::PyList::new(py, py_ticks)?;
                     call_wrapper!(self.wrapper, py, "historical_ticks_last", (req_id as i64, list, done));
                 }
                 crate::types::HistoricalTickData::BidAsk(ticks) => {
-                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTickBidAsk> = ticks.iter().map(|t| crate::python::compat::tick_types::HistoricalTickBidAsk {
-                        time: at(&t.time),
+                    let py_ticks: Vec<crate::python::compat::tick_types::HistoricalTickBidAsk> = ticks.iter().filter_map(|t| Some(crate::python::compat::tick_types::HistoricalTickBidAsk {
+                        time: at(&t.time).or_else(|| { dropped.set(dropped.get() + 1); None })?,
                         tick_attrib_bid_ask: Default::default(),
                         price_bid: t.bid_price,
                         price_ask: t.ask_price,
                         size_bid: t.bid_size as f64,
                         size_ask: t.ask_size as f64,
-                    }).collect();
+                    })).collect();
                     let list = pyo3::types::PyList::new(py, py_ticks)?;
                     call_wrapper!(self.wrapper, py, "historical_ticks_bid_ask", (req_id as i64, list, done));
                 }
+            }
+            if dropped.get() > 0 {
+                // Told to the caller, not only to the log. A shortened series
+                // and a complete one look the same to a program charting it,
+                // and the difference is prints that happened and are not
+                // there. Under the number this client reports a request it
+                // could not make sense of.
+                let why = format!(
+                    "{} historical tick(s) state a moment that cannot be read back, and are \
+                     left out of this answer rather than dated to 1970",
+                    dropped.get(),
+                );
+                call_wrapper!(self.wrapper, py, "error",
+                    (req_id as i64, crate::error_codes::Refusal::VALIDATION as i64, why.as_str(), ""));
             }
         }
 
@@ -653,11 +764,9 @@ impl EClient {
         for (req_id, bar) in rtbars {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
                 // keepUpToDate bar → dispatch as historical_data_update
-                // The moment the bar opened, in seconds since the epoch. The
-                // bars of the initial answer carry the venue's own stamp in
-                // the venue's own zone; a bar still forming is stamped here,
-                // and a zone this client invented for it would be a claim
-                // about a time zone rather than a time.
+                // Bar open time, in seconds since the epoch. Bars of the
+                // initial answer carry the venue's stamp and zone; a bar still
+                // forming is stamped locally and states no zone.
                 let bar_obj = BarData::new(
                     format!("{}", bar.timestamp), bar.open, bar.high, bar.low, bar.close,
                     bar.volume as i64, bar.wap, bar.count,
@@ -735,13 +844,12 @@ impl EClient {
         {
             let acct_name = self.account();
             if let Some(batch) = self.core.prepare_account_summary(shared, acct_name.as_str()) {
-                let tags_orig = self.core.account_summary_req.lock().unwrap().clone();
-                let tags_list = tags_orig.map(|(_, t)| t).unwrap_or_default();
-                if tags_list.is_empty() || tags_list.iter().any(|t| t == "AccountType") {
-                    call_wrapper!(self.wrapper, py, "account_summary", (batch.req_id, acct_name.as_str(), "AccountType", "INDIVIDUAL", ""));
-                }
+                // The account type rides the batch with every other figure, as
+                // the venue stated it. A fixed "INDIVIDUAL" misreports the
+                // advisor and institutional accounts, which are the ones the
+                // answer decides something for.
                 for entry in &batch.entries {
-                    call_wrapper!(self.wrapper, py, "account_summary", (batch.req_id, acct_name.as_str(), entry.tag, entry.value.as_str(), entry.currency.as_str()));
+                    call_wrapper!(self.wrapper, py, "account_summary", (batch.req_id, acct_name.as_str(), entry.tag.as_str(), entry.value.as_str(), entry.currency.as_str()));
                 }
                 call_wrapper!(self.wrapper, py, "account_summary_end", (batch.req_id,));
             }

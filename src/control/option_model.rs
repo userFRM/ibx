@@ -1,16 +1,15 @@
 //! Solving an option for its volatility, or for its price.
 //!
-//! Neither is a request this protocol carries. The counterpart works both out
-//! in its own process, with a pricing model it ships — so a client that only
-//! speaks the wire has nothing to ask for and must do the same arithmetic or
-//! refuse.
+//! Neither is a request this protocol carries. Both are computed client-side
+//! from a pricing model, so a client has nothing to ask the venue for and must
+//! do the arithmetic or refuse.
 //!
 //! What is done here is not a model of this library's own devising, and it is
 //! not seeded with numbers of its own. The venue states its own model for a
 //! contract — the volatility it used, the price that came out, the underlying
 //! it used and the dividends it took off — and that statement is what this is
 //! anchored to: the one number the venue does not state, the rate, is solved
-//! for until the model reproduces the venue's own price exactly. A caller's
+//! for until the model reproduces the venue's price exactly. A caller's
 //! question is then answered as a change to that, not as an opinion.
 //!
 //! With no such statement in hand, nothing is answered. A price worked out
@@ -103,15 +102,15 @@ fn exercise_value(terms: OptionTerms, underlying: f64) -> f64 {
     }
 }
 
-/// The carry that makes this model reproduce the venue's own price from the
-/// venue's own volatility.
+/// The carry that makes this model reproduce the venue's price from the
+/// venue's volatility.
 ///
 /// **Not the venue's interest rate, and not presented as one.** It is a
 /// fitting number: whatever this model needs so that its price for a contract
 /// matches the price the venue published for it. Anything the venue's model
 /// does that this one does not — a different tree, dividends taken discretely,
 /// a borrow cost — is absorbed here, which is exactly what makes a caller's
-/// question answerable as a change to the venue's own answer.
+/// question answerable as a change to the venue's answer.
 ///
 /// That it is a fit and not a rate is visible on the wire: two contracts on
 /// one underlying, one expiry, one minute, wanted five per cent and twenty per
@@ -148,7 +147,7 @@ pub fn carry_that_matches_the_venue(terms: OptionTerms, model: VenueModel) -> Op
     })
 }
 
-/// What volatility a caller's price implies, under the venue's own model.
+/// What volatility a caller's price implies, under the venue's model.
 pub fn implied_volatility(
     terms: OptionTerms,
     model: VenueModel,
@@ -178,7 +177,7 @@ pub fn implied_volatility(
     })
 }
 
-/// What price a caller's volatility implies, under the venue's own model.
+/// What price a caller's volatility implies, under the venue's model.
 pub fn option_price(
     terms: OptionTerms,
     model: VenueModel,
@@ -279,7 +278,7 @@ mod tests {
     }
 
     /// A caller's price gives back the volatility that produces it, and the
-    /// venue's own price gives back the venue's own volatility.
+    /// venue's price gives back the venue's volatility.
     #[test]
     fn a_price_gives_back_its_volatility() {
         let terms = call(100.0, 1.0);
@@ -291,7 +290,7 @@ mod tests {
             present_value_of_dividends: 1.5,
         };
         let same = implied_volatility(terms, model, venue_price, 100.0).expect("it solves");
-        assert!((same - 0.25).abs() < 1e-3, "the venue's own price gave {same}");
+        assert!((same - 0.25).abs() < 1e-3, "the venue's price gave {same}");
 
         let dearer = implied_volatility(terms, model, venue_price * 1.2, 100.0).expect("it solves");
         assert!(dearer > 0.25, "a dearer option implies more volatility, not {dearer}");

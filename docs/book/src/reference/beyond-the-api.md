@@ -20,7 +20,7 @@ grants = client.enabled_features()          # 302 on the session this was writte
 
 They decide behaviour. `island_for_nasdaq` — whether a US stock trading on
 Nasdaq is named by the older spelling — takes this grant as well as the
-setting, which is how the counterpart decides it: it reads the same token off
+setting, which is how it is decided: the same token is read off
 the same list at logon and holds it beside the setting.
 
 ## Which orders the venue will take
@@ -76,7 +76,7 @@ client that speaks the venue's protocol receives it directly, so it is here.
 
 Two consequences worth stating plainly:
 
-- **None of this is derived.** Every figure above is the venue's own statement,
+- **None of this is derived.** Every figure above is stated by the venue,
   read off the session. Nothing here computes what the venue did not say.
 - **It is not portable.** A program using these calls will not run against a
   gateway, because a gateway has no message to carry them. They are the part of

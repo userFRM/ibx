@@ -26,8 +26,8 @@ fn a_recent_second() -> u64 {
 
 #[pymethods]
 impl EClient {
-    /// Seed the venue's own model for a contract, as a market-data
-    /// subscription does when it publishes tick 13.
+    /// Seed the venue's model for a contract, as a market-data subscription
+    /// does when it publishes tick 13.
     #[doc(hidden)]
     fn _test_push_option_model(
         &self, instrument: u32, implied_vol: f64, opt_price: f64, und_price: f64,
@@ -44,6 +44,44 @@ impl EClient {
         Ok(())
     }
 
+    /// Publish a headline about a contract, as a news subscription does.
+    #[doc(hidden)]
+    fn _test_push_tick_news(
+        &self, instrument: u32, provider_code: &str, article_id: &str, headline: &str,
+    ) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.market.push_tick_news(crate::types::TickNews {
+            instrument,
+            provider_code: provider_code.to_string(),
+            article_id: article_id.to_string(),
+            headline: headline.to_string(),
+            timestamp: 1_700_000_000,
+        });
+        Ok(())
+    }
+
+    /// Seed the reference data the logon burst carries, so a test can tell a
+    /// request that delivers it from one that always answers empty.
+    #[doc(hidden)]
+    fn _test_note_reference_data(
+        &self, bit_number: i32, exchange: &str, exchange_letter: &str,
+        tier_name: &str, tier_val: &str, branding_id: &str,
+    ) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.reference.set_smart_components(vec![crate::types::SmartComponent {
+            bit_number,
+            exchange: exchange.to_string(),
+            exchange_letter: exchange_letter.to_string(),
+        }]);
+        shared.reference.set_soft_dollar_tiers(vec![crate::types::SoftDollarTier {
+            name: tier_name.to_string(),
+            val: tier_val.to_string(),
+            display_name: tier_name.to_string(),
+        }]);
+        shared.reference.set_white_branding_id(branding_id.to_string());
+        Ok(())
+    }
+
     /// Name the client this session connected under, as `connect` does.
     #[doc(hidden)]
     fn _test_set_client_id(&self, client_id: i32) {
@@ -52,13 +90,20 @@ impl EClient {
 
     /// Create a fake "connected" EClient backed by a SharedState + channel.
     #[doc(hidden)]
-    #[pyo3(signature = (account_id="TEST123".to_string(), readonly=false))]
-    fn _test_connect(&self, account_id: String, readonly: bool) -> PyResult<()> {
+    #[pyo3(signature = (account_id="TEST123".to_string(), readonly=false, replay_done=true))]
+    fn _test_connect(&self, account_id: String, readonly: bool, replay_done: bool) -> PyResult<()> {
         self.core.set_readonly(readonly);
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
         let shared = Arc::new(SharedState::new());
+        // No venue behind a test session, so the replay of what the account
+        // already has on is over before it starts. Left unsaid, every request
+        // for the open orders waits out the bound before answering. A test of
+        // that wait itself asks for a session that has not had it yet.
+        if replay_done {
+            shared.orders.set_replay_done();
+        }
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
         *self.shared.lock().unwrap() = Some(shared);
@@ -72,6 +117,7 @@ impl EClient {
         // connected.
         *self._test_control_rx.lock().unwrap() = Some(rx);
         self.next_order_id.store(1000, Ordering::Relaxed);
+        self.session_ended.store(false, Ordering::Release);
         self.connected.store(true, Ordering::Release);
         Ok(())
     }
@@ -237,18 +283,19 @@ impl EClient {
     #[doc(hidden)]
     #[pyo3(signature = (
         order_id, instrument, symbol, action, total_quantity, lmt_price, parent_id=0,
+        currency="USD",
     ))]
     fn _test_track_order(
         &self, order_id: u64, instrument: u32,
         symbol: &str, action: &str, total_quantity: f64, lmt_price: f64,
-        parent_id: i64,
+        parent_id: i64, currency: &str,
     ) -> PyResult<()> {
         use crate::types::model::{Contract as ApiContract, Order as ApiOrder};
         let contract = ApiContract {
             symbol: symbol.to_string(),
             sec_type: "STK".into(),
             exchange: "SMART".into(),
-            currency: "USD".into(),
+            currency: currency.to_string(),
             ..Default::default()
         };
         let order = ApiOrder {
@@ -305,6 +352,19 @@ impl EClient {
         shared.orders.push_cancel_reject(CancelReject {
             order_id, instrument, reject_type: 1, reason_code, timestamp_ns: 100,
         });
+        Ok(())
+    }
+
+    /// Say which trade stream a tick-by-tick request asked for, as
+    /// `req_tick_by_tick_data` records it when the subscription is made.
+    #[doc(hidden)]
+    fn _test_set_tbt_kind(&self, req_id: i64, tick_type: &str) -> PyResult<()> {
+        let kind = match tick_type {
+            "AllLast" => 2,
+            "Last" => 1,
+            other => return Err(PyRuntimeError::new_err(format!("no such trade stream: {other}"))),
+        };
+        self.tbt_kind.lock().unwrap().insert(req_id, kind);
         Ok(())
     }
 
@@ -431,6 +491,47 @@ impl EClient {
         Ok(())
     }
 
+    /// Say the venue has finished naming the orders already working.
+    #[doc(hidden)]
+    fn _test_finish_order_replay(&self) -> PyResult<()> {
+        self.shared_state()?.orders.set_replay_done();
+        Ok(())
+    }
+
+    /// Push historical trade ticks, each stating its moment the way the venue
+    /// spells one.
+    #[doc(hidden)]
+    fn _test_push_historical_ticks(&self, req_id: u32, times: Vec<String>) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        let ticks = times.into_iter().enumerate().map(|(i, time)| crate::types::HistoricalTickLast {
+            time,
+            price: 100.0 + i as f64,
+            size: 1,
+            exchange: "NYSE".into(),
+            special_conditions: String::new(),
+        }).collect();
+        shared.reference.push_historical_ticks(
+            req_id, crate::types::HistoricalTickData::Last(ticks), "TRADES".into(), true,
+        );
+        Ok(())
+    }
+
+    /// Add a second request watching a contract someone else subscribed to,
+    /// as a shared subscription does.
+    #[doc(hidden)]
+    fn _test_follow_instrument(&self, req_id: i64, instrument: u32) {
+        self.core.instrument_followers.lock().unwrap()
+            .entry(instrument).or_default().push(req_id);
+    }
+
+    /// State one account figure the way the venue states it, under its own
+    /// key and in its own currency.
+    #[doc(hidden)]
+    fn _test_note_account_value(&self, key: &str, value: &str, currency: &str) -> PyResult<()> {
+        self.shared_state()?.portfolio.note_account_value(key, value, currency);
+        Ok(())
+    }
+
     /// Push a position into SharedState.
     #[doc(hidden)]
     fn _test_set_position(&self, con_id: i64, position: f64, avg_cost: f64) -> PyResult<()> {
@@ -450,12 +551,19 @@ impl EClient {
     }
 
     #[doc(hidden)]
-    fn _test_push_contract_details(&self, req_id: u32, con_id: u32, symbol: &str) -> PyResult<()> {
+    #[pyo3(signature = (req_id, con_id, symbol, right=""))]
+    fn _test_push_contract_details(&self, req_id: u32, con_id: u32, symbol: &str, right: &str) -> PyResult<()> {
+        use crate::control::contracts::OptionRight;
         let shared = self.shared.lock().unwrap().clone()
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("not connected"))?;
         let def = crate::control::contracts::ContractDefinition {
             con_id,
             symbol: symbol.to_string(),
+            right: match right {
+                "C" => Some(OptionRight::Call),
+                "P" => Some(OptionRight::Put),
+                _ => None,
+            },
             ..Default::default()
         };
         shared.reference.push_contract_details(req_id, def);
@@ -484,6 +592,14 @@ impl EClient {
         let tx = self._test_event_tx.lock().unwrap();
         let tx = tx.as_ref().ok_or_else(|| PyRuntimeError::new_err("No event channel"))?;
         tx.send(Event::Disconnected).map_err(|e| PyRuntimeError::new_err(format!("{e}")))
+    }
+
+    /// Inject an `Event::Reconnected` — a transport carrying again (test-only).
+    #[doc(hidden)]
+    fn _test_push_reconnect_event(&self) -> PyResult<()> {
+        let tx = self._test_event_tx.lock().unwrap();
+        let tx = tx.as_ref().ok_or_else(|| PyRuntimeError::new_err("No event channel"))?;
+        tx.send(Event::Reconnected).map_err(|e| PyRuntimeError::new_err(format!("{e}")))
     }
 
     /// Inject an `Event::Stopped` — a session the caller ended (test-only).

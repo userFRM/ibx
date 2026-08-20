@@ -252,17 +252,32 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
 
     // The hot loop should exit on its own after detecting disconnect
     let _ = control_tx.send(ControlCommand::Shutdown);
-    let result = join.join();
-    assert!(result.is_ok(), "Hot loop should not panic on connection drop");
+    let mut hl = join.join().expect("Hot loop should not panic on connection drop");
 
-    // Reconnect real farm for remaining tests
-    let (farm, ccp, hmds) = match Gateway::connect(config) {
-        Ok(gateway::Session { gateway: _gw2, market_data: f, trading: c, historical: h, .. }) => {
-            println!("  Reconnected to IB for remaining tests");
-            (f, c, h)
+    // What the engine rebuilt, on the session that is already open. This threw
+    // the real auth and historical connections away and opened a second
+    // gateway session to get a farm back — a second logon on an account that
+    // allows one, which the venue answers by dropping whatever the suite was
+    // still holding. Every phase after it then ran on connections belonging to
+    // a session the run had itself evicted.
+    let (farm, ccp, hmds) = match (hl.farm_conn.take(), hl.ccp_conn.take()) {
+        (Some(f), Some(c)) => {
+            println!("  the engine rebuilt the farm on the session already open");
+            (f, c, hl.hmds_conn.take())
         }
-        Err(e) => {
-            panic!("Cannot continue compat suite without farm connection: {e}");
+        // The engine did not bring it back inside the wait. Opening a session
+        // is the last resort it always was, and it says so rather than looking
+        // like the recovery this phase is named for.
+        (rebuilt, ccp) => {
+            println!(
+                "  the engine did not rebuild the farm within the wait (farm={}, auth={}); \
+                 opening a session to carry the rest of the run",
+                rebuilt.is_some(), ccp.is_some(),
+            );
+            match Gateway::connect(config) {
+                Ok(gateway::Session { gateway: _gw2, market_data: f, trading: c, historical: h, .. }) => (f, c, h),
+                Err(e) => panic!("Cannot continue compat suite without farm connection: {e}"),
+            }
         }
     };
 
@@ -281,7 +296,13 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
 }
 
 pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _config: &GatewayConfig) -> Conns {
-    println!("--- Phase 105: Reconnection with State Recovery ---");
+    // Named for a reconnection it does not perform: nothing is disconnected
+    // here. The engine is stopped, its transports are reclaimed, and a second
+    // engine is built over the same ones — so what this shows is that a fresh
+    // engine subscribes again and the ticks resume on transports that never
+    // went away. A transport actually dropped and rebuilt is what Phase 96
+    // covers.
+    println!("--- Phase 105: A second engine over the same transports subscribes again ---");
 
     // Step 1: subscribe to market data and confirm ticks arrive
     let account_id = conns.account_id;
@@ -291,7 +312,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
         shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -301,7 +322,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
         if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) { got_ticks = true; break; }
     }
 
-    // Shutdown the hot loop to simulate "disconnect"
+    // Stop the engine and take its transports back
     let conns1 = shutdown_and_reclaim(&control_tx, join, account_id.clone());
 
     if !got_ticks {
@@ -311,7 +332,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
 
     println!("  Step 1: Got ticks before disconnect");
 
-    // Step 2: Reconnect with fresh connections and verify ticks resume
+    // Step 2: a second engine over the reclaimed transports, and ticks resume
     let shared2 = Arc::new(SharedState::new());
     let (event_tx2, event_rx2) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop2, control_tx2) = HotLoop::with_connections(
@@ -319,7 +340,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
         conns1.farm, conns1.ccp, conns1.hmds, None,
     );
 
-    control_tx2.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx2.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join2 = run_hot_loop(hot_loop2);
 
     let deadline2 = Instant::now() + Duration::from_secs(15);
@@ -337,7 +358,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
 
     let conns2 = shutdown_and_reclaim(&control_tx2, join2, conns1.account_id);
 
-    assert!(got_ticks_after, "Should receive ticks after reconnection");
+    assert!(got_ticks_after, "the second engine subscribed and no tick followed");
     println!("  PASS\n");
     conns2
 }
@@ -386,7 +407,7 @@ pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
     let join = run_hot_loop(hot_loop);
 
     // Register 3 instruments via ControlCommand channel (not context_mut)
-    control_tx.send(ControlCommand::RegisterInstrument { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: String::new(), exchange: String::new(), ..Default::default() }, identity: String::new(), reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::RegisterInstrument { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: String::new(), ..Default::default() }, identity: String::new(), reply_tx: None }).unwrap();
     control_tx.send(ControlCommand::RegisterInstrument { contract: ibx::types::ContractRef { con_id: 265598, symbol: "AAPL".to_string(), sec_type: String::new(), exchange: String::new(), ..Default::default() }, identity: String::new(), reply_tx: None }).unwrap();
     control_tx.send(ControlCommand::RegisterInstrument { contract: ibx::types::ContractRef { con_id: 272093, symbol: "MSFT".to_string(), sec_type: String::new(), exchange: String::new(), ..Default::default() }, identity: String::new(), reply_tx: None }).unwrap();
 
@@ -398,7 +419,7 @@ pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
     println!("  Instrument count after 3 registrations: {count}");
 
     // Now subscribe to one of the registered instruments
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
 
     // Wait briefly for any events (subscription confirmation or ticks)
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -432,6 +453,10 @@ pub(super) fn phase_update_param(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Send UpdateParam — hot loop should accept it without crashing
     control_tx.send(ControlCommand::UpdateParam {
@@ -444,7 +469,7 @@ pub(super) fn phase_update_param(conns: Conns) -> Conns {
     // Submit + cancel an order to verify hot loop is still functional after UpdateParam
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -494,7 +519,7 @@ pub(super) fn phase_farm_recovers_with_credentials(
     gw: gateway::Gateway,
     conns: Conns,
     config: &GatewayConfig,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
     println!("--- Phase 96b: Farm recovers on its own (real credentials) ---");
 
     let account_id = conns.account_id.clone();
@@ -527,7 +552,7 @@ pub(super) fn phase_farm_recovers_with_credentials(
     let join = run_hot_loop(hot_loop);
 
     control_tx.send(ControlCommand::Subscribe {
-        contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+        contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
     }).unwrap();
 
     // A tick is the proof. The farm was down before the loop started, so the
@@ -578,5 +603,8 @@ pub(super) fn phase_farm_recovers_with_credentials(
     }
     println!("  data_resumed={ticked} connection_reported_healthy={restored}");
     let _ = shutdown_and_reclaim(&control_tx, join, account_id);
-    (ticked && order_acked, restored)
+    // Three separate facts. Folding the order into the data result reported a
+    // farm that never resumed whenever an order was refused, which names the
+    // wrong cause and hides the right one.
+    (ticked, order_acked, restored)
 }

@@ -19,7 +19,7 @@ use crate::types::model::{Contract, Execution, Order, OrderState};
 /// Where an order stands, as the venue last said.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OrderStatus {
-    /// The venue's own word for it.
+    /// Status as the venue reports it.
     pub status: String,
     /// How much has filled.
     pub filled: f64,
@@ -27,20 +27,46 @@ pub struct OrderStatus {
     pub remaining: f64,
     /// What the filled part averaged.
     pub average_price: f64,
-    /// The venue's own number for the order, stable across sessions.
+    /// Order id assigned by the venue. Stable across sessions, unlike the
+    /// client order id.
     pub perm_id: i64,
     /// What the venue said when it would not take the order.
     pub why_held: String,
+    /// The order this one is a child of — the parent of a bracket, or 0.
+    pub parent_id: i64,
+    /// What the last print went off at, as opposed to what the filled part
+    /// averaged.
+    pub last_fill_price: f64,
+    /// Which client placed it, as the venue states it. An order this session
+    /// did not place still reports here, under the client that did; zero where
+    /// the venue named none.
+    pub client_id: i64,
 }
 
-/// Statuses under which an order is still working.
+/// What the venue said about a request, under the number it said it with.
 ///
-/// Taken from what the venue sends rather than inferred: anything not named
-/// here has stopped. Inferring the other way round — treating an unrecognised
-/// status as still working — leaves a program waiting on an order that is gone.
-const WORKING: [&str; 5] = [
-    "PendingSubmit", "PendingCancel", "PreSubmitted", "Submitted", "ApiPending",
-];
+/// A session answers a question with the answer or a refusal, but the venue
+/// also speaks about requests already made — a subscription it will not serve,
+/// a contract it does not recognise, a connection coming and going. Those
+/// arrive with no call waiting on them. Unread, a stream that never prints and
+/// an iterator that never ends are indistinguishable from a quiet market.
+#[derive(Debug, Clone)]
+pub struct Notice {
+    /// The request it answers, or -1 for one that answers no request.
+    pub req_id: i64,
+    /// Error code as the venue reports it.
+    pub code: i64,
+    /// What it said.
+    pub message: String,
+}
+
+impl Notice {
+    /// Whether this remarks on the connection rather than refusing anything.
+    /// The venue numbers those from 2100 to 2200.
+    pub fn is_notice(&self) -> bool {
+        (2100..=2200).contains(&self.code)
+    }
+}
 
 /// One trade against an order.
 #[derive(Debug, Clone)]
@@ -49,12 +75,17 @@ pub struct Fill {
     pub contract: Contract,
     /// The venue's report of the trade.
     pub execution: Execution,
+    /// What the trade cost, once the venue reports it.
+    ///
+    /// The trade and its cost arrive as separate reports matched by execution
+    /// id, in either order. `None` until the second one arrives.
+    pub commission: Option<crate::types::model::CommissionAndFeesReport>,
 }
 
-/// An order and what has become of it.
+/// An order and what has become of it, as of the moment it was read.
 ///
-/// The status changes under a caller holding this, which is what makes it a
-/// trade rather than a receipt.
+/// A copy: the session goes on being told about the order, and this does not
+/// change with it. Read it again for where the order stands now.
 #[derive(Debug, Clone)]
 pub struct Trade {
     /// What is being traded.
@@ -71,8 +102,29 @@ pub struct Trade {
 
 impl Trade {
     /// Whether the venue is still working it.
+    ///
+    /// The same statuses the open-order snapshot is built from, because they
+    /// answer the same question and a second list of them answered it
+    /// differently: a partial fill is reported as its own status, and it was
+    /// missing here, so an order half filled and still working read as
+    /// finished and `wait_done` returned on it.
+    ///
+    /// An order whose status this session lost — a disconnect while it was
+    /// working — is not one that has stopped. It is one nothing can currently
+    /// say has, and saying so would end a caller's wait on an order that may
+    /// still be live. It resolves when the session does.
     pub fn is_active(&self) -> bool {
-        WORKING.contains(&self.status.status.as_str())
+        // A parked order is not a finished one. `Inactive` is where an order
+        // the venue refused and an order it is holding both land, and only the
+        // completed status beside it tells the two apart: the venue states one
+        // for a refusal and leaves it empty for a hold. Reading both as
+        // refusals drops an order the venue may still work from `open_trades`
+        // and returns `wait_done` on it. The open-order snapshot reads the
+        // same way.
+        crate::types::order_status::is_open_or_reactivatable(
+            &self.status.status,
+            self.state.as_ref().map_or("", |state| state.completed_status.as_str()),
+        ) || self.status.status == "Unknown"
     }
 
     /// Whether it has stopped — filled, cancelled or refused.
@@ -84,7 +136,10 @@ impl Trade {
 /// One trade printed on a contract being watched tick by tick.
 #[derive(Debug, Clone)]
 pub struct Tick {
-    /// When it printed, in nanoseconds since the epoch.
+    /// Print time, in seconds since the epoch.
+    ///
+    /// Passed on unscaled, which is the unit the reference client's
+    /// tick-by-tick callbacks carry.
     pub time: i64,
     /// What it printed at.
     pub price: f64,
@@ -92,6 +147,13 @@ pub struct Tick {
     pub size: f64,
     /// Which venue printed it.
     pub exchange: String,
+    /// Whether the trade was outside the venue's limits.
+    pub past_limit: bool,
+    /// Whether it goes unreported to the tape, which is what separates every
+    /// trade from the ones that print.
+    pub unreported: bool,
+    /// Sale condition codes as the venue reports them.
+    pub conditions: String,
 }
 
 /// Something that happened to an order.
@@ -181,6 +243,9 @@ pub struct NewsTick {
     pub article_id: String,
     /// What it says.
     pub headline: String,
+    /// What the provider states alongside it — the tone and the strength of
+    /// it, where the provider states them. Carried as the venue writes it.
+    pub extra: String,
 }
 
 /// One notice the venue broadcast to everybody.
@@ -254,10 +319,26 @@ pub struct LiveState {
     news_streams: Vec<SyncSender<NewsTick>>,
     tick_streams: Vec<(i64, SyncSender<Tick>)>,
     /// Where a caller asked for what happens to orders to be sent.
-    order_streams: Vec<SyncSender<OrderEvent>>,
+    pub(crate) order_streams: Vec<SyncSender<OrderEvent>>,
+    /// What the venue has said about requests, oldest first.
+    notices: Vec<Notice>,
+    /// What each fill cost, by the venue's id for the execution. Held for the
+    /// fill that has not arrived yet, and read by the one that has.
+    commissions: BTreeMap<String, crate::types::model::CommissionAndFeesReport>,
 }
 
+/// How many of the venue's remarks are kept before the oldest is let go.
+///
+/// A caller that never asks is not a reason to grow without limit, and the
+/// newest are the ones that explain what is happening now.
+const NOTICES_KEPT: usize = 256;
+
 impl LiveState {
+    /// What the venue has said about requests, oldest first, and clears them.
+    pub fn take_notices(&mut self) -> Vec<Notice> {
+        std::mem::take(&mut self.notices)
+    }
+
     /// Every order this session knows of, oldest first.
     pub fn trades(&self) -> Vec<Trade> {
         self.trades.values().cloned().collect()
@@ -330,7 +411,21 @@ impl LiveState {
     /// there is no such order — the venue has not answered yet, and the answer
     /// is what creates it.
     pub(crate) fn remember(&mut self, order_id: i64, trade: Trade) {
-        self.trades.entry(order_id).or_insert(trade);
+        match self.trades.get_mut(&order_id) {
+            // The venue can answer before the caller's own record is written:
+            // an order placed and reported inside the same millisecond leaves
+            // a status here first, and a status names neither the contract nor
+            // the order. Overwriting the status-only record instead leaves the
+            // trade naming no instrument. What the venue has said stands; what
+            // only the caller knows is filled in.
+            Some(held) => {
+                held.contract = trade.contract;
+                held.order = trade.order;
+            }
+            None => {
+                self.trades.insert(order_id, trade);
+            }
+        }
         self.changed();
     }
 
@@ -350,7 +445,25 @@ impl LiveState {
             self.values.entry(key).or_insert(value);
         }
         for (id, trade) in other.trades {
-            self.trades.entry(id).or_insert(trade);
+            match self.trades.get_mut(&id) {
+                // As in `remember`: the snapshot names the contract and the
+                // order, and a status arriving while it is being asked for
+                // names neither. Keeping the status-only record discards the
+                // answer that has both.
+                Some(held) => {
+                    held.contract = trade.contract;
+                    held.order = trade.order;
+                    if held.state.is_none() {
+                        held.state = trade.state;
+                    }
+                    if held.status.status.is_empty() {
+                        held.status = trade.status;
+                    }
+                }
+                None => {
+                    self.trades.insert(id, trade);
+                }
+            }
         }
         if self.accounts.is_empty() {
             self.accounts = other.accounts;
@@ -381,8 +494,30 @@ impl LiveState {
     /// Hand an event to everyone still listening, and forget the ones who
     /// stopped: a caller who dropped their stream is not a caller to keep
     /// sending to, and a send that fails is how that is known.
+    ///
+    /// A caller who is merely behind has not stopped. A full buffer and a
+    /// dropped receiver both fail the send, and treating them alike ended the
+    /// stream of anyone who read slower than the venue printed — their iterator
+    /// finished, which is the same thing it does when the session closes, so
+    /// there was no telling a busy moment from a closed session. Behind, the
+    /// event is dropped and the caller kept.
     fn tell<T: Clone>(streams: &mut Vec<SyncSender<T>>, what: &T) {
-        streams.retain(|to| to.try_send(what.clone()).is_ok());
+        streams.retain(|to| !matches!(
+            to.try_send(what.clone()),
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)),
+        ));
+    }
+
+    /// Let go of everyone the session was sending to.
+    ///
+    /// A receiver whose senders are gone ends its iterator, which is what a
+    /// stream on a session that has closed should do. Kept, the sender leaves
+    /// a caller in `recv()` waiting on a session that will never speak again.
+    pub(crate) fn close_streams(&mut self) {
+        self.tick_streams.clear();
+        self.bar_streams.clear();
+        self.news_streams.clear();
+        self.order_streams.clear();
     }
 
     fn changed(&mut self) {
@@ -391,6 +526,25 @@ impl LiveState {
 }
 
 impl Wrapper for LiveState {
+    fn error(&mut self, req_id: i64, error_code: i64, error_string: &str, _advanced: &str) {
+        let notice = Notice { req_id, code: error_code, message: error_string.to_string() };
+        // Logged as well as kept: a caller who never asks still has this in the
+        // session's own log, and the thing being explained — a stream that
+        // never prints, a subscription that answers nothing — is exactly what a
+        // caller looks in the log for.
+        if notice.is_notice() {
+            log::info!("venue notice {error_code} on request {req_id}: {error_string}");
+        } else {
+            log::warn!("venue refused request {req_id} with {error_code}: {error_string}");
+        }
+        if self.notices.len() == NOTICES_KEPT {
+            self.notices.remove(0);
+        }
+        self.notices.push(notice);
+        self.changed();
+    }
+
+
     fn open_order(&mut self, order_id: i64, contract: &Contract, order: &Order, state: &OrderState) {
         let trade = self.trades.entry(order_id).or_insert_with(|| Trade {
             contract: contract.clone(),
@@ -399,9 +553,9 @@ impl Wrapper for LiveState {
             state: None,
             fills: Vec::new(),
         });
-        // The venue's own statement of the order outranks what was sent: a
-        // field it did not take comes back as what it did take, and a caller
-        // reading this back is reading what is working, not what was asked.
+        // The venue's report replaces what was sent. A field the venue did not
+        // accept comes back as the value it did accept, so this holds the
+        // working order rather than the requested one.
         trade.contract = contract.clone();
         trade.order = order.clone();
         trade.state = Some(state.clone());
@@ -413,8 +567,8 @@ impl Wrapper for LiveState {
 
     fn order_status(
         &mut self, order_id: i64, status: &str, filled: f64, remaining: f64,
-        average_price: f64, perm_id: i64, _parent_id: i64, _last_fill_price: f64,
-        _client_id: i64, why_held: &str, _mkt_cap_price: f64,
+        average_price: f64, perm_id: i64, parent_id: i64, last_fill_price: f64,
+        client_id: i64, why_held: &str, _mkt_cap_price: f64,
     ) {
         let trade = self.trades.entry(order_id).or_insert_with(|| Trade {
             contract: Contract::default(),
@@ -423,15 +577,37 @@ impl Wrapper for LiveState {
             state: None,
             fills: Vec::new(),
         });
+        // The venue assigns the permanent id, so an order states none when it
+        // is placed and learns it from the first report. It belongs on the
+        // order as well as on the status: it is how an order is named across
+        // sessions, and `cancel_order_by_perm_id` could not address an order
+        // this session had placed itself while it sat only on the status.
+        if trade.order.perm_id == 0 && perm_id != 0 {
+            trade.order.perm_id = perm_id;
+        }
         trade.status = OrderStatus {
             status: status.to_string(),
             filled,
             remaining,
             // A status arriving after a fill can state no average; the one
-            // already reported is the better answer.
-            average_price: if average_price > 0.0 { average_price } else { trade.status.average_price },
+            // already reported is the better answer. Nothing is what zero
+            // means here, and only zero: an instrument can trade at a negative
+            // price, and reading anything below zero as unstated reported the
+            // previous average, or none, for exactly those.
+            average_price: if average_price != 0.0 {
+                average_price
+            } else {
+                trade.status.average_price
+            },
             perm_id,
             why_held: why_held.to_string(),
+            // Carried rather than discarded: the venue states them on every
+            // report and the session exposes them nowhere else. A bracket's
+            // child does not otherwise name its parent, and an order this
+            // session did not place does not name who did.
+            parent_id,
+            last_fill_price,
+            client_id,
         };
         Self::tell(&mut self.order_streams, &OrderEvent {
             order_id, status: status.to_string(), filled, remaining, fill: None,
@@ -441,18 +617,42 @@ impl Wrapper for LiveState {
 
     fn tick_by_tick_all_last(
         &mut self, req_id: i64, _tick_type: i32, time: i64, price: f64, size: f64,
-        _attrib: &crate::types::model::TickAttribLast, exchange: &str, _conditions: &str,
+        attrib: &crate::types::model::TickAttribLast, exchange: &str, conditions: &str,
     ) {
-        let tick = Tick { time, price, size, exchange: exchange.to_string() };
+        // What the venue says about the print as well as the print: a trade
+        // that goes unreported to the tape is not one to build a series from,
+        // and the sale codes are how a caller tells that from an ordinary one.
+        let tick = Tick {
+            time, price, size,
+            exchange: exchange.to_string(),
+            past_limit: attrib.past_limit,
+            unreported: attrib.unreported,
+            conditions: conditions.to_string(),
+        };
         // Only to whoever asked for this contract's ticks. Everyone gets
         // everyone else's otherwise, and a caller watching one thing has to
-        // filter out the rest.
-        self.tick_streams
-            .retain(|(id, to)| *id != req_id || to.try_send(tick.clone()).is_ok());
+        // filter out the rest. A caller who is behind keeps their subscription:
+        // see `tell`.
+        self.tick_streams.retain(|(id, to)| {
+            *id != req_id
+                || !matches!(
+                    to.try_send(tick.clone()),
+                    Err(std::sync::mpsc::TrySendError::Disconnected(_)),
+                )
+        });
+        // Counted, as every other thing the session is told is. Left out, the
+        // one class of change this carries most of did not move `changes()`, so
+        // a caller waiting on it for the next thing to happen waited through a
+        // busy tape.
+        self.changed();
     }
 
     fn exec_details(&mut self, _req_id: i64, contract: &Contract, execution: &Execution) {
-        let fill = Fill { contract: contract.clone(), execution: execution.clone() };
+        let fill = Fill {
+            contract: contract.clone(),
+            execution: execution.clone(),
+            commission: self.commissions.get(&execution.exec_id).cloned(),
+        };
         let (status, filled, remaining) = self
             .trades
             .get(&execution.order_id)
@@ -506,17 +706,51 @@ impl Wrapper for LiveState {
         // rather than iterating still finds the bars that arrived.
         self.live_bars.push(bar.clone());
         self.bar_streams
-            .retain(|(id, to)| *id != req_id || to.try_send(bar.clone()).is_ok());
+            .retain(|(id, to)| {
+                *id != req_id
+                    || !matches!(
+                        to.try_send(bar.clone()),
+                        Err(std::sync::mpsc::TrySendError::Disconnected(_)),
+                    )
+            });
+        self.changed();
+    }
+
+    fn commission_and_fees_report(
+        &mut self, report: &crate::types::model::CommissionAndFeesReport,
+    ) {
+        // What a fill cost arrives as its own report, matched to the trade by
+        // execution id. Unread, the session names what traded and never what it
+        // cost. Either report can arrive first, so this is kept for the fill
+        // that has not come yet and written onto the one that has.
+        for trade in self.trades.values_mut() {
+            for fill in trade.fills.iter_mut() {
+                if fill.execution.exec_id == report.exec_id {
+                    fill.commission = Some(report.clone());
+                }
+            }
+        }
+        // The session's own list holds the same fills, so the cost is written
+        // there too. The trade arrives before its cost, so a fill read through
+        // `fills()` otherwise reports no commission whatever the venue states
+        // afterwards.
+        for fill in self.executions.iter_mut() {
+            if fill.execution.exec_id == report.exec_id {
+                fill.commission = Some(report.clone());
+            }
+        }
+        self.commissions.insert(report.exec_id.clone(), report.clone());
         self.changed();
     }
 
     fn tick_news(
         &mut self, req_id: i64, time: i64, provider: &str, article_id: &str,
-        headline: &str, _extra: &str,
+        headline: &str, extra: &str,
     ) {
         let tick = NewsTick {
             req_id, time, provider: provider.to_string(),
             article_id: article_id.to_string(), headline: headline.to_string(),
+            extra: extra.to_string(),
         };
         self.news.push(tick.clone());
         Self::tell(&mut self.news_streams, &tick);

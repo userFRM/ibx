@@ -201,15 +201,15 @@ mod tests {
 
     #[test]
     fn contract_default_values() {
-        // The defaults ibx actually presents, which are the ones its `#[new]`
-        // signature declares — not ibapi's empty strings. This test asserted the
-        // latter and had never run to say otherwise.
+        // What the reference client leaves a fresh contract holding: nothing.
+        // Defaulting to a US stock on SMART sends those terms beside an id that
+        // names something else.
         let c = Contract::default();
         assert_eq!(c.con_id, 0);
         assert_eq!(c.symbol, "");
-        assert_eq!(c.sec_type, "STK");
-        assert_eq!(c.exchange, "SMART");
-        assert_eq!(c.currency, "USD");
+        assert_eq!(c.sec_type, "");
+        assert_eq!(c.exchange, "");
+        assert_eq!(c.currency, "");
         assert_eq!(c.strike, 0.0);
     }
 

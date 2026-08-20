@@ -68,27 +68,19 @@ pub const TICK_ASK_EXCHANGE: i32 = 33;
 /// Tick type 84: the last exchange.
 pub const TICK_LAST_EXCHANGE: i32 = 84;
 
-// ── Shared account field definitions ──
-
-/// Account summary tags (numeric). Superset of update fields + extras.
-pub const ACCOUNT_SUMMARY_TAGS: &[&str] = &[
-    "NetLiquidation",
-    "TotalCashValue",
-    "SettledCash",
-    "BuyingPower",
-    "EquityWithLoanValue",
-    "GrossPositionValue",
-    "InitMarginReq",
-    "MaintMarginReq",
-    "AvailableFunds",
-    "ExcessLiquidity",
-    "Cushion",
-    "DayTradesRemaining",
-    "Leverage",
-    "UnrealizedPnL",
-    "RealizedPnL",
-    "DailyPnL",
-];
+/// Whether one contract of this holding is worth more than one unit of the
+/// price the venue quotes it at.
+///
+/// A quote is per unit, so an option or a future priced from one alone is
+/// valued at a fraction of what it is worth — a hundredth, for the commonest
+/// option multiplier. The venue states its own figure for such a position, and
+/// that is what is reported rather than a price this arithmetic cannot use.
+fn position_is_multiplied(pi: &PositionInfo) -> bool {
+    match pi.multiplier.trim() {
+        "" => false,
+        stated => stated.parse::<f64>().is_ok_and(|m| m != 1.0),
+    }
+}
 
 /// Render an exchange-code bitmask to a letter string using the smart components
 /// table. Each set bit at position N picks `smart_components[N].exchange_letter`.
@@ -148,6 +140,9 @@ pub struct StringTickEvent {
 pub struct QuotePollResult {
     /// Numeric ticks that arrived.
     pub ticks: Vec<TickEvent>,
+    /// Ticks the venue states under a number of its own rather than as a price
+    /// or a size, delivered on `tick_generic`.
+    pub generic_ticks: Vec<TickEvent>,
     /// Ticks whose value is text.
     pub string_ticks: Vec<StringTickEvent>,
     /// The moment the venue stamped the quote with, if it stated one.
@@ -200,11 +195,18 @@ pub struct AccountUpdateBatch {
     pub fields: Vec<AccountFieldUpdate>,
     /// Whether any field was delivered.
     pub delivered: bool,
-    /// Whether the venue has now finished stating the account, said once.
+    /// Whether the account is now taken to have been fully stated, said once.
     ///
-    /// Set when the venue signals the end of the account description, not on
-    /// the first field of any kind. A caller waiting for the account is
-    /// released once the figures it reads are the venue's own.
+    /// Read from the field stream going quiet, not from a signal: the venue
+    /// marks the end of its account request on its own message, and the same
+    /// mark is set by the first rows of the burst as well, so it cannot tell
+    /// the end of the description from its start. What this waits for instead
+    /// is a stretch of silence after the last field — not the first field of
+    /// any kind, since the figures that matter arrive seconds after it.
+    ///
+    /// A download that stalls for longer than that stretch and then resumes is
+    /// therefore called finished early, and a caller released on it reads the
+    /// account as it stood mid-burst.
     pub finished: bool,
 }
 
@@ -218,8 +220,11 @@ pub struct AccountSummaryBatch {
 
 /// One figure answering a summary request.
 pub struct AccountSummaryEntry {
-    /// Which figure this is.
-    pub tag: &'static str,
+    /// Which figure this is, under the venue's name for it. Owned for the
+    /// same reason the currency is: the set is the venue's, not a fixed list
+    /// known here, and a summary built from such a list reported nothing for
+    /// every figure that was not on it.
+    pub tag: String,
     /// What it is.
     pub value: String,
     /// As the venue stated it for this figure. Owned rather than borrowed
@@ -266,6 +271,29 @@ fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, Refusal> {
     }
 }
 
+/// The parameters a strategy this client models reads off the caller's list.
+///
+/// A strategy that is not here is handed to the venue with the caller's list
+/// as written, so it has no set to state.
+fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
+    Some(match strategy {
+        "vwap" => &["maxPctVol", "noTakeLiq", "allowPastEndTime", "startTime", "endTime"],
+        "twap" => &["allowPastEndTime", "startTime", "endTime"],
+        "arrivalpx" | "arrival_price" => &[
+            "maxPctVol", "riskAversion", "allowPastEndTime", "forceCompletion",
+            "startTime", "endTime",
+        ],
+        "closepx" | "close_price" => {
+            &["maxPctVol", "riskAversion", "forceCompletion", "startTime"]
+        }
+        "darkice" | "dark_ice" => {
+            &["allowPastEndTime", "displaySize", "startTime", "endTime"]
+        }
+        "pctvol" | "pct_vol" => &["pctVol", "noTakeLiq", "startTime", "endTime"],
+        _ => return None,
+    })
+}
+
 /// Parse algo strategy and TagValue params into internal AlgoParams.
 ///
 /// A key the caller never set defaults the way IB's own algos do (0.0,
@@ -273,7 +301,23 @@ fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, Refusal> {
 /// set — even to an empty string — is refused if it does not parse, rather
 /// than taking that same default: `riskAversion="Aggresive"` would otherwise
 /// submit a Neutral algo with no error, and `maxPctVol=""` would submit 0.0.
+///
+/// A strategy modelled here is re-encoded from the fields it names rather than
+/// forwarded as the caller wrote it, so a key it does not name would go no
+/// further. Said rather than dropped: the caller had set it for a reason and
+/// the order that reached the venue would not have carried it.
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
+    let folded = strategy.to_lowercase();
+    if let Some(known) = algo_param_names(&folded)
+        && let Some(stray) = params.iter().find(|tv| !known.contains(&tv.tag.as_str()))
+    {
+        return Err(Refusal::validation(format!(
+            "algo parameter '{}' is not one {strategy} carries here, so it would \
+             not reach the venue. This strategy reads {}.",
+            stray.tag,
+            known.join(", "),
+        )));
+    }
     let get = |key: &str| -> Option<String> {
         params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
     };
@@ -306,7 +350,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         }
     };
 
-    match strategy.to_lowercase().as_str() {
+    match folded.as_str() {
         "vwap" => Ok(AlgoParams::Vwap {
             max_pct_vol: get_f64("maxPctVol")?,
             no_take_liq: get_bool("noTakeLiq")?,
@@ -334,8 +378,14 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             start_time: get_str("startTime"),
         }),
         "darkice" | "dark_ice" => {
+            // Stated, not chosen here. A display size is how much of the
+            // order the book shows; a default would show a size the caller
+            // never asked to show.
             let display_size = match get("displaySize") {
-                None => 100,
+                None => return Err(Refusal::validation(
+                    "DarkIce needs a displaySize: it is how much of the order the \
+                     book shows, and this client will not choose it for you",
+                )),
                 Some(raw) => raw.parse().map_err(|_| format!("Invalid displaySize '{raw}': expected a non-negative integer"))?,
             };
             Ok(AlgoParams::DarkIce {
@@ -376,7 +426,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 /// otherwise turn into a different, valid-looking number: NaN becomes 0,
 /// +/-Infinity becomes i64::MAX/MIN, and a finite value whose fixed-point
 /// form overflows i64 saturates the same way.
-fn require_finite_price(field: &str, v: f64) -> Result<(), String> {
+pub(crate) fn require_finite_price(field: &str, v: f64) -> Result<(), String> {
     // `i64::MAX as f64` itself rounds up to 2^63 (f64 cannot represent
     // i64::MAX exactly), so a strict `>` lets a scaled value of exactly
     // 2^63 through and the subsequent `as i64` cast saturates to i64::MAX
@@ -509,9 +559,9 @@ pub struct ClientCore {
     pub registration_timeout: std::sync::Mutex<std::time::Duration>,
     /// Whether this session refuses to send anything that changes a position.
     ///
-    /// The counterpart carries the same control, and a caller running a
-    /// research or reporting program wants the guarantee at the client rather
-    /// than in their own discipline. Set once when the session opens.
+    /// The reference API carries the same control. A research or reporting
+    /// program gets the guarantee at the client rather than by discipline.
+    /// Set once when the session opens.
     pub readonly: std::sync::atomic::AtomicBool,
     // reqId <-> InstrumentId mapping
     /// Which contract each quote request is on.
@@ -527,9 +577,9 @@ pub struct ClientCore {
     pub tbt_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
     /// The other requests watching a contract that is already subscribed.
     ///
-    /// One contract holds one subscription on the wire, as the counterpart
-    /// does, and the same quote is handed to every caller that asked for it.
-    /// Two parts of one program may watch the same contract.
+    /// One contract holds one subscription on the wire, and the same quote is
+    /// handed to every caller that asked for it. Two parts of one program may
+    /// watch the same contract.
     pub instrument_followers: Mutex<HashMap<InstrumentId, Vec<i64>>>,
     // con_id → InstrumentId for find_or_register_instrument lookup
     /// The engine slot each contract id was given.
@@ -613,11 +663,10 @@ pub struct ClientCore {
     mdt_by_req: Mutex<HashMap<i64, i32>>,
     /// Which requests asked for their bar times as seconds since the epoch.
     ///
-    /// The venue states a time the one way it states it, and the counterpart
-    /// formats it for the caller. A caller that asked for the other form and
-    /// was handed this one is reading a date as a number or a number as a
-    /// date; only the request that asked for it is affected, so it is kept per
-    /// request rather than for the session.
+    /// The venue states a time in one form and the client formats it for the
+    /// caller. A caller handed the other form is reading a date as a number or
+    /// a number as a date. Only the request that asked is affected, so this is
+    /// kept per request rather than for the session.
     epoch_dates_by_req: Mutex<HashSet<i64>>,
 
     // Historical data keepUpToDate: req_ids that have completed initial batch.
@@ -731,7 +780,11 @@ impl ClientCore {
             mdt_by_req: Mutex::new(HashMap::new()),
             epoch_dates_by_req: Mutex::new(HashSet::new()),
             hist_initial_complete: Mutex::new(HashSet::new()),
-            news_providers: Mutex::new("BRFG*BRFUPDN".into()),
+            // Empty until something states them. Which providers an account
+            // may read is the venue's answer, given at logon; a pair of codes
+            // standing in for it asked for news from providers the account
+            // may not be entitled to and left out the ones it is.
+            news_providers: Mutex::new(String::new()),
             news_instruments: Mutex::new(HashSet::new()),
             contract_cache: Mutex::new(HashMap::new()),
             named_by_description: Mutex::new(HashMap::new()),
@@ -788,7 +841,7 @@ impl ClientCore {
         self.mdt_by_req.lock().unwrap().clear();
         self.epoch_dates_by_req.lock().unwrap().clear();
         self.hist_initial_complete.lock().unwrap().clear();
-        *self.news_providers.lock().unwrap() = "BRFG*BRFUPDN".into();
+        self.news_providers.lock().unwrap().clear();
         self.news_instruments.lock().unwrap().clear();
         self.contract_cache.lock().unwrap().clear();
         // What the venue named for a description belongs to the session that
@@ -969,7 +1022,7 @@ impl ClientCore {
     /// If `generic_tick_list` contains "292", also subscribes to per-contract news.
     pub fn register_mkt_data(
         &self,
-        _shared: &SharedState,
+        shared: &SharedState,
         control_tx: &SyncSender<ControlCommand>,
         req_id: i64,
         con_id: i64,
@@ -985,11 +1038,41 @@ impl ClientCore {
         generic_tick_list: &str,
         mode_9887: i32,
     ) -> Result<InstrumentId, Refusal> {
-        // News subscription if generic_tick_list contains 292
-        let wants_news = generic_tick_list.split(',')
-            .any(|t| t.trim() == "292" || t.trim() == "mdoff,292" || t.trim().ends_with("292"));
+        // News subscription if generic_tick_list names 292. The whole entry,
+        // not its last three characters: "1292" is not 292, and matching on a
+        // suffix subscribes to news the caller did not ask for. The list is
+        // split on commas first, so a comma-joined entry never matches.
+        let wants_news = generic_tick_list.split(',').any(|t| t.trim() == "292");
+        // And nothing else is carried. The subscription this protocol sends
+        // states a contract and a mode, with no room for a list of extra
+        // ticks. Every other number a caller names is therefore unsendable —
+        // option volume, shortable shares — and is reported rather than
+        // accepted in silence.
+        let unsent: Vec<&str> = generic_tick_list
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty() && *t != "292" && *t != "mdoff")
+            .collect();
+        if !unsent.is_empty() {
+            log::warn!(
+                "generic tick(s) {} were asked for and are not carried by this \
+                 protocol's subscription, so no tick of those kinds will arrive",
+                unsent.join(", "),
+            );
+        }
         if wants_news {
-            let providers = self.news_providers.lock().unwrap().clone();
+            // What the logon said this account may read, unless a caller has
+            // named its own set. The venue separates codes with a star.
+            let named = self.news_providers.lock().unwrap().clone();
+            let providers = if named.is_empty() {
+                shared.reference.news_providers()
+                    .iter()
+                    .map(|p| p.code.as_str())
+                    .collect::<Vec<_>>()
+                    .join("*")
+            } else {
+                named
+            };
             let _ = control_tx.send(ControlCommand::SubscribeNews {
                 con_id,
                 symbol: symbol.to_string(),
@@ -1084,6 +1167,11 @@ impl ClientCore {
     /// Unregister a market data subscription.
     /// Returns `(instrument_id, needs_news_unsub)`.
     pub fn unregister_mkt_data(&self, req_id: i64) -> (Option<InstrumentId>, bool) {
+        // Whatever this id was waiting to finish, it is not waiting any
+        // more. Left behind, the same id handed out again for an ordinary
+        // stream reads as a snapshot and is withdrawn as soon as it has both
+        // sides of a quote.
+        self.snapshot_reqs.lock().unwrap().remove(&req_id);
         if let Some(instrument) = self.req_to_instrument.lock().unwrap().remove(&req_id) {
             // A caller that was watching someone else's subscription stops
             // watching it, and the subscription stays up for the rest. A
@@ -1135,7 +1223,8 @@ impl ClientCore {
         self.con_id_to_instrument.lock().unwrap().retain(|_, iid| *iid != instrument);
     }
 
-    /// Remember which providers the venue named.
+    /// Name the providers to ask for news from, overriding what the logon
+    /// said this account may read. An empty string returns to that.
     pub fn set_news_providers(&self, providers: &str) {
         *self.news_providers.lock().unwrap() = providers.to_string();
     }
@@ -1493,7 +1582,7 @@ impl ClientCore {
     /// execution instruction, no algo block. For an order defined by any of
     /// those, the replace describes something other than the order being
     /// replaced: a trailing stop arrives as a pegged order with no offset, and
-    /// the gateway rejects it, leaving the caller with no stop at all.
+    /// the venue rejects it, leaving the caller with no stop at all.
     ///
     /// The order type alone does not decide this. An adaptive or algo order is
     /// an ordinary `LMT` that is defined by its algo tags, and an adjustable
@@ -1534,7 +1623,7 @@ impl ClientCore {
         // The bracket links are the costly pair. A replace that omits the
         // parent link or the OCA group leaves a child resting alone: a fill on
         // one leg no longer cancels the other, and the position is left with a
-        // naked order against it. Whether the gateway reads an omitted 583 or
+        // naked order against it. Whether the venue reads an omitted 583 or
         // 6107 as unchanged or as cleared is not established here, and the
         // difference between "latent" and "detached" is the whole risk — so
         // the modify is refused rather than sent and hoped for.
@@ -1624,7 +1713,7 @@ impl ClientCore {
         }
     }
 
-    /// Stop tracking an order the gateway has said does not exist.
+    /// Stop tracking an order the venue has said does not exist.
     ///
     /// A cancel rejected as UnknownOrder retires the engine's record, and the
     /// client's own record has to go with it — the open-order snapshot unions
@@ -1644,6 +1733,14 @@ impl ClientCore {
             .map(|info| (info.order.perm_id, info.order.parent_id))
             .unwrap_or((0, 0));
         (perm_id, self.tracked_parent_id(order_id).unwrap_or(engine_parent))
+    }
+
+    /// Which client placed an order, as the venue states it on tag 109.
+    ///
+    /// Zero where this session has no record of the order, which is also what
+    /// the venue states for an order it names no client for.
+    pub(crate) fn placing_client(&self, shared: &SharedState, order_id: u64) -> i32 {
+        shared.orders.get_order_info(order_id).map_or(0, |info| info.order.client_id)
     }
 
     /// What tells two contracts on one underlying apart.
@@ -1666,15 +1763,23 @@ impl ClientCore {
     /// and the engine has already retired its record. The client's own record
     /// has to go with it, or the open-order snapshot keeps reporting the order
     /// the rejection was about.
+    ///
+    /// The code says the cancel was refused, and which of the two ways. 202
+    /// means an order that was cancelled, so reporting it for a refused cancel
+    /// states the opposite and invites a replacement against an order still
+    /// working. 10147 means "not found", which is one reason among several.
     pub(crate) fn retire_rejected(&self, reject: &CancelReject) -> (i64, String) {
         if reject.reason_code == 1 {
             self.untrack_order(reject.order_id);
         }
-        let code = if reject.reject_type == 1 { 202 } else { 10147 };
+        // 10147 is the order the venue could not find; 10148 is the order it
+        // found and would not act on. The reason it stated picks between them.
+        let code = if reject.reason_code == 1 { 10147 } else { 10148 };
+        let what = if reject.reject_type == 1 { "cancel" } else { "modify" };
         (
             code,
             format!(
-                "Order {} cancel/modify rejected (reason: {})",
+                "Order {} {what} rejected by the venue (reason: {})",
                 reject.order_id, reject.reason_code,
             ),
         )
@@ -1865,12 +1970,24 @@ impl ClientCore {
         // depends on shared.reference.smart_components. Emit a delta record
         // when the bitmask changes; dispatch resolves the letter string.
         let mut string_ticks = Vec::new();
+        // What is cached for this instrument, which is the quote as it stands
+        // except where a field could not be rendered yet.
+        let mut cached = fields;
         const EXCH_TICKS: &[(usize, i32)] = &[
             (12, TICK_BID_EXCHANGE), (13, TICK_ASK_EXCHANGE), (14, TICK_LAST_EXCHANGE),
         ];
         for &(idx, tt) in EXCH_TICKS {
             if fields[idx] != last[idx] {
                 let letters = render_exchange_mask(fields[idx], shared);
+                // A mask with bits set and no letters to show for them is
+                // one the venue has not named its exchanges for yet. Caching
+                // it as delivered leaves it equal to the next mask, so it is
+                // never rendered again once the names arrive and the quote's
+                // exchange is lost for the life of the subscription.
+                if letters.is_empty() && fields[idx] != 0 {
+                    cached[idx] = last[idx];
+                    continue;
+                }
                 string_ticks.push(StringTickEvent {
                     req_id, tick_type: tt, value: letters,
                 });
@@ -1878,14 +1995,28 @@ impl ClientCore {
             }
         }
 
-        // A halt would change what every other tick in this quote means, and
-        // is worth delivering — but not from a field filled by an opcode named
-        // for a halt on no evidence. Nothing writes `halted` until the generic
-        // tick that really carries it is read.
+        // A halt changes what every other tick in this quote means: the prices
+        // standing are the ones from before the venue stopped, not a market
+        // anyone can deal on. It arrives on the trading-status tick and was
+        // written into the quote, compared here, and then cached without being
+        // sent anywhere — so the one transition worth hearing about was
+        // consumed and could never be delivered again.
+        //
+        // The venue states it under a number of its own, so it goes out on
+        // `tick_generic` as the reference client delivers it.
+        let mut generic_ticks = Vec::new();
+        if fields[15] != last[15] {
+            generic_ticks.push(TickEvent {
+                req_id, tick_type: TICK_HALTED,
+                value: fields[15] as f64,
+                is_price: false,
+            });
+            delivered = true;
+        }
 
-        map.insert(iid, fields);
+        map.insert(iid, cached);
 
-        QuotePollResult { ticks, string_ticks, timestamp, delivered }
+        QuotePollResult { ticks, generic_ticks, string_ticks, timestamp, delivered }
     }
 
     /// Whether a snapshot has just finished arriving.
@@ -1968,7 +2099,7 @@ impl ClientCore {
             con_ids.insert(pi.con_id);
         }
         // An account holding nothing still has a P&L: what it realised today
-        // is already in the gateway's own figures. Returning here reported
+        // is already in the venue's figures. Returning here reported
         // nothing at all to a caller that had asked to be told.
 
         let con_id_map = self.con_id_to_instrument.lock().unwrap();
@@ -2005,9 +2136,28 @@ impl ClientCore {
                 continue;
             };
 
+            // A price is per unit and a contract may be worth many of them.
+            // Multiplied by nothing, an option holding was valued at a
+            // hundredth of what it is worth and the account total with it, so
+            // such a position is left to the venue's figures rather than
+            // valued from a price this arithmetic cannot use.
+            let carries_multiplier = pi.as_ref().is_some_and(position_is_multiplied);
+            let has_size = qty_now != 0.0 || qty_midnight != 0.0;
+            if carries_multiplier && has_size {
+                unpriceable += 1;
+                continue;
+            }
+
             let quote = con_id_map.get(&con_id).map(|&iid| shared.market.quote(iid));
             let prev_close = quote.map_or(0, |q| q.close);
             let Some(price_now) = quote.map(|q| q.last).filter(|&p| p != 0) else {
+                // A position with size and no live price is one this total
+                // is missing, which is what `unpriceable` counts. Skipping it
+                // without counting reports the rest of the account as the
+                // whole of it.
+                if has_size {
+                    unpriceable += 1;
+                }
                 continue;
             };
             // What the position was worth at midnight. The venue states the
@@ -2016,6 +2166,9 @@ impl ClientCore {
             // only where the venue said nothing.
             let prev_close = Self::midnight_price(shared, con_id).unwrap_or(prev_close);
             if seed.and_then(|s| s.cost_midnight).is_none() && prev_close == 0 && qty_midnight != 0.0 {
+                // Nothing to value the overnight leg against, so this position
+                // is missing from the total too.
+                unpriceable += 1;
                 continue;
             }
 
@@ -2046,13 +2199,13 @@ impl ClientCore {
 
         // No position carried a live quote (a req_pnl-only client never populates
         // con_id_to_instrument, so every position above hits `continue`). Fall back
-        // to the gateway's account-level P&L, which the gateway pushes independently
+        // to the venue's account-level P&L, which the venue pushes independently
         // of any market-data subscription. Without this the quote-derived totals stay
         // [0,0,0] and no callback ever fires.
         // A position that could not be priced makes the client-side sum an
         // incomplete account total, not a smaller correct one — and the realized
         // figure has already accrued for it, so the three would not even agree
-        // with each other. The gateway's own account-level numbers are complete
+        // with each other. The venue's account-level numbers are complete
         // by construction, so one unpriceable position sends the whole account
         // to them rather than reporting a partial sum as if it were the total.
         if priced == 0 || unpriceable > 0 {
@@ -2103,8 +2256,24 @@ impl ClientCore {
             let avg_cost = pi.avg_cost;
 
             let quote = con_id_map.get(&con_id).map(|&iid| shared.market.quote(iid));
-            let Some(price_now) = quote.map(|q| q.last).filter(|&p| p != 0) else {
-                continue;
+            // The venue's mark for the position, stated whether or not
+            // anything here subscribed to the contract. A quote is per unit
+            // and a contract may be worth many of them, so an option or a
+            // future is valued from the venue's figure rather than from a
+            // price this arithmetic cannot use. This subscription does not
+            // depend on a market-data subscription.
+            let stated_mark = (pi.market_price != 0).then_some(pi.market_price);
+            let price_now = match quote.map(|q| q.last).filter(|&p| p != 0) {
+                Some(live) if !position_is_multiplied(&pi) => live,
+                _ => match stated_mark {
+                    Some(mark) => mark,
+                    None => continue,
+                },
+            };
+            let unit_value = if pi.market_value != 0 {
+                pi.market_value as f64 / PRICE_SCALE_F
+            } else {
+                qty_now * price_now as f64 / PRICE_SCALE_F
             };
             let seed = seeds.get(&con_id);
             // An unparseable overnight quantity leaves nothing to price the
@@ -2114,7 +2283,7 @@ impl ClientCore {
             // the callback would leave every one of them stale on the caller's
             // side rather than reporting one it cannot compute.
             let qty_midnight = seed.map_or(Some(0.0), |s| s.qty_midnight);
-            // As in poll_pnl, the venue's own mark is what the overnight leg is
+            // As in poll_pnl, the venue's mark is what the overnight leg is
             // valued against, so the two callbacks value the same position from
             // the same figures.
             let prev_close = Self::midnight_price(shared, con_id)
@@ -2135,7 +2304,7 @@ impl ClientCore {
                 None => -(qty_now * avg_cost as f64 / PRICE_SCALE_F),
             };
 
-            let mv_now = qty_now * price_now as f64 / PRICE_SCALE_F;
+            let mv_now = unit_value;
             // Held at the value last reported when the overnight size is
             // unknown, rather than recomputed from an assumption that would be
             // wrong in a specific direction: treating the absence as flat
@@ -2148,7 +2317,12 @@ impl ClientCore {
                 None => last_cache.get(&req_id)
                     .map_or(0.0, |prev| prev[1] as f64 / PRICE_SCALE_F),
             };
-            let unrealized = if avg_cost != 0 {
+            // The venue states what the position has made and not realised,
+            // and it is the only figure that is right for a contract worth
+            // more than one unit of its own price.
+            let unrealized = if pi.unrealized_pnl != 0 {
+                pi.unrealized_pnl as f64 / PRICE_SCALE_F
+            } else if avg_cost != 0 && !position_is_multiplied(&pi) {
                 qty_now * (price_now - avg_cost) as f64 / PRICE_SCALE_F
             } else { 0.0 };
             let realized = seed.map(|s| s.realized_pnl).unwrap_or(0.0);
@@ -2180,7 +2354,7 @@ impl ClientCore {
 
     /// The account figures to deliver, as the venue stated them.
     ///
-    /// Built from the venue's own statements rather than from this client's
+    /// Built from the venue's statements rather than from this client's
     /// typed copy, which exists before the venue has stated anything and would
     /// otherwise report every figure as zero in no currency.
     ///
@@ -2283,20 +2457,21 @@ impl ClientCore {
         // rows the venue sends, and a summary asked for before they arrive
         // reported an empty account rather than nothing.
         let stated = shared.portfolio.stated_account_values();
-        let mut entries = Vec::new();
-        for &tag in ACCOUNT_SUMMARY_TAGS {
-            if !tags.is_empty() && !tags.iter().any(|t| t == tag) {
-                continue;
-            }
-            for (key, value, currency) in stated.iter().filter(|(k, ..)| k == tag) {
-                entries.push(AccountSummaryEntry {
-                    tag,
-                    value: value.clone(),
-                    currency: currency.clone(),
-                });
-                let _ = key;
-            }
-        }
+        // "All" is the venue's word for every figure it holds, and a request
+        // naming no tag at all means the same. Matched against a local list of
+        // names instead, "All" matches none of them and returns empty, and any
+        // figure absent from that list is dropped with it: accrued cash, SMA,
+        // look-ahead margin, per-currency ledger rows.
+        let wants_all = tags.is_empty() || tags.iter().any(|t| t == "All");
+        let entries = stated
+            .iter()
+            .filter(|(key, ..)| wants_all || tags.iter().any(|t| t == key))
+            .map(|(key, value, currency)| AccountSummaryEntry {
+                tag: key.clone(),
+                value: value.clone(),
+                currency: currency.clone(),
+            })
+            .collect();
 
         Some(AccountSummaryBatch { req_id, entries })
     }
@@ -2348,6 +2523,35 @@ impl ClientCore {
         if order.adjusted_trailing_amount != f64::MAX {
             require_finite_price("adjusted_trailing_amount", order.adjusted_trailing_amount)?;
         }
+        // Every other field a saturating cast turns into a different,
+        // valid-looking number on its way to the wire. Guarding only the
+        // handful above lets a NaN ladder step reach the venue as an increment
+        // of zero, and a benchmark reference or hedging leg stated as an
+        // infinity reach it as the largest price there is.
+        for (field, value) in [
+            ("scale_price_increment", order.scale_price_increment),
+            ("scale_profit_offset", order.scale_profit_offset),
+            ("scale_price_adjust_value", order.scale_price_adjust_value),
+            ("delta_neutral_aux_price", order.delta_neutral_aux_price),
+            ("pegged_change_amount", order.pegged_change_amount),
+            ("reference_change_amount", order.reference_change_amount),
+            ("starting_price", order.starting_price),
+            ("stock_ref_price", order.stock_ref_price),
+            ("stock_range_lower", order.stock_range_lower),
+            ("stock_range_upper", order.stock_range_upper),
+            ("percent_offset", order.percent_offset),
+            ("volatility", order.volatility),
+        ] {
+            // f64::MAX is this API's "not set" and states nothing.
+            if value != f64::MAX {
+                require_finite_price(field, value)?;
+            }
+        }
+        for (at, leg) in order.order_combo_legs.iter().enumerate() {
+            if *leg != f64::MAX {
+                require_finite_price(&format!("order_combo_legs[{at}]"), *leg)?;
+            }
+        }
         if !order.trailing_percent.is_finite()
             || order.trailing_percent < 0.0
             || order.trailing_percent * 100.0 > u32::MAX as f64
@@ -2382,12 +2586,6 @@ impl ClientCore {
         // says how much to buy.
         if order.total_quantity == 0.0 && order.cash_qty <= 0.0 {
             return Err("total_quantity is zero and no cash_qty was supplied".to_string());
-        }
-        if order.display_size < 0 {
-            return Err(format!("display_size must not be negative, got {}", order.display_size));
-        }
-        if order.min_qty < 0 {
-            return Err(format!("min_qty must not be negative, got {}", order.min_qty));
         }
         if order.parent_id < 0 {
             return Err(format!("parent_id must not be negative, got {}", order.parent_id));
@@ -2552,8 +2750,8 @@ impl ClientCore {
                     .to_string(),
             );
         }
-        // These two carry a sentinel for "not stated", so only a value below it
-        // and below zero is a mistake.
+        // These carry a sentinel for "not stated", so only a value that is
+        // neither the sentinel nor a quantity is a mistake.
         for (what, stated) in [
             ("min_trade_qty", order.min_trade_qty),
             ("post_to_ats", order.post_to_ats),
@@ -2567,12 +2765,10 @@ impl ClientCore {
             }
         }
 
-        // Two fields the conversion narrows to a set and turns anything else
-        // into the default. Narrowing is what the counterpart does with a value
-        // it does not know, so an order that reached the venue carrying one
-        // would be treated the same way — but a value outside the set is a
-        // caller's mistake, and hearing about it is better than having it
-        // quietly become something else.
+        // Two fields the conversion narrows to a set, turning anything else
+        // into the default. An unknown value reaching the venue is narrowed
+        // there the same way, but a value outside the set is a caller's
+        // mistake and is reported rather than silently changed.
         if !matches!(order.trigger_method, 0..=4 | 7 | 8) {
             return Err(format!(
                 "trigger_method {} is not one this venue carries. It is 0 to 4, \
@@ -2602,7 +2798,7 @@ impl ClientCore {
             if !HEDGE.contains(&kind.as_str()) {
                 return Err(format!(
                     "hedge_type '{}' is not one this venue carries. It is one of \
-                     {} — delta, beta, FX, pair, or the venue's own pair. An \
+                     {} — delta, beta, FX, pair, or the venue's pair. An \
                      unrecognised kind would otherwise be dropped and the order \
                      sent unhedged.",
                     order.hedge_type,
@@ -2643,16 +2839,6 @@ impl ClientCore {
         }
 
 
-        // An unrecognized tif would otherwise be sent as DAY silently.
-        match order.tif.as_str() {
-            "" | "DAY" | "GTC" | "IOC" | "FOK" | "OPG" | "GTD" | "DTC" | "AUC" => {}
-            other => {
-                return Err(format!(
-                    "Unsupported tif '{other}': use DAY, GTC, IOC, FOK, OPG, GTD, DTC or AUC"
-                ));
-            }
-        }
-
         let order_type = order.order_type.to_uppercase();
 
         // These order types carry a type-specific instruction in the same
@@ -2664,24 +2850,42 @@ impl ClientCore {
             ));
         }
 
-        if order.algo_strategy.eq_ignore_ascii_case("Adaptive") {
-            adaptive_priority(&order.algo_params)?;
-            return Ok(());
-        }
+        // An order carrying an algorithm is encoded as a limit and nothing
+        // else: the strategy rides on an order whose type byte is written
+        // once, as `2`. The caller's own type must therefore be a limit.
+        // Accepting another type and encoding a limit anyway sends an order
+        // the caller did not describe — `MKT` with an algorithm becomes a
+        // limit at whatever `lmt_price` holds.
         if !order.algo_strategy.is_empty() {
-            crate::client_core::parse_algo_params(&order.algo_strategy, &order.algo_params)?;
+            if order.algo_strategy.eq_ignore_ascii_case("Adaptive") {
+                adaptive_priority(&order.algo_params)?;
+            } else {
+                crate::client_core::parse_algo_params(&order.algo_strategy, &order.algo_params)?;
+            }
+            if !order_type.is_empty() && order_type != "LMT" {
+                return Err(format!(
+                    "algo_strategy '{}' is carried on a limit order, and this one \
+                     states order_type '{}'. Sent as it stands the venue would \
+                     receive a limit at {}, which is not the order described.",
+                    order.algo_strategy, order.order_type, order.lmt_price,
+                ));
+            }
             return Ok(());
         }
-        if order.what_if {
-            return Ok(());
-        }
+        // A preview asks about an order this client could send, so it answers
+        // for the same set of types. Returning before this match sends an
+        // unknown type to the wire as a limit, and the venue answers about an
+        // order the caller did not ask about.
         match order_type.as_str() {
             "MKT" | "LMT" | "STP" | "STP LMT" | "TRAIL" | "TRAIL LIMIT"
             | "MOC" | "LOC" | "MIT" | "LIT" | "MTL" | "MKT PRT" | "STP PRT"
             | "REL" | "PEG MKT" | "PEG MID" | "PEG MIDPT" | "MIDPX" | "MIDPRICE"
             | "SNAP MKT" | "SNAP MID" | "SNAP MIDPT" | "SNAP PRI" | "SNAP PRIM"
-            | "BOX TOP" => {}
+            | "PEG BENCH" | "PEGBENCH" | "BOX TOP" => {}
             _ => return Err(format!("Unsupported order type: '{}'", order.order_type)),
+        }
+        if order.what_if {
+            return Ok(());
         }
 
         // Reject orders that require aux_price when it is zero — prevents silent no-
@@ -2719,7 +2923,7 @@ impl ClientCore {
 
     /// Remember how a request asked for its bar times to be written.
     ///
-    /// The reference client numbers the two forms: 1 for the venue's own
+    /// The reference client numbers the two forms: 1 for the venue's
     /// spelling, 2 for seconds since the epoch. Anything else is 1, which is
     /// what that client does with a number it does not know.
     pub fn note_date_format(&self, req_id: i64, format_date: i32) {
@@ -2817,8 +3021,9 @@ impl ClientCore {
     ///
     /// The conversion takes each leg as it finds it: a side it does not
     /// recognise becomes a buy, a negative ratio becomes none, and a slot
-    /// outside a byte wraps to whatever fits. Each of those is a leg trading
-    /// the other way, in no size, or borrowing from somewhere nobody named —
+    /// outside a byte is clamped to the nearest one that fits. Each of those is
+    /// a leg trading the other way, in no size, or borrowing from somewhere
+    /// nobody named —
     /// against the rest of a combination that is priced as one thing.
     pub fn validate_leg(at: usize, leg: &crate::types::model::ComboLeg) -> Result<(), String> {
         if !leg.action.eq_ignore_ascii_case("BUY") && !leg.action.eq_ignore_ascii_case("SELL") {
@@ -2994,7 +3199,7 @@ impl ClientCore {
     /// other order goes through emits it.
     ///
     /// The override the documented signature takes is not here. It is a
-    /// validation bypass the venue's own front end applies while it builds the
+    /// validation bypass the venue's front end applies while it builds the
     /// order, so no tag carries it and there is nothing to send.
     pub fn build_exercise_request(
         order_id: OrderId, instrument: InstrumentId, action: u8, qty: u32,
@@ -3109,14 +3314,14 @@ impl ClientCore {
             // exchange and security type" — the venue was refusing an order
             // the caller never asked for.
             //
-            // Eleven types have a byte here. A type without one is previewed as
-            // a limit, so a trailing stop is answered with the margin on a
-            // limit at the same price rather than on the order asked about.
-            // That is not silent — it is what this says — but it is not right
-            // either, and settling it needs a preview of each such type against
-            // a session to see what the venue answers a byte it was not given.
-            let ord_type = match order.ord_type_byte() { 0 => b'2', byte => byte };
-            return Ok(ControlCommand::Order(ex(OrderKind::WhatIf { price, ord_type })));
+            // The preview names every type this client sends, which is a wider
+            // set than a replace may restate; see `Order::what_if_byte`.
+            let ord_type = order.what_if_byte();
+            // The price the previewed type triggers at. A stop states it and
+            // no limit price at all, so a preview built from the limit price
+            // alone asked about a stop at zero.
+            let aux = (order.aux_price * PRICE_SCALE_F) as i64;
+            return Ok(ControlCommand::Order(ex(OrderKind::WhatIf { price, aux, ord_type })));
         }
 
         // Adjustable stop: a base STP that converts to another order type when
@@ -3139,22 +3344,21 @@ impl ClientCore {
             } else {
                 order.adjusted_trailing_amount
             };
-            // Through SubmitEx like every other order type, so a bracket child
-            // keeps its parent link, its OCA group and its tif.
-            return Ok(ControlCommand::Order(OrderRequest::SubmitEx {
-                order_id, instrument, side, qty,
-                kind: OrderKind::AdjustableStop {
-                    stop_price: scale(order.aux_price),
-                    trigger_price: scale(order.trigger_price),
-                    adjusted_order_type: adjusted,
-                    adjusted_stop_price: scale(order.adjusted_stop_price),
-                    adjusted_stop_limit_price: scale(order.adjusted_stop_limit_price),
-                    adjusted_trailing_amount: scale(adj_trail),
-                    adjustable_trailing_unit: order.adjustable_trailing_unit,
-                },
-                tif: order.tif_byte(),
-                attrs: order.attrs(),
-            }));
+            // Through the same construction every other order type uses, so a
+            // bracket child keeps its parent link, its OCA group and its tif —
+            // and so does everything the contract states rather than the order:
+            // its legs, its listing exchange and the contract it hedges
+            // against. Built from `order.attrs()` alone, an adjustable stop on
+            // a combination reached the encoder with no legs at all.
+            return Ok(ControlCommand::Order(ex(OrderKind::AdjustableStop {
+                stop_price: scale(order.aux_price),
+                trigger_price: scale(order.trigger_price),
+                adjusted_order_type: adjusted,
+                adjusted_stop_price: scale(order.adjusted_stop_price),
+                adjusted_stop_limit_price: scale(order.adjusted_stop_limit_price),
+                adjusted_trailing_amount: scale(adj_trail),
+                adjustable_trailing_unit: order.adjustable_trailing_unit,
+            })));
         }
 
         let req = match order_type.as_str() {
@@ -3281,7 +3485,7 @@ impl ClientCore {
 
         Ok(ControlCommand::Order(req))
     }
-    /// The contract's terms and the venue's own model for it, or why neither
+    /// The contract's terms and the venue's model for it, or why neither
     /// question can be answered.
     pub(crate) fn solve_option(
         &self,
@@ -3326,7 +3530,7 @@ impl ClientCore {
         };
         solve(terms, model).ok_or_else(|| {
             crate::error_codes::Refusal::validation(
-            "this contract cannot be solved under the venue's own model for it. The model is \
+            "this contract cannot be solved under the venue's model for it. The model is \
              anchored to the price the venue published, so a figure no rate reproduces leaves \
              nothing to solve against — and an option far enough into the money is worth its \
              intrinsic value and little else, its price hardly moving with volatility at all, \

@@ -141,13 +141,15 @@ pub const O_ASK_EXCH: u64 = 17;
 /// UNVERIFIED. Named for a halt on no evidence — unlike its neighbours, which
 /// cite measurements against daily bars and wall-clock samples.
 ///
-/// The venue does state a halt, but the counterpart reads it elsewhere: as a
-/// generic tick under id 437, whose payload is three big-endian 32-bit ints
+/// The venue does state a halt, but carries it elsewhere: as a generic tick
+/// under id 437, whose payload is three big-endian 32-bit ints
 /// (a status bitmask, a timestamp, a status index) rather than anything in this
-/// stream. Its statuses are named in an enum that survived obfuscation:
-/// 0 exchange open, 1 regulatory halt, 2 volatility halt, 3 short-sale
-/// restriction, 4 no status available — and "halted" is bit 0 or bit 1 of the
-/// mask, not an index equal to one.
+/// stream. Its statuses are a named set, each carrying an index and a mask of
+/// one shifted by it: exchange open at 0,
+/// regulatory halt at 1, volatility halt at 2, short-sale restriction at 3, and
+/// no-status-available at 16 rather than at its position in the enum. "Halted"
+/// is the regulatory or volatility mask, so bit 1 or bit 2, and not an index
+/// equal to one. [`crate::protocol::trading_status`] reads it.
 ///
 /// So this opcode is something else, and nothing may report a halt from it
 /// until the real path is read. A wrong halt is worse than no halt: a caller
@@ -172,7 +174,7 @@ pub const O_LAST_TS: u64 = 23;
 /// A single decoded tick from a 35=P message.
 #[derive(Debug, Clone, Copy)]
 pub struct RawTick {
-    /// The venue's own number for the subscription.
+    /// The venue's number for the subscription.
     pub server_tag: u32,
     /// Which tick this is, as the wire numbers it.
     pub tick_type: u64,

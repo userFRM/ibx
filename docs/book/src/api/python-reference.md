@@ -30,7 +30,7 @@ def new(wrapper)
 
 #### `connect`
 
-Connect to IB and start the engine.  Live logins (``paper=False``) enter a second-factor approval window and **block** until the factor is approved (mobile push) or the deadline fires (``ib_key_timeout_secs``, default ~18 min). This is a human approval gate, not a hang. To bound or avoid it: use ``paper=True``, pass a smaller ``ib_key_timeout_secs``, or run ``connect()`` on a worker thread with your own timeout. Paper logins skip the gate entirely. Set ``RUST_LOG=info`` to see a log line when the wait begins.  ``code_provider`` answers that factor with a typed code instead: ``code_provider(factor, display_id, avth_url) -> str``, where ``factor`` is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or ``"authenticator"`` (return the account's current code; ``display_id`` and ``avth_url`` are empty). An authenticator account has no push to fall back to and cannot log in without this. It is called once, on a thread of its own, and holds the GIL while it runs — return the code, don't block on input. One wrong code ends the login; there is no retry.  Multiple ``EClient`` instances can run concurrently in one process; each owns its own state, sockets, and engine thread, and ``connect()`` does not serialize across instances. If you pin engines via ``core_id``, give each a distinct value.  `port` is taken and not applied. There is no local socket to name a port on: this client is the one the gateway would have been listening for.
+Connect to IB and start the engine.  Live logins (``paper=False``) enter a second-factor approval window and **block** until the factor is approved (mobile push) or the deadline fires (``ib_key_timeout_secs``, default ~18 min). This is a human approval gate, not a hang. To bound or avoid it: use ``paper=True``, pass a smaller ``ib_key_timeout_secs``, or run ``connect()`` on a worker thread with your own timeout. Paper logins skip the gate entirely. Set ``RUST_LOG=info`` to see a log line when the wait begins.  ``code_provider`` answers that factor with a typed code instead: ``code_provider(factor, display_id, avth_url) -> str``, where ``factor`` is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or ``"authenticator"`` (return the account's current code; ``display_id`` and ``avth_url`` are empty). An authenticator account has no push to fall back to and cannot log in without this. It is called once, on a thread of its own, and holds the GIL while it runs — return the code, don't block on input. One wrong code ends the login; there is no retry.  Multiple ``EClient`` instances can run concurrently in one process; each owns its own state, sockets, and engine thread, and ``connect()`` does not serialize across instances. If you pin engines via ``core_id``, give each a distinct value.  `port` is taken and not applied. The session connects to the venue directly, so there is no local socket to name a port on.
 
 ```python
 def connect(host, port=0, client_id=0, username="", password="", paper=True, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=False, settings=None, session_file=None, order_id_file=None)
@@ -68,6 +68,16 @@ Check if connected.
 
 ```python
 def is_connected()
+```
+
+---
+
+#### `events_lost`
+
+How many engine events this session's channel discarded.  The engine never waits on a reader — a session that stalled on one would stop carrying market data — so an event arriving at a full channel is dropped. A program that acted on every fill it saw needs to know the difference between that and every fill there was. Zero for a session whose reader kept up.
+
+```python
+def events_lost()
 ```
 
 ---
@@ -124,7 +134,7 @@ def ccp_session_id()
 
 #### `misc_url`
 
-Logical-name → host URL lookup from the gateway logon MiscUrls push (e.g. `region_dam`). None when the gateway did not push this key.
+Logical-name → host URL lookup from the MiscUrls block of the logon response (e.g. `region_dam`). `None` when the logon did not carry the key.
 
 ```python
 def misc_url(key)
@@ -231,7 +241,7 @@ def cancel_account_summary(req_id)
 
 #### `req_positions`
 
-Request all positions.
+Request all positions.  Before a session exists this is reported on the error callback and the call returns, as every other request made before connecting is. A program written against the reference client has no exception handling around a request, because that client does not raise there.
 
 ```python
 def req_positions()
@@ -251,7 +261,7 @@ def cancel_positions()
 
 #### `req_account_updates`
 
-Request account updates.  `acct_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
+Request account updates.  `acct_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.  Subscribing also asks the venue to state the figures now. It restates them on its own schedule otherwise, which is unhurried: a session that has just opened waits tens of seconds for its first set, and a caller that subscribed and then read the account got nothing.
 
 ```python
 def req_account_updates(subscribe, _acct_code="")
@@ -266,7 +276,7 @@ def req_account_updates(subscribe, _acct_code="")
 
 #### `req_managed_accts`
 
-Request managed accounts list. Answered with every account this login holds, comma separated, matching the reference client.
+Request managed accounts list. Answered with every account this login holds, comma separated, matching the reference client.  Before a session exists there are no accounts to name, and an empty list reads as a login holding none rather than as a question asked too early.
 
 ```python
 def req_managed_accts()
@@ -365,7 +375,7 @@ def place_order(order_id, contract, order)
 
 #### `exercise_options`
 
-Exercise or lapse a long option position.  `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `_override` is taken for signature compatibility and is not sent: it is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.  `override_` is taken and not applied. It is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.
+Exercise or lapse a long option position.  `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `_override` is taken and not applied: it selects a validation bypass applied before the order is built, and no tag on this wire carries it.
 
 ```python
 def exercise_options(req_id, contract, exercise_action, exercise_quantity, account, _override)
@@ -384,7 +394,7 @@ def exercise_options(req_id, contract, exercise_action, exercise_quantity, accou
 
 #### `cancel_order`
 
-Cancel an order.  `manual_order_cancel_time` is taken and not applied. A cancel names five fields on this wire and no time among them, as the counterpart's own cancel does.
+Cancel an order.  `manual_order_cancel_time` is taken and not applied. A cancel on this wire names five fields and no time among them.
 
 ```python
 def cancel_order(order_id, manual_order_cancel_time="")
@@ -423,7 +433,7 @@ def req_global_cancel()
 
 #### `req_ids`
 
-Request next valid order ID.  `num_ids` is taken and not applied. Ids are handed out one at a time here, as the reference client does whatever number is asked for.
+Request next valid order ID.  `num_ids` is taken and not applied. Ids are handed out one at a time here, as the reference client does whatever number is asked for.  Before a session exists there is no counter to answer from: the id an account may next use is the venue's to state. Answering announces zero, which names no order the venue will hold and is refused on placement. Reported the way the reference client reports every request made before connecting.
 
 ```python
 def req_ids(num_ids=1)
@@ -457,7 +467,7 @@ def req_open_orders()
 
 #### `req_all_open_orders`
 
-Request all open orders across all clients.
+Request all open orders across all clients.  The same answer as `req_open_orders`. The reference client splits the two by client id; this wire carries no client id on an order, so the venue names the orders on the account without stating who entered them. A subset would be an attribution the venue does not supply.
 
 ```python
 def req_all_open_orders()
@@ -467,7 +477,7 @@ def req_all_open_orders()
 
 #### `req_auto_open_orders`
 
-Binding an order placed elsewhere to this session.  The reference client asks a local process to hand over orders a person entered by hand in front of it. There is no such process here and no such person, so there is nothing to hand over, and this reports that rather than returning as though the binding were in place.  Returning quietly was worse than either alternative: a caller that asked to be given those orders and was told nothing waits for orders that are never coming, with nothing to say why.  `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
+Binding an order placed elsewhere to this session.  The reference client asks a local process to hand over orders a person entered by hand in front of it. There is no such process here and no such person, so there is nothing to hand over, and this reports that rather than returning as though the binding were in place.  Reported rather than returning silently: a caller told nothing waits for orders that will not arrive.  `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
 
 ```python
 def req_auto_open_orders(b_auto_bind)
@@ -545,7 +555,7 @@ def req_mkt_data(req_id, contract, generic_tick_list="", snapshot=False, regulat
 
 #### `req_mkt_data_ex`
 
-Like `req_mkt_data`, but encodes the market-data mode per request (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several subscriptions on the same contract can run in parallel and the caller picks whichever feed has data. The frozen one keeps thinly-traded names streaming after hours when the realtime feed is silent.  `regulatory_snapshot` is taken and not applied. A regulatory snapshot is a separate, chargeable request this protocol does not carry, so asking for one here would be answered with an ordinary subscription and a charge nobody agreed to.
+Like `req_mkt_data`, but encodes the market-data mode per request (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several subscriptions on the same contract can run in parallel and the caller picks whichever feed has data. The frozen one keeps thinly-traded names streaming after hours when the realtime feed is silent.  `regulatory_snapshot` is refused rather than dropped. It names a separate, chargeable one-shot request this protocol does not carry, so taking it and subscribing anyway answers a different request than the one asked for: the caller reads a stream where they asked for a single NBBO snapshot, and nothing says so. Reported through `error`, where a request this client will not send belongs.
 
 ```python
 def req_mkt_data_ex(req_id, contract, generic_tick_list="", snapshot=False, regulatory_snapshot=False, mode_9887=0)
@@ -578,7 +588,7 @@ def cancel_mkt_data(req_id)
 
 #### `req_tick_by_tick_data`
 
-Request tick-by-tick data.  `number_of_ticks` and `ignore_size` are refused rather than dropped. The subscription states the contract and the kind of stream and nothing else: there is no field for a prelude of past ticks, and none for suppressing size-only changes. A caller that set either and was answered anyway would be reading a stream it did not ask for, with nothing to say so. Their defaults — no prelude, sizes included — are what the venue does, so an ordinary call is unaffected. Reported through `error`, where a request this client will not send belongs.
+Request tick-by-tick data.  `number_of_ticks` and `ignore_size` are refused rather than dropped. Settled: the request states sixteen tags and neither of these is among them. The subscription states the contract and the kind of stream and nothing else: there is no field for a prelude of past ticks, and none for suppressing size-only changes. A caller that set either and was answered anyway would be reading a stream it did not ask for, with nothing to say so. Their defaults — no prelude, sizes included — are what the venue does, so an ordinary call is unaffected. Reported through `error`, where a request this client will not send belongs.
 
 ```python
 def req_tick_by_tick_data(req_id, contract, tick_type, number_of_ticks=0, ignore_size=False)
@@ -630,7 +640,7 @@ def last_rtt_ms()
 
 #### `req_market_data_type`
 
-NOT supported end to end: the requested type (1=live, 2=frozen, 3=delayed, 4=delayed-frozen) is stored locally but never sent to the gateway, so subscriptions always deliver realtime data and delayed tick variants never arrive. Requesting a non-realtime type logs a warning, and the `market_data_type` callback reports the DELIVERED type (realtime) rather than echoing the request.
+Name the kind of data every subscription after this one asks for: 1 live, 2 frozen, 3 delayed, 4 delayed-frozen.  The type is carried on each subscription that follows, and the `market_data_type` callback reports the type that subscription was made under. A type this client does not know is logged and leaves subscriptions live. `req_mkt_data_ex` states the type per request, which allows two feeds on one contract at once.
 
 ```python
 def req_market_data_type(market_data_type)
@@ -1169,7 +1179,7 @@ def cancel_calculate_option_price(req_id)
 
 #### `req_news_bulletins`
 
-Ask for the notices the venue broadcasts to everyone. Answered on `update_news_bulletin`.  `all_msgs` is taken and not applied. The subscription carries no field asking for the bulletins that came before it, so what arrives is what is published from here on.
+Ask for the notices the venue broadcasts to everyone. Answered on `update_news_bulletin`.  `all_msgs` is taken and not applied, and already honoured for everything it can be. Nothing is sent to the venue: it broadcasts these unasked and this only decides whether they are delivered, so every bulletin the session has seen — including those from before this call — is handed over here. What cannot be had is anything from before the session existed, because there is no request to ask for it with. The last [`NEWS_BULLETIN_LIMIT`](crate::bridge::NEWS_BULLETIN_LIMIT) are kept for a caller who has not asked yet.
 
 ```python
 def req_news_bulletins(all_msgs=True)
@@ -1193,7 +1203,7 @@ def cancel_news_bulletins()
 
 #### `req_current_time`
 
-Ask the venue for its own clock. Answered on `current_time`.
+Ask the venue for its own clock. Answered on `current_time`.  Before a session exists there is no venue clock to report, so this is answered the way the reference client answers every request made before connecting: on `error`, under the number it reports that by. The local clock is not a substitute, since the caller asks this to measure the difference between the two.
 
 ```python
 def req_current_time()
@@ -1203,7 +1213,7 @@ def req_current_time()
 
 #### `request_fa`
 
-Ask the venue for a partition of the advisor's own configuration.  The reference client names the partition by a number: its groups, its allocation profiles, its aliases. The venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition.
+Ask the venue for a partition of the advisor's own configuration.  The reference client names the partition by a number: its groups, its allocation profiles, its aliases. The venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition.  The request reaches the venue; its answer is not read back yet, so `receive_fa` does not fire. What the venue replies with lands among the messages this client records as unread. Reading it needs an advisor account to state the reply's shape, and inventing one would be a guess about a frame nobody here has seen. Said here because a caller waiting on a callback that cannot come has nothing else to tell them.
 
 ```python
 def request_fa(fa_data_type)
@@ -1217,7 +1227,7 @@ def request_fa(fa_data_type)
 
 #### `replace_fa`
 
-Replace a partition of the advisor's configuration with the one given.
+Replace a partition of the advisor's configuration with the one given.  As with `request_fa`, the replacement reaches the venue and its answer is not read back, so `replace_fa_end` does not fire.  `req_id` is taken and not applied. The exchange carries no request number on this wire, and the reference client numbers it only to match the answer that is not read back here.
 
 ```python
 def replace_fa(req_id, fa_data_type, cxml)
@@ -1340,7 +1350,7 @@ def req_family_codes()
 
 #### `set_server_log_level`
 
-How much the venue should log about this session, 1 to 5.
+How much to log about this session, 1 to 5.  Recorded locally rather than sent: this wire carries no log-level request. A level outside 1 to 5 is refused rather than reported back as `warn`, which would tell a caller they had a level that does not exist.
 
 ```python
 def set_server_log_level(log_level=2)
@@ -1483,7 +1493,7 @@ What the venue said about a request, under the number it says it with. Codes fro
 
 #### `current_time`
 
-The venue's own clock, in seconds since the epoch.
+The venue clock, in seconds since the epoch.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2071,7 +2081,7 @@ Historical trades, in batches, until `done`.
 
 #### `tick_option_computation`
 
-The venue's own model for an option: the volatility its price implies, the greeks, and what the model says the option and its underlying are worth.
+The venue's model for an option: the volatility its price implies, the greeks, and the modelled value of the option and its underlying.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

@@ -98,13 +98,26 @@ impl SecureChannel {
     ///
     /// `fields` are the semicolon-split parts after version and msg_type:
     /// `[server_random_b64, server_pub_b64, ...]`
+    ///
+    /// # Server identity is not verified
+    ///
+    /// Only the first two fields are read. Any further field is ignored, and
+    /// no signature or certificate presented by the server is parsed, checked
+    /// for validity, or chained to a trust anchor. Key derivation therefore
+    /// proceeds against whatever peer answered the connect, and every value in
+    /// the key block descends from a public value that peer chose. The channel
+    /// MAC then verifies against that key, so a substituted peer is not
+    /// detectable downstream.
+    ///
+    /// The range check on the public value below is the only check made here.
+    /// The farm connections have no outer TLS, so on those this is the whole
+    /// of the peer authentication.
     pub fn process_server_hello(&mut self, fields: &[&str]) -> std::io::Result<()> {
         let invalid = |what: &str| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("DH server hello: {what}"))
         };
-        // Every field below was indexed directly and decoded with `unwrap`, so a
-        // short or non-base64 hello aborted the process on the ordinary connect
-        // path rather than failing the connection.
+        // Fields are matched and decoded rather than indexed: a short or
+        // non-base64 hello fails the connection instead of panicking.
         let [server_random_b64, server_pub_b64, ..] = fields else {
             return Err(invalid(&format!("expected at least 2 fields, got {}", fields.len())));
         };
@@ -116,11 +129,10 @@ impl SecureChannel {
 
         let n = dh_n();
 
-        // The public value has to lie in [2, N-2]. 0 and 1 pin the pre-master
-        // secret to a known constant, and so therefore the whole key block
-        // derived from it — both AES keys, both IVs, both HMAC keys. Nothing
-        // downstream would notice: the channel's own MAC would be verifying
-        // against the key the peer chose.
+        // The public value must lie in [2, N-2]. 0 and 1 pin the pre-master
+        // secret to a known constant, and with it the whole key block: both
+        // AES keys, both IVs, both HMAC keys. The channel MAC would then
+        // verify against that key, so nothing downstream would detect it.
         let two = BigUint::from(2u32);
         if server_pub < two || server_pub > &n - &two {
             return Err(invalid("public value outside [2, N-2]"));
@@ -440,16 +452,14 @@ mod tests {
         assert_eq!(kb_b.len(), 104);
     }
 
+    /// Both channels complete a key exchange and derive a usable key block.
+    ///
+    /// Each side seeds its key block with its own `client_random`, so two
+    /// independent channels do not derive identical key blocks and this does
+    /// not compare shared secrets. It checks only that both derivations
+    /// produce a 104-byte key block and that both channels then encrypt.
     #[test]
     fn two_channels_exchange_keys_shared_secret_matches() {
-        // In DH, both sides compute the same shared secret: A^b mod N == B^a mod N.
-        // However, the key_block derivation uses each channel's own client_random as
-        // seed,
-        // so two independent SecureChannels won't derive identical key_blocks.
-        //
-        // What is checkable: after the key exchange both sides hold the same
-        // DH shared secret, shown by both channels holding valid 104-byte
-        // key_blocks and encrypt_fresh producing parseable output.
         let mut channel_a = SecureChannel::new();
         let mut channel_b = SecureChannel::new();
 

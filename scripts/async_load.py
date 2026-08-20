@@ -76,6 +76,15 @@ async def drive(ib: IB, rounds: int) -> int:
     print(f"\nevents: {seen}")
     if seen["tickers"] == 0:
         failures.append("no pending-ticker event fired in the whole run")
+    # Counted every round, printed, and then not looked at: a request that
+    # raises is caught above, but one that answers with an empty list is the
+    # async historical path returning nothing, and the run reported that it had
+    # answered. History does not need a live market, so this cannot fail for
+    # being run out of hours — unlike the priced-ticker count beside it, which
+    # legitimately reads zero on a shut market and is printed rather than
+    # required.
+    if seen["bars"] == 0:
+        failures.append("no bars came back from any contract in any round")
     if not failures:
         print("every async form answered, and the events fired")
     for what in failures:

@@ -33,17 +33,18 @@ pub(super) fn phase_account_data(conns: Conns) -> Conns {
     let mut account_checked = false;
     let mut net_liq = 0i64;
 
+    // Account figures arrive on their own, not behind a tick. Reading them
+    // only when one arrives meant a quiet instrument reported the account
+    // missing, which is a statement about the market rather than the session.
     while Instant::now() < deadline {
-        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(200))
-            && !account_checked {
-                let acct = shared.portfolio.account();
-                if acct.net_liquidation != 0 {
-                    net_liq = acct.net_liquidation;
-                    println!("  ACCOUNT: net_liq={:.2}", net_liq as f64 / PRICE_SCALE as f64);
-                    account_checked = true;
-                    break;
-                }
-            }
+        let _ = event_rx.recv_timeout(Duration::from_millis(200));
+        let acct = shared.portfolio.account();
+        if acct.net_liquidation != 0 {
+            net_liq = acct.net_liquidation;
+            println!("  ACCOUNT: net_liq={:.2}", net_liq as f64 / PRICE_SCALE as f64);
+            account_checked = true;
+            break;
+        }
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
@@ -53,7 +54,7 @@ pub(super) fn phase_account_data(conns: Conns) -> Conns {
         println!("  net_liq=${:.2}", net_liq as f64 / PRICE_SCALE as f64);
         println!("  PASS\n");
     } else {
-        println!("  WARN: Account data not received within 20s\n");
+        session_owed(&shared, "no account data arrived");
     }
     conns
 }
@@ -71,13 +72,17 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
     // Register SPY instrument so on_start order submission works
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
-    // The gateway pushes account values on its own cadence off the logon
+    // The venue pushes account values on its own cadence off the logon
     // subscription; two consecutive pushes were 23s apart when measured. This
     // phase runs on a fresh SharedState, so nothing an earlier phase received
     // is here to short-circuit the wait, and a 15s deadline could expire
@@ -88,7 +93,7 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
     let mut probe_done = false;
 
     // Both conditions, not either. The $1 limit resolves in seconds while the
-    // account push runs on the gateway's own cadence, so exiting as soon as the
+    // account push runs on the venue's cadence, so exiting as soon as the
     // order probe finished ended the wait before the account could arrive and
     // reported it as never sent.
     while Instant::now() < deadline && !(probe_done && account_received) {
@@ -135,19 +140,31 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
         shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut phase = 0u8; // 0=wait ticks, 1=buy sent, 2=sell sent
     let mut tick_count = 0u32;
     let mut got_position_update = false;
+    // What the account held before the buy: the round trip returns to this, not
+    // to zero, since the account may already hold the contract.
+    let mut held_before: Option<f64> = None;
+    // The round trip ends on the sell filling, not on it being submitted.
+    let mut sell_filled = false;
+    // Set once the round trip is done, to keep draining for a moment rather
+    // than leaving the moment the last fill lands.
+    let mut settle_by: Option<Instant> = None;
 
     while Instant::now() < deadline {
+        if settle_by.is_some_and(|at| Instant::now() >= at) {
+            break;
+        }
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::Tick(instrument)) => {
                 tick_count += 1;
                 if phase == 0 && tick_count >= 5 {
+                    held_before = Some(shared.portfolio.position(instrument));
                     let buy_oid = next_order_id();
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: buy_oid, instrument, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 1;
@@ -159,9 +176,12 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_order_id, instrument: fill.instrument, side: Side::Sell, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
-                    // Wait a bit more for position update
-                    std::thread::sleep(Duration::from_secs(2));
-                    break;
+                    sell_filled = true;
+                    // Keep receiving rather than sleeping through it: a position
+                    // update the venue sends in this window arrives on this
+                    // channel, and sleeping here then breaking is how it was
+                    // missed. The deadline below ends the wait.
+                    settle_by = Some(Instant::now() + Duration::from_secs(3));
                 }
             }
             Ok(Event::PositionUpdate { instrument, con_id, position, avg_cost }) => {
@@ -185,14 +205,27 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
 
     if phase < 1 {
         no_market(&shared, "no ticks arrived");
-    } else if phase == 2 && got_position_update {
-        // After buy+sell round trip, position should return to 0 (or near it)
+    } else if sell_filled {
+        // Read from what the session holds, which the engine moves on every fill.
+        // The position event is the venue's feed and restates on its own
+        // schedule, not on a fill, so it is not required here.
         let pos = shared.portfolio.position(0);
-        println!("  Final position: {pos}");
-        assert!(pos.abs() <= 1.0, "Position after round trip should be 0 (±1 for timing), got {pos}");
+        let before = held_before.unwrap_or(0.0);
+        println!(
+            "  Final position: {pos}, held before: {before}{}",
+            if got_position_update { " (the venue restated it too)" } else { "" },
+        );
+        // Both sides filled, so the account is back where it started. The
+        // tolerance this replaces was the whole size of the trade: a share
+        // bought and never sold satisfied it, and the phase reported the
+        // position had returned while the account was still long it.
+        assert_eq!(
+            pos, before,
+            "one share was bought and one sold, and the position did not come back to {before}",
+        );
         println!("  PASS (position returned to {pos})\n");
     } else if phase == 2 {
-        session_owed(&shared, "the orders filled and no position update followed");
+        println!("  SKIP: the sell was sent and did not fill within the wait\n");
     } else {
         println!("  SKIP: Only reached phase {phase} (buy may not have filled)\n");
     }
@@ -210,7 +243,7 @@ pub(super) fn phase_account_summary(conns: Conns) -> Conns {
         conns.farm, conns.ccp, conns.hmds, None,
     );
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     // Wait for account data to populate
@@ -218,7 +251,9 @@ pub(super) fn phase_account_summary(conns: Conns) -> Conns {
     let mut has_account_data = false;
 
     while Instant::now() < deadline {
-        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(200)) {
+        // As in the reception phase: the figures do not arrive behind a tick.
+        let _ = event_rx.recv_timeout(Duration::from_millis(200));
+        {
             let acct = shared.portfolio.account();
             if acct.net_liquidation > 0 {
                 // Verify individual fields
@@ -278,6 +313,10 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
@@ -287,6 +326,7 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut cancel_sent = false;
     let mut terminal = false;
+    let mut refused = false;
 
     while Instant::now() < deadline && !terminal {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -295,7 +335,13 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
                 control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                 cancel_sent = true;
             }
-            if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Filled) {
+            // A rejection is not this phase's outcome: the order never worked, so
+            // the cancel under test is never sent.
+            if matches!(update.status, OrderStatus::Rejected) {
+                refused = true;
+                terminal = true;
+            }
+            if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Filled) {
                 terminal = true;
             }
         }
@@ -316,14 +362,23 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
         println!("  SKIP: Order never reached terminal state\n");
         return conns;
     }
+    if refused {
+        println!(
+            "  SKIP: the venue refused the order — {}; nothing was withdrawn, so the \
+             cancel this phase exists to follow was never sent\n",
+            reject_reason(&shared, order_id),
+        );
+        return conns;
+    }
 
+    assert!(cancel_sent, "the order reached a terminal state without a cancel being sent");
     assert!(!completed.is_empty(), "Expected at least one completed order after cancel");
     let co = completed.iter().find(|c| c.order_id == order_id);
     assert!(co.is_some(), "completed order for the placed order_id not found");
     let co = co.unwrap();
     assert!(
-        matches!(co.status, OrderStatus::Cancelled | OrderStatus::Rejected),
-        "Expected Cancelled or Rejected, got {:?}", co.status
+        matches!(co.status, OrderStatus::Cancelled),
+        "the order was withdrawn, so the completed record should say so, not {:?}", co.status
     );
     println!("  PASS\n");
     conns
@@ -362,9 +417,13 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Fetch secdef first to populate contract cache with exchange/localSymbol/tradingClass
-    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9999, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9999, filters: Default::default() }).unwrap();
 
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
@@ -429,8 +488,18 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
 
     // Manually do what EClient::req_positions does
     for pi in shared.portfolio.position_infos() {
-        let c = shared.reference.get_contract(pi.con_id)
-            .unwrap_or_else(|| api::Contract { con_id: pi.con_id, ..Default::default() });
+        // The same construction `req_positions` uses: the definition where one
+        // has been fetched, and the holding's own fields where it has not. The
+        // feed names the contract beside the quantity, so a definition that has
+        // not landed does not leave the holding unnamed.
+        let c = shared.reference.get_contract(pi.con_id).unwrap_or_else(|| api::Contract {
+            con_id: pi.con_id,
+            symbol: pi.symbol.clone(),
+            sec_type: pi.sec_type.clone(),
+            currency: pi.currency.clone(),
+            multiplier: pi.multiplier.clone(),
+            ..Default::default()
+        });
         let avg_cost = pi.avg_cost as f64 / PRICE_SCALE as f64;
         wrapper.position(&account_id, &c, pi.position, avg_cost);
     }
@@ -526,9 +595,13 @@ pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Fetch secdef to populate contract cache
-    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9998, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9998, filters: Default::default() }).unwrap();
 
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
@@ -642,6 +715,10 @@ pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let join = run_hot_loop(hot_loop);
 
@@ -665,8 +742,18 @@ pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
     // Exercise req_positions path
     let mut wrapper = PosWrapper { positions: Vec::new() };
     for pi in shared.portfolio.position_infos() {
-        let c = shared.reference.get_contract(pi.con_id)
-            .unwrap_or_else(|| api::Contract { con_id: pi.con_id, ..Default::default() });
+        // The same construction `req_positions` uses: the definition where one
+        // has been fetched, and the holding's own fields where it has not. The
+        // feed names the contract beside the quantity, so a definition that has
+        // not landed does not leave the holding unnamed.
+        let c = shared.reference.get_contract(pi.con_id).unwrap_or_else(|| api::Contract {
+            con_id: pi.con_id,
+            symbol: pi.symbol.clone(),
+            sec_type: pi.sec_type.clone(),
+            currency: pi.currency.clone(),
+            multiplier: pi.multiplier.clone(),
+            ..Default::default()
+        });
         let avg_cost = pi.avg_cost as f64 / PRICE_SCALE as f64;
         wrapper.position(&account_id, &c, pi.position, avg_cost);
     }
@@ -741,9 +828,13 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Fetch secdef to populate contract cache
-    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9997, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9997, filters: Default::default() }).unwrap();
 
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
@@ -857,6 +948,10 @@ pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Submit a far-from-market order to trigger account updates
     let order_id = next_order_id();
@@ -959,12 +1054,19 @@ pub(super) fn phase_pnl_subscribe_command(conns: Conns) -> Conns {
     control_tx.send(ControlCommand::CancelPnl { req_id }).unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
+    // Read before the engine is stopped: stopping it sets the same flag a lost
+    // connection does. A malformed subscribe drops the session, so this phase
+    // asserts on it rather than leaving it to the phases that follow.
+    let survived = !lost_unasked(&shared);
+
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    // The assertion is the lifecycle itself: a malformed 6040=142 would have
-    // dropped the CCP session, and shutdown_and_reclaim's ccp_keepalive (plus the
-    // CCP-dependent phases that follow) would then fail.
     println!("  midnight seeds received: {seeds_seen}");
+    assert!(
+        survived,
+        "the session went away across the subscribe and the withdrawal, which is \
+         what the venue does with a message it cannot read",
+    );
     println!("  PASS\n");
     conns
 }
@@ -981,7 +1083,7 @@ pub(super) fn phase_news_bulletins(conns: Conns) -> Conns {
         conns.farm, conns.ccp, conns.hmds, None,
     );
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     // Wait for any events to flow, checking for bulletins periodically

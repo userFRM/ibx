@@ -47,21 +47,23 @@ const SETTLE: Duration = Duration::from_secs(5);
 impl EClient {
     /// Bars during regular hours, ending now.
     ///
-    /// `duration` and `bar_size` are the venue's own words for them — `"2 D"`,
+    /// `duration` and `bar_size` are the venue's words for them — `"2 D"`,
     /// `"1 hour"`.
     ///
     /// Of trades, except where the instrument has none. A currency pair does
-    /// not trade on an exchange, so the venue holds no trade history for one
-    /// and answers a request for it with *"No historical market data"* — asking
-    /// for trades there is never what a caller meant, so this asks for the
-    /// midpoint instead. For bid/ask bars, an end other than now, or bars
-    /// through the whole session, state them with
-    /// [`historical_data`](EClient::historical_data).
+    /// not trade on an exchange, and CFD and CMDTY are quoted rather than traded.
+    /// A TRADES request on those is answered with no history, so this asks for
+    /// MIDPOINT instead.
+    ///
+    /// The choice is made here: a contract's description does not state which
+    /// series it has. For another series, another end time, or bars across the
+    /// whole session, use [`historical_data`](EClient::historical_data).
     pub fn bars(
         &self, contract: &Contract, duration: &str, bar_size: &str,
     ) -> Result<Vec<BarData>, Refusal> {
-        let quoted_not_traded = contract.sec_type.eq_ignore_ascii_case("CASH")
-            || contract.sec_type.eq_ignore_ascii_case("CFD");
+        let quoted_not_traded = ["CASH", "CFD", "CMDTY"]
+            .iter()
+            .any(|kind| contract.sec_type.eq_ignore_ascii_case(kind));
         let what = if quoted_not_traded { "MIDPOINT" } else { "TRADES" };
         self.historical_data(contract, "", duration, bar_size, what, true)
     }
@@ -152,7 +154,7 @@ impl EClient {
     /// own is the one case where they meet. Pass what this returns to
     /// [`cancel_mkt_data`](EClient::cancel_mkt_data) to stop the stream.
     ///
-    /// The contract must carry the venue's own id, which
+    /// The contract must carry the venue's id, which
     /// [`qualify`](EClient::qualify) supplies.
     pub fn watch(&self, contract: &Contract) -> Result<i64, Refusal> {
         let req_id = super::ask::ask_id();
@@ -195,15 +197,34 @@ impl EClient {
         };
         crate::client_core::ClientCore::validate_order(&entering, &self.account_id)
             .map_err(Refusal::validation)?;
+        // The exits are prices and are range-checked as the entry is. Scaling
+        // saturates a value the wire cannot carry, which the ordering check below
+        // would then read as a valid price.
+        for (field, price) in [("take_profit", take_profit), ("stop_loss", stop_loss)] {
+            crate::client_core::require_finite_price(field, price)
+                .map_err(Refusal::validation)?;
+        }
         let buying = entering.side().map_err(Refusal::validation)?;
-        let (above, below) = match buying {
-            crate::types::Side::Sell => (stop_loss, take_profit),
-            _ => (take_profit, stop_loss),
+        // A short sale is a sell: its exits take the selling orientation.
+        let selling = matches!(
+            buying,
+            crate::types::Side::Sell | crate::types::Side::ShortSell,
+        );
+        let (above, below) = if selling {
+            (stop_loss, take_profit)
+        } else {
+            (take_profit, stop_loss)
         };
         if !(below < entry && entry < above) {
+            let side_word = if selling { "selling" } else { "buying" };
+            let (upper, lower) = if selling {
+                ("stops out above it", "takes profit below")
+            } else {
+                ("takes profit above it", "stops out below")
+            };
             return Err(Refusal::validation(format!(
-                "a bracket buying at {entry} takes profit above it and stops out \
-                 below: stated as {take_profit} and {stop_loss}, one of the two \
+                "a bracket {side_word} at {entry} {upper} and {lower}: stated as \
+                 {take_profit} and {stop_loss}, one of the two \
                  is on the wrong side of the entry and would close the position \
                  as soon as it opened",
             )));

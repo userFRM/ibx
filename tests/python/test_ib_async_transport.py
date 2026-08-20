@@ -162,3 +162,80 @@ def test_every_call_their_library_makes_is_carried():
         and not hasattr(ibx.EClient, ibx.ib_async._our_name_for(name, ibx.EClient))
     ]
     assert not unrouted, f"their library calls what this engine does not carry: {unrouted}"
+
+
+def test_a_contract_named_by_id_states_nothing_else():
+    """An id names one contract exactly, and nothing is stated beside it.
+
+    This engine's own contract stands ready as a US stock on SMART in dollars,
+    which is what a caller naming a symbol means. Carried onto a contract named
+    only by its id, it stated that a future was a stock as well — a description
+    the venue reads alongside an id it can contradict.
+    """
+    by_id = ibx.ib_async._as_ours(ib_async.Contract(conId=756733))
+    assert by_id.conId == 756733
+    assert (by_id.secType, by_id.exchange, by_id.currency) == ("", "", ""), (
+        "an id was given, so nothing was guessed beside it"
+    )
+
+    # And a description is carried as it was written. A bare symbol used to
+    # arrive as a US stock on SMART in dollars, which is three terms the caller
+    # never stated and the reference client never sends.
+    described = ibx.ib_async._as_ours(ib_async.Contract(symbol="AAPL"))
+    assert (described.secType, described.exchange, described.currency) == ("", "", "")
+
+    # And what the caller did state is carried whichever way it was given.
+    stock = ibx.ib_async._as_ours(ib_async.Stock("AAPL", "SMART", "USD"))
+    assert (stock.symbol, stock.secType, stock.exchange) == ("AAPL", "STK", "SMART")
+
+
+def test_a_combination_keeps_its_legs_across_the_bridge():
+    """Everything the contract carries, not the fields a shorter list names.
+
+    Converting a contract through a narrower helper lost what that helper did
+    not name — the legs of a combination among them, which makes the order one
+    for something else entirely.
+    """
+    theirs = ib_async.Contract(symbol="SPY", secType="BAG", exchange="SMART", currency="USD")
+    theirs.comboLegs = [ib_async.ComboLeg(conId=756733, ratio=1, action="BUY", exchange="SMART")]
+    theirs.secIdType, theirs.secId = "ISIN", "US78462F1030"
+    theirs.includeExpired = True
+
+    ours = ibx.ib_async._as_ours(theirs)
+    assert len(ours.comboLegs) == 1, "a combination is its legs"
+    assert (ours.secIdType, ours.secId) == ("ISIN", "US78462F1030")
+    assert ours.includeExpired is True
+    assert ours.secType == "BAG"
+
+
+def test_what_tunes_an_algo_reaches_the_order():
+    """A field set by the name the reference client uses has to arrive.
+
+    The camelCase names were readable and not writable, and the failure to
+    write them was swallowed: an Adaptive order carried its strategy and lost
+    the priority that tunes it, a combination lost its routing, and an order
+    directing its commission to a tier stated one that was never carried. The
+    order went out on terms nobody had asked for, and nothing said so.
+    """
+    their = ib_async.Order(
+        orderId=1, action="BUY", totalQuantity=1, orderType="LMT", lmtPrice=1.0,
+    )
+    their.algoStrategy = "Adaptive"
+    their.algoParams = [ib_async.TagValue("adaptivePriority", "Normal")]
+    their.smartComboRoutingParams = [ib_async.TagValue("NonGuaranteed", "1")]
+    their.softDollarTier = ib_async.SoftDollarTier("T", "v", "D")
+
+    ours = ibx.ib_async._as_ours(their)
+    assert [(p.tag, p.value) for p in ours.algoParams] == [("adaptivePriority", "Normal")]
+    assert [(p.tag, p.value) for p in ours.smartComboRoutingParams] == [("NonGuaranteed", "1")]
+    tier = ours.softDollarTier
+    assert (tier.name, tier.val, tier.displayName) == ("T", "v", "D")
+
+
+def test_a_field_that_cannot_be_carried_is_refused():
+    """Swallowed, an unset field is an order placed on terms nobody stated."""
+    their = ib_async.Order(orderId=1, action="BUY", totalQuantity=1)
+    their.orderType = object()  # not a string, so nothing can carry it
+    with pytest.raises(ValueError, match="cannot carry"):
+        ibx.ib_async._as_ours(their)
+

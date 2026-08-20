@@ -251,6 +251,8 @@ def where_fields_are_read() -> str:
 STATED_CONSTANTS = {
     "primary_exchange": "carried on the contract, not on the order",
     "exercise_action": "set by the exercise call, not by an order",
+    "combo_legs": "carried on the contract, not on the order",
+    "delta_neutral_contract": "carried on the contract, not on the order",
 }
 
 
@@ -262,7 +264,13 @@ def constants_in_the_conversion() -> list[str]:
     return [
         m.group(1)
         for m in re.finditer(
-            r"^\s*(\w+): (\d+|false|true|String::new\(\)|Default::default\(\)),",
+            # Every shape a literal takes here, not the four that were thought
+            # of first: a float, a negative, `None`, an empty collection and a
+            # named constant are all a caller's value being replaced, and each
+            # of them read as carried.
+            r"^\s*(\w+): (-?\d+(?:\.\d+)?|false|true|None"
+            r"|String::new\(\)|Vec::new\(\)|Default::default\(\)"
+            r"|[A-Z][A-Z0-9_]{2,}),",
             text[at:end], re.M,
         )
     ]
