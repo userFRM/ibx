@@ -1416,8 +1416,10 @@ pub(super) fn phase_fractional_order(conns: Conns) -> Conns {
     hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitFractional {
-        order_id, instrument: inst_id, side: Side::Buy, qty: QTY_SCALE / 2, price: 1_00_000_000,
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: QTY_SCALE / 2,
+        kind: ibx::types::OrderKind::Limit { price: 1_00_000_000 },
+        tif: b'0', attrs: Default::default(),
     })).unwrap();
     control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);

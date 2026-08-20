@@ -1179,20 +1179,6 @@ pub enum OrderRequest {
     /// What-If order: sends a limit order with tag 6091=1 for margin/commission
     /// preview.
     /// The order is NOT placed — response comes back as 35=8 with margin fields.
-    /// Fractional shares limit order. Qty is fixed-point, `QTY_SCALE`, and
-    /// goes out on tag 38 as a decimal string.
-    SubmitLimitFractional {
-        /// The caller's number for the order.
-        order_id: OrderId,
-        /// The engine's own slot for the contract.
-        instrument: InstrumentId,
-        /// Whether it buys or sells.
-        side: Side,
-        /// How much, scaled by `QTY_SCALE`.
-        qty: Qty, // QTY_SCALE fixed-point
-        /// The price, scaled by `PRICE_SCALE`.
-        price: Price,
-    },
     /// Withdraw one order.
     Cancel {
         /// The caller's number for the order.
@@ -1240,7 +1226,6 @@ impl OrderRequest {
             Self::Cancel { order_id } => *order_id,
             Self::CancelAll { .. } => 0,
             Self::Modify { order_id, .. } => *order_id,
-            | Self::SubmitLimitFractional { order_id, .. }
             | Self::SubmitEx { order_id, .. } => *order_id,
             Self::SubmitBracket { parent_id, .. } => *parent_id,
         }
@@ -1268,7 +1253,6 @@ impl OrderRequest {
         match self {
             Self::Cancel { .. } | Self::Modify { .. } => None,
             Self::CancelAll { instrument }
-            | Self::SubmitLimitFractional { instrument, .. }
             | Self::SubmitEx { instrument, .. }
             | Self::SubmitBracket { instrument, .. } => Some(*instrument),
         }
@@ -1293,7 +1277,6 @@ impl OrderRequest {
         match self {
             Self::Cancel { .. } | Self::CancelAll { .. } => {}
             Self::Modify { price, stop_price, .. } => { s(price); s(stop_price); }
-            Self::SubmitLimitFractional { price, .. } => s(price),
             Self::SubmitBracket { entry_price, take_profit, stop_loss, .. } => {
                 s(entry_price); s(take_profit); s(stop_loss);
             }

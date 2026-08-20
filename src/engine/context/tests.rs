@@ -721,14 +721,16 @@ fn submit_limit_fractional_drains_correctly() {
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
     match &orders[0] {
-        OrderRequest::SubmitLimitFractional { order_id, instrument, side, qty, price } => {
+        OrderRequest::SubmitEx {
+            order_id, instrument, side, qty, kind: OrderKind::Limit { price }, ..
+        } => {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
             assert_eq!(*qty as f64 / QTY_SCALE as f64, 0.5, "half a share");
             assert_eq!(*price, 150 * PRICE_SCALE);
         }
-        _ => panic!("expected SubmitLimitFractional"),
+        _ => panic!("expected a limit order carrying the fraction"),
     }
 }
 

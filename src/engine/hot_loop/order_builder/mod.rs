@@ -239,48 +239,6 @@ pub(crate) fn drain_and_send_orders(
                 sl_fields.extend_from_slice(&identity);
                 parent_sent.and(tp_sent).and(conn.send_fix(&sl_fields))
             }
-            OrderRequest::SubmitLimitFractional { order_id, instrument, side, qty, price } => {
-                // Contract identity tags, as on the bracket legs.
-                let identity: Vec<(u32, String)> = {
-                    let mut f = Vec::new();
-                    push_contract_identity(&mut f, context, instrument);
-                    f
-                };
-                context.insert_order(crate::types::Order::new(
-                    order_id, instrument, side, qty, price, b'2', b'0', 0,
-                ));
-                let ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let clord_str = format!("{order_id}.{ver}");
-                let side_str = fix_side(side);
-                let qty_str = format_qty(qty);
-                let price_str = format_price(price);
-                let symbol = context.market.symbol(instrument).to_string();
-                let (sec_type_str, destination) = context.market.order_routing(instrument);
-                // What the contract is denominated in, not what most of them
-                // happen to be.
-                let currency = currency_for(context, shared, instrument);
-                let now = chrono_free_timestamp();
-                let mut fields = vec![
-                    (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
-                    (fix::TAG_SENDING_TIME, &now),
-                    (11, &clord_str),
-                    (1, account_id),
-                    (55, &symbol),
-                    (54, side_str),
-                    (38, &qty_str), // Decimal qty (e.g., "0.5")
-                    (40, "2"),      // OrdType = Limit
-                    (44, &price_str),
-                    (59, "0"),
-                    (60, &now),
-                    (167, &sec_type_str),
-                    (100, &destination),
-                    (6210, &destination),
-                    (15, &currency),
-                    (204, CUSTOMER),
-                ];
-                fields.extend(identity.iter().map(|(t, v)| (*t, v.as_str())));
-                conn.send_fix(&fields)
-            }
             OrderRequest::Cancel { order_id } => {
                 let result = send_cancel(conn, context, account_id, order_id);
                 if result.is_ok() {

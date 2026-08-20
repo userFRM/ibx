@@ -246,12 +246,17 @@ impl Context {
         (parent_id, tp_id, sl_id)
     }
 
-    /// Submit a fractional shares limit order.
+    /// Submit a limit order for a quantity stated fixed-point, so it may be a
+    /// fraction of a share.
     ///
-    /// The quantity is fixed-point: shares multiplied by `QTY_SCALE`. Half a
-    /// share is `QTY_SCALE / 2`. Written out as a number, an example goes
-    /// stale the day the scale changes and quietly teaches a caller to submit
-    /// a fraction of what it meant.
+    /// The quantity is shares multiplied by `QTY_SCALE`; half a share is
+    /// `QTY_SCALE / 2`. Written out as a number, an example goes stale the
+    /// day the scale changes and quietly teaches a caller to submit a
+    /// fraction of what it meant.
+    ///
+    /// This is [`Context::submit`] with the quantity already scaled. It
+    /// carries the same request, so a fractional order goes out through the
+    /// same encoder as every other order rather than a path of its own.
     pub fn submit_limit_fractional(
         &mut self,
         instrument: InstrumentId,
@@ -261,8 +266,14 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitLimitFractional {
-            order_id: id, instrument, side, qty, price,
+        self.pending_orders.push(OrderRequest::SubmitEx {
+            order_id: id,
+            instrument,
+            side,
+            qty,
+            kind: OrderKind::Limit { price },
+            tif: b'0',
+            attrs: OrderAttrs::default(),
         });
         id
     }

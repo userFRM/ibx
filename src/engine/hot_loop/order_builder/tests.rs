@@ -2360,36 +2360,42 @@ mod outside_rth_polarity_tests {
             "all three bracket legs carry the contract id: {sent}",
         );
 
-        context.pending_orders.push(crate::types::OrderRequest::SubmitLimitFractional {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
             order_id: 4,
             instrument,
             side: Side::Buy,
             qty: crate::types::QTY_SCALE / 2,
-            price: 100 * crate::types::PRICE_SCALE,
+            kind: crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: Default::default(),
         });
         let sent = drain(&mut context);
         assert!(sent.contains("|48=MESU7|"), "the fraction names the contract: {sent}");
         assert!(sent.contains("|6008=893091670|"), "the fraction carries the id: {sent}");
     }
 
-    /// A cancel states tag 38 when the quantity is known. A fractional order
-    /// tracks `qty` as 0, so the tag is omitted rather than sent as `38=0`.
+    /// A cancel states tag 38 as the quantity the order carries, so a
+    /// fractional order is cancelled for the fraction it was placed for
+    /// rather than for a quantity of zero.
     #[test]
-    fn a_fractional_cancel_states_no_quantity_rather_than_zero() {
+    fn a_fractional_cancel_states_the_fraction_it_was_placed_for() {
         let mut context = Context::new();
         let instrument = context.register_instrument(893091670);
         context.set_symbol(instrument, "MES".to_string());
-        context.pending_orders.push(crate::types::OrderRequest::SubmitLimitFractional {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
             order_id: 9,
             instrument,
             side: Side::Buy,
             qty: crate::types::QTY_SCALE / 2,
-            price: 100 * crate::types::PRICE_SCALE,
+            kind: crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: Default::default(),
         });
         drain(&mut context);
         context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 9 });
         let sent = drain(&mut context);
         assert!(!sent.contains("|38=0|"), "the cancel states no zero quantity: {sent}");
+        assert!(sent.contains("|38=0.5|"), "it states the fraction instead: {sent}");
     }
 
     /// A replace restates the order's terms, not its history: `filled` carries
