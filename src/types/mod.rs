@@ -92,6 +92,30 @@ pub fn qty_to_f64(qty: Qty) -> f64 {
     qty as f64 / QTY_SCALE as f64
 }
 
+/// The largest share count whose fixed-point form is exact.
+///
+/// The conversion multiplies by `QTY_SCALE` in floating point, and a product
+/// past the 53 bits an `f64` carries loses its low digits. Callers bound the
+/// quantity by this so every quantity that is accepted converts exactly,
+/// rather than one near the top of the range converting to a size nobody
+/// asked for. It is some ninety million shares, which is orders of magnitude
+/// above any single order.
+pub const MAX_EXACT_QTY_SHARES: f64 = (1u64 << 53) as f64 / QTY_SCALE as f64;
+
+/// Convert a caller's decimal quantity into the fixed-point form `Qty` holds.
+///
+/// The inverse of [`qty_to_f64`], and the one place the multiplication lives.
+/// Rounded rather than truncated: a caller asking for a fraction of a share
+/// stated it as a decimal, and truncation places an order for none of it.
+/// Exact for any quantity up to [`MAX_EXACT_QTY_SHARES`].
+#[inline]
+pub fn qty_from_f64(shares: f64) -> Qty {
+    if !shares.is_finite() {
+        return 0;
+    }
+    (shares * QTY_SCALE as f64).round() as Qty
+}
+
 /// Convert a counted size into the `QTY_SCALE` fixed-point form, where the
 /// venue stated what it counts this instrument's sizes in.
 ///

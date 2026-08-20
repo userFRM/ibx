@@ -6,7 +6,7 @@ use crate::protocol::datetime::{chrono_free_timestamp, unix_to_ib_utc_dash};
 use crate::engine::context::Context;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
-use crate::types::{AlgoParams, OrderCondition, OrderRequest, OrderStatus, OrderUpdate, Side, qty_from_wire, qty_to_f64};
+use crate::types::{AlgoParams, OrderCondition, OrderRequest, OrderStatus, OrderUpdate, Side, qty_to_f64};
 
 use super::{HeartbeatState, format_price, format_qty, format_uint};
 
@@ -108,7 +108,7 @@ pub(crate) fn drain_and_send_orders(
                 };
                 let exit_side_str = fix_side(exit_side);
                 let side_str = fix_side(side);
-                let qty_str = format_uint(qty as u64);
+                let qty_str = format_qty(qty);
                 let symbol = context.market.symbol(instrument).to_string();
                 let (sec_type_str, destination) = context.market.order_routing(instrument);
                 // What the contract is denominated in, not what most of them
@@ -143,7 +143,7 @@ pub(crate) fn drain_and_send_orders(
                     parent_id,
                     instrument,
                     side,
-                    qty_from_wire(qty as i64),
+                    qty,
                     entry_price,
                     b'2',
                     b'0',
@@ -176,7 +176,7 @@ pub(crate) fn drain_and_send_orders(
                     tp_id,
                     instrument,
                     exit_side,
-                    qty_from_wire(qty as i64),
+                    qty,
                     take_profit,
                     b'2',
                     b'1',
@@ -209,7 +209,7 @@ pub(crate) fn drain_and_send_orders(
 
                 // 3. Stop-loss child: stop exit, linked to parent, in OCA group
                 context.insert_order(crate::types::Order::new(
-                    sl_id, instrument, exit_side, qty_from_wire(qty as i64), stop_loss, b'3', b'1', stop_loss,
+                    sl_id, instrument, exit_side, qty, stop_loss, b'3', b'1', stop_loss,
                 ));
                 let now = chrono_free_timestamp();
                 // The legs go out as three messages and the arm reports one
@@ -405,7 +405,7 @@ pub(crate) fn drain_and_send_orders(
                         order_id,
                         orig.instrument,
                         orig.side,
-                        qty_from_wire(qty as i64),
+                        qty,
                         price,
                         ord_type,
                         tif,
@@ -443,7 +443,7 @@ pub(crate) fn drain_and_send_orders(
                     context.submitted.insert(order_id, spec);
                 }
 
-                let qty_str = format_uint(qty as u64);
+                let qty_str = format_qty(qty);
                 let price_str = format_price(price);
                 let now = chrono_free_timestamp();
                 let side_str = fix_side(orig.side);
@@ -894,7 +894,7 @@ fn send_order_ex(
     order_id: crate::types::OrderId,
     instrument: crate::types::InstrumentId,
     side: Side,
-    qty: u32,
+    qty: crate::types::Qty,
     kind: crate::types::OrderKind,
     tif: u8,
     attrs: &crate::types::OrderAttrs,
@@ -939,7 +939,7 @@ fn send_order_ex(
         order_id,
         instrument,
         side,
-        qty_from_wire(qty as i64),
+        qty,
         track_price,
         ord_type_byte,
         tif,
@@ -974,7 +974,7 @@ fn send_order_ex(
         (1, account_id.to_string()),
         (55, symbol),
         (54, fix_side(side).to_string()),
-        (38, format_uint(qty as u64).to_string()),
+        (38, format_qty(qty).to_string()),
     ];
 
     // Order type (40) plus its price tags and type-specific companions —

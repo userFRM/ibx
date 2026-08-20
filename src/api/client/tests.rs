@@ -195,30 +195,16 @@ fn a_what_if_preview_reports_the_parent_the_child_was_given() {
         "the preview carries the recorded parent: {:?}", w.events,
     );
 }
-/// The quantity reaches the wire through `as u32`, which truncates. Asking for
-/// 1.5 shares sent an order for 1 and reported nothing — the fill, the status
-/// and the position were all consistent with an order that was never placed.
-#[test]
-fn a_fractional_quantity_is_refused_rather_than_truncated() {
-    let (client, rx, _shared) = test_client();
-    let order = Order {
-        action: "BUY".into(), total_quantity: 1.5, order_type: "MKT".into(),
-        tif: "DAY".into(), ..Default::default()
-    };
-    let err = client.place_order(9101, &spy(), &order).expect_err("must be refused");
-    assert!(err.to_string().contains("whole number"), "the error says why: {err}");
-    assert!(rx.try_recv().is_err(), "and nothing reaches the wire");
-}
 
-/// A quantity that is not a number, or is negative, or overflows the wire
-/// type, all reach `as u32` and become something the caller did not ask for.
+/// A quantity that is not a number, or is negative, or overflows the
+/// fixed-point form, all become a size the caller did not ask for.
 #[test]
 fn an_unusable_quantity_is_refused() {
     for (qty, expect) in [
         (f64::NAN, "finite"),
         (f64::INFINITY, "finite"),
         (-5.0, "negative"),
-        (5e9, "too large"),
+        (1e11, "too large"),
     ] {
         let (client, _rx, _shared) = test_client();
         let order = Order {
@@ -246,10 +232,11 @@ fn the_quantity_boundaries_are_exact() {
         client.place_order(9601, &spy(), &order)
     };
 
-    assert!(place(u32::MAX as f64).is_ok(), "the largest carryable quantity still places");
-    assert!(place(u32::MAX as f64 + 1.0).is_err(), "one past it does not");
+    let largest = crate::types::MAX_EXACT_QTY_SHARES;
+    assert!(place(largest).is_ok(), "the largest carryable quantity still places");
+    assert!(place(largest + 1.0).is_err(), "one past it does not");
     assert!(place(-1.0).is_err(), "a small negative is refused, not just a large one");
-    assert!(place(1.25).is_err(), "a fraction below a half is refused too");
+    assert!(place(1.25).is_ok(), "a fraction is carried, not refused");
     assert!(place(f64::NEG_INFINITY).is_err(), "negative infinity is not finite either");
 }
 
@@ -1065,6 +1052,32 @@ fn cancel_tick_by_tick_unknown_req_id_no_panic() {
 //  Orders — every order type
 // ═══════════════════════════════════════════════════════════════════
 
+/// A caller asking for a fraction of a share gets one. The quantity was
+/// taken through `as u32`, so `placeOrder` with 0.5 sent an order for none:
+/// the fraction was dropped before it reached the wire.
+#[test]
+fn place_order_carries_a_fractional_quantity() {
+    let (client, rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let order = Order {
+        action: "BUY".into(),
+        total_quantity: 0.5,
+        order_type: "LMT".into(),
+        lmt_price: 150.0,
+        ..Default::default()
+    };
+    client.place_order(1, &spy(), &order).unwrap();
+
+    let cmd = rx.try_recv().unwrap();
+    match cmd {
+        ControlCommand::Order(OrderRequest::SubmitEx { qty, .. }) => assert_eq!(
+            qty, crate::types::QTY_SCALE / 2,
+            "half a share reaches the engine as half a share",
+        ),
+        _ => panic!("expected a submitted order, got {cmd:?}"),
+    }
+}
+
 #[test]
 fn place_order_market() {
     let (client, rx, shared) = test_client();
@@ -1074,7 +1087,7 @@ fn place_order_market() {
 
     let cmd = rx.try_recv().unwrap();
     match cmd {
-        ControlCommand::Order(OrderRequest::SubmitEx { qty, kind: OrderKind::Market, .. }) => assert_eq!(qty, 100),
+        ControlCommand::Order(OrderRequest::SubmitEx { qty, kind: OrderKind::Market, .. }) => assert_eq!(qty, 100 * crate::types::QTY_SCALE),
         _ => panic!("expected a Market order, got {cmd:?}"),
     }
 }
@@ -1092,7 +1105,7 @@ fn place_order_limit() {
     let cmd = rx.try_recv().unwrap();
     match cmd {
         ControlCommand::Order(OrderRequest::SubmitEx { qty, kind: OrderKind::Limit { price, .. }, .. }) => {
-            assert_eq!(qty, 50);
+            assert_eq!(qty, 50 * crate::types::QTY_SCALE);
             assert_eq!(price, (150.25 * PRICE_SCALE_F) as i64);
         }
         _ => panic!("expected a Limit order, got {cmd:?}"),
@@ -4142,7 +4155,7 @@ fn modify_limit_order_price_via_resubmit() {
     while let Ok(cmd) = rx.try_recv() {
         if let ControlCommand::Order(OrderRequest::Modify { order_id: 80, price, qty, .. }) = cmd {
             assert_eq!(price, (152.0 * PRICE_SCALE_F) as i64);
-            assert_eq!(qty, 100);
+            assert_eq!(qty, 100 * crate::types::QTY_SCALE);
             found = true;
         }
     }
@@ -4256,7 +4269,7 @@ fn modify_tif_day_to_gtc_via_resubmit() {
     while let Ok(cmd) = rx.try_recv() {
         if let ControlCommand::Order(OrderRequest::Modify { order_id: 88, price, qty, tif, .. }) = cmd {
             assert_eq!(price, (150.0 * PRICE_SCALE_F) as i64);
-            assert_eq!(qty, 100);
+            assert_eq!(qty, 100 * crate::types::QTY_SCALE);
             // The change the test is named for. Asserting only that a Modify
             // was emitted passed for as long as the time-in-force was dropped.
             assert_eq!(tif, b'1', "the modify must carry GTC, not restate DAY");
@@ -4286,7 +4299,7 @@ fn modify_price_and_qty_simultaneously() {
     let mut found = false;
     while let Ok(cmd) = rx.try_recv() {
         if let ControlCommand::Order(OrderRequest::Modify { order_id: 55, qty, price, .. }) = cmd {
-            assert_eq!(qty, 200);
+            assert_eq!(qty, 200 * crate::types::QTY_SCALE);
             assert_eq!(price, (148.0 * PRICE_SCALE_F) as i64);
             found = true;
         }

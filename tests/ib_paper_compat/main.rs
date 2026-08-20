@@ -721,7 +721,7 @@ fn cross_session_recovery_phase_live() {
         // tag 167 with "Unsupported type".
         hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
-        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("Session A: send order failed");
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("Session A: send order failed");
 
         let join = run_hot_loop(hot_loop);
 
@@ -996,7 +996,7 @@ fn cancel_by_perm_id_phase_live() {
     // tag 167 with "Unsupported type".
     hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
 
     let join = run_hot_loop(hot_loop);
 
@@ -1133,12 +1133,12 @@ fn submit_ex_bracket_child_phase_live() {
 
     // Parent: resting far-below-market entry (proven pattern from the
     // cross-session test).
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: parent_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send parent failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: parent_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send parent failed");
 
     // Child shape: STP + GTC + parent_id + oca_group. A sell
     // stop at $0.50 can never trigger even if something goes wrong.
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: child_id, instrument: inst_id, side: Side::Sell, qty: 1,
+        order_id: child_id, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE,
         kind: ibx::types::OrderKind::Stop { stop_price: 50_000_000 },
         tif: b'1', // GTC
         attrs: ibx::types::OrderAttrs {
@@ -1262,7 +1262,7 @@ fn snap_to_tick_phase_live() {
     std::thread::sleep(Duration::from_secs(5));
 
     // Off-grid on a $0.01 grid: must go out as $1.00.
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_123_400 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_123_400 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let (mut acked, mut rejected) = (false, false);

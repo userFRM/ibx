@@ -1140,8 +1140,8 @@ pub enum OrderRequest {
         instrument: InstrumentId,
         /// Whether it buys or sells.
         side: Side,
-        /// How much, in whole shares.
-        qty: u32,
+        /// How much, scaled by `QTY_SCALE`.
+        qty: Qty,
         /// Where the parent enters.
         entry_price: Price,
         /// Where the profit-taking child sits.
@@ -1159,8 +1159,8 @@ pub enum OrderRequest {
         instrument: InstrumentId,
         /// Whether it buys or sells.
         side: Side,
-        /// How much, in whole shares.
-        qty: u32,
+        /// How much, scaled by `QTY_SCALE`.
+        qty: Qty,
         /// What kind of order this is, and the prices that kind needs.
         kind: OrderKind,
         /// How long the order lives, as the wire carries it.
@@ -1214,8 +1214,8 @@ pub enum OrderRequest {
         order_id: OrderId,
         /// The price, scaled by `PRICE_SCALE`.
         price: Price,
-        /// How much, in whole shares.
-        qty: u32,
+        /// How much, scaled by `QTY_SCALE`.
+        qty: Qty,
         /// Outside-RTH flag from the order the caller resubmitted. The replace
         /// asserts tag 6433 from this rather than from the tracked record,
         /// which has no field for it.

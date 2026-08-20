@@ -178,7 +178,7 @@ impl EClient {
                 return self.report_refusal(py, order_id, refusal.into());
             }
             let price = (api_order.lmt_price * crate::types::model::PRICE_SCALE_F) as i64;
-            let qty = api_order.total_quantity as u32;
+            let qty = crate::types::qty_from_f64(api_order.total_quantity);
             // A stop's trigger rides on aux_price, exactly as it does on the
             // submit path.
             let stop_price = (api_order.aux_price * crate::types::model::PRICE_SCALE_F) as i64;
@@ -251,7 +251,7 @@ impl EClient {
         };
         let instrument = self.find_or_register_instrument(py, contract)?;
         Self::send_control(py, &tx, ControlCommand::Order(
-            ClientCore::build_exercise_request(oid, instrument, action, qty),
+            ClientCore::build_exercise_request(oid, instrument, action, crate::types::qty_from_wire(qty as i64)),
         ))
     }
 

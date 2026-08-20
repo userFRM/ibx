@@ -101,7 +101,7 @@ fn order_buffer_starts_empty() {
 fn order_buffer_push_and_drain() {
     let mut buf = OrderBuffer::new();
     buf.push(OrderRequest::SubmitEx {
-        order_id: 1, instrument: 0, side: Side::Buy, qty: 100,
+        order_id: 1, instrument: 0, side: Side::Buy, qty: 100 * crate::types::QTY_SCALE,
         kind: OrderKind::Limit { price: 150 * PRICE_SCALE },
         tif: b'0', attrs: OrderAttrs::default(),
     });
@@ -117,7 +117,7 @@ fn order_buffer_push_and_drain() {
 fn order_buffer_drain_reusable() {
     let mut buf = OrderBuffer::new();
     buf.push(OrderRequest::SubmitEx {
-        order_id: 1, instrument: 0, side: Side::Sell, qty: 50,
+        order_id: 1, instrument: 0, side: Side::Sell, qty: 50 * crate::types::QTY_SCALE,
         kind: OrderKind::Market,
         tif: b'0', attrs: OrderAttrs::default(),
     });
@@ -136,7 +136,7 @@ fn order_request_is_copy() {
     let req = OrderRequest::Modify {
         order_id: 1,
         price: 100 * PRICE_SCALE,
-        qty: 200,
+        qty: 200 * crate::types::QTY_SCALE,
         outside_rth: false,
         ord_type: 0,
         tif: 0,
@@ -307,7 +307,7 @@ fn snap_to_tick_rounds_to_nearest() {
 #[test]
 fn snap_prices_limit_and_stop_fields() {
     let mut req = OrderRequest::SubmitEx {
-        order_id: 1, instrument: 0, side: Side::Buy, qty: 1,
+        order_id: 1, instrument: 0, side: Side::Buy, qty: crate::types::QTY_SCALE,
         kind: OrderKind::StopLimit { price: 15_012_345_678, stop_price: 15_099_999_999 },
         tif: b'0', attrs: OrderAttrs::default(),
     };
@@ -324,7 +324,7 @@ fn snap_prices_limit_and_stop_fields() {
 #[test]
 fn snap_prices_submit_ex_kind() {
     let mut req = OrderRequest::SubmitEx {
-        order_id: 1, instrument: 0, side: Side::Sell, qty: 1,
+        order_id: 1, instrument: 0, side: Side::Sell, qty: crate::types::QTY_SCALE,
         kind: OrderKind::Stop { stop_price: 24_000_123_456 },
         tif: b'1', attrs: OrderAttrs::default(),
     };
@@ -341,7 +341,7 @@ fn snap_prices_submit_ex_kind() {
 fn snap_prices_leaves_percent_trail_alone() {
     // trail_pct is basis points, not a price — must never be snapped.
     let mut req = OrderRequest::SubmitEx {
-        order_id: 1, instrument: 0, side: Side::Sell, qty: 1,
+        order_id: 1, instrument: 0, side: Side::Sell, qty: crate::types::QTY_SCALE,
         kind: OrderKind::TrailPct { trail_pct: 137, trail_stop_price: 0 },
         tif: b'0', attrs: OrderAttrs::default(),
     };
@@ -356,7 +356,7 @@ fn snap_prices_leaves_percent_trail_alone() {
 #[test]
 fn snap_prices_unknown_tick_is_noop() {
     let mut req = OrderRequest::SubmitEx {
-        order_id: 1, instrument: 0, side: Side::Buy, qty: 1,
+        order_id: 1, instrument: 0, side: Side::Buy, qty: crate::types::QTY_SCALE,
         kind: OrderKind::Limit { price: 15_012_345_678 },
         tif: b'0', attrs: OrderAttrs::default(),
     };
@@ -371,25 +371,25 @@ fn snap_prices_unknown_tick_is_noop() {
 #[test]
 fn instrument_accessor_covers_submits() {
     let req = OrderRequest::SubmitEx {
-        order_id: 1, instrument: 7, side: Side::Buy, qty: 1,
+        order_id: 1, instrument: 7, side: Side::Buy, qty: crate::types::QTY_SCALE,
         kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default(),
     };
     assert_eq!(req.instrument(), Some(7));
     assert_eq!(OrderRequest::Cancel { order_id: 1 }.instrument(), None);
     assert_eq!(
-        OrderRequest::Modify { order_id: 1, price: 0, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 }.instrument(),
+        OrderRequest::Modify { order_id: 1, price: 0, qty: crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 }.instrument(),
         None
     );
 }
 
 #[test]
 fn order_request_modify_fields() {
-    let req = OrderRequest::Modify { order_id: 99, price: 200 * PRICE_SCALE, qty: 10, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 };
+    let req = OrderRequest::Modify { order_id: 99, price: 200 * PRICE_SCALE, qty: 10 * crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 };
     match req {
         OrderRequest::Modify { order_id, price, qty, .. } => {
             assert_eq!(order_id, 99);
             assert_eq!(price, 200 * PRICE_SCALE);
-            assert_eq!(qty, 10);
+            assert_eq!(qty, 10 * QTY_SCALE);
         }
         _ => panic!("wrong variant"),
     }
@@ -432,11 +432,11 @@ fn fill_is_copy() {
         order_id: 1,
         side: Side::Buy,
         price: 150 * PRICE_SCALE,
-        qty: 100,
+        qty: 100 * QTY_SCALE,
         remaining: 0,
         commission: 0,
         timestamp_ns: 123456789,
-        cum_qty: 100, avg_price: 150 * PRICE_SCALE,
+        cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     };
     let f2 = f; // Copy
     assert_eq!(f.order_id, f2.order_id);
@@ -452,8 +452,8 @@ fn order_is_copy() {
         instrument: 0,
         side: Side::Sell,
         price: 200 * PRICE_SCALE,
-        qty: 50,
-        filled: 10,
+        qty: 50 * QTY_SCALE,
+        filled: 10 * QTY_SCALE,
         status: OrderStatus::PartiallyFilled,
         ord_type: b'2',
         tif: b'0',
@@ -567,6 +567,30 @@ fn order_attrs_cash_qty_default_zero() {
     let attrs = OrderAttrs::default();
     assert_eq!(attrs.cash_qty, 0);
 }
+
+/// A caller's decimal becomes the fixed-point form exactly, both ways, for
+/// every quantity the order path accepts.
+#[test]
+fn qty_from_f64_is_exact_up_to_the_bound() {
+    use super::{qty_from_f64, qty_to_f64, MAX_EXACT_QTY_SHARES, QTY_SCALE};
+
+    assert_eq!(qty_from_f64(0.5), QTY_SCALE / 2, "half a share");
+    assert_eq!(qty_from_f64(100.0), 100 * QTY_SCALE, "a whole one");
+    assert_eq!(qty_from_f64(0.00000001), 1, "the finest the scale holds");
+    assert_eq!(qty_from_f64(f64::NAN), 0, "not a number is not a quantity");
+    assert_eq!(qty_from_f64(f64::INFINITY), 0);
+
+    // Rounded, not truncated: a tenth is not exact in binary, so truncation
+    // puts three tenths one hundred-millionth low.
+    assert_eq!(qty_from_f64(0.3), 3 * QTY_SCALE / 10);
+
+    // The bound is where the product still fits the 53 bits an f64 carries,
+    // so the round trip is lossless everywhere it is accepted.
+    let largest = MAX_EXACT_QTY_SHARES;
+    assert_eq!(qty_to_f64(qty_from_f64(largest)), largest, "exact at the bound");
+    assert_eq!(qty_to_f64(qty_from_f64(1234.5678)), 1234.5678, "and below it");
+}
+
 mod counted_size_tests {
     use super::super::{qty_from_counted, qty_from_wire, QTY_SCALE};
 

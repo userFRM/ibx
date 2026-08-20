@@ -223,7 +223,7 @@ fn fill_dedup_duplicate_exec_id_no_double_position() {
 
     engine.context_mut().insert_order(ibx::types::Order {
         order_id: 70, instrument: 0, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, filled: 0,
+        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE * QTY_SCALE, filled: 0,
         status: OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -250,7 +250,7 @@ fn fill_dedup_different_exec_ids_both_count() {
 
     engine.context_mut().insert_order(ibx::types::Order {
         order_id: 71, instrument: 0, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 200 * QTY_SCALE, filled: 0,
+        price: 150 * PRICE_SCALE, qty: 200 * QTY_SCALE * QTY_SCALE, filled: 0,
         status: OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -702,7 +702,7 @@ fn concurrent_account_read_write() {
 fn order_buffer_push_drain_cycle() {
     let mut buf = OrderBuffer::new();
     for i in 0..64 {
-        buf.push(OrderRequest::SubmitEx { order_id: i, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() });
+        buf.push(OrderRequest::SubmitEx { order_id: i, instrument: 0, side: Side::Buy, qty: QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() });
     }
     let drained: Vec<_> = buf.drain().collect();
     assert_eq!(drained.len(), 64);
@@ -715,7 +715,7 @@ fn order_buffer_multiple_drain_cycles() {
     let mut buf = OrderBuffer::new();
     for cycle in 0..5 {
         for i in 0..10 {
-            buf.push(OrderRequest::SubmitEx { order_id: cycle * 10 + i, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() });
+            buf.push(OrderRequest::SubmitEx { order_id: cycle * 10 + i, instrument: 0, side: Side::Buy, qty: QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() });
         }
         let drained: Vec<_> = buf.drain().collect();
         assert_eq!(drained.len(), 10);

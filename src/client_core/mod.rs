@@ -2561,24 +2561,18 @@ impl ClientCore {
                 order.trailing_percent
             ));
         }
-        // The quantity reaches the wire through `as u32`, which truncates. A
-        // caller asking for 1.5 was sent an order for 1 and told nothing —
-        // the fill, the status and the position were all consistent with an
-        // order they never placed. Fractional quantities are not carried on
-        // this path, so say so rather than rounding someone's size down.
+        // The quantity reaches the wire as the decimal it was given, so a
+        // fraction of a share is carried rather than refused. The bound is
+        // where the fixed-point conversion stops being exact: past it the
+        // low digits are lost, and the order goes out for a size nobody
+        // asked for rather than being refused.
         if !order.total_quantity.is_finite() {
             return Err("total_quantity must be a finite number".to_string());
         }
         if order.total_quantity < 0.0 {
             return Err(format!("total_quantity {} is negative", order.total_quantity));
         }
-        if order.total_quantity.fract() != 0.0 {
-            return Err(format!(
-                "total_quantity {} is not a whole number of shares, which this path cannot carry",
-                order.total_quantity
-            ));
-        }
-        if order.total_quantity > u32::MAX as f64 {
+        if order.total_quantity > crate::types::MAX_EXACT_QTY_SHARES {
             return Err(format!("total_quantity {} is too large", order.total_quantity));
         }
         // A cash-quantity order legitimately carries no shares — the size is
@@ -3202,7 +3196,7 @@ impl ClientCore {
     /// validation bypass the venue's front end applies while it builds the
     /// order, so no tag carries it and there is nothing to send.
     pub fn build_exercise_request(
-        order_id: OrderId, instrument: InstrumentId, action: u8, qty: u32,
+        order_id: OrderId, instrument: InstrumentId, action: u8, qty: Qty,
     ) -> OrderRequest {
         OrderRequest::SubmitEx {
             order_id,
@@ -3231,7 +3225,7 @@ impl ClientCore {
         contract: Option<&crate::types::model::Contract>,
     ) -> Result<ControlCommand, String> {
         let side = order.side()?;
-        let qty = order.total_quantity as u32;
+        let qty = crate::types::qty_from_f64(order.total_quantity);
         let order_type = order.order_type.to_uppercase();
 
         // Every order type carries its extended attributes and its time-in-force

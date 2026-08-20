@@ -31,7 +31,7 @@ fn submit_limit_drains_correctly() {
         } => {
             assert_eq!(instrument, 0);
             assert_eq!(side, Side::Buy);
-            assert_eq!(qty, 100);
+            assert_eq!(qty, 100 * crate::types::QTY_SCALE);
             assert_eq!(price, 150 * PRICE_SCALE);
         }
         _ => panic!("expected SubmitLimit"),
@@ -52,7 +52,7 @@ fn submit_market_drains_correctly() {
         } => {
             assert_eq!(instrument, 1);
             assert_eq!(side, Side::Sell);
-            assert_eq!(qty, 200);
+            assert_eq!(qty, 200 * crate::types::QTY_SCALE);
         }
         _ => panic!("expected SubmitMarket"),
     }
@@ -97,7 +97,7 @@ fn modify_drains_correctly() {
         } => {
             assert_eq!(order_id, 7);
             assert_eq!(price, 200 * PRICE_SCALE);
-            assert_eq!(qty, 50);
+            assert_eq!(qty, 50 * crate::types::QTY_SCALE);
         }
         _ => panic!("expected Modify"),
     }
@@ -163,7 +163,7 @@ fn insert_and_query_order() {
         instrument: 0,
         side: Side::Buy,
         price: 150 * PRICE_SCALE,
-        qty: 100,
+        qty: 100 * QTY_SCALE,
         filled: 0,
         status: OrderStatus::Submitted,
         ord_type: b'2',
@@ -172,7 +172,7 @@ fn insert_and_query_order() {
     };
     ctx.insert_order(order);
     assert!(ctx.order(1).is_some());
-    assert_eq!(ctx.order(1).unwrap().qty, 100);
+    assert_eq!(ctx.order(1).unwrap().qty, 100 * crate::types::QTY_SCALE);
 }
 
 #[test]
@@ -572,7 +572,7 @@ fn submit_stop_returns_id_and_drains() {
             assert_eq!(order_id, id);
             assert_eq!(instrument, 0);
             assert_eq!(side, Side::Sell);
-            assert_eq!(qty, 50);
+            assert_eq!(qty, 50 * crate::types::QTY_SCALE);
             assert_eq!(stop_price, 140 * PRICE_SCALE);
         }
         _ => panic!("Expected SubmitStop"),
@@ -648,7 +648,7 @@ fn submit_limit_auc_drains_correctly() {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
-            assert_eq!(*qty, 100);
+            assert_eq!(*qty, 100 * crate::types::QTY_SCALE);
             assert_eq!(*price, 150 * PRICE_SCALE);
         }
         _ => panic!("expected SubmitLimitAuc"),
@@ -667,7 +667,7 @@ fn submit_mtl_auc_drains_correctly() {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
-            assert_eq!(*qty, 100);
+            assert_eq!(*qty, 100 * crate::types::QTY_SCALE);
         }
         _ => panic!("expected SubmitMtlAuc"),
     }
@@ -687,7 +687,7 @@ fn submit_box_top_reuses_mtl() {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
-            assert_eq!(*qty, 100);
+            assert_eq!(*qty, 100 * crate::types::QTY_SCALE);
         }
         _ => panic!("expected SubmitMtl from box_top"),
     }
@@ -707,7 +707,7 @@ fn submit_what_if_drains_correctly() {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
-            assert_eq!(*qty, 100);
+            assert_eq!(*qty, 100 * crate::types::QTY_SCALE);
             assert_eq!(*price, 25620 * (PRICE_SCALE / 100));
         }
         _ => panic!("expected a what-if"),
@@ -758,7 +758,7 @@ fn submit_adjustable_stop_drains_correctly() {
             adjusted_stop_limit_price, .. }, tif, attrs, .. } => {
             assert_eq!(*order_id, id);
             assert_eq!(*side, Side::Sell);
-            assert_eq!(*qty, 1);
+            assert_eq!(*qty, crate::types::QTY_SCALE);
             assert_eq!(*stop_price, 25120 * (PRICE_SCALE / 100));
             assert_eq!(*trigger_price, 25620 * (PRICE_SCALE / 100));
             assert_eq!(*adjusted_order_type, AdjustedOrderType::StopLimit);

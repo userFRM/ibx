@@ -54,7 +54,7 @@ fn a_replace_restates_the_attributes_the_order_was_placed_with() {
         order_id: 42,
         instrument,
         side: Side::Buy,
-        qty: 100,
+        qty: 100 * crate::types::QTY_SCALE,
         kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
         tif: b'0',
         attrs,
@@ -77,7 +77,7 @@ fn a_replace_restates_the_attributes_the_order_was_placed_with() {
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 42,
         price: 151 * crate::types::PRICE_SCALE,
-        qty: 100,
+        qty: 100 * crate::types::QTY_SCALE,
         outside_rth: false,
         ord_type: 0,
         tif: 0,
@@ -374,7 +374,7 @@ fn a_bracket_whose_write_failed_leaves_no_leg_reported_as_working() {
         sl_id: 12,
         instrument,
         side: Side::Buy,
-        qty: 100,
+        qty: 100 * crate::types::QTY_SCALE,
         entry_price: 150 * crate::types::PRICE_SCALE,
         take_profit: 155 * crate::types::PRICE_SCALE,
         stop_loss: 145 * crate::types::PRICE_SCALE,
@@ -437,7 +437,7 @@ fn an_order_whose_write_failed_is_unknown_rather_than_rejected() {
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 42,
         price: 151 * crate::types::PRICE_SCALE,
-        qty: 100,
+        qty: 100 * crate::types::QTY_SCALE,
         outside_rth: false,
         ord_type: 0,
         tif: 0,
@@ -525,7 +525,7 @@ fn a_replacement_can_itself_be_replaced() {
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 7,
         price: 2 * crate::types::PRICE_SCALE,
-        qty: 1,
+        qty: crate::types::QTY_SCALE,
         outside_rth: false,
         ord_type: 0,
         tif: 0,
@@ -548,7 +548,7 @@ fn a_replacement_can_itself_be_replaced() {
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 7,
         price: 3 * crate::types::PRICE_SCALE,
-        qty: 1,
+        qty: crate::types::QTY_SCALE,
         outside_rth: false,
         ord_type: 0,
         tif: 0,
@@ -587,7 +587,7 @@ fn a_pegged_order_states_its_offset_and_no_limit_price() {
         order_id: 1,
         instrument,
         side: Side::Buy,
-        qty: 1,
+        qty: crate::types::QTY_SCALE,
         kind: crate::types::OrderKind::PegMkt { offset: 0, price_cap: 0 },
         tif: b'0',
         attrs: Default::default(),
@@ -1495,7 +1495,7 @@ mod modify_wire_tests {
             ord_type: b'4',
             tif: 0,
             price: 101 * crate::types::PRICE_SCALE,
-            qty: 1,
+            qty: crate::types::QTY_SCALE,
             outside_rth: false,
             stop_price: 99 * crate::types::PRICE_SCALE,
         });
@@ -1540,7 +1540,7 @@ mod modify_wire_tests {
                 ord_type: 0,
                 tif: 0,
                 price: 101 * crate::types::PRICE_SCALE,
-                qty: 1,
+                qty: crate::types::QTY_SCALE,
                 outside_rth: false,
                 stop_price: 610 * crate::types::PRICE_SCALE,
             });
@@ -1575,7 +1575,7 @@ mod modify_wire_tests {
             order_id: 7,
             instrument,
             side: Side::Buy,
-            qty: 1,
+            qty: crate::types::QTY_SCALE,
             kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
             tif: b'0',
             attrs: crate::types::OrderAttrs::default(),
@@ -1587,6 +1587,32 @@ mod modify_wire_tests {
         assert!(sent.contains("|202=230|"), "the strike: {sent}");
         assert!(sent.contains("|201=1|"), "the right, as the wire code for a call: {sent}");
         assert!(sent.contains("|231=100|"), "the multiplier: {sent}");
+    }
+
+    /// The caller's decimal reaches the wire. Tag 38 written from an integer
+    /// sent `38=0` for half a share, which asks the venue for nothing.
+    #[test]
+    fn a_fractional_quantity_goes_out_as_the_decimal_it_was_given() {
+        let mut context = Context::new();
+        let instrument = context
+            .market
+            .try_register_contract(0, "AAPL", "STK", "SMART", "")
+            .expect("slot");
+        context.market.set_symbol(instrument, "AAPL".into());
+        context.market.set_routing(instrument, "STK", "SMART");
+
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 9,
+            instrument,
+            side: Side::Buy,
+            qty: crate::types::QTY_SCALE / 2,
+            kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: Default::default(),
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|38=0.5|"), "half a share is stated as half a share: {sent}");
     }
 
     /// An exercise and a lapse are new orders carrying the action, and nothing
@@ -1605,7 +1631,7 @@ mod modify_wire_tests {
             context.market.set_routing(instrument, "OPT", "SMART");
 
             context.pending_orders.push(
-                crate::client_core::ClientCore::build_exercise_request(7, instrument, action, 3),
+                crate::client_core::ClientCore::build_exercise_request(7, instrument, action, 3 * crate::types::QTY_SCALE),
             );
             let sent = drain(&mut context);
 
@@ -1637,7 +1663,7 @@ mod modify_wire_tests {
             order_id: 7,
             instrument,
             side: Side::Buy,
-            qty: 1,
+            qty: crate::types::QTY_SCALE,
             kind: crate::types::OrderKind::Limit { price: 3827 * crate::types::PRICE_SCALE },
             tif: b'0',
             attrs: crate::types::OrderAttrs::default(),
@@ -1657,7 +1683,7 @@ mod modify_wire_tests {
             order_id: 7,
             instrument,
             side: Side::Buy,
-            qty: 1,
+            qty: crate::types::QTY_SCALE,
             kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
             tif: b'0',
             attrs: crate::types::OrderAttrs::default(),
@@ -1681,7 +1707,7 @@ mod modify_wire_tests {
                 order_id: 7,
                 instrument,
                 side: Side::Buy,
-                qty: 1,
+                qty: crate::types::QTY_SCALE,
                 kind,
                 tif: b'0',
                 attrs: crate::types::OrderAttrs::default(),
@@ -1724,7 +1750,7 @@ mod modify_wire_tests {
                 ord_type: 0,
                 tif: 0,
                 price: 610 * crate::types::PRICE_SCALE,
-                qty: 1,
+                qty: crate::types::QTY_SCALE,
                 outside_rth: false,
                 stop_price: 590 * crate::types::PRICE_SCALE,
             });
@@ -2317,7 +2343,7 @@ mod outside_rth_polarity_tests {
             sl_id: 3,
             instrument,
             side: Side::Buy,
-            qty: 1,
+            qty: crate::types::QTY_SCALE,
             entry_price: 100 * crate::types::PRICE_SCALE,
             take_profit: 110 * crate::types::PRICE_SCALE,
             stop_loss: 90 * crate::types::PRICE_SCALE,
@@ -2377,7 +2403,7 @@ mod outside_rth_polarity_tests {
             order_id: 11,
             instrument,
             side: Side::Buy,
-            qty: 100,
+            qty: 100 * crate::types::QTY_SCALE,
             kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
             tif: b'0',
             attrs: Default::default(),
@@ -2388,7 +2414,7 @@ mod outside_rth_polarity_tests {
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             order_id: 11,
             price: 151 * crate::types::PRICE_SCALE,
-            qty: 100,
+            qty: 100 * crate::types::QTY_SCALE,
             outside_rth: false,
             ord_type: 0,
             tif: 0,
@@ -2635,7 +2661,7 @@ fn an_off_grid_price_reaches_the_venue_as_the_caller_stated_it() {
         order_id: 7,
         instrument,
         side: Side::Buy,
-        qty: 1,
+        qty: crate::types::QTY_SCALE,
         kind: crate::types::OrderKind::Limit { price: off_grid },
         tif: b'0',
         attrs: crate::types::OrderAttrs::default(),
@@ -2665,7 +2691,7 @@ fn a_replace_for_an_untracked_order_is_refused_rather_than_invented() {
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 4242,
         price: 100 * crate::types::PRICE_SCALE,
-        qty: 1,
+        qty: crate::types::QTY_SCALE,
         outside_rth: false,
         ord_type: 0,
         tif: 0,

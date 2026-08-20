@@ -468,7 +468,7 @@ pub(super) fn phase_update_param(conns: Conns) -> Conns {
 
     // Submit + cancel an order to verify hot loop is still functional after UpdateParam
     let oid = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
@@ -579,7 +579,7 @@ pub(super) fn phase_farm_recovers_with_credentials(
     if ticked {
         let oid = next_order_id();
         control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-            order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
+            order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
             kind: OrderKind::Limit { price: 1_00_000_000 },
             tif: b'0', attrs: OrderAttrs { outside_rth: true, ..OrderAttrs::default() },
         })).unwrap();

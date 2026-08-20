@@ -212,7 +212,7 @@ impl Context {
         let id = self.next_order_id;
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::SubmitEx {
-            order_id: id, instrument, side, qty, kind, tif, attrs,
+            order_id: id, instrument, side, qty: qty_from_wire(qty as i64), kind, tif, attrs,
         });
         id
     }
@@ -238,7 +238,7 @@ impl Context {
             sl_id,
             instrument,
             side,
-            qty,
+            qty: qty_from_wire(qty as i64),
             entry_price,
             take_profit,
             stop_loss,
@@ -304,7 +304,7 @@ impl Context {
             order_id,
             price,
             stop_price,
-            qty,
+            qty: qty_from_wire(qty as i64),
             outside_rth,
             ord_type,
             tif,

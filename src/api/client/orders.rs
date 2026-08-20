@@ -165,7 +165,7 @@ impl EClient {
                 return Err(refusal.into());
             }
             let price = (order.lmt_price * PRICE_SCALE_F) as i64;
-            let qty = order.total_quantity as u32;
+            let qty = crate::types::qty_from_f64(order.total_quantity);
             // A stop's trigger rides on aux_price, exactly as it does on the
             // submit path. Reading only lmt_price left a stop order modifying
             // itself to a limit price of zero.
@@ -221,7 +221,7 @@ impl EClient {
             &identity,
         )?;
         self.send(ControlCommand::Order(
-            ClientCore::build_exercise_request(oid, instrument, action, qty),
+            ClientCore::build_exercise_request(oid, instrument, action, crate::types::qty_from_wire(qty as i64)),
         ))
     }
 
@@ -489,7 +489,7 @@ impl EClient {
             sl_id: sl_id as u64,
             instrument,
             side,
-            qty: quantity as u32,
+            qty: crate::types::qty_from_f64(quantity),
             entry_price: scaled(entry),
             take_profit: scaled(take_profit),
             stop_loss: scaled(stop_loss),

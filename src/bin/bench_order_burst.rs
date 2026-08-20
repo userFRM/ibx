@@ -60,7 +60,7 @@ fn main() {
         let order_id = (i + 1) as u64;
         let price = (100 + i as i64) * (PRICE_SCALE / 100); // $1.00, $1.01, ...
         submit_times.insert(order_id, Instant::now());
-        session.send_order(OrderRequest::SubmitEx { order_id, instrument, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } });
+        session.send_order(OrderRequest::SubmitEx { order_id, instrument, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } });
     }
 
     let submit_dur = burst_start.elapsed();
