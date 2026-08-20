@@ -534,7 +534,15 @@ pub struct HistoricalTickLast {
     /// What it traded at.
     pub price: f64,
     /// How much.
-    pub size: i64,
+    ///
+    /// A historical size crosses as text rather than as a number, because a
+    /// size can be a fraction of a share. Read as a whole number, `0.5` was
+    /// no size at all. Held as a decimal, like the price beside it.
+    ///
+    /// A historical size crosses as text rather than as a number, because a
+    /// size can be a fraction of a share. Read as a whole number, `0.5` was
+    /// no size at all.
+    pub size: f64,
     /// Which venue.
     pub exchange: String,
     /// What the venue notes about it.
@@ -551,9 +559,9 @@ pub struct HistoricalTickBidAsk {
     /// The ask.
     pub ask_price: f64,
     /// How much at the bid.
-    pub bid_size: i64,
+    pub bid_size: f64,
     /// How much at the ask.
-    pub ask_size: i64,
+    pub ask_size: f64,
 }
 
 /// Historical tick data (one of three types based on whatToShow).

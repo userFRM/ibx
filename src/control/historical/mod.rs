@@ -725,8 +725,8 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
                     time: tag(t, "time").unwrap_or("").to_string(),
                     bid_price: tag(t, "priceBid").and_then(|s| s.parse().ok()).unwrap_or(0.0),
                     ask_price: tag(t, "priceAsk").and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    bid_size: tag(t, "sizeBid").and_then(|s| s.parse().ok()).unwrap_or(0),
-                    ask_size: tag(t, "sizeAsk").and_then(|s| s.parse().ok()).unwrap_or(0),
+                    bid_size: tag(t, "sizeBid").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                    ask_size: tag(t, "sizeAsk").and_then(|s| s.parse().ok()).unwrap_or(0.0),
                 });
                 search_start = end;
             }
@@ -765,7 +765,7 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
                 ticks.push(crate::types::HistoricalTickLast {
                     time: tag(t, "time").unwrap_or("").to_string(),
                     price: tag(t, "price").and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                    size: tag(t, "size").and_then(|s| s.parse().ok()).unwrap_or(0),
+                    size: tag(t, "size").and_then(|s| s.parse().ok()).unwrap_or(0.0),
                     exchange: tag(t, "exchange").unwrap_or("").to_string(),
                     special_conditions: tag(t, "specialConditions").unwrap_or("").to_string(),
                 });

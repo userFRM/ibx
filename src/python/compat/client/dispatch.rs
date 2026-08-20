@@ -742,7 +742,7 @@ impl EClient {
                         time: at(&t.time).or_else(|| { dropped.set(dropped.get() + 1); None })?,
                         tick_attrib_last: Default::default(),
                         price: t.price,
-                        size: t.size as f64,
+                        size: t.size,
                         exchange: t.exchange.clone(),
                         special_conditions: t.special_conditions.clone(),
                     })).collect();
@@ -755,8 +755,8 @@ impl EClient {
                         tick_attrib_bid_ask: Default::default(),
                         price_bid: t.bid_price,
                         price_ask: t.ask_price,
-                        size_bid: t.bid_size as f64,
-                        size_ask: t.ask_size as f64,
+                        size_bid: t.bid_size,
+                        size_ask: t.ask_size,
                     })).collect();
                     let list = pyo3::types::PyList::new(py, py_ticks)?;
                     call_wrapper!(self.wrapper, py, "historical_ticks_bid_ask", (req_id as i64, list, done));

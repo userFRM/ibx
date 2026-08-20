@@ -390,6 +390,28 @@ fn a_tick_request_naming_only_a_start_is_refused() {
     assert!(validate_tick_window("", "").is_ok(), "the most recent ticks");
 }
 
+/// A historical size crosses as text because it can be a fraction of a share.
+/// Read as a whole number, a fractional print was a print of nothing.
+#[test]
+fn a_fractional_historical_size_is_read_as_the_fraction_it_states() {
+    let xml = r#"<ResultSetTick>
+            <id>tk_frac</id>
+        <eoq>true</eoq>
+        <tz>US/Eastern</tz>
+        <Events>
+            <Tick><time>20260312-14:30:01</time><price>150.25</price><size>0.5</size><exchange>NASDAQ</exchange></Tick>
+        </Events>
+    </ResultSetTick>"#;
+    let (_qid, data, _done) = parse_tick_response(xml, "TRADES").unwrap();
+    match data {
+        crate::types::HistoricalTickData::Last(ticks) => {
+            assert_eq!(ticks.len(), 1);
+            assert_eq!(ticks[0].size, 0.5, "half a share is half a share, not none");
+        }
+        _ => panic!("Expected Last variant"),
+    }
+}
+
 #[test]
 fn parse_tick_response_trades() {
     let xml = r#"<ResultSetTick>
@@ -408,7 +430,7 @@ fn parse_tick_response_trades() {
         crate::types::HistoricalTickData::Last(ticks) => {
             assert_eq!(ticks.len(), 2);
             assert_eq!(ticks[0].price, 150.25);
-            assert_eq!(ticks[0].size, 100);
+            assert_eq!(ticks[0].size, 100.0);
             assert_eq!(ticks[0].exchange, "NASDAQ");
             assert_eq!(ticks[1].special_conditions, "I");
         }

@@ -2794,6 +2794,35 @@ fn req_matching_symbols_sends_fetch() {
 //  Positions
 // ═══════════════════════════════════════════════════════════════════
 
+/// A fill moves the holding, and the broker does not restate holdings when an
+/// order fills. Without the fill recording the move, a caller watching
+/// positions never heard about its own fill.
+#[test]
+fn a_fill_moves_the_holding_and_is_reported() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_account_download_complete();
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 265598, position: 100.0, symbol: "AAPL".into(),
+        sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+    });
+
+    let mut w = RecordingWrapper::default();
+    client.req_positions(&mut w);
+    let reported = |w: &RecordingWrapper| {
+        w.events.iter().filter(|e| e.starts_with("position:")).count()
+    };
+    assert_eq!(reported(&w), 1, "the holding held when it was asked for");
+
+    shared.portfolio.apply_fill(265598, 25.0, 150 * PRICE_SCALE);
+    client.process_msgs(&mut w);
+
+    assert_eq!(reported(&w), 2, "the fill's move reaches the caller");
+    assert_eq!(
+        shared.portfolio.position_info(265598).unwrap().position, 125.0,
+        "and the holding is what the fill made it",
+    );
+}
+
 /// Nothing is drained while no ask stands. Draining in the dispatch as well
 /// discarded the moves that landed while `req_positions` was still assembling
 /// its answer, and no later report repeated them.
@@ -4058,14 +4087,14 @@ fn process_msgs_routes_historical_tick_variants() {
     let (client, _rx, shared) = test_client();
     shared.reference.push_historical_ticks(10, HistoricalTickData::Last(vec![
         HistoricalTickLast {
-            time: "2026-01-15 09:30:00".into(), price: 150.5, size: 100,
+            time: "2026-01-15 09:30:00".into(), price: 150.5, size: 100.0,
             exchange: "ARCA".into(), special_conditions: "".into(),
         },
     ]), "TRADES".into(), true);
     shared.reference.push_historical_ticks(11, HistoricalTickData::BidAsk(vec![
         HistoricalTickBidAsk {
             time: "2026-01-15 09:30:01".into(), bid_price: 150.4, ask_price: 150.6,
-            bid_size: 200, ask_size: 300,
+            bid_size: 200.0, ask_size: 300.0,
         },
     ]), "BID_ASK".into(), true);
     let mut w = RecordingWrapper::default();

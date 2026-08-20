@@ -229,6 +229,12 @@ impl PortfolioState {
             // wrong side. What is held now was bought at this price.
             row.avg_cost = price;
         }
+        // Recorded like any other move. The broker does not restate a holding
+        // when an order fills, so this is the only account this session gets
+        // of it: without the record, a caller watching positions never hears
+        // about the one thing it was most likely watching for — its own fill
+        // moving its own holding.
+        self.position_changes.lock().unwrap().insert(con_id);
     }
 
     /// Update the per-position marks (from the account-updates portfolio message).

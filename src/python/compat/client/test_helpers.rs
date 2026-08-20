@@ -506,7 +506,7 @@ impl EClient {
         let ticks = times.into_iter().enumerate().map(|(i, time)| crate::types::HistoricalTickLast {
             time,
             price: 100.0 + i as f64,
-            size: 1,
+            size: 1.0,
             exchange: "NYSE".into(),
             special_conditions: String::new(),
         }).collect();
