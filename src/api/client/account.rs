@@ -37,6 +37,14 @@ impl EClient {
     /// same as an account holding nothing. Said in the log rather than left to
     /// be inferred, because the two are not the same answer.
     pub fn req_positions(&self, wrapper: &mut impl Wrapper) {
+        // The real-time report is held off while the answer is assembled, and
+        // what accumulated before the ask is dropped: the answer states the
+        // holdings itself, and reporting them again as moves would repeat the
+        // account back to the caller. A holding that moves from here is
+        // recorded and reported once the ask stands, so nothing that lands
+        // during the wait below is lost.
+        self.positions_requested.store(false, Ordering::Release);
+        self.shared.portfolio.drain_position_changes();
         // Waits for the batch-end signal, not for the first holding: an account
         // with several would otherwise answer with whichever arrived first. An
         // account holding nothing is complete when the batch ends, so this does
@@ -78,9 +86,7 @@ impl EClient {
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             wrapper.position(&self.account_id, &c, pi.position, avg_cost);
         }
-        // What has already been delivered is not delivered again: the feed
-        // reports from here, on the next holding to move.
-        self.shared.portfolio.drain_position_changes();
+        // Reported from here, on the next holding to move.
         self.positions_requested.store(true, Ordering::Release);
         wrapper.position_end();
     }

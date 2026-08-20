@@ -76,14 +76,15 @@ impl EClient {
     /// asked for positions and has not withdrawn the ask.
     ///
     /// The feed is real-time: a fill that changes what the account holds is
-    /// followed by the holding it changed. Drained whether or not anyone
-    /// asked, so a caller who asks later is answered with what the account
-    /// holds then rather than a backlog of what it held before.
+    /// followed by the holding it changed. Nothing is drained while no ask
+    /// stands — [`EClient::req_positions`] clears what accumulated before it,
+    /// and draining here as well discarded the moves that landed while it was
+    /// still assembling its answer, which no later report would repeat.
     fn dispatch_positions(&self, wrapper: &mut impl Wrapper) {
-        let moved = self.shared.portfolio.drain_position_changes();
         if !self.positions_requested.load(Ordering::Acquire) {
             return;
         }
+        let moved = self.shared.portfolio.drain_position_changes();
         for pi in &moved {
             wrapper.position(
                 &self.account_id,

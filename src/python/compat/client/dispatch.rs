@@ -109,11 +109,12 @@ impl EClient {
         // A holding that moved since the caller last heard, where the caller
         // asked for positions and has not withdrawn the ask. The feed is
         // real-time, so a fill that changes what the account holds is followed
-        // by the holding it changed. Drained either way: a caller who never
-        // asked is not owed the report, and keeping it would deliver a
-        // backlog to whoever asks later.
-        let moved = shared.portfolio.drain_position_changes();
+        // by the holding it changed. Nothing is drained while no ask stands:
+        // `req_positions` clears what accumulated before it, and draining here
+        // as well discarded the moves that landed while it was still
+        // assembling its answer, which no later report would repeat.
         if self.positions_requested.load(Ordering::Acquire) {
+            let moved = shared.portfolio.drain_position_changes();
             for pi in &moved {
                 let c_py = Py::new(py, self.position_contract(pi, shared))?.into_any();
                 let avg_cost = pi.avg_cost as f64 / crate::types::PRICE_SCALE as f64;

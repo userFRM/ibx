@@ -181,15 +181,19 @@ impl PortfolioState {
             }
             None => { map.insert(info.con_id, info); }
         }
-        drop(map);
+        // Recorded while the holdings are still held, so the two locks are
+        // always taken in the same order and a reader cannot see the new
+        // value before the record that it moved. Taken the other way round, a
+        // drain running alongside this read the moved holding and then found
+        // it again on the next drain, reporting one move twice.
         self.position_changes.lock().unwrap().insert(con_id);
     }
 
     /// The holdings that have moved since this was last called, as they stand
     /// now. Empty where nothing has moved.
     pub fn drain_position_changes(&self) -> Vec<PositionInfo> {
-        let changed = std::mem::take(&mut *self.position_changes.lock().unwrap());
         let map = self.position_infos.lock().unwrap();
+        let changed = std::mem::take(&mut *self.position_changes.lock().unwrap());
         changed.iter().filter_map(|c| map.get(c).cloned()).collect()
     }
 

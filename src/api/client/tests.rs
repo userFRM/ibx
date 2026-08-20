@@ -2794,6 +2794,25 @@ fn req_matching_symbols_sends_fetch() {
 //  Positions
 // ═══════════════════════════════════════════════════════════════════
 
+/// Nothing is drained while no ask stands. Draining in the dispatch as well
+/// discarded the moves that landed while `req_positions` was still assembling
+/// its answer, and no later report repeated them.
+#[test]
+fn a_move_is_kept_while_no_request_stands() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 265598, position: 5.0, symbol: "AAPL".into(), ..Default::default()
+    });
+
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+
+    assert!(
+        !shared.portfolio.drain_position_changes().is_empty(),
+        "a dispatch nobody had asked for consumed the move",
+    );
+}
+
 /// `req_positions` subscribes to a real-time feed: a holding that moves after
 /// the call is reported as it moves. Answering only the set held when the
 /// call was made left a caller tracking its positions from a snapshot that

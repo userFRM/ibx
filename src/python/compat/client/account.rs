@@ -110,6 +110,14 @@ impl EClient {
     fn req_positions(&self, py: Python<'_>) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
+        // The real-time report is held off while the answer is assembled, and
+        // what accumulated before the ask is dropped: the answer states the
+        // holdings itself, and reporting them again as moves would repeat the
+        // account back to the caller. A holding that moves from here is
+        // recorded and reported once the ask stands, so nothing that lands
+        // during the wait below is lost.
+        self.positions_requested.store(false, Ordering::Release);
+        shared.portfolio.drain_position_changes();
         // Wait for CCP init burst to complete (up to 10s).
         for _ in 0..1000 {
             if shared.portfolio.account_download_complete() { break; }
@@ -145,9 +153,7 @@ impl EClient {
             self.callback(py, "position", (self.account().as_str(), &c_py, pi.position, avg_cost))?;
         }
         self.callback(py, "position_end", ())?;
-        // What has already been delivered is not delivered again: the feed
-        // reports from here, on the next holding to move.
-        shared.portfolio.drain_position_changes();
+        // Reported from here, on the next holding to move.
         self.positions_requested.store(true, Ordering::Release);
         Ok(())
     }
