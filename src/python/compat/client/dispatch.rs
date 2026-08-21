@@ -123,15 +123,35 @@ impl EClient {
         // `req_positions` clears what accumulated before it, and draining here
         // as well discarded the moves that landed while it was still
         // assembling its answer, which no later report would repeat.
-        if self.positions_requested.load(Ordering::Acquire) {
+        let on_position = self.positions_requested.load(Ordering::Acquire);
+        let per_request: Vec<i64> = {
+            let watching = self.positions_multi_requested.lock().unwrap();
+            let mut ids: Vec<i64> = watching.iter().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+        if on_position || !per_request.is_empty() {
+            // Drained once and given to everyone watching. Drained per
+            // watcher, the first would take the move and the rest would never
+            // hear of it.
             let moved = shared.portfolio.drain_position_changes();
             for pi in &moved {
                 let c_py = Py::new(py, self.position_contract(pi, shared))?.into_any();
                 let avg_cost = pi.avg_cost as f64 / crate::types::PRICE_SCALE as f64;
-                self.callback(
-                    py, "position",
-                    (self.account().as_str(), &c_py, pi.position, avg_cost),
-                )?;
+                if on_position {
+                    self.callback(
+                        py, "position",
+                        (self.account().as_str(), &c_py, pi.position, avg_cost),
+                    )?;
+                }
+                // The account this session opened under, whatever the request
+                // named, as the answer to the request itself states.
+                for req_id in &per_request {
+                    self.callback(
+                        py, "position_multi",
+                        (*req_id, self.account().as_str(), "", &c_py, pi.position, avg_cost),
+                    )?;
+                }
             }
         }
 

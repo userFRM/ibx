@@ -37,14 +37,6 @@ impl EClient {
     /// same as an account holding nothing. Said in the log rather than left to
     /// be inferred, because the two are not the same answer.
     pub fn req_positions(&self, wrapper: &mut impl Wrapper) {
-        // The real-time report is held off while the answer is assembled, and
-        // what accumulated before the ask is dropped: the answer states the
-        // holdings itself, and reporting them again as moves would repeat the
-        // account back to the caller. A holding that moves from here is
-        // recorded and reported once the ask stands, so nothing that lands
-        // during the wait below is lost.
-        self.positions_requested.store(false, Ordering::Release);
-        self.shared.portfolio.drain_position_changes();
         // Waits for the batch-end signal, not for the first holding: an account
         // with several would otherwise answer with whichever arrived first. An
         // account holding nothing is complete when the batch ends, so this does
@@ -86,7 +78,11 @@ impl EClient {
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             wrapper.position(&self.account_id, &c, pi.position, avg_cost);
         }
-        // Reported from here, on the next holding to move.
+        // Reported from here, on the next holding to move. What was already
+        // recorded is left standing rather than dropped: the record is kept by
+        // contract and states what the holding is now, so at worst the caller
+        // is told once more what the answer above already said — and dropping
+        // it would lose a holding that moved while the answer was assembled.
         self.positions_requested.store(true, Ordering::Release);
         wrapper.position_end();
     }
@@ -281,11 +277,20 @@ impl EClient {
             );
         }
         wrapper.position_multi_end(req_id);
+        // Reported from here, on the next holding to move. The same live feed
+        // as `position`, asked for under this request id.
+        self.positions_multi_requested.lock().unwrap().insert(req_id);
     }
 
     /// Cancel multi-account positions. Matches `cancelPositionsMulti` in C++.
-    pub fn cancel_positions_multi(&self, _req_id: i64) {
-        // No-op: delivered immediately.
+    /// Stop watching holdings under this request.
+    ///
+    // nothing to withdraw: the venue keeps the account current whether or not
+    // anyone is listening, as for `cancel_positions`. What stops is the
+    // reporting — a holding that moves after this is no longer delivered on
+    // `position_multi` for this request.
+    pub fn cancel_positions_multi(&self, req_id: i64) {
+        self.positions_multi_requested.lock().unwrap().remove(&req_id);
     }
 
     /// Holdings the venue reports that this broker does not hold itself:

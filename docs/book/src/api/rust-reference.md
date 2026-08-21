@@ -447,10 +447,8 @@ pub fn req_positions_multi( &self, req_id: i64, account: &str, model_code: &str,
 
 #### `cancel_positions_multi`
 
-Cancel multi-account positions.
-
 ```rust
-pub fn cancel_positions_multi(&self, _req_id: i64)
+pub fn cancel_positions_multi(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |

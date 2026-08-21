@@ -260,6 +260,15 @@ def test_a_snapshot_asked_for_as_market_data_answers_no_later_ask():
     assert ib._by_contract[("quote", id(contract))] in ib._subscribed
     assert stream is not None, "the stream was answered with the finished snapshot"
 
+    # A snapshot on a contract that never quotes is still withdrawable by
+    # naming the contract, which is the only handle a caller who did not keep
+    # the id has.
+    snap = ib._by_contract[("snapshot", id(contract))]
+    assert snap in ib._subscribed
+    ib.cancelMktData(contract)     # the stream, which is named first
+    ib.cancelMktData(contract)     # then the snapshot behind it
+    assert snap not in ib._subscribed, "a snapshot that never quotes could not be cancelled"
+
 
 def test_a_second_quote_on_one_contract_is_the_first_one_back():
     """The registry holds one request against a contract object. Opening a

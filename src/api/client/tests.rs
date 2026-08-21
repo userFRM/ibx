@@ -2984,6 +2984,47 @@ fn a_fill_moves_the_holding_and_is_reported() {
     );
 }
 
+/// `positionMulti` is the same live feed as `position`, asked for under a
+/// request id and withdrawn under one — the protocol has a cancel for it, and
+/// nothing cancels a one-shot. Answered once, a caller watching an account's
+/// holdings read a snapshot that went stale on the next fill.
+///
+/// Both may be watching at once, and one move is told to both: drained per
+/// watcher, the first would take it and the other would never hear of it.
+#[test]
+fn a_holding_that_moves_reaches_every_watcher() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_account_download_complete();
+    let held = |qty: f64| PositionInfo {
+        con_id: 265598, position: qty, symbol: "AAPL".into(),
+        sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+    };
+    shared.portfolio.set_position_info(held(100.0));
+
+    let mut w = RecordingWrapper::default();
+    client.req_positions(&mut w);
+    client.req_positions_multi(9, "", "", &mut w);
+    let counted = |w: &RecordingWrapper, what: &str| {
+        w.events.iter().filter(|e| e.starts_with(what)).count()
+    };
+    let (was_plain, was_multi) =
+        (counted(&w, "position:"), counted(&w, "position_multi:"));
+
+    shared.portfolio.set_position_info(held(150.0));
+    client.process_msgs(&mut w);
+
+    assert_eq!(counted(&w, "position:"), was_plain + 1, "the plain watcher");
+    assert_eq!(counted(&w, "position_multi:"), was_multi + 1, "and the one per request");
+
+    // Withdrawn under its own id, leaving the other watching.
+    client.cancel_positions_multi(9);
+    shared.portfolio.set_position_info(held(175.0));
+    client.process_msgs(&mut w);
+
+    assert_eq!(counted(&w, "position:"), was_plain + 2, "still watching");
+    assert_eq!(counted(&w, "position_multi:"), was_multi + 1, "withdrawn");
+}
+
 /// Nothing is drained while no ask stands. Draining in the dispatch as well
 /// discarded the moves that landed while `req_positions` was still assembling
 /// its answer, and no later report repeated them.

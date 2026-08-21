@@ -333,7 +333,7 @@ def req_positions_multi(req_id, account, model_code)
 
 #### `cancel_positions_multi`
 
-Cancel multi-account positions.
+Cancel multi-account positions. 
 
 ```python
 def cancel_positions_multi(req_id)

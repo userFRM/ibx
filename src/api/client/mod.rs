@@ -223,6 +223,12 @@ pub struct EClient {
     /// is when the fill has been delivered — so the deferral costs a pass and
     /// not the rest of the session.
     pub(crate) deferred_evictions: Mutex<std::collections::HashSet<u64>>,
+    /// The requests watching holdings per account or model.
+    ///
+    /// `positionMulti` is the same live feed as `position`, asked for under a
+    /// request id and withdrawn under it. Held apart from that flag because
+    /// both may be watching at once and each is answered on its own callback.
+    pub(crate) positions_multi_requested: Mutex<std::collections::HashSet<i64>>,
     pub(crate) next_order_id: AtomicU64,
     /// Where the last id handed out is kept, and under which key.
     pub(crate) order_id_store: Option<(std::path::PathBuf, String)>,
@@ -450,6 +456,7 @@ impl EClient {
             close_notified: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
+            positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
             next_order_id: AtomicU64::new(start_id),
             order_id_store,
             asking: Mutex::new(()),
@@ -485,6 +492,7 @@ impl EClient {
             close_notified: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
+            positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
             next_order_id: AtomicU64::new(start_id),
             // Built from parts, so nothing is remembered anywhere.
             order_id_store: None,

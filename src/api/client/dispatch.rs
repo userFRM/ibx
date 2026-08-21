@@ -81,17 +81,32 @@ impl EClient {
     /// and draining here as well discarded the moves that landed while it was
     /// still assembling its answer, which no later report would repeat.
     fn dispatch_positions(&self, wrapper: &mut impl Wrapper) {
-        if !self.positions_requested.load(Ordering::Acquire) {
+        let on_position = self.positions_requested.load(Ordering::Acquire);
+        let per_request: Vec<i64> = {
+            let watching = self.positions_multi_requested.lock().unwrap();
+            let mut ids: Vec<i64> = watching.iter().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+        if !on_position && per_request.is_empty() {
             return;
         }
+        // Drained once and given to everyone watching. Drained per watcher,
+        // the first would take the move and the rest would never hear of it.
         let moved = self.shared.portfolio.drain_position_changes();
         for pi in &moved {
-            wrapper.position(
-                &self.account_id,
-                &self.position_contract(pi),
-                pi.position,
-                pi.avg_cost as f64 / PRICE_SCALE_F,
-            );
+            let contract = self.position_contract(pi);
+            let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
+            if on_position {
+                wrapper.position(&self.account_id, &contract, pi.position, avg_cost);
+            }
+            // The account this session opened under, whatever the request
+            // named, as the answer to the request itself states.
+            for req_id in &per_request {
+                wrapper.position_multi(
+                    *req_id, &self.account_id, "", &contract, pi.position, avg_cost,
+                );
+            }
         }
     }
 

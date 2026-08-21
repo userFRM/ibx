@@ -240,8 +240,11 @@ class Client:
             if already is not None:
                 return self.wrapper.ticker_for(already)
         req_id, ticker = self._start_quote(contract, genericTickList, snapshot)
-        if not snapshot:
-            self._by_contract[("quote", id(contract))] = req_id
+        # Under its own name, so it neither takes the stream's place nor
+        # answers a later ask for one — and a snapshot on a contract that
+        # never quotes can still be withdrawn by naming the contract, which
+        # is the only handle a caller who did not keep the id has.
+        self._by_contract[("snapshot" if snapshot else "quote", id(contract))] = req_id
         return ticker
 
     def _start_quote(self, contract, genericTickList="", snapshot=False):
@@ -259,7 +262,11 @@ class Client:
         return req_id, ticker
 
     def cancelMktData(self, contract):
+        # The stream first: a snapshot beside it ends on its own, and a caller
+        # cancelling a contract it is streaming means the stream.
         req_id = self._by_contract.pop(("quote", id(contract)), None)
+        if req_id is None:
+            req_id = self._by_contract.pop(("snapshot", id(contract)), None)
         if req_id is None:
             return
         self._subscribed.pop(req_id, None)

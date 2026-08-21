@@ -110,14 +110,6 @@ impl EClient {
     fn req_positions(&self, py: Python<'_>) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
-        // The real-time report is held off while the answer is assembled, and
-        // what accumulated before the ask is dropped: the answer states the
-        // holdings itself, and reporting them again as moves would repeat the
-        // account back to the caller. A holding that moves from here is
-        // recorded and reported once the ask stands, so nothing that lands
-        // during the wait below is lost.
-        self.positions_requested.store(false, Ordering::Release);
-        shared.portfolio.drain_position_changes();
         // Wait for CCP init burst to complete (up to 10s).
         for _ in 0..1000 {
             if shared.portfolio.account_download_complete() { break; }
@@ -153,7 +145,11 @@ impl EClient {
             self.callback(py, "position", (self.account().as_str(), &c_py, pi.position, avg_cost))?;
         }
         self.callback(py, "position_end", ())?;
-        // Reported from here, on the next holding to move.
+        // Reported from here, on the next holding to move. What was already
+        // recorded is left standing rather than dropped: the record is kept by
+        // contract and states what the holding is now, so at worst the caller
+        // is told once more what the answer above already said — and dropping
+        // it would lose a holding that moved while the answer was assembled.
         self.positions_requested.store(true, Ordering::Release);
         Ok(())
     }
@@ -263,13 +259,20 @@ impl EClient {
                 (req_id, account, model_code, &c_py, pi.position, avg_cost))?;
         }
         self.callback(py, "position_multi_end", (req_id,))?;
+        // Reported from here, on the next holding to move. The same live feed
+        // as `position`, asked for under this request id.
+        self.positions_multi_requested.lock().unwrap().insert(req_id);
         Ok(())
     }
 
     /// Cancel multi-account positions.
-    // nothing to withdraw: as for cancel_positions.
+    ///
+    // nothing to withdraw: the venue pushes what the account holds and keeps
+    // it current whether or not anyone is listening, as for
+    // `cancel_positions`. What stops is the reporting — a holding that moves
+    // after this is no longer delivered on `position_multi` for this request.
     fn cancel_positions_multi(&self, req_id: i64) -> PyResult<()> {
-        let _ = req_id;
+        self.positions_multi_requested.lock().unwrap().remove(&req_id);
         Ok(())
     }
 
