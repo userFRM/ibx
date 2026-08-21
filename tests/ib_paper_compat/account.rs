@@ -847,7 +847,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::Fill(f)) if f.order_id == order_id => {
-                println!("  Fill received: qty={} price={:.2}", f.qty, f.price as f64 / PRICE_SCALE as f64);
+                println!("  Fill received: qty={} price={:.2}", ibx::types::qty_to_f64(f.qty), f.price as f64 / PRICE_SCALE as f64);
                 filled = true;
                 break;
             }
@@ -878,7 +878,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
         };
         let exec = api::Execution {
             side: side_str.into(),
-            shares: fill.qty as f64,
+            shares: ibx::types::qty_to_f64(fill.qty),
             price: price_f,
             order_id: fill.order_id as i64,
             ..Default::default()

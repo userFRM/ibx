@@ -1087,6 +1087,249 @@ fn cancel_by_perm_id_phase_live() {
     println!("\n  PASS — cancel_order_by_perm_id works\n");
 }
 
+/// A real fill books the quantity the venue reported, and moves the holding.
+///
+/// Run against a European listing, which trades while New York is closed, so
+/// the order actually fills rather than resting. What is proven is the whole
+/// path a fill takes: the quantity is read off the wire as a decimal, held
+/// fixed-point, booked against the order, and moves the holding — which the
+/// broker does not restate on a fill, so the fill is the only account of it.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn european_fill_books_what_the_venue_reported_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== A fill on an open market ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: mut ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    // Vodafone in London, in sterling. Asked for rather than written down:
+    // the venue names its own listings, and an id copied into a test goes
+    // stale the day the listing changes.
+    let now = ibx::protocol::datetime::chrono_free_timestamp();
+    ccp.send_fix(&[
+        (fix::TAG_MSG_TYPE, "c"),
+        (fix::TAG_SENDING_TIME, &now),
+        (ibx::control::contracts::TAG_SECURITY_REQ_ID, "RFILL"),
+        (ibx::control::contracts::TAG_SECURITY_REQ_TYPE, "2"),
+        (ibx::control::contracts::TAG_SYMBOL, "VOD"),
+        (ibx::control::contracts::TAG_SECURITY_TYPE, "CS"),
+        (ibx::control::contracts::TAG_EXCHANGE, "SMART"),
+        (ibx::control::contracts::TAG_CURRENCY, "GBP"),
+        (ibx::control::contracts::TAG_IB_SOURCE, "Socket"),
+    ]).expect("failed to ask for the listing");
+
+    let mut listing: Option<ibx::control::contracts::ContractDefinition> = None;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && listing.is_none() {
+        match ccp.try_recv() {
+            Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
+            Err(e) => { println!("  CCP recv error: {e}"); break; }
+            Ok(_) => {}
+        }
+        for frame in ccp.extract_frames() {
+            let messages = match frame {
+                Frame::FixComp(raw) => {
+                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
+                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
+                }
+                Frame::Fix(raw) => vec![raw],
+                _ => continue,
+            };
+            for msg in messages {
+                let tags = fix::fix_parse(&msg);
+                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
+                    && let Some(def) = ibx::control::contracts::parse_secdef_response(&msg, true)
+                    && def.currency == "GBP"
+                {
+                    listing = Some(def);
+                }
+            }
+        }
+    }
+    let Some(def) = listing else {
+        println!("\n  SKIP: no sterling listing of VOD came back");
+        return;
+    };
+    println!("  listing: con_id={} currency={}", def.con_id, def.currency);
+
+    let order_id = common::next_order_id();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+
+    // Registered by id alone it states no security type, and the venue
+    // answers an order carrying an empty tag 167 with "Unsupported type".
+    let inst_id = hot_loop.context_mut().register_instrument(def.con_id as i64);
+    hot_loop.context_mut().set_symbol(inst_id, "VOD".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+    let before = hot_loop.context_mut().position(inst_id);
+
+    // One share, priced through the offer so it trades rather than rests.
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        kind: ibx::types::OrderKind::Market,
+        tif: b'0',
+        attrs: ibx::types::OrderAttrs::default(),
+    })).expect("send failed");
+
+    let join = run_hot_loop(hot_loop);
+    let mut filled: Option<ibx::types::Fill> = None;
+    let mut refused = false;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline && filled.is_none() && !refused {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Fill(f)) if f.order_id == order_id => filled = Some(f),
+            Ok(Event::OrderUpdate(u)) if u.order_id == order_id => {
+                println!("  [update] status={:?}", u.status);
+                refused = matches!(u.status, OrderStatus::Rejected | OrderStatus::Inactive);
+            }
+            _ => {}
+        }
+    }
+
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let mut hl = join.join().expect("the hot loop must not panic on a fill");
+
+    let Some(fill) = filled else {
+        if refused {
+            println!(
+                "\n  SKIP: the venue refused it — {}",
+                common::reject_reason(&shared, order_id),
+            );
+            return;
+        }
+        println!("\n  SKIP: nothing traded within the wait — the listing may be closed");
+        return;
+    };
+
+    println!(
+        "  filled {} at {:.4}, cumulative {}",
+        ibx::types::qty_to_f64(fill.qty),
+        fill.price as f64 / ibx::types::PRICE_SCALE as f64,
+        ibx::types::qty_to_f64(fill.cum_qty),
+    );
+
+    assert_eq!(
+        fill.qty, ibx::types::QTY_SCALE,
+        "one share was asked for and {} was booked",
+        ibx::types::qty_to_f64(fill.qty),
+    );
+    let after = hl.context_mut().position(inst_id);
+    assert!(
+        (after - before - 1.0).abs() < 1e-9,
+        "the holding went from {before} to {after} on a fill of one share",
+    );
+    println!("\n  PASS — the fill booked one share and the holding moved by one");
+}
+
+/// A fraction of a share reaches the venue as the decimal it was asked for.
+///
+/// The quantity used to be carried whole from the caller down to tag 38, so a
+/// fraction could not be stated at all and was refused before it was sent.
+/// This places a resting order for half a share far below the market, reads
+/// what the venue says about it, and withdraws it.
+///
+/// A refusal naming the account's permissions is not a failure of the
+/// encoding and is reported as what it is: the order was stated, and the
+/// venue understood it well enough to say who may place it.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn fractional_order_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== Fractional order ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    let order_id = common::next_order_id();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+
+    // Half a share, resting far below the market so it cannot fill. Kept to
+    // regular hours: the venue serves a fraction of a share only then, and an
+    // order marked for outside them is refused on that ground before the
+    // quantity is judged at all.
+    let half = ibx::types::QTY_SCALE / 2;
+    println!("  orderId = {order_id}, qty = half a share");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: half,
+        kind: ibx::types::OrderKind::Limit { price: 1_00_000_000 },
+        tif: b'0',
+        attrs: ibx::types::OrderAttrs::default(),
+    })).expect("send failed");
+
+    let join = run_hot_loop(hot_loop);
+    let mut acked = false;
+    let mut refused = false;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline && !acked && !refused {
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if u.order_id != order_id { continue; }
+            println!("  [update] status={:?}", u.status);
+            match u.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => acked = true,
+                OrderStatus::Rejected | OrderStatus::Inactive => refused = true,
+                _ => {}
+            }
+        }
+    }
+
+    if acked {
+        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
+            .expect("cancel failed");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut withdrawn = false;
+        while Instant::now() < deadline && !withdrawn {
+            if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+                withdrawn = u.order_id == order_id
+                    && matches!(u.status, OrderStatus::Cancelled);
+            }
+        }
+        let _ = control_tx.send(ControlCommand::Shutdown);
+        let _ = join.join();
+        assert!(withdrawn, "the fraction rested and was not withdrawn — clean up {order_id} by hand");
+        println!("\n  PASS — half a share was stated, taken, and withdrawn");
+        return;
+    }
+
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+    if refused {
+        println!(
+            "\n  SKIP: the venue refused it — {}; the quantity was stated and read, \n\
+             so this says who may place one rather than whether it can be written",
+            common::reject_reason(&shared, order_id),
+        );
+        return;
+    }
+    panic!("no answer within 30s — clean up {order_id} by hand");
+}
+
 /// Live entry that validates the `SubmitEx` wire path:
 /// a bracket-style child (STP, GTC, parent_id + oca_group) placed against a
 /// resting parent. Without them the attributes are dropped and the child
