@@ -2171,7 +2171,7 @@ impl CcpState {
         // News streams belonged to the dead session and are not part of what
         // the server pushes back. Left alone they went quiet for good, with
         // the connection reporting healthy the whole time.
-        let stale: Vec<_> = self.news_subscriptions.drain(..).collect();
+        let stale = std::mem::take(&mut self.news_subscriptions);
         let wanted = stale.len();
         for (instrument, req_id, providers, _) in stale {
             match market.con_id(instrument) {

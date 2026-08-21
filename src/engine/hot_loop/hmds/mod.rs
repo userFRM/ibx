@@ -290,7 +290,7 @@ impl HmdsState {
 
         // The ids belong to the session that died; each subscription is sent
         // again and takes a new one.
-        let stale: Vec<_> = self.tbt_subscriptions.drain(..).collect();
+        let stale = std::mem::take(&mut self.tbt_subscriptions);
         let wanted = stale.len();
         for dead in stale {
             let (instrument, tbt_type) = (dead.instrument, dead.kind);

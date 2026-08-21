@@ -1777,9 +1777,10 @@ fn push_order_attrs(
             }
             fields.push((5957, (param_strs.len() / 2).to_string()));
             // Key/value pairs: 5958=key, 5960=value, repeated.
-            for pair in param_strs.chunks_exact(2) {
-                fields.push((5958, pair[0].clone()));
-                fields.push((5960, pair[1].clone()));
+            let (pairs, _) = param_strs.as_chunks::<2>();
+            for [key, value] in pairs {
+                fields.push((5958, key.clone()));
+                fields.push((5960, value.clone()));
             }
         }
         K::WhatIf { .. } => fields.push((6091, "1".to_string())),

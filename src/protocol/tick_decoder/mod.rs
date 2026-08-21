@@ -216,9 +216,6 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
 
         let mut has_more = 1u64;
         while has_more == 1 && reader.remaining() >= 8 {
-            let tick_type;
-            let byte_width;
-
             let raw_tick_type = match reader.read_unsigned(5) {
                 Some(v) => v,
                 None => break,
@@ -232,23 +229,21 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
                 None => break,
             };
 
-            if raw_tick_type == 31 {
+            let (tick_type, byte_width) = if raw_tick_type == 31 {
                 // Extended format
                 if reader.remaining() < 16 {
                     return;
                 }
-                tick_type = match reader.read_unsigned(8) {
-                    Some(v) => v,
-                    None => return,
+                let Some(tick_type) = reader.read_unsigned(8) else {
+                    return;
                 };
-                byte_width = match reader.read_unsigned(8) {
-                    Some(v) => v,
-                    None => return,
+                let Some(byte_width) = reader.read_unsigned(8) else {
+                    return;
                 };
+                (tick_type, byte_width)
             } else {
-                tick_type = raw_tick_type;
-                byte_width = raw_width;
-            }
+                (raw_tick_type, raw_width)
+            };
 
             let total_value_bits = (8 * byte_width) as usize;
             if reader.remaining() < total_value_bits {

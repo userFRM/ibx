@@ -2001,7 +2001,7 @@ impl FarmState {
         self.drive_replay(replay, farm_conn, hb);
 
         // Re-subscribe depth subscriptions (depth_resub_info survived disconnect)
-        let depth_params: Vec<_> = self.depth_resub_info.drain(..).collect();
+        let depth_params = std::mem::take(&mut self.depth_resub_info);
         let depth_count = depth_params.len();
         for (req_id, con_id, exchange, listed_on, sec_type, num_rows, is_smart_depth)
             in depth_params

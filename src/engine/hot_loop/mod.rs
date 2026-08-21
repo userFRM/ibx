@@ -586,7 +586,7 @@ impl HotLoop {
             // 1c. Hand off any scanner results with cache-miss con_ids to CCP for
             // contract-detail fan-out. Mirrors what the gateway does
             // internally for binary-API scanner clients.
-            for (req_id, result) in self.hmds.cold_scanner_results.drain(..).collect::<Vec<_>>() {
+            for (req_id, result) in std::mem::take(&mut self.hmds.cold_scanner_results) {
                 self.ccp.start_scanner_enrichment(
                     req_id, result, &mut self.ccp_conn, &self.shared, &mut self.hb,
                 );
