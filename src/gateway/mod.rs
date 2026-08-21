@@ -1160,22 +1160,27 @@ fn dial_auth_server(
     let dh_msg = channel.build_secure_connect(NS_VERSION, NS_VERSION);
     tls.write_all(&dh_msg)?;
 
-    let (payload, _) = ns::ns_recv(&mut tls)?;
-    let text = String::from_utf8_lossy(&payload);
-    let parts: Vec<&str> = text.split(';').collect();
-    let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    if msg_type == ns::NS_SECURE_ERROR {
-        return Err(io::Error::other(
-            format!("DH error: {}", parts[2..].join(";")),
-        ));
-    }
-    if msg_type != ns::NS_SECURE_CONNECTION_START {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Expected 533, got {msg_type}"),
-        ));
-    }
-    channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
+    // A message the venue states while the hello is awaited is read past, not
+    // taken for a failure. It states a backup host of its own accord, and
+    // ending the connection over one would give up on a venue that had not
+    // refused anything.
+    let hello = loop {
+        let (payload, _) = ns::ns_recv(&mut tls)?;
+        let text = String::from_utf8_lossy(&payload);
+        let parts: Vec<&str> = text.split(';').collect();
+        let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        if msg_type == ns::NS_SECURE_ERROR {
+            return Err(io::Error::other(
+                format!("DH error: {}", parts[2..].join(";")),
+            ));
+        }
+        if msg_type == ns::NS_SECURE_CONNECTION_START {
+            break parts.get(2..).unwrap_or(&[]).iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        }
+        log::info!("received msg id {msg_type} while awaiting the key exchange; read past");
+    };
+    let hello: Vec<&str> = hello.iter().map(String::as_str).collect();
+    channel.process_server_hello(&hello)?;
     log::info!("Auth key exchange complete");
     Ok((tls, channel))
 }
