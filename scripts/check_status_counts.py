@@ -138,18 +138,50 @@ def published() -> dict[str, int]:
     return out
 
 
+#: Every status the legend defines. A mark outside this set is a typo or a
+#: status nobody wrote down, and either way the row carrying it must not be
+#: counted silently.
+STATUSES = frozenset({
+    "\u2705 Supported",
+    "\U0001f52c Implemented",
+    "\u26d4 Unavailable",
+    "\u2705 Documented",
+})
+
+#: The characters a status cell starts with, used to tell one from a capability
+#: name or a verification note in the same row. Membership is tested on the
+#: first character of a non-empty cell: an empty cell is a substring of any
+#: string, so testing a slice would match every blank column in the file.
+MARKS = "\u2705\U0001f52c\u26d4"
+
+
 def capabilities() -> tuple[int, int]:
-    """How many capabilities the matrix lists, and how many are verified."""
+    """How many capabilities the matrix lists, and how many are verified.
+
+    Counting only the marks this script already knows lets an unrecognised one
+    drop a whole row out of both figures without failing anything, so the
+    totals stay self-consistent while the matrix quietly says less than it
+    lists. Every mark is collected first and checked against the legend.
+    """
     text = (ROOT / "docs/capabilities.md").read_text()
     # From the first capability section, so the table defining the marks is
     # not counted as capabilities carrying them.
     rows = text[text.index("## Client surfaces"):].splitlines()
-    verified = sum(1 for l in rows if l.startswith("| ") and "| \u2705 Supported |" in l)
-    other = sum(
-        1 for l in rows
-        if l.startswith("| ") and ("| \U0001f52c Implemented |" in l or "| \u26d4" in l)
-    )
-    return verified, verified + other
+    marks = [
+        cell
+        for line in rows
+        if line.startswith("| ")
+        for cell in (c.strip() for c in line.split("|"))
+        if cell and cell[0] in MARKS
+    ]
+    unknown = sorted(set(marks) - STATUSES)
+    if unknown:
+        raise SystemExit(
+            "docs/capabilities.md carries a status its legend does not define: "
+            + ", ".join(unknown)
+        )
+    verified = sum(1 for m in marks if m == "\u2705 Supported")
+    return verified, len(marks)
 
 
 def readme_says() -> tuple[int, int] | None:
