@@ -994,14 +994,13 @@ w = W()",
         Python::initialize();
         Python::attach(|py| {
             let (client, _rx, _shared, w) = wired_client(py);
-            let q = crate::types::QTY_SCALE;
 
             // The venue acknowledges the order, then fills half of it, both
             // before the caller pumps the queue again.
             client.call_method1(py, "_test_push_order_update",
                 (88u64, 0u32, "Submitted", 0.0f64, 100.0f64)).unwrap();
             client.call_method1(py, "_test_push_fill",
-                (0u32, 88u64, "BUY", 150.0f64, 50 * q, 50 * q, 0.0f64)).unwrap();
+                (0u32, 88u64, "BUY", 150.0f64, 50i64, 50i64, 0.0f64)).unwrap();
             client.call_method1(py, "_test_push_order_update",
                 (88u64, 0u32, "PartiallyFilled", 50.0f64, 50.0f64)).unwrap();
 

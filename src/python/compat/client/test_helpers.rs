@@ -174,6 +174,11 @@ impl EClient {
     /// Push a fill into SharedState.
     #[doc(hidden)]
     #[pyo3(signature = (instrument, order_id, side, price, qty, remaining, commission=0.0))]
+    /// Push a fill into SharedState.
+    ///
+    /// `qty` and `remaining` are whole shares, which is what a caller writing
+    /// the test is thinking in. They are scaled here, so a test states the
+    /// size it means rather than the fixed-point figure that stands for it.
     fn _test_push_fill(
         &self, instrument: u32, order_id: u64, side: &str,
         price: f64, qty: i64, remaining: i64, commission: f64,
@@ -188,11 +193,14 @@ impl EClient {
         let ps = PRICE_SCALE as f64;
         shared.orders.push_fill(Fill {
             instrument, order_id, side: s,
-            price: (price * ps) as i64, qty, remaining,
+            price: (price * ps) as i64,
+            qty: crate::types::qty_from_wire(qty),
+            remaining: crate::types::qty_from_wire(remaining),
             commission: (commission * ps) as i64,
             timestamp_ns: 100,
             // Single-print injection: the order total is this print.
-            cum_qty: qty, avg_price: (price * ps) as i64,
+            cum_qty: crate::types::qty_from_wire(qty),
+            avg_price: (price * ps) as i64,
         });
         Ok(())
     }
