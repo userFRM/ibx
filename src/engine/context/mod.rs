@@ -167,13 +167,19 @@ impl Context {
         self.positions[id as usize]
     }
 
+    /// The orders on this contract a cancel-all has to reach.
+    ///
+    /// Includes `Inactive`. The venue holds such an order and it can return to
+    /// working; a stop held until the session opens is the ordinary case. A
+    /// cancel for one the venue has finished with returns an unknown-order
+    /// reject, which the reject handler retires.
     pub fn open_orders_for(&self, id: InstrumentId) -> Vec<&Order> {
         self.open_orders
             .values()
             .filter(|o| o.instrument == id && matches!(o.status,
                 OrderStatus::PendingSubmit | OrderStatus::PreSubmitted | OrderStatus::Submitted |
                 OrderStatus::PendingCancel | OrderStatus::PendingReplace |
-                OrderStatus::PartiallyFilled | OrderStatus::Uncertain))
+                OrderStatus::PartiallyFilled | OrderStatus::Uncertain | OrderStatus::Inactive))
             .collect()
     }
 
@@ -191,6 +197,9 @@ impl Context {
     ///
     /// What one order differs from another by is its kind; the rest of a
     /// request is the same four values whatever kind it is.
+    ///
+    /// The quantity is in whole shares. A fraction of one goes through
+    /// [`Context::submit_limit_fractional`], which states it fixed-point.
     pub fn submit(
         &mut self,
         instrument: InstrumentId,
@@ -203,7 +212,7 @@ impl Context {
         let id = self.next_order_id;
         self.next_order_id += 1;
         self.pending_orders.push(OrderRequest::SubmitEx {
-            order_id: id, instrument, side, qty, kind, tif, attrs,
+            order_id: id, instrument, side, qty: qty_from_wire(qty as i64), kind, tif, attrs,
         });
         id
     }
@@ -229,7 +238,7 @@ impl Context {
             sl_id,
             instrument,
             side,
-            qty,
+            qty: qty_from_wire(qty as i64),
             entry_price,
             take_profit,
             stop_loss,
@@ -237,12 +246,17 @@ impl Context {
         (parent_id, tp_id, sl_id)
     }
 
-    /// Submit a fractional shares limit order.
+    /// Submit a limit order for a quantity stated fixed-point, so it may be a
+    /// fraction of a share.
     ///
-    /// The quantity is fixed-point: shares multiplied by `QTY_SCALE`. Half a
-    /// share is `QTY_SCALE / 2`. Written out as a number, an example goes
-    /// stale the day the scale changes and quietly teaches a caller to submit
-    /// a fraction of what it meant.
+    /// The quantity is shares multiplied by `QTY_SCALE`; half a share is
+    /// `QTY_SCALE / 2`. Written out as a number, an example goes stale the
+    /// day the scale changes and quietly teaches a caller to submit a
+    /// fraction of what it meant.
+    ///
+    /// This is [`Context::submit`] with the quantity already scaled. It
+    /// carries the same request, so a fractional order goes out through the
+    /// same encoder as every other order rather than a path of its own.
     pub fn submit_limit_fractional(
         &mut self,
         instrument: InstrumentId,
@@ -252,8 +266,14 @@ impl Context {
     ) -> OrderId {
         let id = self.next_order_id;
         self.next_order_id += 1;
-        self.pending_orders.push(OrderRequest::SubmitLimitFractional {
-            order_id: id, instrument, side, qty, price,
+        self.pending_orders.push(OrderRequest::SubmitEx {
+            order_id: id,
+            instrument,
+            side,
+            qty,
+            kind: OrderKind::Limit { price },
+            tif: b'0',
+            attrs: OrderAttrs::default(),
         });
         id
     }
@@ -295,7 +315,7 @@ impl Context {
             order_id,
             price,
             stop_price,
-            qty,
+            qty: qty_from_wire(qty as i64),
             outside_rth,
             ord_type,
             tif,
@@ -394,13 +414,38 @@ impl Context {
     /// not regress the lifecycle — terminal states are absorbing, and a
     /// lower-rank status never overwrites a higher one. Deliberate
     /// regressions go through `set_order_status_forced`.
-    pub fn update_order_status(&mut self, order_id: OrderId, status: OrderStatus) -> bool {
+    ///
+    /// `replayed` marks a report that restates history: PossResend (tag 97)
+    /// or PossDupFlag (tag 43). Such a report cannot move an order out of
+    /// PendingCancel.
+    pub fn update_order_status(
+        &mut self,
+        order_id: OrderId,
+        status: OrderStatus,
+        replayed: bool,
+    ) -> bool {
         if let Some(order) = self.open_orders.get_mut(&order_id) {
             let prev = order.status;
             if prev == status {
                 return false;
             }
-            if prev.is_terminal() || status.rank() < prev.rank() {
+            // PendingCancel does not supersede the working states. The ranks
+            // are a total order and cannot express this on their own, because
+            // a partially filled order must still be able to reach
+            // PendingCancel.
+            //
+            // A report stating the order is working moves it out of
+            // PendingCancel. A remark on an order arrives as a pending cancel
+            // with the acceptance immediately behind it, and a cancel the
+            // venue declines leaves the order working.
+            //
+            // A replayed report is excluded. Recent activity is replayed when
+            // a session opens, and a replayed working status predates any
+            // cancel sent since.
+            let resumes_working = !replayed
+                && prev == OrderStatus::PendingCancel
+                && matches!(status, OrderStatus::PreSubmitted | OrderStatus::Submitted);
+            if !resumes_working && (prev.is_terminal() || status.rank() < prev.rank()) {
                 log::debug!(
                     "Order {order_id} status guard: keeping {prev:?}, dropping stale {status:?}",
                 );
@@ -421,9 +466,14 @@ impl Context {
         }
     }
 
-    pub fn update_order_filled(&mut self, order_id: OrderId, last_shares: u32) {
+    /// Move what an order has filled by a signed amount, `QTY_SCALE`
+    /// fixed-point.
+    ///
+    /// A busted trade restates the order's cumulative quantity downwards, so
+    /// the delta may be negative. Saturates at zero.
+    pub fn adjust_order_filled(&mut self, order_id: OrderId, delta: Qty) {
         if let Some(order) = self.open_orders.get_mut(&order_id) {
-            order.filled = order.filled.saturating_add(last_shares);
+            order.filled = order.filled.saturating_add(delta).max(0);
         }
     }
 
@@ -460,7 +510,12 @@ impl Context {
         for order in self.open_orders.values_mut() {
             match order.status {
                 OrderStatus::PendingSubmit | OrderStatus::PreSubmitted | OrderStatus::Submitted |
-                OrderStatus::PendingCancel | OrderStatus::PendingReplace | OrderStatus::PartiallyFilled => {
+                OrderStatus::PendingCancel | OrderStatus::PendingReplace |
+                OrderStatus::PartiallyFilled |
+                // Includes `Inactive`: the venue holds such an order and it
+                // can return to working, so its state after a disconnect is
+                // unknown like any other.
+                OrderStatus::Inactive => {
                     order.status = OrderStatus::Uncertain;
                 }
                 _ => {}

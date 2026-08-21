@@ -2,9 +2,7 @@
 
 use super::common::*;
 use ibx::control::contracts;
-use ibx::protocol::connection::Frame;
 use ibx::protocol::fix;
-use ibx::protocol::fixcomp;
 
 pub(super) fn phase_market_data(conns: Conns) -> Conns {
     println!("--- Phase 2: Market Data Ticks (AAPL) ---");
@@ -103,7 +101,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
         .unwrap();
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -169,7 +167,7 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
     let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared,
+        shared.clone(),
         Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
         account_id.clone(),
         conns.farm,
@@ -179,7 +177,7 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
     );
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -195,11 +193,33 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
     control_tx
         .send(ControlCommand::Unsubscribe { instrument: 0 })
         .unwrap();
-    std::thread::sleep(Duration::from_secs(3));
+    // Ticks already in flight when the withdrawal is sent are absorbed rather
+    // than counted.
+    let settle = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < settle {
+        let _ = event_rx.recv_timeout(Duration::from_millis(100));
+    }
+    // Then silence is required. Without a read after the withdrawal, a
+    // subscription that is never withdrawn, and one that never starts, both pass.
+    let mut after_unsubscribe = 0u32;
+    let quiet = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < quiet {
+        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            after_unsubscribe += 1;
+        }
+    }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-    println!("  Total ticks: {tick_count}");
-    println!("  PASS\n");
+    println!("  Total ticks: {tick_count}, after the withdrawal: {after_unsubscribe}");
+    if tick_count == 0 {
+        no_market(&shared, "no ticks arrived while subscribed");
+        return conns;
+    }
+    assert_eq!(
+        after_unsubscribe, 0,
+        "ticks were still arriving three seconds after the subscription was withdrawn",
+    );
+    println!("  PASS ({tick_count} ticks, then silence)\n");
     conns
 }
 
@@ -247,7 +267,7 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
         .send(ControlCommand::UnsubscribeDepth { req_id })
         .unwrap();
 
-    // Aggregated depth is entitled separately from a venue's own book, so a
+    // Aggregated depth is entitled separately from a single exchange book, so a
     // silent aggregated subscription is retried directly before concluding
     // anything about the client.
     if depth_updates.is_empty() {
@@ -271,7 +291,7 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
         while Instant::now() < deadline {
             depth_updates.extend(shared.market.drain_depth_updates());
             if !depth_updates.is_empty() {
-                println!("  (aggregated depth was silent, the venue's own book delivers)");
+                println!("  (aggregated depth was silent, the exchange book delivers)");
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -443,7 +463,7 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
 
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -547,15 +567,10 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
             Ok(_) => {}
         }
         for frame in ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => {
-                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
+            // Every frame is unsigned, whatever kind it is. On a signed session a
+            // frame read as it stands parses distorted, and unsigning is what
+            // advances the read chain, so skipping one leaves the rest unreadable.
+            for msg in messages_in(&mut ccp, &frame) {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
                     && let Some(def) = contracts::parse_secdef_response(&msg, true)
@@ -572,6 +587,8 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
             lookup_returned_nothing("no EUR.USD contract came back");
         }
     };
+    // Read by the two phases after this one.
+    let _ = FOREX_CON_ID.set(con_id);
 
     // Subscribe and verify ticks
     let account_id = conns.account_id;
@@ -650,6 +667,14 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
 pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
     println!("--- Phase 108: Forex Streaming Validation (EUR.USD — session-independent) ---");
 
+    // As the venue named it, in the phase before this one. Written in here, a
+    // contract id that had changed or that this account sees differently read
+    // as a subscription that produced nothing.
+    let Some(&con_id) = FOREX_CON_ID.get() else {
+        println!("  SKIP: the phase that asks the venue for EUR.USD did not name it\n");
+        return conns;
+    };
+
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
@@ -663,10 +688,9 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
         None,
     );
 
-    // EUR.USD con_id = 12087792 (well-known IB con_id)
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 12087792, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -709,6 +733,14 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
 pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
     println!("--- Phase 109: Forex Reconnection Recovery (EUR.USD — session-independent) ---");
 
+    // As the venue named it, in the phase before this one. Written in here, a
+    // contract id that had changed or that this account sees differently read
+    // as a subscription that produced nothing.
+    let Some(&con_id) = FOREX_CON_ID.get() else {
+        println!("  SKIP: the phase that asks the venue for EUR.USD did not name it\n");
+        return conns;
+    };
+
     // Step 1: Subscribe, get forex ticks
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -725,7 +757,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
 
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 12087792, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -762,7 +794,7 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
 
     control_tx2
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 12087792, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join2 = run_hot_loop(hot_loop2);
@@ -813,7 +845,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
     // Subscribe to 3 high-volume instruments
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     control_tx
@@ -1007,7 +1039,7 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
     // Subscribe to both regular market data and TBT simultaneously
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     control_tx
@@ -1082,12 +1114,14 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
         "  Regular ticks: {tick_count}  TBT trades: {tbt_trade_count}  TBT quotes: {tbt_quote_count}"
     );
 
+    // This phase requires both streams at once; one stream working says nothing
+    // about the two running together.
     if got_tick && got_tbt {
         println!("  PASS (both streams active simultaneously)\n");
     } else if got_tick {
-        println!("  PASS (regular ticks only — HMDS TBT may not be streaming)\n");
+        println!("  SKIP: regular ticks only — nothing came on tick-by-tick to run beside them\n");
     } else {
-        println!("  PASS (TBT only — regular ticks delayed)\n");
+        println!("  SKIP: tick-by-tick only — no regular ticks to run beside it\n");
     }
     conns
 }

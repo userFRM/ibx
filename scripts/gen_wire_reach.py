@@ -16,8 +16,8 @@ Every caller-facing request falls into one of five kinds:
   silent    it returns as though it did something and did not
 
 `silent` must stay at zero. The others are facts to be stated, not failures:
-the venue pushes account and position data on login, and answering from that is
-what the counterpart does too.
+the venue pushes account and position data on login, and these calls answer
+from that push.
 
 Writes target/gates/wire-reach.md, which is a report and not the gate: this
 exits non-zero on its own findings, and on a total the capability matrix
@@ -52,6 +52,11 @@ def bodies() -> dict[str, str]:
         if path.name in ("test_helpers.rs", "dispatch.rs"):
             continue
         text = path.read_text()
+        # What a caller can reach, which the tests beside it are not. Indented
+        # by the same four spaces, a test function read as a request the venue
+        # carries — and one that happened to be named after a request was
+        # counted as a second copy of it.
+        text = text.split("\n#[cfg(test)]\n", 1)[0]
         for m in re.finditer(r"\n    (?:pub\(crate\) )?fn ([a-z_0-9]+)\(", text):
             start = m.end()
             lead = leading_comment(text, m.start())
@@ -183,7 +188,6 @@ def main() -> int:
         lines.append(", ".join(f"`{n}`" for n in named) if named else "None.")
         lines.append("")
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(lines))
 

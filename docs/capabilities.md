@@ -14,10 +14,10 @@ Verification runs against a paper account on IBKR production servers, and the or
 
 | | |
 | --- | --- |
-| Requests | 78. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
+| Requests | 77. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
 | Order fields | 154. 114 are sent; 35 have no field in the protocol to carry them and the call says so rather than dropping them; 5 are what the venue fills on the way back, which an order does not carry out |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 1,999 offline, and 157 more that only run against a broker session |
+| Tests | 2,258 offline, and 166 more that only run against a broker session |
 
 45 of the 46 capabilities are verified against IBKR production servers; the
 remaining one, advisor configuration, reaches the server and needs an advisor
@@ -34,7 +34,7 @@ Every figure above is measured on each commit, and the build fails if one moves.
 | `EClient` / `EWrapper` (TWS API shape) | ✅ Supported | `tests/ib_paper_compat`, `tests/python/test_compat_tier1..3.py` |
 | `ib_async`, unmodified | ✅ Supported | Their `IB` on this engine via `ibx.ib_async.attach`; their events, async variants and types, with no gateway. All 67 transport calls their library makes are carried, measured against their own source and gated. Their own test suite runs against it, and all three behave as they do against a gateway. Two pass. The third asserts a `RequestError` carrying code 321, which their own wrapper cannot raise: it lists 321 among the codes it treats as warnings, and a warning never ends the request it belongs to. That test fails the same way against any server, this engine or a gateway, and their source carries an open note about the same code. `tests/python/test_ib_async_transport.py`, `tests/ib_async_upstream/conftest.py` |
 | `ibx.IB` (ib_async shape) | ✅ Supported | 90/90 methods present; `tests/python/test_ib_facade.py`, `scripts/sdk_sweep.py` |
-| `ibx::Client` (Rust) | ✅ Supported | 78/78 callable; 3 return an error naming a local-process facility this client does not have |
+| `ibx::Client` (Rust) | ✅ Supported | 77/77 callable; 3 return an error naming a local-process facility this client does not have |
 | Gateway settings | ✅ Supported | 17 settings carried, 7 recorded as having no counterpart; `tests/python/test_gateway_settings.py`, `tests/python/test_settings_parity.py`; session opened under a stated build and time zone |
 | Rust/Python equivalence | ✅ Supported | 4 static gates (settings, order fields, surface, error behaviour) plus `scripts/conformance.py --compare`, which compares 10 server responses across both clients |
 
@@ -98,7 +98,7 @@ stops holding.
 
 | What is guaranteed | Where it stands |
 | --- | --- |
-| A call never returns success having sent nothing | 78 requests, none silent |
+| A call never returns success having sent nothing | 77 requests, none silent |
 | A field a caller sets is never quietly ignored | 154 order fields, none dropped |
 | A field the server sends is never thrown away | What this client has no name for is kept under its tag number — 49 such fields on an equity definition, 46 on a bond |
 
@@ -122,7 +122,7 @@ official gateway behaves the same way.
 - **A caller's request id is not what the venue is asked under.** Every
   subscription is asked for under an id this client allocates and is mapped
   back to the caller who wanted it. The venue echoes an id back, so one taken
-  from the caller cannot be told apart from one allocated here. The counterpart
+  from the caller cannot be told apart from one allocated here. The venue
   allocates the same way, from one upward, and keys its subscriptions on it.
 - **`keepUpToDate` queries are closed on first response.** Continuation is
   provided by folding the 5-second bar stream into the requested bar size.
@@ -138,19 +138,19 @@ in.
 | Behaviour | Status | Verification |
 | --- | :---: | --- |
 | The session holding the account is reported to the caller | ✅ Supported | `competing_session()` returns the address, the logon time, and whether this session may trade. A read-only flag from the venue is carried as stated |
-| A logon later than this one is another client, and keeps the account | ✅ Supported | A reconnect that finds one reports it and stops; retrying cannot change it. Both times are read from the venue's own clock, so two machines' clocks cannot decide it |
+| A logon later than this one is another client, and keeps the account | ✅ Supported | A reconnect that finds one reports it and stops; retrying cannot change it. Both times are read from the venue's clock, so two machines' clocks cannot decide it |
 | A logon at or before this one is this session's own, still being reaped | ✅ Supported | The reconnect completes over it, which is what an ordinary recovery is |
 | The heartbeat is the interval the venue answered with | ✅ Supported | The interval a logon proposes is not what it is held to; the answer is read from the logon response and applied on every reconnect |
 | A reconnect follows the venue | ✅ Supported | It uses the hosts this session reached the venue through, on the port the venue named in its redirect, and stops walking hosts when one answers and refuses |
 | The first connect knocks on the next door when one does not answer | ✅ Supported | One host per region. A door that answers and refuses ends the walk, so a refused logon is not repeated at every door |
 | The last order id is kept between runs | ✅ Supported | An order id belongs to the account, not the process: an id it has already used is refused by name. The last one handed out is remembered per account, kind of session and client id, and the next run counts on from it |
 | A session survives losing its connection | ✅ Supported | A dropped connection is rebuilt on the session already open, with no second factor: five forced drops recovered in 2-8s, and an eight hour session rode through its losses unattended |
-| A session does not survive its process | ✅ Documented | The venue holds a session for a socket, not for an account: killed without logging out, it was already gone forty seconds later, and a later start is answered with a handshake. The counterpart stores no session either — it stays connected rather than restarting. So a restart costs a second factor here exactly as it does there, and staying up costs none |
-| A session that has ended answers at once | ✅ Supported | Requests made after a terminal loss are refused with 504 immediately, rather than waiting out a timeout each. Every request already answered keeps the venue's own answer |
+| A session does not survive its process | ✅ Documented | The venue holds a session for a socket, not for an account: killed without logging out, it was already gone forty seconds later, and a later start is answered with a handshake. The venue stores no session either — it stays connected rather than restarting. So a restart costs a second factor here exactly as it does there, and staying up costs none |
+| A session that has ended answers at once | ✅ Supported | Requests made after a terminal loss are refused with 504 immediately, rather than waiting out a timeout each. Every request already answered keeps the venue's answer |
 
 One session, held open for 175 minutes across a market open: 106,053 quotes,
 180,433 trades, 95,985 book rows and 4,148 bars, with no unrequested
-disconnect and no error other than the venue's own answer for a series it does
+disconnect and no error other than the venue's answer for a series it does
 not hold. `scripts/endurance.py --minutes 175`.
 
 ## Architectural differences from a gateway process
@@ -183,7 +183,7 @@ not hold. `scripts/endurance.py --minutes 175`.
 - Tick 437 carries four 32-bit integers. Three are read — a status mask, a
   number, and an index naming one status — and the fourth is left alone. The
   number is kept exactly as stated: its unit is not established, and no reading
-  of it would be found rather than invented. The counterpart reads the same
+  of it would be found rather than invented. The venue reads the same
   three, keeps the same number, and no code path there reads it either.
 
 ## Refusals

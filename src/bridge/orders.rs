@@ -118,6 +118,14 @@ impl OrderState {
         self.order_cache.lock().unwrap().get(&order_id).cloned()
     }
 
+    /// Whether a fill for this order is still waiting to be read.
+    ///
+    /// A fill is read against the order's record, so the record outlives the
+    /// fill rather than the other way round.
+    pub fn has_pending_fill(&self, order_id: u64) -> bool {
+        self.fills.lock().unwrap().iter().any(|f| f.order_id == order_id)
+    }
+
     /// Remove an enriched entry. Called after a completed order has been
     /// delivered to the user, to bound `order_cache` growth in long sessions.
     pub fn remove_order_info(&self, order_id: u64) {
@@ -151,9 +159,29 @@ impl OrderState {
         self.replay_done.store(true, Ordering::Release);
     }
 
+    /// A new connection has not named what is already working yet.
+    ///
+    /// Left set across a reconnect, the flag still reports the previous
+    /// connection's replay as finished, and a caller asking what it has on is
+    /// answered from the pre-drop book — every order in it Uncertain — while
+    /// the venue's account is still arriving.
+    #[doc(hidden)] pub fn clear_replay_done(&self) {
+        self.replay_done.store(false, Ordering::Release);
+    }
+
     /// Whether the orders already working have been received.
     pub fn replay_done(&self) -> bool {
         self.replay_done.load(Ordering::Acquire)
+    }
+
+    /// A new connection has not yet named what it has working.
+    ///
+    /// Set once and never cleared, this state outlived the connection that
+    /// earned it: after a reconnect a caller asking what it already has on was
+    /// answered straight away, from the old session's record, and never waited
+    /// for the new one to say — which is how the same order gets placed twice.
+    #[doc(hidden)] pub fn replay_is_pending(&self) {
+        self.replay_done.store(false, Ordering::Release);
     }
 
     #[doc(hidden)] pub fn push_completed_order(&self, order: CompletedOrder) {
@@ -202,7 +230,7 @@ impl OrderState {
     ///
     /// An order that has completed is not returned to a working status. Nothing
     /// remembered that an order was done, so a replayed frame — the reconnect
-    /// open-order burst racing a fill, or any message the gateway resends —
+    /// open-order burst racing a fill, or any message the venue resends —
     /// wrote `Submitted` over the terminal entry, and `req_open_orders` then
     /// reported a completed order as live.
     ///
@@ -212,7 +240,7 @@ impl OrderState {
     /// eviction, and an intervening terminal report cannot overwrite the
     /// evidence the way a cached string could.
     ///
-    /// A correction from the gateway is not a replay and goes through
+    /// A correction from the venue is not a replay and goes through
     /// [`push_order_correction`](Self::push_order_correction).
     #[doc(hidden)] pub fn push_order_info(&self, order_id: u64, info: RichOrderInfo) {
         if crate::types::order_status::is_open_status(&info.order_state.status) {
@@ -231,9 +259,9 @@ impl OrderState {
 
     /// Cache a view that supersedes a completed one.
     ///
-    /// A trade cancel or trade correction restates an execution the gateway has
+    /// A trade cancel or trade correction restates an execution the venue has
     /// already reported, so it can legitimately return a filled order to a
-    /// working quantity. That is the gateway's own statement rather than a
+    /// working quantity. That is the venue's statement rather than a
     /// replay of an older one, so it is not refused, and the order stops being
     /// remembered as completed.
     #[doc(hidden)] pub fn push_order_correction(&self, order_id: u64, info: RichOrderInfo) {

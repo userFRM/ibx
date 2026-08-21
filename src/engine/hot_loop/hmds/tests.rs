@@ -81,6 +81,11 @@ fn a_reconnect_puts_the_tick_by_tick_streams_back() {
 /// The routing for a five-second bar stream is a ticker id the session
 /// issued. A reconnect that kept the routing and re-sent nothing left the
 /// bars stopped with the connection reporting healthy.
+///
+/// A keep-up-to-date request needs only this stream restored: its bars are
+/// folded from it, and the partial bar survives the reconnect. A second
+/// request for the same stream leaves two subscriptions upstream for one
+/// caller.
 #[test]
 fn a_reconnect_asks_for_the_five_second_bars_again() {
     let mut hmds = HmdsState::new();
@@ -92,6 +97,16 @@ fn a_reconnect_asks_for_the_five_second_bars_again() {
     let mut hb = HeartbeatState::new();
     hmds.send_realtime_bar_subscribe(9, 265598, "", "STK", "SMART", "TRADES", true, &mut conn, &mut hb);
     let first = hmds.rtbar_subs[0].0.clone();
+    // State a keep-up-to-date request leaves behind: the stream and the
+    // partial bar.
+    hmds.keep_up_to_date_reqs.insert(9);
+    hmds.forming_bars.push(super::FormingBar {
+        req_id: 9,
+        seconds: 60,
+        opened_at: 0,
+        bar: Default::default(),
+        weighted: 0.0,
+    });
 
     let sock2 = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (_peer2, _) = listener.accept().unwrap();
@@ -104,43 +119,13 @@ fn a_reconnect_asks_for_the_five_second_bars_again() {
     assert_eq!(hmds.rtbar_subs.len(), 1, "the stream is asked for again");
     assert_ne!(hmds.rtbar_subs[0].0, first, "under a new query, not the dead session's");
     assert_eq!(hmds.rtbar_subs[0].1, 9, "still answering the caller's request id");
-}
-
-/// registered as pending and reported to the caller as sent. That waiter is
-/// exempt from the idle sweep — a subscription has no single answer to time
-/// out — so nothing would ever answer it and nothing would ever expire it.
-#[test]
-fn a_keep_up_to_date_request_that_was_not_sent_is_not_registered() {
-    let shared = SharedState::new();
-    let mut hb = HeartbeatState::new();
-    let iv = std::sync::Mutex::new(Vec::new());
-
-    // A transport whose peer is gone, so the send fails rather than the
-    // request being rejected by an earlier guard. "5 mins" is a bar size
-    // keep-up-to-date supports, so the call reaches the send.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (peer, _) = listener.accept().unwrap();
-    drop(peer);
-    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
-
-    let mut hmds = HmdsState::new();
-    let mut sent = true;
-    // A dead peer may buffer the first write; keep going until the socket
-    // reports the failure the caller has to be told about.
-    for _ in 0..8 {
-        sent = hmds.send_historical_request_via_ccp(
-            7, 756733, "", "1 D", "5 mins", "TRADES", true, "SPY", "STK", "SMART",
-            &mut conn, &mut hb, &[], &iv, &shared,
-        );
-        if !sent { break; }
-        hmds.pending_historical.clear();
-    }
-
-    assert!(!sent, "a refused send is not reported as sent");
+    assert_eq!(
+        hmds.forming_bars.iter().filter(|f| f.req_id == 9).count(), 1,
+        "and the bar it was folding is still the one being folded",
+    );
     assert!(
-        hmds.pending_historical.is_empty(),
-        "and nothing is left waiting for an answer that cannot come",
+        hmds.pending_historical.iter().all(|(_, rid, _)| *rid != 9),
+        "nothing else is asked for on its behalf: one request, one stream",
     );
 }
 
@@ -152,18 +137,27 @@ use super::*;
 /// someone was diagnosing an incident.
 #[test]
 fn a_non_utf8_xml_tag_does_not_abort_the_hot_loop() {
-    // 199 ASCII bytes then one invalid byte: byte 200 is not a boundary.
-    let mut value = "a".repeat(199).into_bytes();
-    value.push(0xFF);
-    let lossy = String::from_utf8_lossy(&value).to_string();
+    // Driven through the handler that performs the slice, so the assertion
+    // depends on the code under test.
+    //
+    // 199 ASCII bytes then one invalid byte. Lossily decoded, that byte becomes
+    // a three-byte replacement character, so byte 200 falls inside it.
+    let mut payload = b"<ResultSetBar>".to_vec();
+    payload.extend(std::iter::repeat_n(b'a', 199 - payload.len()));
+    payload.push(0xFF);
 
-    // The slice the log performs, on the value the parser would hold.
-    let head = lossy.get(..200).unwrap_or(&lossy);
-    assert!(!head.is_empty(), "a head is produced rather than panicking");
-    assert!(
-        lossy.len() > 200 || head.len() <= lossy.len(),
-        "and it never exceeds the value it came from",
-    );
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"35=W\x016118=");
+    msg.extend_from_slice(&payload);
+    msg.push(0x01);
+
+    let mut hmds = HmdsState::new();
+    let shared = crate::bridge::SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<crate::protocol::connection::Connection> = None;
+    // The slice runs only with debug logging enabled.
+    log::set_max_level(log::LevelFilter::Debug);
+    hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
 }
 
 fn make_query_error_msg(query_id: &str, error: &str) -> Vec<u8> {
@@ -294,7 +288,7 @@ fn engine_rejects_unknown_bar_size_with_error_and_sentinel() {
     let mut conn: Option<Connection> = None;
 
     hmds.send_historical_request_ex(9, 756733, "", "2 d", "1 Min", "TRADES",
-        true, false, "SPY", "STK", "SMART", &mut conn, &mut hb, &shared);
+        true, false, false, "SPY", "STK", "SMART", &mut conn, &mut hb, &shared);
 
     assert!(hmds.pending_historical.is_empty(), "rejected request must not go pending");
     let errors = shared.reference.drain_historical_errors();
@@ -382,52 +376,13 @@ fn the_query_on_the_wire_carries_the_contract_s_own_type_and_venue() {
 
     hmds.send_historical_request_ex(
         1, 495512563, "20260101 16:00:00", "1 D", "1 hour", "TRADES",
-            true, false, "ES", "FUT", "CME", &mut conn, &mut hb, &shared,
+            true, false, false, "ES", "FUT", "CME", &mut conn, &mut hb, &shared,
     );
 
     let sent = String::from_utf8_lossy(&read_frame(&mut peer)).to_string();
 
     assert!(sent.contains("FUT"), "the contract's security type: {sent}");
     assert!(sent.contains("CME"), "the contract's venue: {sent}");
-    assert!(!sent.contains("SMART"), "and not the old constant: {sent}");
-}
-
-/// The keep-up-to-date request is built by a second function over a
-/// different transport, and it was changed too. Reverting only that one
-/// passes every other test here.
-#[test]
-fn the_streaming_query_carries_them_too() {
-    use crate::protocol::connection::Connection;
-
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let client = std::net::TcpStream::connect(addr).unwrap();
-    let (mut peer, _) = listener.accept().unwrap();
-    peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-    let mut conn = Some(Connection::new_raw(client).unwrap());
-
-    let mut hmds = super::HmdsState::new();
-    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
-    let shared = crate::bridge::SharedState::new();
-    let sign_iv = std::sync::Mutex::new(Vec::new());
-
-    hmds.send_historical_request_via_ccp(
-        1, 495512563, "20260101 16:00:00", "1800 S", "5 secs", "TRADES",
-        true, "ES", "FUT", "CME", &mut conn, &mut hb, &[], &sign_iv, &shared,
-    );
-
-    // This transport compresses, so the bytes have to be decoded before
-    // the query is readable at all.
-    let raw = read_frame(&mut peer);
-    let inner = crate::protocol::fixcomp::fixcomp_decompress(&raw)
-        .expect("the frame decompresses");
-    let sent: String = inner.iter()
-        .map(|m| String::from_utf8_lossy(m).to_string())
-        .collect::<Vec<_>>()
-        .join("");
-
-    assert!(sent.contains("<secType>FUT</secType>"), "the contract's security type: {sent}");
-    assert!(sent.contains("<exchange>CME</exchange>"), "the contract's venue: {sent}");
     assert!(!sent.contains("SMART"), "and not the old constant: {sent}");
 }
 
@@ -467,7 +422,7 @@ fn read_frame(peer: &mut std::net::TcpStream) -> Vec<u8> {
 mod tick_ack_tests {
     use super::super::{parse_tick_subscription_ack, scaled_size};
 
-    /// The venue's own answer, taken from a live session. It names the
+    /// The venue's answer, taken from a live session. It names the
     /// subscription back, states the number it will use on every frame, and
     /// states the increments prices and sizes move in — none of which is
     /// stated anywhere else on this connection.
@@ -637,5 +592,308 @@ mod forming_bar_tests {
         let next = forming.fold(&five(1_786_456_800, 9.4, 9.6, 9.3, 9.5, 10.0));
         assert_eq!(next.timestamp, 1_786_456_800);
         assert_eq!(next.volume, 10.0, "nothing carried over");
+    }
+}
+
+/// A scan response is delivered to the scan that answered.
+///
+/// Every response arrives under one message id, so the id cannot identify the
+/// scan. The payload names the scan, and that is what routes the rows.
+#[test]
+fn each_scan_gets_its_own_answer() {
+    let mut hmds = super::HmdsState::new();
+    hmds.pending_scanner.push(("APISCAN1:10001".to_string(), 10001));
+    hmds.pending_scanner.push(("APISCAN2:10002".to_string(), 10002));
+    hmds.pending_scanner.push(("APISCAN3:10003".to_string(), 10003));
+
+    for (named, expected) in [
+        ("APISCAN1:10001", 10001),
+        ("APISCAN2:10002", 10002),
+        ("APISCAN3:10003", 10003),
+    ] {
+        let xml = format!("<ScanResponse>\n\t<id>{named}</id>\n</ScanResponse>");
+        assert_eq!(
+            hmds.scanner_answered(&xml),
+            Some(expected),
+            "{named} answered, so its rows belong to the request that asked for it",
+        );
+    }
+}
+
+/// A response naming a scan this session is not running belongs to nobody here.
+///
+/// A withdrawn scan can answer once more. The scan name identifies the owner,
+/// so a name matching no running scan has no owner and is not delivered.
+#[test]
+fn an_answer_naming_no_running_scan_is_not_handed_to_another() {
+    let mut hmds = super::HmdsState::new();
+    hmds.pending_scanner.push(("APISCAN1:10001".to_string(), 10001));
+    assert_eq!(hmds.scanner_answered("<ScanResponse></ScanResponse>"), None);
+    assert_eq!(hmds.scanner_answered("<ScanResponse><id>APISCAN9:99</id></ScanResponse>"), None);
+    // The one it does name still answers.
+    assert_eq!(
+        hmds.scanner_answered("<ScanResponse><id>APISCAN1:10001</id></ScanResponse>"),
+        Some(10001),
+    );
+}
+
+mod hmds_correlation_tests {
+    use super::super::*;
+    use crate::bridge::SharedState;
+    use crate::protocol::connection::Connection;
+
+    /// Query names are numbered, so one is a prefix of another as soon as the
+    /// count reaches ten. Searching the payload for the name handed the answer
+    /// for `tk_12` to whichever of `tk_1` and `tk_12` was waiting first, and
+    /// the other was never answered.
+    ///
+    /// A news reply states what the query asked for after its name, separated
+    /// from it, and is still that query's answer.
+    #[test]
+    fn a_query_name_that_prefixes_another_is_not_answered_by_it() {
+        let answer_for = |id: &str| {
+            format!("<ResultSetTick><id>{id}</id><eoq>true</eoq></ResultSetTick>")
+        };
+
+        assert!(answers(&answer_for("tk_1"), "tk_1"), "its own answer");
+        assert!(
+            !answers(&answer_for("tk_12"), "tk_1"),
+            "tk_1 took the answer meant for tk_12",
+        );
+        assert!(answers(&answer_for("tk_12"), "tk_12"), "which tk_12 needs itself");
+        assert!(!answers(&answer_for("tk_2"), "tk_1"), "a different query entirely");
+
+        // The decorated form a news reply states.
+        let news = "<NewsResponse><id>news_2-headlines;;NewsQuery;;0;;true;;0;;U</id></NewsResponse>";
+        assert!(answers(news, "news_2"), "the reply names the query it answers");
+        assert!(!answers(news, "news_2x"), "and not one whose name merely resembles it");
+    }
+
+    fn tick_msg(query_id: &str, done: bool) -> Vec<u8> {
+        let xml = format!(
+            "<ResultSetTick><id>{}</id><eoq>{}</eoq><tz>UTC</tz><Events>\
+             <Tick><time>20260714-13:30:00</time><price>100.0</price><size>1</size></Tick>\
+             </Events></ResultSetTick>",
+            query_id, if done { "true" } else { "false" },
+        );
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"35=W\x016118=");
+        msg.extend_from_slice(xml.as_bytes());
+        msg.push(0x01);
+        msg
+    }
+
+    /// A tick query is answered in segments, each stating whether it is the
+    /// last. The route is held until a segment states it is.
+    #[test]
+    fn a_segmented_tick_reply_keeps_its_route_until_the_venue_is_done() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        hmds.pending_ticks.push(("tk_1".to_string(), 31, "TRADES".to_string()));
+
+        hmds.process_hmds_message(&tick_msg("tk_1", false), &mut conn, &shared, &None, &mut hb);
+        assert_eq!(hmds.pending_ticks.len(), 1, "more is coming, so the route stays");
+
+        hmds.process_hmds_message(&tick_msg("tk_1", true), &mut conn, &shared, &None, &mut hb);
+        assert!(hmds.pending_ticks.is_empty(), "the last segment releases it");
+        assert_eq!(
+            shared.reference.drain_historical_ticks().len(), 2,
+            "both segments reached the caller",
+        );
+    }
+
+    /// Tag 96 carries gzip bytes. The parsed field map is UTF-8 lossy, which
+    /// replaces every invalid byte, so the payload is read from the raw
+    /// frame.
+    #[test]
+    fn a_compressed_fundamental_report_survives_being_read() {
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+
+        let report = "<ReportSnapshot><Issuer>ACME</Issuer></ReportSnapshot>";
+        let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(report.as_bytes()).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(
+            String::from_utf8(compressed.clone()).is_err(),
+            "the payload really is not text",
+        );
+
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        hmds.pending_fundamental.push(("fund_1".to_string(), 51));
+
+        // Tag 95 states the length, which frames a payload containing SOH
+        // bytes.
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"35=U\x016040=10012\x016118=<FundamentalsResponse/>\x0195=");
+        msg.extend_from_slice(compressed.len().to_string().as_bytes());
+        msg.extend_from_slice(b"\x0196=");
+        msg.extend_from_slice(&compressed);
+        msg.push(0x01);
+        hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+        let answered = shared.reference.drain_fundamental_data();
+        assert_eq!(answered.len(), 1, "the report reached the caller");
+        assert_eq!(answered[0].1, report, "and it is the report the venue sent");
+    }
+
+    /// An article response consumes the pending request whether or not its
+    /// payload reads, so an unreadable one is reported to the caller.
+    #[test]
+    fn an_unreadable_article_is_reported_rather_than_swallowed() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        hmds.pending_articles.push(("art_1".to_string(), 61));
+
+        let xml = "<NewsResponse><id>art_1-article_file;;NewsQuery;;0;;true;;0;;U</id></NewsResponse>";
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"35=U\x016040=10032\x016118=");
+        msg.extend_from_slice(xml.as_bytes());
+        msg.push(0x01);
+        hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+        assert!(hmds.pending_articles.is_empty(), "the request is spent either way");
+        assert!(
+            shared.reference.drain_news_articles().is_empty(),
+            "there was no article to deliver",
+        );
+        assert!(
+            shared.reference.drain_historical_errors_for_dispatch().iter().any(|(id, _, _)| *id == 61),
+            "and the caller is told, rather than left waiting",
+        );
+    }
+
+    /// A news response names the query it answers, and is matched on that
+    /// name. Two searches can be in flight at once.
+    #[test]
+    fn a_news_reply_answers_the_request_it_names() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        hmds.pending_news.push(("news_1".to_string(), 51));
+        hmds.pending_news.push(("news_2".to_string(), 52));
+
+        // The second request's response arrives first, under the id its own
+        // query went out with.
+        let xml = "<NewsResponse><id>news_2-headlines;;NewsQuery;;0;;true;;0;;U</id></NewsResponse>";
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"35=U\x016040=10032\x016118=");
+        msg.extend_from_slice(xml.as_bytes());
+        msg.push(0x01);
+        hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+        let answered = shared.reference.drain_historical_news();
+        assert_eq!(answered.len(), 1, "one answer reached a caller");
+        assert_eq!(answered[0].0, 52, "and it is the caller the reply names");
+        assert_eq!(
+            hmds.pending_news.iter().map(|(q, _)| q.as_str()).collect::<Vec<_>>(),
+            vec!["news_1"],
+            "the other request is still outstanding",
+        );
+    }
+
+    /// A head timestamp goes out under an id its response names, and is
+    /// matched on it. Two can be in flight at once.
+    #[test]
+    fn a_head_timestamp_answers_the_request_the_reply_names() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        let id_of = |con_id: u32| {
+            crate::control::historical::head_timestamp_query_id(
+                &crate::control::historical::HeadTimestampRequest {
+                    con_id,
+                    sec_type: "CS".into(),
+                    exchange: "SMART".into(),
+                    data_type: crate::control::historical::BarDataType::Trades,
+                    use_rth: true,
+                },
+            )
+        };
+        hmds.pending_head_ts.push((id_of(1), 41));
+        hmds.pending_head_ts.push((id_of(2), 42));
+
+        let xml = format!(
+            "<ResultSetHeadTimeStamp><id>{}</id><eoq>true</eoq>\
+             <headTS>19930129-09:00:00</headTS><tz>US/Eastern</tz></ResultSetHeadTimeStamp>",
+            id_of(2),
+        );
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"35=W\x016118=");
+        msg.extend_from_slice(xml.as_bytes());
+        msg.push(0x01);
+        hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+        let answered = shared.reference.drain_head_timestamps();
+        assert_eq!(answered.len(), 1);
+        assert_eq!(answered[0].0, 42, "the reply named the second request");
+    }
+
+    /// A response naming no pending query is not delivered to the oldest
+    /// outstanding request.
+    #[test]
+    fn an_answer_naming_no_pending_query_is_not_handed_to_another() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        hmds.pending_head_ts.push(("hts_of_another_query".to_string(), 71));
+        hmds.pending_histogram.push(("hg_of_another_query".to_string(), 72));
+
+        for xml in [
+            "<ResultSetHeadTimeStamp><id>nobody</id><eoq>true</eoq>\
+             <headTS>19930129-09:00:00</headTS><tz>US/Eastern</tz></ResultSetHeadTimeStamp>",
+            "<ResultSetHistogram><id>nobody</id><eoq>true</eoq>\
+             <Events><Tick><price>100.0</price><size>5</size></Tick></Events></ResultSetHistogram>",
+        ] {
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"35=W\x016118=");
+            msg.extend_from_slice(xml.as_bytes());
+            msg.push(0x01);
+            hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+        }
+
+        assert!(shared.reference.drain_head_timestamps().is_empty());
+        assert!(shared.reference.drain_histogram_data().is_empty());
+        assert_eq!(hmds.pending_head_ts.len(), 1, "and both are still waiting");
+        assert_eq!(hmds.pending_histogram.len(), 1);
+    }
+}
+
+mod hmds_transport_tests {
+    use super::super::*;
+    use crate::bridge::SharedState;
+    use crate::protocol::connection::Connection;
+
+    /// One-shot requests are failed when the connection is lost. Only
+    /// historical bars carry a timeout, so the rest would never complete.
+    #[test]
+    fn a_lost_connection_answers_the_requests_it_took_with_it() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut conn: Option<Connection> = None;
+        hmds.pending_head_ts.push(("hts".to_string(), 61));
+        hmds.pending_fundamental.push(("fund".to_string(), 62));
+        hmds.pending_ticks.push(("tk".to_string(), 63, "TRADES".to_string()));
+
+        hmds.disconnect(&mut conn, &shared);
+
+        let errors = shared.reference.drain_historical_errors();
+        for req_id in [61, 62, 63] {
+            assert!(
+                errors.iter().any(|(rid, ..)| *rid == req_id),
+                "request {req_id} was told the connection went: {errors:?}",
+            );
+        }
+        assert!(hmds.pending_head_ts.is_empty(), "and nothing is left waiting");
     }
 }

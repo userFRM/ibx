@@ -113,6 +113,13 @@ public:
 
     // Limit order tracking
     OrderId limit_order_id = 0;
+    // The two the measurement is of. An execution names the order it belongs
+    // to, and without reading that name any fill on the account — one placed
+    // by hand, one left from an earlier run — completed the buy measurement
+    // and sent a sell against a position this had not opened.
+    std::atomic<bool> connection_closed{false};
+    OrderId buy_order_id = 0;
+    OrderId sell_order_id = 0;
     TimePoint limit_submit_time{};
     TimePoint limit_cancel_time{};
     uint64_t limit_ack_rtt_ns = 0;
@@ -157,10 +164,8 @@ public:
 
         // Subscribe to market data
         Contract contract;
+        // An id names one contract exactly, which is all a subscription needs.
         contract.conId = con_id;
-        contract.exchange = "SMART";
-        contract.secType = "STK";
-        contract.currency = "USD";
         client->reqMktData(1, contract, "", false, false, {});
         printf("[%.3fs] Subscribed to conId=%d\n", elapsed_secs(start), con_id);
     }
@@ -233,9 +238,11 @@ public:
 
             Contract contract;
             contract.conId = con_id;
+            // An order needs a destination as well as an instrument, and the
+            // id alone states only the instrument. SMART is stated here rather
+            // than resolved per contract, so pass a con_id that routes through
+            // it.
             contract.exchange = "SMART";
-            contract.secType = "STK";
-            contract.currency = "USD";
 
             Order order;
             order.action = "BUY";
@@ -243,7 +250,8 @@ public:
             order.orderType = "MKT";
 
             buy_submit_time = Clock::now();
-            client->placeOrder(next_order_id++, contract, order);
+            buy_order_id = next_order_id++;
+            client->placeOrder(buy_order_id, contract, order);
             phase.store(WAIT_BUY, std::memory_order_relaxed);
             break;
         }
@@ -253,9 +261,11 @@ public:
 
             Contract contract;
             contract.conId = con_id;
+            // An order needs a destination as well as an instrument, and the
+            // id alone states only the instrument. SMART is stated here rather
+            // than resolved per contract, so pass a con_id that routes through
+            // it.
             contract.exchange = "SMART";
-            contract.secType = "STK";
-            contract.currency = "USD";
 
             Order order;
             order.action = "BUY";
@@ -323,7 +333,7 @@ public:
                      const Execution& execution) override {
         int p = phase.load(std::memory_order_relaxed);
 
-        if (p == WAIT_BUY && !buy_filled) {
+        if (p == WAIT_BUY && !buy_filled && execution.orderId == buy_order_id) {
             auto now = Clock::now();
             buy_rtt_ns = std::chrono::duration_cast<Duration>(
                 now - buy_submit_time).count();
@@ -335,9 +345,11 @@ public:
             printf("[%.3fs] Submitting market SELL 1 share...\n", elapsed_secs(start));
             Contract c;
             c.conId = con_id;
+            // An order needs a destination as well as an instrument, and the
+            // id alone states only the instrument. SMART is stated here rather
+            // than resolved per contract, so pass a con_id that routes through
+            // it.
             c.exchange = "SMART";
-            c.secType = "STK";
-            c.currency = "USD";
 
             Order order;
             order.action = "SELL";
@@ -345,10 +357,11 @@ public:
             order.orderType = "MKT";
 
             sell_submit_time = Clock::now();
-            client->placeOrder(next_order_id++, c, order);
+            sell_order_id = next_order_id++;
+            client->placeOrder(sell_order_id, c, order);
             phase.store(WAIT_SELL, std::memory_order_relaxed);
         }
-        else if (p == WAIT_SELL && !sell_filled) {
+        else if (p == WAIT_SELL && !sell_filled && execution.orderId == sell_order_id) {
             auto now = Clock::now();
             sell_rtt_ns = std::chrono::duration_cast<Duration>(
                 now - sell_submit_time).count();
@@ -371,6 +384,10 @@ public:
 
     void connectionClosed() override {
         printf("[%.3fs] Connection closed\n", elapsed_secs(start));
+        // The loop has nothing left to read, so it stops — but stopping
+        // because the socket went is not the run having finished, and reported
+        // as one it read as a benchmark that measured everything it set out to.
+        connection_closed.store(true, std::memory_order_relaxed);
         done.store(true, std::memory_order_relaxed);
     }
 
@@ -522,9 +539,37 @@ int main(int argc, char** argv) {
         reader.processMsgs();
     }
 
-    if (!wrapper.done.load(std::memory_order_relaxed)) {
+    bool finished = wrapper.done.load(std::memory_order_relaxed)
+        && !wrapper.connection_closed.load(std::memory_order_relaxed);
+    if (!finished) {
         int p = wrapper.phase.load(std::memory_order_relaxed);
         printf("\nBenchmark timed out in phase %d - are markets open?\n", p);
+
+        // What the run started and did not finish is not left on the account.
+        // The limit order is good-till-cancelled, so a run that stopped
+        // measuring it left it resting; and a buy that filled with no sell
+        // behind it left a position nobody opened deliberately.
+        if (wrapper.limit_order_id != 0 && !wrapper.limit_cancelled) {
+            printf("Withdrawing the resting limit order %ld\n", wrapper.limit_order_id);
+            client.cancelOrder(wrapper.limit_order_id, "");
+        }
+        if (wrapper.buy_filled && !wrapper.sell_filled && wrapper.sell_order_id == 0) {
+            printf("Closing the share the benchmark bought\n");
+            Contract c;
+            c.conId = wrapper.con_id;
+            c.exchange = "SMART";
+            Order order;
+            order.action = "SELL";
+            order.totalQuantity = stringToDecimal("1");
+            order.orderType = "MKT";
+            client.placeOrder(wrapper.next_order_id++, c, order);
+        }
+        // Give the venue a moment to take them before the socket goes.
+        auto settle = Clock::now() + std::chrono::seconds(10);
+        while (Clock::now() < settle) {
+            signal.waitForSignal();
+            reader.processMsgs();
+        }
     }
 
     // Cancel market data and disconnect
@@ -532,5 +577,7 @@ int main(int argc, char** argv) {
     client.eDisconnect();
 
     wrapper.print_report();
-    return 0;
+    // A run that did not measure what it set out to measure did not succeed,
+    // and a caller reading only the exit status was told it had.
+    return finished ? 0 : 1;
 }

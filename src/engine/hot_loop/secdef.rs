@@ -30,10 +30,14 @@ pub struct SecDefState {
     /// request, which the answer echoes, which of the two it was, and when to
     /// stop waiting.
     pending: Vec<(String, u32, bool, Instant)>,
-    /// Whether the event types have been asked for. The counterpart holds them
-    /// and will not build an event request without them, so an event request
-    /// sent first is one the venue is never asked in ordinary operation.
-    meta_asked: bool,
+    /// Whether the venue has named the event types. An event request cannot be
+    /// built until it has, so one sent beforehand is not a request made in
+    /// ordinary operation.
+    ///
+    /// Set when the answer arrives, not when the request goes out. A metadata
+    /// request that is refused or never answered must leave this clear, so the
+    /// event request that follows is not sent on an unmet prerequisite.
+    meta_answered: bool,
     /// Message types this connection has sent that nothing here reads, named
     /// once each. Reported where somebody looks, rather than dropped.
     unread: std::collections::HashSet<String>,
@@ -89,7 +93,6 @@ impl SecDefState {
             return;
         }
         hb.last_secdef_sent = Instant::now();
-        self.meta_asked = true;
         self.pending.push((key, req_id, true, Instant::now() + CALENDAR_TIMEOUT));
         log::info!("Sent calendar metadata request: req_id={req_id}");
     }
@@ -103,11 +106,12 @@ impl SecDefState {
         hb: &mut HeartbeatState,
         shared: &SharedState,
     ) {
-        if !self.meta_asked {
+        if !self.meta_answered {
             shared.reference.push_historical_error(
                 req_id,
                 321,
-                "the calendar's event types have not been asked for; request them first"
+                "the calendar has not named its event types yet; ask for them and wait \
+                 for the answer first"
                     .to_string(),
             );
             return;
@@ -170,6 +174,11 @@ impl SecDefState {
         self.give_up_with(conn, shared, "it can no longer be written to");
     }
 
+    /// Give it up because it stopped answering.
+    pub(crate) fn give_up_silent(&mut self, conn: &mut Option<Connection>, shared: &SharedState) {
+        self.give_up_with(conn, shared, "it stopped answering");
+    }
+
     fn give_up_with(&mut self, conn: &mut Option<Connection>, shared: &SharedState, why: &str) {
         *conn = None;
         for (_, req_id, ..) in self.pending.drain(..) {
@@ -179,7 +188,7 @@ impl SecDefState {
                 format!("the connection carrying the calendar went: {why}"),
             );
         }
-        self.meta_asked = false;
+        self.meta_answered = false;
     }
 
     fn read(
@@ -200,7 +209,11 @@ impl SecDefState {
                         log::error!("Security definition farm connection lost: {e}");
                         return Err(e.to_string());
                     }
-                    Ok(_) => hb.last_secdef_recv = Instant::now(),
+                    Ok(_) => {
+                        hb.last_secdef_recv = Instant::now();
+                        // It answered, so whatever was asked of it is settled.
+                        hb.pending_secdef_test = None;
+                    }
                 }
                 let frames = conn.extract_frames();
                 let mut msgs: Vec<Vec<u8>> = Vec::new();
@@ -306,7 +319,6 @@ impl SecDefState {
                 for (_, req_id, ..) in self.pending.drain(..) {
                     shared.reference.push_historical_error(req_id, 321, said.clone());
                 }
-                self.meta_asked = false;
             }
             other => {
                 if self.unread.insert(other.to_string()) {
@@ -338,8 +350,23 @@ impl SecDefState {
             shared.reference.push_historical_error(req_id, 321, said);
             return;
         }
-        let json = parsed.get(&96).cloned().unwrap_or_default();
+        // The answer's payload. Absent is not empty: an answer carrying no
+        // payload at all was delivered as a successful empty result, so a
+        // caller could not tell a calendar with nothing in it from a reply
+        // this client could not read.
+        let Some(json) = parsed.get(&96).cloned() else {
+            let told = format!(
+                "the calendar answered request {req_id} with no payload, so there is \
+                 nothing to read out of it"
+            );
+            log::warn!("{told}");
+            shared.reference.push_historical_error(req_id, 321, told);
+            return;
+        };
         if is_meta {
+            // The event types are known from here, which is what an event
+            // request needs and what asking for them was not.
+            self.meta_answered = true;
             shared.reference.push_calendar_meta_data(req_id, json.clone());
         } else {
             shared.reference.push_calendar_events(req_id, json.clone());
@@ -420,10 +447,9 @@ mod tests {
         assert_eq!(answered[0].0, 7);
     }
 
-    /// A refusal reaches every caller waiting, not just one. The calendar is
-    /// asked in twos — the event types, then the events — so answering only
-    /// when exactly one thing was outstanding left the other to wait out a
-    /// timeout for a refusal already given.
+    /// A refusal reaches every caller waiting, not just one. Answering only
+    /// where exactly one request is outstanding leaves the rest to wait out a
+    /// timeout for a refusal the venue has already given.
     #[test]
     fn a_refusal_reaches_everyone_waiting() {
         let shared = SharedState::new();
@@ -431,8 +457,16 @@ mod tests {
         let (socket, _peer) = Connection::for_test();
         let mut conn = Some(socket);
         state.send_calendar_meta_data_request(7, &mut conn, &mut HeartbeatState::new(), &shared);
+        let soh = '\u{1}';
+        let answer = format!(
+            "35=U{soh}6040={}{soh}{}=MetaDataRequest7{soh}96=[]{soh}",
+            cal::CALENDAR_ANSWER,
+            cal::TAG_CALENDAR_KEY,
+        );
+        state.handle(answer.as_bytes(), &mut conn, &shared, &None, &mut HeartbeatState::new());
         let query = crate::types::CalendarQuery { con_id: Some(1), ..Default::default() };
         state.send_calendar_events_request(8, &query, &mut conn, &mut HeartbeatState::new(), &shared);
+        state.send_calendar_events_request(9, &query, &mut conn, &mut HeartbeatState::new(), &shared);
         assert_eq!(
             state.pending.len(), 2,
             "both requests are outstanding; errors so far: {:?}",
@@ -463,10 +497,12 @@ mod tests {
         for _ in 0..4 {
             state.poll(&mut conn, &shared, &None, &mut HeartbeatState::new());
         }
-        if conn.is_none() {
-            let told = shared.reference.drain_historical_errors_for_dispatch();
-            assert!(!told.is_empty(), "the caller was left waiting on a dead socket");
-        }
+        // Asserted rather than asked about: guarded by `if conn.is_none()`
+        // this passed without checking anything in exactly the case it is
+        // named for, where the dead connection is still installed.
+        assert!(conn.is_none(), "the dead connection was put down");
+        let told = shared.reference.drain_historical_errors_for_dispatch();
+        assert!(!told.is_empty(), "the caller was left waiting on a dead socket");
     }
 
     /// A request the venue never answers is given up on, and the caller told.
@@ -487,6 +523,77 @@ mod tests {
         assert!(state.pending.is_empty());
     }
 
+    /// The event types are a prerequisite the venue states, not a question this
+    /// client remembers asking. Set when the request is sent, a metadata
+    /// request that is refused or never answered leaves it standing, and the
+    /// event request behind it goes out on an unmet prerequisite.
+    #[test]
+    fn an_event_request_waits_for_the_types_to_arrive_not_to_be_asked_for() {
+        let (conn, _peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let mut state = SecDefState::new();
+        let query = crate::types::CalendarQuery {
+            con_id: Some(265598),
+            ..Default::default()
+        };
+
+        state.send_calendar_meta_data_request(7, &mut conn, &mut hb, &shared);
+        state.send_calendar_events_request(8, &query, &mut conn, &mut hb, &shared);
+        let told = shared.reference.drain_historical_errors_for_dispatch();
+        assert!(
+            told.iter().any(|(id, _, why)| *id == 8 && why.contains("not named its event types")),
+            "asking is not being answered: {told:?}",
+        );
+
+        // The venue names them, and the same request is taken.
+        let soh = '\u{1}';
+        let answer = format!(
+            "35=U{soh}6040={}{soh}{}=MetaDataRequest7{soh}96=[]{soh}",
+            cal::CALENDAR_ANSWER,
+            cal::TAG_CALENDAR_KEY,
+        );
+        state.handle(answer.as_bytes(), &mut conn, &shared, &None, &mut hb);
+        state.send_calendar_events_request(9, &query, &mut conn, &mut hb, &shared);
+        let told = shared.reference.drain_historical_errors_for_dispatch();
+        assert!(
+            !told.iter().any(|(id, ..)| *id == 9),
+            "once the types have arrived the request goes out: {told:?}",
+        );
+    }
+
+    /// An answer carrying no payload is not an empty calendar. Delivered as
+    /// one, a caller could not tell a calendar with nothing in it from a reply
+    /// this client could not read.
+    #[test]
+    fn an_answer_with_no_payload_is_not_an_empty_calendar() {
+        let (conn, _peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let mut state = SecDefState::new();
+        state.send_calendar_meta_data_request(7, &mut conn, &mut hb, &shared);
+
+        let soh = '\u{1}';
+        let answer = format!(
+            "35=U{soh}6040={}{soh}{}=MetaDataRequest7{soh}",
+            cal::CALENDAR_ANSWER,
+            cal::TAG_CALENDAR_KEY,
+        );
+        state.handle(answer.as_bytes(), &mut conn, &shared, &None, &mut hb);
+
+        assert!(
+            shared.reference.drain_calendar_meta_data_for_dispatch().is_empty(),
+            "nothing readable arrived, so nothing is handed over as an answer",
+        );
+        let told = shared.reference.drain_historical_errors_for_dispatch();
+        assert!(
+            told.iter().any(|(id, _, why)| *id == 7 && why.contains("no payload")),
+            "and the caller is told why: {told:?}",
+        );
+    }
+
     /// A write that fails leaves the socket installed unless something gives
     /// it up. The read path does that when the connection goes, but a write
     /// can fail with no read error behind it — and the reconnect declines to
@@ -503,13 +610,13 @@ mod tests {
         let mut conn = Some(Connection::new_raw(sock).unwrap());
 
         state.pending.push((String::new(), 77, false, Instant::now()));
-        state.meta_asked = true;
+        state.meta_answered = true;
 
         state.give_up(&mut conn, &shared);
 
         assert!(conn.is_none(), "the connection is put down, so another can be built");
         assert!(state.pending.is_empty(), "and nothing is left waiting on it");
-        assert!(!state.meta_asked, "the next connection asks for the calendar again");
+        assert!(!state.meta_answered, "the next connection asks for the calendar again");
         assert!(
             !shared.reference.drain_historical_errors().is_empty(),
             "the caller is told rather than left to time out",

@@ -119,7 +119,7 @@ impl EClient {
     ///
     /// Sends the lookup, waits for the venue to say it has finished, and hands
     /// back every match. A description matching nothing returns an empty list;
-    /// a venue that refuses the lookup raises with the venue's own words.
+    /// a venue that refuses the lookup raises with the reason it gave.
     fn contract_details(
         &self,
         py: Python<'_>,
@@ -343,7 +343,7 @@ impl EClient {
         Ok(rows.iter().map(|e| (e.price, e.count)).collect())
     }
 
-    /// A fundamental report on a contract, as the venue's own document.
+    /// A fundamental report on a contract, as the venue supplies it.
     fn fundamental_data(
         &self,
         py: Python<'_>,
@@ -404,7 +404,7 @@ impl EClient {
     }
 }
 
-/// The same lookups, handing back the venue's own code rather than prose.
+/// The same lookups, handing back the venue's refusal code rather than prose.
 ///
 /// Outside `#[pymethods]` on purpose: every function in that block becomes a
 /// method on the Python object, and these are for this crate. A caller with

@@ -14,10 +14,13 @@ impl EClient {
     ///
     /// `generic_tick_list` is NOT transmitted to the gateway, with one
     /// exception: "292" additionally subscribes per-contract news. Other
-    /// generic tick types (RTVolume and friends) have no emission path, and
-    /// `tick_generic` never fires — the venue asks for those under
-    /// numbers of its own rather than the ones this list uses, and this client
-    /// does not know the mapping.
+    /// generic tick types (RTVolume and friends) are not requested — the venue
+    /// asks for those under numbers of its own rather than the ones this list
+    /// uses, and this client does not know the mapping. Naming one is warned
+    /// about rather than quietly dropped.
+    ///
+    /// `tick_generic` does fire, for the halt the venue states on its own tick:
+    /// tick 49, 0 while a contract is trading and 1 once it has stopped.
     ///
     /// Delayed and frozen data are requested, contrary to what this said: name
     /// the type on [`req_market_data_type`](EClient::req_market_data_type) and
@@ -56,20 +59,33 @@ impl EClient {
     /// every subscription instead of naming it per request, call
     /// `req_market_data_type`.
     ///
-    /// `regulatory_snapshot` is taken and not applied. A regulatory snapshot is
-    /// a separate, chargeable request this protocol does not carry, so asking
-    /// for one here would be answered with an ordinary subscription and a
-    /// charge nobody agreed to.
+    /// `regulatory_snapshot` is refused rather than dropped. It names a
+    /// separate, chargeable one-shot request, and this protocol carries no
+    /// field for one: taken and ignored, a caller who asked for a single NBBO
+    /// snapshot the venue charges for and stands behind reads an ordinary
+    /// subscription instead, which is neither, with nothing to say so. Its
+    /// default is false, so an ordinary call is unaffected.
     pub fn req_mkt_data_ex(
         &self, req_id: i64, contract: &Contract,
-        generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool,
+        generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool,
         mode_9887: i32,
     ) -> Result<(), Refusal> {
+        if regulatory_snapshot {
+            return Err(Refusal::validation(
+                "regulatory_snapshot is not carried by this protocol: the subscription \
+                 states the contract and the kind of feed, with no field asking for the \
+                 chargeable one-shot snapshot. Ask for an ordinary snapshot with \
+                 snapshot=true",
+            ));
+        }
         // A contract's news is asked for by the venue's id for the contract,
         // and the caller may have stated a description instead. Resolved only
         // when news is what was asked for: a quote on a description is asked
         // for by description and the venue names it itself.
-        let wants_news = generic_tick_list.split(',').any(|t| t.trim().ends_with("292"));
+        // The whole entry, not a number ending in it: 1292 is not 292. Matching on
+        // the ending qualifies the contract, which is a request to the venue and a
+        // wait on the caller's thread, while the core subscribes to no news.
+        let wants_news = generic_tick_list.split(',').any(|t| t.trim() == "292");
         let named;
         let contract = if wants_news && contract.con_id == 0 && !contract.symbol.is_empty() {
             named = self.qualify_contract(contract)?;
@@ -90,12 +106,15 @@ impl EClient {
 
     /// Cancel market data. Matches `cancelMktData` in C++.
     pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), Refusal> {
-        let (instrument, needs_news_unsub) = self.core.unregister_mkt_data(req_id);
+        let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
+        // Asked separately, because the quotes stay up for another caller
+        // while the headlines this one asked for stop. Withdrawn only
+        // alongside the quotes, they carried on with nobody listening.
+        if let Some(instrument) = stop_news {
+            let _ = self.send(ControlCommand::UnsubscribeNews { instrument });
+        }
         if let Some(instrument) = instrument {
             self.send(ControlCommand::Unsubscribe { instrument })?;
-            if needs_news_unsub {
-                let _ = self.send(ControlCommand::UnsubscribeNews { instrument });
-            }
         }
         Ok(())
     }
@@ -104,7 +123,7 @@ impl EClient {
     ///
     /// The feed rides the historical farm, registered there under the name
     /// `TickByTick` beside the five-second bars. No separate service is
-    /// involved. A missing entitlement arrives as the venue's own refusal
+    /// involved. A missing entitlement arrives as the venue's refusal
     /// rather than as silence.
     ///
     /// `number_of_ticks` and `ignore_size` are refused rather than dropped.
@@ -135,7 +154,7 @@ impl EClient {
         }
         let kind = TbtType::named(tick_type)?;
 
-        // A stream is asked for by the venue's own id for the contract. Sent
+        // A stream is asked for by the venue's id for the contract. Sent
         // with none, the venue answers "Unknown contract" against a query this
         // client had not told anyone about, and the caller waited on a stream
         // that was refused before it began.
@@ -158,7 +177,11 @@ impl EClient {
                 &contract.exchange,
                 kind,
             )
-            .map(|_| ())
+            .map(|_| ())?;
+        // Which stream the callback names when these trades arrive: 1 = Last,
+        // 2 = AllLast. The trade record does not carry it; the subscription does.
+        self.tbt_kinds.lock().unwrap().insert(req_id, kind);
+        Ok(())
     }
 
 
@@ -166,6 +189,7 @@ impl EClient {
     pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), Refusal> {
         // Only what this request took out. Removing the contract's quote
         // mapping here took the quotes away from whoever was watching them.
+        self.tbt_kinds.lock().unwrap().remove(&req_id);
         if let Some(instrument) = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id) {
             self.send(ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         }
@@ -175,14 +199,25 @@ impl EClient {
     // ── Market Depth ──
 
     /// Subscribe to market depth (L2 order book). Matches `reqMktDepth` in C++.
+    ///
+    /// A contract that names no venue and no security type is sent as it
+    /// stands. The engine reads an unnamed venue as the smart destination and
+    /// checks a named security type against the venue's routing table.
+    /// Substituting a stock here asks for a future's book as a stock's, which
+    /// the venue refuses as a book it does not serve.
     pub fn req_mkt_depth(
         &self, req_id: i64, contract: &Contract,
         num_rows: i32, is_smart_depth: bool,
     ) -> Result<(), Refusal> {
-        let exchange = if contract.exchange.is_empty() { "SMART".to_string() } else { contract.exchange.clone() };
-        let sec_type = if contract.sec_type.is_empty() { "STK".to_string() } else { contract.sec_type.clone() };
         self.send(ControlCommand::SubscribeDepth {
-            contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange, sec_type, currency: contract.currency.clone(), ..Default::default() },
+            contract: ContractRef {
+                con_id: contract.con_id,
+                symbol: contract.symbol.clone(),
+                exchange: contract.exchange.clone(),
+                sec_type: contract.sec_type.clone(),
+                currency: contract.currency.clone(),
+                ..Default::default()
+            },
             req_id: wire_req_id(req_id)?,
             filters: contract.lookup_filters(),
             num_rows,
@@ -206,6 +241,9 @@ impl EClient {
         &self, req_id: i64, contract: &Contract,
         _bar_size: i32, what_to_show: &str, use_rth: bool,
     ) -> Result<(), Refusal> {
+        // Refused here rather than turned into trades on the way out: a
+        // misspelled "BID" answered with trade bars looks like data.
+        crate::control::historical::BarDataType::from_api_str(what_to_show)?;
         self.send(ControlCommand::SubscribeRealTimeBar {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,
@@ -220,7 +258,6 @@ impl EClient {
         self.send(ControlCommand::CancelRealTimeBar { req_id: wire_req_id(req_id)? })
     }
 
-    /// Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen).
     /// Request an auth-connection round-trip time sample: sends a
     /// lightweight liveness probe with no side effects on subscriptions,
     /// contract caches, or pacing budgets. The result lands asynchronously —
@@ -239,12 +276,14 @@ impl EClient {
         self.shared.last_ccp_rtt()
     }
 
-    /// NOT supported end to end: the requested type is stored
-    /// locally but never sent to the gateway, so subscriptions always
-    /// deliver realtime data and delayed tick variants never arrive.
-    /// Requesting a non-realtime type logs a warning, and the
-    /// `market_data_type` callback reports the DELIVERED type (realtime)
-    /// rather than echoing the request.
+    /// Which feed the subscriptions after this one ask for: 1 live, 2 frozen,
+    /// 3 delayed, 4 delayed and frozen.
+    ///
+    /// Sent with each subscription, in the field this protocol carries it in,
+    /// and the `market_data_type` callback reports the type the subscription
+    /// was made under. To state it for one request rather than for the ones
+    /// that follow, [`req_mkt_data_ex`](EClient::req_mkt_data_ex) takes it.
+    /// A number naming no type leaves subscriptions realtime, and says so.
     pub fn req_market_data_type(&self, market_data_type: i32) {
         self.core.set_market_data_type(market_data_type);
     }

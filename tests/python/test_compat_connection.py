@@ -6,6 +6,7 @@ Compatibility tests (marked @pytest.mark.live) require IB paper trading gateway.
 
 import os
 import pytest
+from conftest import NotConnectedProbe
 from ibx import EWrapper, EClient, TickAttrib, TickTypeEnum
 
 
@@ -102,18 +103,22 @@ def test_eclient_get_account_id_empty():
 
 
 def test_eclient_req_ids_not_connected():
-    """Req_ids() dispatches next_valid_id even without connection."""
-    w = ConnectionWrapper()
-    client = EClient(w)
+    """The id an account may next use is the venue's to state.
+
+    This required an id to be invented before a session existed, and what got
+    announced was zero, which names no order the venue will hold.
+    """
+    probe = NotConnectedProbe()
+    client = EClient(probe)
     client.req_ids()
-    assert len(w.events) == 1
-    assert w.events[0][0] == "next_valid_id"
+    assert probe.not_connected, "the call reports rather than answering"
 
 
 def test_eclient_req_ids_with_num():
     """Req_ids() accepts num_ids parameter."""
     w = ConnectionWrapper()
     client = EClient(w)
+    client._test_connect("DU0000000")
     client.req_ids(5)
     assert w.events[0][0] == "next_valid_id"
 

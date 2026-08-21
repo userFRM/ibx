@@ -45,6 +45,15 @@ pub struct ScannerResult {
     pub entries: Vec<ScannerEntry>,
     /// When the venue ran it.
     pub scan_time: String,
+    /// Why the venue would not run it, in its own words, and empty when it
+    /// ran.
+    ///
+    /// A refused scan answers with the same element as a successful one and
+    /// says what went wrong inside it. Read for its rows alone, a refusal was
+    /// a scan that found nothing — the caller was told the market held no
+    /// matches where the venue declined the question. The text is handed to
+    /// the caller instead of the contracts alongside it.
+    pub error_text: String,
 }
 
 /// Build a scanner parameters request (no XML payload).
@@ -106,6 +115,7 @@ pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
     }
 
     let scan_time = crate::control::xml::tag(xml, "scanTime").unwrap_or("").to_string();
+    let error_text = crate::control::xml::tag(xml, "errorText").unwrap_or("").to_string();
 
     let mut con_ids = Vec::new();
     let mut entries = Vec::new();
@@ -128,7 +138,7 @@ pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
         search_start = c_end;
     }
 
-    Some(ScannerResult { con_ids, entries, scan_time })
+    Some(ScannerResult { con_ids, entries, scan_time, error_text })
 }
 
 #[cfg(test)]
@@ -219,6 +229,20 @@ mod tests {
         assert_eq!(result.con_ids.len(), 2);
         assert_eq!(result.con_ids[0], 592977497);
         assert_eq!(result.con_ids[1], 265598);
+    }
+
+    /// A refused scan says so inside the same element a successful one uses.
+    /// Reading it for rows alone reports a scan that matched nothing, which is
+    /// a different answer from the one the venue gave.
+    #[test]
+    fn a_refused_scan_carries_the_refusal() {
+        let xml = r#"<ScanResponse>
+            <id>APISCAN31:3</id>
+            <errorText>Scanner subscription not allowed</errorText>
+        </ScanResponse>"#;
+        let result = parse_scanner_response(xml).expect("the response parses");
+        assert_eq!(result.error_text, "Scanner subscription not allowed");
+        assert!(result.con_ids.is_empty(), "and it found nothing to report");
     }
 
     #[test]

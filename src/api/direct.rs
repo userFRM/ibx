@@ -338,7 +338,7 @@ impl Client {
         })
     }
 
-    /// A fundamental report on a contract, as the venue's own document.
+    /// A fundamental report on a contract, as the venue's document.
     pub fn fundamental_data(
         &self,
         contract: &Contract,
@@ -721,7 +721,7 @@ impl Client {
 
     /// How much this client writes about what it is doing.
     pub fn set_server_log_level(&self, level: &str) {
-        // The counterpart asks a local process to change its logging. There is
+        // This asks a local process to change its logging. There is
         // no local process, so this sets this client's own.
         unsafe { std::env::set_var("IBX_LOG_LEVEL", level) };
     }

@@ -30,7 +30,7 @@ impl Refusal {
     /// Binding orders entered elsewhere was asked for by a client that is not
     /// the one they are bound to.
     ///
-    /// The number the counterpart answers this with. It answers the request
+    /// The number the venue answers this with. It answers the request
     /// itself rather than sending it on, so this is the whole of what happens.
     pub const AUTO_BIND_NOT_THIS_CLIENT: i32 = 327;
 

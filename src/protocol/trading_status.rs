@@ -12,7 +12,7 @@
 
 /// One thing a venue can be doing with a contract.
 ///
-/// The values are the venue's own. `None` sits at 16 rather than 4, which
+/// The values are the venue's. `None` sits at 16 rather than 4, which
 /// matters more than it looks: each status's mask is `1 << index`, so a `None`
 /// at 4 would carry mask 4 — the same mask as a volatility halt. "No status
 /// available" and "halted for volatility" would have been one value.
@@ -64,12 +64,12 @@ impl TradingStatus {
 pub struct ExchangeTradingStatus {
     /// Every status in force at once. More than one can be.
     pub mask: u32,
-    /// The venue's own stamp on this record.
+    /// Timestamp the venue put on this record.
     ///
-    /// Kept as stated. Its unit is not established — it is a signed 32-bit
-    /// integer, so epoch milliseconds cannot fit it, and nothing in the
-    /// counterpart reads it, so nothing there says which of the remaining
-    /// readings is right. Handing it over as a time would be inventing one.
+    /// Kept as stated. Its unit is not established: it is a signed 32-bit
+    /// integer, so epoch milliseconds cannot fit, and no reader of this message
+    /// settles which of the remaining readings is right. Handing it over as a
+    /// time would invent one.
     pub stamp: i32,
     /// The one status the venue named, which can be nothing while the mask
     /// says trading has stopped.
@@ -79,19 +79,25 @@ pub struct ExchangeTradingStatus {
 impl ExchangeTradingStatus {
     /// Whether trading has stopped.
     ///
-    /// Both fields have to say so: the mask has to carry a halt bit, and the
-    /// venue has to have named a status at all. Neither alone is enough, and
-    /// the counterpart asks for both before it calls a contract halted.
+    /// The mask alone determines this: the two halt bits are tested against
+    /// the mask and nothing else is read. Whether a status was named is a
+    /// separate question — see [`Self::named_a_status`].
     ///
-    /// This is not pedantry about a corner. A live American listing states,
-    /// in the premarket, a mask of nothing and an index of one — which alone
-    /// reads as a regulatory halt. Going by the index, every such contract
-    /// would be reported halted while it was trading normally.
+    /// Requiring a name as well gives a different answer: a venue that stops
+    /// trading and names nothing sets a halt bit and leaves the index at 16,
+    /// and that contract reports as trading. Reading the index instead has the
+    /// opposite fault — a live
+    /// American listing states, in the premarket, a mask of nothing and an
+    /// index of one, which as an index alone reads as a regulatory halt.
     pub fn is_halted(self) -> bool {
-        let named_something = self.named != TradingStatus::None;
         let halt_bits =
             TradingStatus::RegulatoryHalt.mask() | TradingStatus::VolatilityHalt.mask();
-        named_something && self.mask & halt_bits != 0
+        self.mask & halt_bits != 0
+    }
+
+    /// Whether the venue named a status at all, which it need not have done.
+    pub fn named_a_status(self) -> bool {
+        self.named != TradingStatus::None
     }
 
     /// Whether the venue is restricting short sales in this contract.
@@ -106,10 +112,9 @@ impl ExchangeTradingStatus {
 /// rather than read from as far as it goes: a partly-read status is a claim
 /// about whether a market is open, made from bytes that were not the venue's.
 ///
-/// A longer body is read for its three and the rest left alone. The venue
-/// sends four words where the counterpart reads three, and nothing there
-/// reads the fourth — so what it carries is not established, and a reading of
-/// it would be invented rather than found.
+/// A longer body is read for its three words and the rest left alone. The
+/// venue sends a fourth word whose meaning is not established, so it is not
+/// interpreted.
 pub fn parse_trading_status(body: &[u8]) -> Option<ExchangeTradingStatus> {
     if body.len() < 12 {
         return None;
@@ -152,11 +157,11 @@ mod tests {
         }
     }
 
-    /// Both fields have to say so. A mask with a halt bit and no status named
-    /// is not a halt, which is what the counterpart requires before it calls
-    /// a contract halted.
+    /// The mask says whether trading has stopped, on its own. A venue that
+    /// halts a contract and names no status leaves the index at 16, and that
+    /// contract is halted: the halt bits decide it, and the name is not read.
     #[test]
-    fn a_halt_with_no_name_is_not_a_halt() {
+    fn a_halt_with_no_name_is_still_a_halt() {
         let status = parse_trading_status(&body(
             TradingStatus::RegulatoryHalt.mask() as i32,
             0,
@@ -164,7 +169,8 @@ mod tests {
         ))
         .expect("twelve bytes parse");
         assert_eq!(status.named, TradingStatus::None);
-        assert!(!status.is_halted(), "the mask said halted and nothing was named");
+        assert!(!status.named_a_status(), "the venue named nothing");
+        assert!(status.is_halted(), "and the mask says trading has stopped");
     }
 
     /// "No status" sits at 16, so its mask is 65536. Placed at 4 it would carry
@@ -224,7 +230,7 @@ mod tests {
     fn a_premarket_listing_is_not_reported_halted() {
         let mut wire = body(0, 0, 1);
         wire.extend_from_slice(&0i32.to_be_bytes());
-        let status = parse_trading_status(&wire).expect("the venue's own bytes");
+        let status = parse_trading_status(&wire).expect("the venue's bytes");
         assert_eq!(status.named, TradingStatus::RegulatoryHalt, "the index says so on its own");
         assert!(!status.is_halted(), "and the mask does not, so trading has not stopped");
     }

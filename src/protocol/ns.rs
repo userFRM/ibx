@@ -89,12 +89,22 @@ pub fn ns_parse(payload: &[u8]) -> Option<(u32, u32, Vec<String>)> {
     }
     let version: u32 = parts[0].parse().ok()?;
     let msg_type: u32 = parts[1].parse().ok()?;
-    let fields: Vec<String> = parts[2..].iter().filter(|p| !p.is_empty()).map(|s| s.to_string()).collect();
-    Some((version, msg_type, fields))
+    // Every field is a position, so an empty one is a field the venue left
+    // blank and not a field that is not there. Dropping the empties closed the
+    // gaps and moved everything after them one place up, and `ns_build` and
+    // this stopped being inverses of each other.
+    //
+    // The last `;` is a terminator rather than a separator, so the empty string
+    // after it is the only one that is not a field.
+    let mut parts = &parts[2..];
+    if parts.last() == Some(&"") {
+        parts = &parts[..parts.len() - 1];
+    }
+    Some((version, msg_type, parts.iter().map(|s| s.to_string()).collect()))
 }
 
 /// Build an `NS_HEART_BEAT` reply that echoes the timestamp from a paired
-/// `NS_TEST_REQUEST`. Uses the `MISC` prefix variant the gateway client uses.
+/// `NS_TEST_REQUEST`. Uses the `MISC` prefix variant.
 pub fn ns_build_heart_beat(ns_version: u32, test_req_timestamp: &str) -> Vec<u8> {
     ns_build(ns_version, NS_HEART_BEAT, &[test_req_timestamp], "MISC")
 }
@@ -102,9 +112,13 @@ pub fn ns_build_heart_beat(ns_version: u32, test_req_timestamp: &str) -> Vec<u8>
 /// Extract the timestamp from an inbound `NS_TEST_REQUEST` payload. Returns
 /// `None` if the payload doesn't parse or carries the wrong message type.
 pub fn parse_test_request_timestamp(payload: &[u8]) -> Option<String> {
-    let (_, msg_type, fields) = ns_parse(payload)?;
+    let (_, msg_type, mut fields) = ns_parse(payload)?;
     if msg_type != NS_TEST_REQUEST { return None; }
-    fields.into_iter().find(|f| !f.is_empty())
+    // The first field, because that is where the timestamp sits. Taking the
+    // first non-empty one instead echoed whatever field followed a blank
+    // timestamp, and the probe wants the value from that position or nothing.
+    let first = fields.drain(..).next()?;
+    (!first.is_empty()).then_some(first)
 }
 
 /// Receive one `#%#%` framed message. Returns (payload_bytes, total_len).
@@ -119,10 +133,9 @@ pub fn ns_recv<R: Read>(reader: &mut R) -> io::Result<(Vec<u8>, usize)> {
     }
     let payload_len = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
     // Read in bounded chunks rather than allocating what the header claims.
-    // The counterpart reads into a buffer it caps and takes the smaller of
-    // that and what remains, so a length nobody backs with bytes costs it
-    // nothing. Reserving it up front makes a four-byte field an instruction to
-    // allocate four gigabytes.
+    // A length nobody backs with bytes then costs nothing. Reserving it up
+    // front makes a four-byte field an instruction to allocate four
+    // gigabytes.
     const CHUNK: usize = 64 * 1024;
     let mut payload = Vec::with_capacity(payload_len.min(CHUNK));
     let mut buf = [0u8; CHUNK];
@@ -137,7 +150,7 @@ pub fn ns_recv<R: Read>(reader: &mut R) -> io::Result<(Vec<u8>, usize)> {
 /// Classify a `#%#%` framed payload as NS text or XYZ binary.
 ///
 /// Returns `true` if the payload looks like NS text — either an ASCII digit
-/// (no prefix) or the `MISC` prefix the gateway uses for some message types
+/// (no prefix) or the `MISC` prefix used for some message types
 /// (e.g. `NS_MISC_URLS_RESPONSE`, `NS_TEST_REQUEST`, `NS_HEART_BEAT`).
 pub fn is_ns_text(payload: &[u8]) -> bool {
     match payload.first() {
@@ -178,6 +191,24 @@ mod tests {
         assert_eq!(version, 50);
         assert_eq!(msg_type, 521);
         assert_eq!(fields, vec!["user", "1234", "info"]);
+    }
+
+    /// A field the venue left blank still occupies its place. Dropped, every
+    /// field behind it moves up one and the payload is read as a different
+    /// message than the one that arrived.
+    #[test]
+    fn a_blank_field_keeps_its_place() {
+        let msg = ns_build(50, 521, &["user", "", "info"], "");
+        let (_, _, fields) = ns_parse(&msg[8..]).unwrap();
+        assert_eq!(fields, vec!["user", "", "info"]);
+    }
+
+    /// And the probe reads the timestamp from its own position rather than
+    /// from whichever field happens to carry something.
+    #[test]
+    fn a_test_request_with_no_timestamp_echoes_nothing() {
+        let msg = ns_build(50, NS_TEST_REQUEST, &["", "1750000000"], "MISC");
+        assert_eq!(parse_test_request_timestamp(&msg[8..]), None);
     }
 
     #[test]
@@ -446,8 +477,7 @@ mod tests {
     ///
     /// The header states a size in four bytes. Reserving that up front turns
     /// `0xffffffff` into an instruction to allocate four gigabytes before a
-    /// single byte of payload has arrived. The counterpart reads into a buffer
-    /// it caps and takes the smaller of that and what remains.
+    /// single byte of payload has arrived. Reads are chunked instead.
     #[test]
     fn a_stated_length_is_not_an_allocation() {
         let mut framed = NS_MAGIC.to_vec();

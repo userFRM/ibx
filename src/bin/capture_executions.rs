@@ -1,8 +1,7 @@
 //! What executions a session opens with.
 //!
-//! The counterpart asks the venue for every one it still holds. This asks the
-//! same way and counts what comes back, and asks the narrow way for comparison
-//! — the difference between the two is what a caller migrating would have lost.
+//! Asks for every execution the venue still holds, then asks the narrow way,
+//! and counts both. The difference is what the narrow request omits.
 //!
 //! Reads only. It places nothing.
 
@@ -42,7 +41,7 @@ fn main() {
         std::process::exit(2);
     }
     let all = opened_with("all");
-    println!("  asking the way the counterpart does: {all} execution(s)");
+    println!("  asking the documented way: {all} execution(s)");
     let today = opened_with("today");
     println!("  asking only for today's:            {today} execution(s)");
     println!(

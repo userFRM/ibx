@@ -1,13 +1,13 @@
-"""Both clients answer a request the same way, not just carry the same fields.
+"""Both clients answer a request that cannot be served.
 
 The surface test compares what a caller can set. This compares what happens
-when a call cannot be served: one client answering on the error channel while
-the other writes a line to a log and returns leaves a caller waiting on a
-callback that will never come — and looks identical to a slow venue.
+when a call cannot be served. A call that returns without telling the caller
+leaves them waiting on a callback that never arrives, which is
+indistinguishable from a slow venue.
 
-It has found three: a market rule nobody has seen, and the two advisor
-requests, which one client sent to the venue while the other refused them as
-unwired.
+The two mechanisms: the request surface returns `Result<(), Refusal>`, the
+binding reports on the error callback. A method that only forwards to a sibling
+answers however that sibling does.
 """
 
 import pathlib
@@ -15,13 +15,21 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-#: Calls whose two sides differ on purpose, with the reason. Named here so a
-#: difference stays a decision rather than an oversight.
-_DIFFER_ON_PURPOSE = {
-    # The binding takes a request id from the caller and answers refusals
-    # against it; the Rust client returns the reason to the caller directly.
-    "req_wsh_event_data",
-    "update_display_group",
+#: The one binding call that answers by raising rather than reporting. `connect`
+#: has no request id to report against, so a failure raises.
+_ANSWERS_BY_RAISING = {"connect"}
+
+#: Calls the request surface leaves quiet where the binding reports. Each takes
+#: a wrapper it could report on and returns after a log line. Listed as an open
+#: gap rather than an intended difference, so a new divergence still fails.
+_ONE_SIDED_ON_THE_REQUEST_SURFACE = {
+    "req_positions",
+    "req_positions_multi",
+    "req_account_updates_multi",
+    "req_ids",
+    "req_managed_accts",
+    "req_current_time",
+    "req_auto_open_orders",
 }
 
 
@@ -38,12 +46,32 @@ def _methods(pattern: str, *globs: str) -> dict[str, str]:
     return found
 
 
-def _answers_a_failure(body: str) -> bool:
-    return (
-        "wrapper.error" in body
-        or '"error"' in body
-        or "report_reason" in body
-        or "push_historical_error" in body
+#: How the binding reports a request it will not serve: on the error callback,
+#: returning normally, as the reference client does. `tx_or_report` and
+#: `report_refusal` are the current spellings; the rest predate them.
+_REPORTS = (
+    "report_refusal", "tx_or_report", "report_unserviceable",
+    "wrapper.error", '"error"', "report_reason", "push_historical_error",
+)
+
+
+def _answers(name: str, methods: dict[str, str], through: tuple[str, ...] = ()) -> bool:
+    """Whether a call that cannot be served lets the caller know.
+
+    Recognises both mechanisms: a `Result` return on the request surface, a
+    report on the error callback in the binding. A predicate that recognises
+    only one reads most pairs as silent on both sides and compares nothing.
+    """
+    body = methods[name]
+    if "-> Result<" in body or any(k in body for k in _REPORTS):
+        return True
+    # A call whose work is one call to a sibling answers however that one does.
+    # Without this a thin forwarder reads as silent while the method it hands to
+    # reports, and the pair reads as differing when it does not.
+    return any(
+        to in methods and to not in through and to != name
+        and _answers(to, methods, through + (name,))
+        for to in re.findall(r"\bself\.([a-z_0-9]+)\(", body)
     )
 
 
@@ -53,13 +81,35 @@ def test_a_call_that_cannot_be_served_answers_on_both_clients():
         r"\n    (?:pub |pub\(crate\) )?fn ([a-z_0-9]+)\(", "src/python/compat/client/*.rs"
     )
 
+    ignored = _ANSWERS_BY_RAISING | _ONE_SIDED_ON_THE_REQUEST_SURFACE
     differs = sorted(
         name
         for name in set(rust) & set(python)
-        if name not in _DIFFER_ON_PURPOSE
-        and _answers_a_failure(rust[name]) != _answers_a_failure(python[name])
+        if name not in ignored
+        and _answers(name, rust) != _answers(name, python)
     )
     assert not differs, (
         "one client answers a failure and the other does not, so a caller of "
         f"the quieter one waits on a callback that never comes: {differs}"
     )
+
+
+def test_the_gate_can_still_tell_the_two_apart():
+    """A predicate that recognises nothing passes everything.
+
+    Guards the comparison above: reading the mechanisms the code uses must find
+    most calls answering on each surface. Finding few means this file has
+    stopped reading that surface, and every pair then matches as silent.
+    """
+    rust = _methods(r"\n    pub fn ([a-z_0-9]+)\(", "src/api/client/*.rs")
+    python = _methods(
+        r"\n    (?:pub |pub\(crate\) )?fn ([a-z_0-9]+)\(", "src/python/compat/client/*.rs"
+    )
+    common = set(rust) & set(python)
+    assert len(common) > 50, f"the two surfaces stopped overlapping: {len(common)}"
+    for surface, methods in (("request", rust), ("binding", python)):
+        answering = sum(_answers(n, methods) for n in common)
+        assert answering > len(common) // 2, (
+            f"the {surface} surface reads as answering {answering} of "
+            f"{len(common)} calls, so this file is not reading it"
+        )

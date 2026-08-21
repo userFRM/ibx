@@ -9,6 +9,7 @@ mod dispatch;
 mod stubs;
 mod test_helpers;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -65,15 +66,49 @@ pub struct EClient {
     /// Every account this login holds, the first being `account_id`.
     pub(crate) accounts: Mutex<Vec<String>>,
     pub(crate) connected: AtomicBool,
+    /// Whether the caller asked for positions and has not withdrawn the ask.
+    ///
+    /// `reqPositions` subscribes to a real-time feed, so a holding that moves
+    /// afterwards is reported as it moves. Answering only the set held when
+    /// the call was made left a caller tracking positions from a snapshot
+    /// that went stale on the next fill.
+    pub(crate) positions_requested: AtomicBool,
+    /// Order records kept back because a fill for them was still queued.
+    ///
+    /// A fill is read against the record, so the record cannot be freed while
+    /// one is waiting. Freed on the next read of the completed orders, which
+    /// is when the fill has been delivered — so the deferral costs a pass and
+    /// not the rest of the session.
+    pub(crate) deferred_evictions: Mutex<std::collections::HashSet<u64>>,
+    /// The requests watching holdings per account or model.
+    ///
+    /// `positionMulti` is the same live feed as `position`, asked for under a
+    /// request id and withdrawn under it. Held apart from that flag because
+    /// both may be watching at once and each is answered on its own callback.
+    pub(crate) positions_multi_requested: Mutex<std::collections::HashSet<i64>>,
+    /// Whether this session is finished rather than merely disconnected.
+    ///
+    /// The engine announces a loss it is still working on and a loss it has
+    /// given up on with the same event, and only records a reason for the
+    /// second. Kept apart from `connected` because the two answer different
+    /// questions: a caller asks the first whether a request will reach the
+    /// venue now, and the pumps ask this one whether there is any point
+    /// waiting for it to.
+    pub(crate) session_ended: AtomicBool,
     /// The number this session connected under, as the caller gave it.
     ///
     /// One session holds the account here, so this does not route anything.
-    /// It is kept because the counterpart answers some calls by it — binding
-    /// orders entered elsewhere is refused for any client but zero — and a
-    /// caller that names one is answered the same way.
+    /// It is kept because some calls are answered by client id: binding orders
+    /// entered elsewhere is refused for any client id but 0.
     pub(crate) client_id: AtomicI32,
     /// Receiver for engine events (disconnects, etc.).
     pub(crate) event_rx: Mutex<Option<std::sync::mpsc::Receiver<Event>>>,
+    /// What this session's event channel discarded because it was full.
+    ///
+    /// Kept rather than handed away: counted into a total nobody holds, a
+    /// program that acted on every event it saw had no way to tell that from
+    /// every event there was.
+    pub(crate) events_lost: Arc<std::sync::atomic::AtomicU64>,
     /// Sender for test-injected events (test-only).
     #[doc(hidden)]
     pub(crate) _test_event_tx: Mutex<Option<std::sync::mpsc::SyncSender<Event>>>,
@@ -81,6 +116,27 @@ pub struct EClient {
     /// Dropping it closed the channel, so a client that reported itself
     /// connected failed every request that sends one.
     pub(crate) _test_control_rx: Mutex<Option<std::sync::mpsc::Receiver<ControlCommand>>>,
+    /// Which kind of trade stream each tick-by-tick request asked for, as the
+    /// number the callback states it under: 1 for the exchange's own prints
+    /// and 2 for every print including those reported away from it.
+    ///
+    /// The trade record does not carry the kind, so it is kept per request id.
+    /// Without it a caller holding both subscriptions cannot tell the two
+    /// streams apart.
+    pub(crate) tbt_kind: Mutex<HashMap<i64, i32>>,
+    /// The orders this session has seen the venue finish with, kept.
+    ///
+    /// The queue they arrive on empties as it is read and the venue does not
+    /// send them again, so without this a second request is answered with none
+    /// of them and the account reads as having completed nothing. The Rust
+    /// surface keeps the same
+    /// archive for the same reason.
+    #[allow(clippy::type_complexity)]
+    pub(crate) completed: Mutex<Vec<(
+        crate::types::model::Contract,
+        crate::types::model::Order,
+        crate::types::model::OrderState,
+    )>>,
     /// Shared subscription tracking and dispatch preparation.
     pub(crate) core: ClientCore,
 }
@@ -120,13 +176,30 @@ impl Drop for EClient {
 }
 
 /// Narrow a caller's req_id to the width the request carries on the wire,
-/// refusing rather than truncating. `next_order_id()` starts at
-/// milliseconds-since-epoch, so the ibapi idiom of one counter for orders and
-/// requests is past `u32::MAX` on the first call, and a truncated id answers
-/// under one the caller never used.
+/// refusing rather than truncating.
+///
+/// The counter this client hands out fits: it continues from the last id the
+/// account used, and on a first run from the clock in seconds, which is well
+/// inside `u32` and is why `order_ids` states it in seconds rather than
+/// milliseconds. What need not fit is an id a caller numbers themselves, and
+/// a truncated one answers under a number they never used.
 pub(crate) fn wire_req_id(req_id: i64) -> PyResult<u32> {
     crate::api::client::wire_req_id(req_id)
         .map_err(|refusal| PyRuntimeError::new_err(refusal.message))
+}
+
+/// Narrow another signed value the caller stated to the width its request
+/// carries, refusing rather than wrapping.
+///
+/// Same reason as `wire_req_id`, for the fields beside it. A contract id or a
+/// count below zero wraps to a value above four billion, which asks about the
+/// wrong contract or for every row the venue holds.
+pub(crate) fn wire_u32(what: &str, value: i64) -> PyResult<u32> {
+    u32::try_from(value).map_err(|_| {
+        PyRuntimeError::new_err(format!(
+            "{what} {value} is outside the range this request can carry (0..={})", u32::MAX,
+        ))
+    })
 }
 
 /// Adapt a Python callable to the second-factor [`CodeProvider`] the login gate
@@ -163,9 +236,16 @@ impl EClient {
             account_id: Mutex::new(None),
             accounts: Mutex::new(Vec::new()),
             connected: AtomicBool::new(false),
+            positions_requested: AtomicBool::new(false),
+            deferred_evictions: Mutex::new(std::collections::HashSet::new()),
+            positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
+            session_ended: AtomicBool::new(false),
             event_rx: Mutex::new(None),
+            events_lost: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             _test_event_tx: Mutex::new(None),
             _test_control_rx: Mutex::new(None),
+            tbt_kind: Mutex::new(HashMap::new()),
+            completed: Mutex::new(Vec::new()),
             core: ClientCore::new(),
         }
     }
@@ -194,8 +274,8 @@ impl EClient {
     /// not serialize across instances. If you pin engines via ``core_id``, give
     /// each a distinct value.
     ///
-    /// `port` is taken and not applied. There is no local socket to name a port
-    /// on: this client is the one the gateway would have been listening for.
+    /// `port` is taken and not applied. The session connects to the venue
+    /// directly, so there is no local socket to name a port on.
     #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None, order_id_file=None))]
     fn connect(
         &self,
@@ -216,12 +296,10 @@ impl EClient {
         // process's, and is what a session that states nothing falls back to.
         settings: Option<std::collections::HashMap<String, String>>,
         // Where to keep this session so the next start does not need a new
-        // logon. The venue answers a request that names a session it still
-        // holds with a challenge rather than a whole handshake, which is how a
-        // program restarts without a person to approve it — and how a program
-        // that starts often stops counting against an account as a new login
-        // every time. Owner-only, sealed with the password, and bound to this
-        // account and this kind of session.
+        // logon. A request naming a session the venue still holds is answered
+        // with a challenge rather than a full handshake, so a restart needs no
+        // approval and does not count as a new login. Owner-only, sealed with
+        // the password, and bound to this account and this kind of session.
         session_file: Option<String>,
         // Where the last order id handed out is kept. Beside the session file
         // by default, or under the caller's home where there is none.
@@ -294,8 +372,12 @@ impl EClient {
             gw,
             shared.clone(),
             // This session's own count of what it discarded, so a program with
-            // two sessions is not told about the other one's.
-            Some(crate::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+            // two sessions is not told about the other one's — and held here,
+            // so it can be asked.
+            Some(crate::engine::hot_loop::EventSink::new(
+                event_tx,
+                Arc::clone(&self.events_lost),
+            )),
             farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id,
             crate::gateway::CallerAuth {
                 settings: Default::default(),
@@ -339,6 +421,7 @@ impl EClient {
         *self.event_rx.lock().unwrap() = Some(event_rx);
         self.next_order_id.store(start_id, Ordering::Relaxed);
         *self._thread.lock().unwrap() = Some(handle);
+        self.session_ended.store(false, Ordering::Release);
         self.connected.store(true, Ordering::Release);
 
         self.client_id.store(client_id, Ordering::Release);
@@ -405,6 +488,7 @@ impl EClient {
             py.detach(|| { let _ = h.join(); });
         }
         self.connected.store(false, Ordering::Release);
+        self.session_ended.store(true, Ordering::Release);
         // Reset per-session state so connect() can be called again.
         *self.shared.lock().unwrap() = None;
         *self.control_tx.lock().unwrap() = None;
@@ -420,6 +504,17 @@ impl EClient {
         self.connected.load(Ordering::Relaxed)
     }
 
+    /// How many engine events this session's channel discarded.
+    ///
+    /// The engine never waits on a reader — a session that stalled on one would
+    /// stop carrying market data — so an event arriving at a full channel is
+    /// dropped. A program that acted on every fill it saw needs to know the
+    /// difference between that and every fill there was. Zero for a session
+    /// whose reader kept up.
+    fn events_lost(&self) -> u64 {
+        self.events_lost.load(Ordering::Acquire)
+    }
+
     /// Run the event loop.
     /// Deliver everything waiting, once, and return.
     ///
@@ -428,9 +523,11 @@ impl EClient {
     /// callbacks from its own loop, and a blocking loop leaves it nowhere to
     /// stand. This is one pass of the same dispatch.
     fn poll(&self, py: Python<'_>) -> PyResult<()> {
-        if !self.connected.load(Ordering::Acquire) {
-            return Ok(());
-        }
+        // Not gated on the connection. A session the engine is still
+        // rebuilding is disconnected and not over, and the event saying it
+        // came back arrives on this same pump — so a pump that stopped at the
+        // loss could never deliver it, and the caller stayed stood down on a
+        // session that had recovered.
         let Some(shared) = self.shared.lock().unwrap().clone() else {
             return Ok(());
         };
@@ -448,7 +545,12 @@ impl EClient {
         }
 
         // Event loop — wake immediately on data, or check signals every 1ms.
-        while self.connected.load(Ordering::Relaxed) {
+        //
+        // Ends when the session does, not when it goes quiet. The engine keeps
+        // rebuilding a lost connection past the 1100 notice and announces 1102
+        // when the transports carry again, so the loop must outlive 1100 to
+        // deliver the recovery.
+        while !self.session_ended.load(Ordering::Relaxed) {
             py.check_signals()?;
 
             let shared = match self.shared.lock().unwrap().clone() {
@@ -495,8 +597,9 @@ impl EClient {
         Ok(self.shared_state()?.reference.ccp_session_id())
     }
 
-    /// Logical-name → host URL lookup from the gateway logon MiscUrls push
-    /// (e.g. `region_dam`). None when the gateway did not push this key.
+    /// Logical-name → host URL lookup from the MiscUrls block of the logon
+    /// response (e.g. `region_dam`). `None` when the logon did not carry the
+    /// key.
     fn misc_url(&self, key: &str) -> PyResult<Option<String>> {
         Ok(self.shared_state()?.reference.misc_url(key))
     }
@@ -654,15 +757,12 @@ impl EClient {
     /// Call a callback on the caller's wrapper, under the name the reference
     /// client gives it as well as the name this one does.
     ///
-    /// The reference client names its callbacks in one style and this one names
-    /// them in another. A caller who brought a wrapper written against the
-    /// reference client defines the reference client's names, and every call
-    /// here landed on the no-op this base class supplies instead — so their
-    /// callbacks never ran and nothing said so. Silence is the whole of the
-    /// fault: an exception would at least have been visible.
+    /// The two clients spell callback names differently. A wrapper written
+    /// against the reference client defines only that client's names, and a
+    /// call under this client's names reaches the base-class no-op instead.
     ///
-    /// So the reference name is tried first, and the name this client has
-    /// always used second, which keeps every existing caller working.
+    /// The reference name is tried first and this client's name second, so a
+    /// wrapper written against either is reached.
     pub(crate) fn callback<'py, A>(
         &self,
         py: Python<'py>,
@@ -722,25 +822,27 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::contract::TagValue;
     use pyo3::Python;
 
+    /// A client that has not connected holds no session, and says so on every
+    /// question about one.
     #[test]
     fn eclient_default_state() {
-        // Not constructible without Python; the parsing helpers stand alone
-        let tv = [TagValue { tag: "maxPctVol".into(), value: "0.1".into() },
-            TagValue { tag: "startTime".into(), value: "09:30:00".into() },
-            TagValue { tag: "endTime".into(), value: "16:00:00".into() }];
+        Python::initialize();
+        Python::attach(|py| {
+            let client = Py::new(py, EClient::new(recording_wrapper(py))).unwrap();
+            assert!(!client.get().connected.load(Ordering::Relaxed));
+            assert_eq!(client.get().account(), "");
+            assert!(client.get().accounts.lock().unwrap().is_empty());
+            assert!(client.get().shared.lock().unwrap().is_none());
+            assert_eq!(client.get().events_lost.load(Ordering::Acquire), 0);
 
-        let get = |key: &str| -> String {
-            tv.iter()
-                .find(|t| t.tag == key)
-                .map(|t| t.value.clone())
-                .unwrap_or_default()
-        };
-        assert_eq!(get("maxPctVol"), "0.1");
-        assert_eq!(get("startTime"), "09:30:00");
-        assert_eq!(get("missing"), "");
+            // And a pump on it does nothing rather than dispatching against a
+            // session that is not there.
+            client.call_method0(py, "poll").unwrap();
+            let err = client.call_method0(py, "run").unwrap_err();
+            assert!(err.to_string().contains("Not connected"), "got {err}");
+        });
     }
 
     /// The gate hands the callback the factor it is asking for, and an
@@ -818,9 +920,25 @@ w = W()",
         (Py::new(py, client).unwrap(), rx, shared, w)
     }
 
-    /// `next_order_id()` starts at milliseconds-since-epoch, so the ibapi idiom
-    /// of one counter for orders and requests hands every request an id past
-    /// `u32::MAX`. Truncating it answers under an id the caller never used.
+    /// The counter and the wire agree, so the refusal fires on a caller's own
+    /// number and not on ordinary use. Seeded from a clock in milliseconds
+    /// rather than seconds, every id this client numbered for itself would be
+    /// a thousand times too wide and every request would be refused.
+    #[test]
+    fn an_id_from_the_counter_fits_on_the_wire() {
+        // The path this surface takes: connect always names a file, so a first
+        // run starts from the clock through `next_after_last`.
+        let cold = std::path::Path::new("/nonexistent/ibx-order-ids");
+        let seeded = crate::order_ids::next_after_last(cold, "someone/paper/0");
+        assert!(
+            wire_req_id(seeded as i64).is_ok(),
+            "the counter starts past what a request can carry: {seeded}",
+        );
+    }
+
+    /// An id a caller numbers themselves need not fit the width the request
+    /// carries. Truncating it answers under an id they never used, so it is
+    /// refused instead.
     #[test]
     fn a_req_id_past_u32_is_refused_rather_than_truncated() {
         Python::initialize();
@@ -838,6 +956,104 @@ w = W()",
                 assert!(err.to_string().contains("outside the range"), "{method}: got {err}");
             }
             assert!(rx.try_recv().is_err(), "a refused req_id must reach no engine command");
+        });
+    }
+
+    /// The reference client sends a book request's secType and exchange
+    /// straight off the contract. Filling them in here subscribes a contract
+    /// naming only an id to the book of a US stock on SMART, under the
+    /// caller's own request id.
+    #[test]
+    fn a_book_request_states_the_contract_it_was_given() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, _shared, _w) = wired_client(py);
+            let contract = Py::new(py, Contract {
+                con_id: 495512563,
+                sec_type: String::new(),
+                exchange: String::new(),
+                ..Default::default()
+            }).unwrap();
+            client.call_method1(py, "req_mkt_depth", (1i64, &contract, 5i32, false)).unwrap();
+
+            let sent = rx.try_recv().expect("the request reached no engine command");
+            let ControlCommand::SubscribeDepth { contract, .. } = sent else {
+                panic!("a book request sent something else");
+            };
+            assert_eq!(contract.exchange, "", "an exchange was invented");
+            assert_eq!(contract.sec_type, "", "a security type was invented");
+            assert_eq!(contract.con_id, 495512563);
+        });
+    }
+
+    /// One pass can carry two reports for the same order: an acknowledgement
+    /// and then a fill. Keeping one report per order dropped the earlier one,
+    /// and the caller was never told the order had been acknowledged.
+    #[test]
+    fn an_acknowledgement_survives_a_fill_in_the_same_pass() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, _shared, w) = wired_client(py);
+
+            // The venue acknowledges the order, then fills half of it, both
+            // before the caller pumps the queue again.
+            client.call_method1(py, "_test_push_order_update",
+                (88u64, 0u32, "Submitted", 0.0f64, 100.0f64)).unwrap();
+            client.call_method1(py, "_test_push_fill",
+                (0u32, 88u64, "BUY", 150.0f64, 50i64, 50i64, 0.0f64)).unwrap();
+            client.call_method1(py, "_test_push_order_update",
+                (88u64, 0u32, "PartiallyFilled", 50.0f64, 50.0f64)).unwrap();
+
+            client.call_method0(py, "_test_dispatch_once").unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let reported: usize = py.eval(
+                c"len([c for c in w.calls if c[0] in ('order_status', 'orderStatus')])",
+                Some(&g), None,
+            ).unwrap().extract().unwrap();
+            assert_eq!(
+                reported, 2,
+                "the acknowledgement was dropped by the fill that followed it",
+            );
+        });
+    }
+
+
+    /// `reqPositions` subscribes to a real-time feed: a holding that moves
+    /// after the call is reported as it moves. Answering only the set held
+    /// when the call was made left a caller tracking its positions from a
+    /// snapshot that went stale on the next fill.
+    #[test]
+    fn a_holding_that_moves_after_the_request_is_reported() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            shared.portfolio.set_account_download_complete();
+            let held = |qty: f64| PositionInfo {
+                con_id: 756733, position: qty, symbol: "SPY".into(),
+                sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+            };
+            shared.portfolio.set_position_info(held(1.0));
+            client.call_method0(py, "req_positions").unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let reported = || -> usize {
+                py.eval(c"len([c for c in w.calls if c[0] == 'position'])", Some(&g), None)
+                    .unwrap().extract().unwrap()
+            };
+            assert_eq!(reported(), 1, "the holding held when it was asked for");
+
+            shared.portfolio.set_position_info(held(3.0));
+            client.call_method0(py, "_test_dispatch_once").unwrap();
+            assert_eq!(reported(), 2, "and the holding once it moves");
+
+            // Withdrawn, so what moves after is no longer reported.
+            client.call_method0(py, "cancel_positions").unwrap();
+            shared.portfolio.set_position_info(held(5.0));
+            client.call_method0(py, "_test_dispatch_once").unwrap();
+            assert_eq!(reported(), 2, "a withdrawn ask is not answered further");
         });
     }
 
@@ -867,7 +1083,10 @@ w = W()",
 
             let g = pyo3::types::PyDict::new(py);
             g.set_item("w", &w).unwrap();
-            for (callback, index) in [("position", 2), ("position_multi", 4)] {
+            // Under the reference client's own spelling, which is what a
+            // wrapper written against it defines and so what these answers are
+            // delivered as.
+            for (callback, index) in [("position", 2), ("positionMulti", 4)] {
                 let expr = format!("[c[{index}] for c in w.calls if c[0] == '{callback}'][0]");
                 let c = py.eval(&std::ffi::CString::new(expr).unwrap(), Some(&g), None).unwrap();
                 for (field, want) in [

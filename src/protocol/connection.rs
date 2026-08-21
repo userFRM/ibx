@@ -115,7 +115,7 @@ fn write_is_recoverable(err: &io::Error, written: usize, tls: bool) -> bool {
     // partial record has already gone to the peer. Retrying then puts a second
     // frame behind half of the first, and the sequence and signature state
     // would be committed for a frame the peer never receives whole — an order
-    // reported as failed here could still arrive at the gateway.
+    // reported as failed here could still arrive at the venue.
     !tls
         && written == 0
         && matches!(err.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
@@ -276,13 +276,41 @@ impl Connection {
             }
             // Compressed protocol
             if self.buf.starts_with(FIXCOMP_MARKER) {
-                match fixcomp::fixcomp_length(&self.buf) {
-                    Some(total) if self.buf.len() >= total => {
+                match fixcomp::fixcomp_frame_length(&self.buf) {
+                    fixcomp::FrameLength::Complete(total) if self.buf.len() >= total => {
                         let msg: Vec<u8> = self.buf.drain(..total).collect();
                         frames.push(Frame::FixComp(msg));
                         continue;
                     }
-                    _ => break, // incomplete
+                    // Still arriving. Worth waiting for.
+                    fixcomp::FrameLength::Incomplete | fixcomp::FrameLength::Complete(_) => break,
+                    // Its own header does not read, so no number of further
+                    // bytes completes it. Waited on, it sat at the head of the
+                    // buffer and every acknowledgement and fill behind it was
+                    // never extracted, on a connection that went on reading as
+                    // alive. Stepped over instead, onto the next header.
+                    fixcomp::FrameLength::Unreadable => {
+                        let head_n = self.buf.len().min(64);
+                        let head_ascii: String = self.buf[..head_n]
+                            .iter()
+                            .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+                            .collect();
+                        // Onto the next header of any kind this reads, not
+                        // only the next compressed or FIX one: a binary or
+                        // control frame delivered in the same slice sits at a
+                        // lower offset than either, and searching past it
+                        // dropped a quote or a token frame that had arrived
+                        // intact.
+                        let next = next_header(&self.buf[1..]).map(|p| p + 1);
+                        let dropped = next.unwrap_or(self.buf.len());
+                        log::warn!(
+                            "extract_frames: a compressed frame states a length that does not \
+                             read; dropping {dropped}B to the next header. \
+                             first {head_n}B ascii={head_ascii:?}",
+                        );
+                        self.buf.drain(..dropped);
+                        continue;
+                    }
                 }
             }
 
@@ -380,6 +408,19 @@ impl Connection {
                         frames.push(Frame::Fix(msg));
                         continue;
                     }
+                // A length that is there and unreadable is not a length
+                // still arriving. Waiting for it holds the header at the front
+                // of the buffer indefinitely, and every frame behind it queues
+                // unread while the socket keeps delivering and the
+                // connection kept reading as alive.
+                if tag9_is_unreadable(&self.buf) {
+                    log::warn!(
+                        "extract_frames: a FIX header states an unreadable body \
+                         length; resynchronising past it",
+                    );
+                    self.buf.drain(..1);
+                    continue;
+                }
                 break; // incomplete
             }
 
@@ -411,10 +452,9 @@ impl Connection {
             return Some(msg.to_vec()); // no signing configured
         }
         // A frame carrying no 8349 tag is still accepted, as the reference
-        // client does. Whether the gateway ever sends one on a keyed
-        // connection is not established here, and refusing them on that
-        // assumption would drop real traffic; the warning makes the case
-        // visible so the question can be settled from logs rather than guessed.
+        // client does. Whether unsigned frames arrive on a keyed connection is
+        // not established; refusing them on that assumption would drop real
+        // traffic. The warning makes the case visible in logs.
         if !msg.windows(6).any(|w| w == b"\x018349=") {
             log::warn!("inbound frame carries no 8349 signature on a signed connection");
             return Some(msg.to_vec());
@@ -592,7 +632,11 @@ fn binary_msg_length(data: &[u8]) -> Option<usize> {
         .ok()?
         .parse()
         .ok()?;
-    Some(soh_pos + 1 + body_len)
+    // The length is whatever the peer wrote, so a total that does not fit is
+    // a length no frame can have rather than something to add anyway: added
+    // unchecked it aborted the process where overflow is checked and framed
+    // from a wrapped offset where it is not.
+    soh_pos.checked_add(1)?.checked_add(body_len)
 }
 
 /// Compute total length of a `8=FIX.4.1\x01 9=<body_len>\x01 ...` message.
@@ -605,7 +649,46 @@ fn fix_msg_length(data: &[u8]) -> Option<usize> {
         .parse()
         .ok()?;
     // header up to and including SOH after tag 9, + body + "10=XXX\x01" (7 bytes)
-    Some(soh_pos + 1 + body_len + 7)
+    soh_pos.checked_add(8)?.checked_add(body_len)
+}
+
+/// The offset of the earliest header this reader recognises, if there is one.
+///
+/// The same set the frame scan uses, so resynchronising after an unreadable
+/// frame lands on whatever comes next rather than only on the two kinds a
+/// particular caller was looking for.
+fn next_header(data: &[u8]) -> Option<usize> {
+    [
+        find_subsequence(data, FIXCOMP_MARKER),
+        find_subsequence(data, b"8=FIX."),
+        find_subsequence(data, b"8=O\x01"),
+        find_subsequence(data, b"8=1\x01"),
+        find_subsequence(data, b"8=X\x01"),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+}
+
+/// Whether the tag 9 at the front of this buffer has arrived in full and does
+/// not read as a number.
+///
+/// That is the case a length-framed reader cannot wait out: the field is
+/// complete, so no further bytes will make it parse.
+fn tag9_is_unreadable(data: &[u8]) -> bool {
+    let Some(tag9_pos) = find_subsequence(data, b"9=").filter(|&p| p < 20) else {
+        // No tag 9 within the header yet. Twenty bytes past the start of a
+        // FIX header is more than the field can take, so once that many have
+        // arrived without one the header is not one.
+        return data.len() >= 20;
+    };
+    let Some(soh) = data[tag9_pos..].iter().position(|&b| b == SOH) else {
+        return false; // still arriving
+    };
+    std::str::from_utf8(&data[tag9_pos + 2..tag9_pos + soh])
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .is_none()
 }
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -634,6 +717,25 @@ mod tests {
     fn fix_msg_length_incomplete() {
         let msg = fix_build(&[(35, "0")], 1);
         assert_eq!(fix_msg_length(&msg[..10]), None);
+    }
+
+    /// A length that is there and unreadable is not a length still arriving.
+    /// Waited out as though it were, the header sat at the front of the buffer
+    /// for good and every frame behind it queued unread while the socket kept
+    /// delivering and the connection kept reading as alive.
+    #[test]
+    fn a_body_length_that_cannot_be_read_is_not_one_still_arriving() {
+        let whole = fix_build(&[(35, "0")], 1);
+        assert!(!tag9_is_unreadable(&whole), "a good header is readable");
+        // A header cut inside its own length field: more bytes would finish it.
+        assert!(!tag9_is_unreadable(&whole[..12]), "still arriving");
+
+        // The field is complete and states something that is not a number.
+        assert!(tag9_is_unreadable(b"8=FIX.4.1\x019=00X4\x0135=0\x01"));
+        assert!(tag9_is_unreadable(b"8=FIX.4.1\x019=\x0135=0\x01"));
+
+        // A header long past where its length would sit, carrying none.
+        assert!(tag9_is_unreadable(b"8=FIX.4.1\x0135=0\x0134=000001\x01"));
     }
 
     #[test]
@@ -1180,5 +1282,84 @@ mod tests {
             "a write may not outlast the liveness probe interval",
         );
         assert!(WRITE_TIMEOUT > std::time::Duration::ZERO);
+    }
+}
+
+#[cfg(test)]
+mod wedge_tests {
+    use super::*;
+
+    /// A compressed frame whose own length does not read is stepped over.
+    ///
+    /// Waited on, it sat at the head of the buffer and no frame behind it was
+    /// ever extracted: every acknowledgement and fill queued up unread while
+    /// the socket went on delivering and the connection went on reading as
+    /// alive.
+    #[test]
+    fn a_frame_whose_length_does_not_read_does_not_wedge_the_rest() {
+        let (mut conn, _peer) = Connection::for_test();
+        // A compressed header whose tag 9 is not a number, then a good frame
+        // behind it.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"8=FIXCOMP9=notanumber35=A");
+        let good = b"8=FIX.4.29=535=A";
+        bytes.extend_from_slice(good);
+        conn.inject_buf(&bytes);
+
+        let held = conn.buffered();
+        let _ = conn.extract_frames();
+        assert!(
+            conn.buffered() < held,
+            "the unreadable frame is stepped over rather than waited on forever",
+        );
+        // Again, to show it does not stall one call later.
+        let after = conn.buffered();
+        let _ = conn.extract_frames();
+        assert!(after == 0 || conn.buffered() <= after);
+    }
+
+    /// A frame that is merely still arriving is waited for, not discarded.
+    #[test]
+    fn a_frame_still_arriving_is_waited_for() {
+        let (mut conn, _peer) = Connection::for_test();
+        conn.inject_buf(b"8=FIXCOMP9=50035=A");
+        assert!(conn.extract_frames().is_empty(), "nothing complete yet");
+        assert!(conn.buffered() > 0, "and the partial frame is kept");
+    }
+
+    /// After a compressed frame whose length does not read, the next intact
+    /// frame is extracted whatever kind it is.
+    ///
+    /// Resynchronising to a compressed or FIX header alone searched straight
+    /// past a binary quote frame that had arrived whole in the same slice, and
+    /// dropped it with the corrupt bytes.
+    #[test]
+    fn an_unreadable_compressed_frame_resynchronises_onto_any_header() {
+        let mut conn = Connection::for_test().0;
+        let body = b"35=P\x01data";
+        let mut good = format!("8=O\x019={}\x01", body.len()).into_bytes();
+        good.extend_from_slice(body);
+
+        let mut buf = b"8=FIXCOMP9=not-a-number\x01".to_vec();
+        buf.extend_from_slice(&good);
+        conn.inject_buf(&buf);
+
+        let frames = conn.extract_frames();
+        assert!(
+            frames.iter().any(|f| matches!(f, Frame::Binary(_))),
+            "the intact binary frame behind the corrupt one survives: {frames:?}",
+        );
+    }
+
+    /// A stated length no frame can have is not a length to add.
+    ///
+    /// Added unchecked it aborted where overflow is checked and framed from a
+    /// wrapped offset where it is not, on a number the peer chooses.
+    #[test]
+    fn a_stated_length_that_cannot_fit_is_not_a_frame() {
+        let huge = format!("8=O\x019={}\x01body", usize::MAX);
+        assert_eq!(binary_msg_length(huge.as_bytes()), None);
+        let huge_fix = format!("8=FIX.4.1\x019={}\x01body", usize::MAX);
+        assert_eq!(fix_msg_length(huge_fix.as_bytes()), None);
     }
 }

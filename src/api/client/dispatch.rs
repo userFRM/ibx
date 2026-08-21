@@ -1,5 +1,7 @@
 //! Event dispatch: drains SharedState queues and fires Wrapper callbacks.
 
+use std::sync::atomic::Ordering;
+use crate::types::qty_to_f64;
 use crate::types::model::{
     BarData, CommissionAndFeesReport, ContractDetails, ContractDescription, Execution,
     Order as ApiOrder, OrderState, TickAttribLast, TickAttribBidAsk, PRICE_SCALE_F,
@@ -21,7 +23,7 @@ const NO_SECURITY_DEFINITION: i64 = 200;
 
 /// Reported against no request, the way the reference client reports anything
 /// it cannot attribute to one.
-const NO_REQUEST: i64 = -1;
+pub(crate) const NO_REQUEST: i64 = -1;
 
 /// The venue said something went wrong and stated no code for it. This one
 /// says only that the venue is the one saying it.
@@ -33,6 +35,7 @@ impl EClient {
     /// Drain all SharedState queues and dispatch to the Wrapper.
     /// Call this in a loop — it is the Rust equivalent of C++ `EReader::processMsgs()`.
     pub fn process_msgs(&self, wrapper: &mut impl Wrapper) {
+        self.dispatch_positions(wrapper);
         self.dispatch_orders(wrapper);
         self.dispatch_quotes(wrapper);
         self.dispatch_data(wrapper);
@@ -69,21 +72,120 @@ impl EClient {
 
     // ── Order / Fill Dispatch ──
 
+    /// A holding that has moved since the caller last heard, where the caller
+    /// asked for positions and has not withdrawn the ask.
+    ///
+    /// The feed is real-time: a fill that changes what the account holds is
+    /// followed by the holding it changed. Nothing is drained while no ask
+    /// stands — [`EClient::req_positions`] clears what accumulated before it,
+    /// and draining here as well discarded the moves that landed while it was
+    /// still assembling its answer, which no later report would repeat.
+    fn dispatch_positions(&self, wrapper: &mut impl Wrapper) {
+        let on_position = self.positions_requested.load(Ordering::Acquire);
+        let per_request: Vec<i64> = {
+            let watching = self.positions_multi_requested.lock().unwrap();
+            let mut ids: Vec<i64> = watching.iter().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+        if !on_position && per_request.is_empty() {
+            return;
+        }
+        // Drained once and given to everyone watching. Drained per watcher,
+        // the first would take the move and the rest would never hear of it.
+        let moved = self.shared.portfolio.drain_position_changes();
+        for pi in &moved {
+            let contract = self.position_contract(pi);
+            let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
+            if on_position {
+                wrapper.position(&self.account_id, &contract, pi.position, avg_cost);
+            }
+            // The account this session opened under, whatever the request
+            // named, as the answer to the request itself states.
+            for req_id in &per_request {
+                wrapper.position_multi(
+                    *req_id, &self.account_id, "", &contract, pi.position, avg_cost,
+                );
+            }
+        }
+    }
+
+    /// Answer the calculations that were waiting on the venue to state a
+    /// model, and forget them.
+    ///
+    /// A question the venue still cannot answer is kept: the watch is open, so
+    /// the model may yet arrive. It is dropped when the caller withdraws it.
+    fn answer_kept_option_calcs(&self) {
+        let kept: Vec<(i64, crate::api::client::PendingOptionCalc)> = self
+            .pending_option_calcs.lock().unwrap()
+            .iter().map(|(k, v)| (*k, v.clone())).collect();
+        for (req_id, calc) in kept {
+            let answered = if calc.wants_volatility {
+                self.solve_and_push_volatility(req_id, &calc)
+            } else {
+                self.solve_and_push_price(req_id, &calc)
+            };
+            if answered {
+                self.pending_option_calcs.lock().unwrap().remove(&req_id);
+            }
+        }
+    }
+
     fn dispatch_orders(&self, wrapper: &mut impl Wrapper) {
         // Fills → order_status + exec_details + commission_and_fees_report
+        // One `order_status` per execution report: a report carrying both a fill
+        // and a status emits them together.
+        //
+        // Held as a list in arrival order. Each status change is a separate
+        // report, so two changes to one order in a single pass are two
+        // callbacks.
+        // Records held back while a fill for them was queued, freed once that
+        // fill has been read. Freed here and nowhere else: this is the side
+        // that reads the fills, so a record cannot be freed between a fill
+        // being taken off the queue and the report that is built from it.
+        if !self.deferred_evictions.lock().unwrap().is_empty() {
+            self.deferred_evictions.lock().unwrap().retain(|oid| {
+                if self.shared.orders.has_pending_fill(*oid) {
+                    return true;
+                }
+                self.shared.orders.remove_order_info(*oid);
+                false
+            });
+        }
+        let mut paired: Vec<crate::types::OrderUpdate> =
+            self.shared.orders.drain_order_updates();
         for fill in self.shared.orders.drain_fills() {
             let price_f = fill.price as f64 / PRICE_SCALE_F;
             let commission_and_fees_f = fill.commission as f64 / PRICE_SCALE_F;
-            let status = if fill.remaining == 0 { "Filled" } else { "PartiallyFilled" };
-            // A fill emits its own order_status and never reaches the branch
-            // below, so the client's record has to be preferred here too.
+            // Paired on the report, not the order: one pass can carry both an
+            // acknowledgement and a fill for the same order. The matching report
+            // is the one whose filled and remaining quantities equal the fill's.
+            let with_it = paired
+                .iter()
+                .position(|u| {
+                    u.order_id == fill.order_id
+                        && u.remaining_qty == qty_to_f64(fill.remaining)
+                        && u.filled_qty == qty_to_f64(fill.cum_qty)
+                })
+                .map(|at| paired.remove(at));
+            // Status as the report states it, derived from `remaining` only when
+            // the report carries none.
+            let status = with_it
+                .map(|u| order_status_str(u.status))
+                .unwrap_or(if fill.remaining == 0 { "Filled" } else { "Submitted" });
+            if let Some(u) = with_it {
+                self.core.update_order_status(
+                    &self.shared, u.order_id, u.status, u.filled_qty, u.remaining_qty,
+                );
+            }
             let (perm_id, parent_id) = self.core.perm_and_parent(&self.shared, fill.order_id);
             // `filled` and `avgFillPrice` describe the order so far;
             // `lastFillPrice` describes this print.
             let avg_price_f = fill.avg_price as f64 / PRICE_SCALE_F;
             wrapper.order_status(
-                fill.order_id as i64, status, fill.cum_qty as f64, fill.remaining as f64,
-                avg_price_f, perm_id, parent_id, price_f, 0, "", 0.0,
+                fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
+                avg_price_f, perm_id, parent_id, price_f,
+                self.core.placing_client(&self.shared, fill.order_id) as i64, "", 0.0,
             );
 
             let side_str = match fill.side {
@@ -94,7 +196,7 @@ impl EClient {
             let (c, exec) = if let Some(info) = self.shared.orders.get_order_info(fill.order_id) {
                 let mut ex = info.last_exec;
                 ex.side = side_str.into();
-                ex.shares = fill.qty as f64;
+                ex.shares = qty_to_f64(fill.qty);
                 ex.price = price_f;
                 ex.order_id = fill.order_id as i64;
                 let contract = if info.contract.con_id != 0 {
@@ -106,13 +208,15 @@ impl EClient {
             } else {
                 (Contract::default(), Execution {
                     side: side_str.into(),
-                    shares: fill.qty as f64,
+                    shares: qty_to_f64(fill.qty),
                     price: price_f,
                     order_id: fill.order_id as i64,
                     ..Default::default()
                 })
             };
-            let req_id = self.core.req_id_for_instrument(fill.instrument);
+            // Unsolicited executions carry request id -1. A market-data
+            // subscription id does not identify a `reqExecutions` request.
+            let req_id = NO_REQUEST;
             wrapper.exec_details(req_id, &c, &exec);
 
             let report = CommissionAndFeesReport::charged(
@@ -124,11 +228,11 @@ impl EClient {
             self.core.push_execution(req_id, c, exec, report);
 
             // Update open order tracking
-            self.core.update_order_fill(fill.order_id, status, fill.cum_qty as f64, fill.remaining as f64);
+            self.core.update_order_fill(fill.order_id, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining));
         }
 
-        // Order updates → order_status
-        for update in self.shared.orders.drain_order_updates() {
+        // What is left: a status change with no fill on the same report.
+        for update in paired {
             let status = order_status_str(update.status);
             // The engine reads no parent from the report, but this client
             // placed the order and was told. Prefer what it recorded; an order
@@ -141,7 +245,8 @@ impl EClient {
             let avg = update.avg_price as f64 / crate::types::PRICE_SCALE as f64;
             wrapper.order_status(
                 update.order_id as i64, status, update.filled_qty,
-                update.remaining_qty, avg, update.perm_id, parent_id, 0.0, 0, "", 0.0,
+                update.remaining_qty, avg, update.perm_id, parent_id, 0.0,
+                self.core.placing_client(&self.shared, update.order_id) as i64, "", 0.0,
             );
             self.core.update_order_status(&self.shared, update.order_id, update.status, update.filled_qty, update.remaining_qty);
         }
@@ -202,6 +307,11 @@ impl EClient {
                     }
                 }
             }
+            for tick in &result.generic_ticks {
+                for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
+                    wrapper.tick_generic(id, tick.tick_type, tick.value);
+                }
+            }
             for st in &result.string_ticks {
                 for id in std::iter::once(st.req_id).chain(watchers.iter().copied()) {
                     wrapper.tick_string(id, st.tick_type, &st.value);
@@ -209,7 +319,11 @@ impl EClient {
             }
             if let Some(ts) = &result.timestamp {
                 let ts_secs = ts.timestamp_ns / 1_000_000_000;
-                wrapper.tick_string(ts.req_id, 45, &ts_secs.to_string());
+                // Tick type 45 goes to every subscriber of the contract, as the
+                // prices and strings above do.
+                for id in std::iter::once(ts.req_id).chain(watchers.iter().copied()) {
+                    wrapper.tick_string(id, 45, &ts_secs.to_string());
+                }
             }
             if self.core.check_snapshot_done(
                 req_id, result.delivered,
@@ -224,18 +338,27 @@ impl EClient {
         }
 
         // TBT trades → tick_by_tick_all_last
-        for trade in self.shared.market.drain_tbt_trades() {
+        let trades = self.shared.market.drain_tbt_trades();
+        // Locked once per batch: this is the highest-rate feed here.
+        let kinds = (!trades.is_empty()).then(|| self.tbt_kinds.lock().unwrap().clone());
+        for trade in trades {
             // As the caller numbered it, from the record itself: a contract
             // can carry several streams and the contract alone does not say
             // which one this came from.
             let req_id = trade.req_id;
+            // Tick type names the stream the request asked for: 1 = Last,
+            // 2 = AllLast. The trade record does not carry it.
+            let kind = match kinds.as_ref().and_then(|k| k.get(&req_id)) {
+                Some(TbtType::AllLast) => 2,
+                _ => 1,
+            };
             // What the venue said about this print, not what a default says.
             let attrib_last = TickAttribLast {
                 past_limit: trade.past_limit,
                 unreported: trade.unreported,
             };
             wrapper.tick_by_tick_all_last(
-                req_id, 1, trade.timestamp as i64,
+                req_id, kind, trade.timestamp as i64,
                 trade.price as f64 / PRICE_SCALE_F,
                 trade.size as f64 / QTY_SCALE_F,
                 &attrib_last, &trade.exchange, &trade.conditions,
@@ -274,23 +397,46 @@ impl EClient {
         // News → tick_news
         for news in self.shared.market.drain_tick_news() {
             let req_id = self.core.req_id_for_instrument(news.instrument);
-            wrapper.tick_news(
-                req_id, news.timestamp as i64,
-                &news.provider_code, &news.article_id, &news.headline, "",
-            );
+            // News goes to every subscriber of the contract, as its quotes do.
+            let watchers = self.core.followers_of(news.instrument);
+            for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
+                wrapper.tick_news(
+                    id, news.timestamp as i64,
+                    &news.provider_code, &news.article_id, &news.headline, "",
+                );
+            }
         }
 
         // The venue's option model → tick_option_computation. Tick type 13 is
         // the model computation, and the attribute says the model is the
         // venue's rather than a price-based reading.
+        // A calculation asked for before the venue had stated a model waited
+        // on the watch that asking opened. The model has arrived, so answer
+        // the question that was kept rather than leaving the caller with the
+        // model it did not ask for.
+        if !self.pending_option_calcs.lock().unwrap().is_empty() {
+            self.answer_kept_option_calcs();
+        }
+
         for comp in self.shared.market.drain_option_computations() {
-            let req_id = comp.answers
-                .unwrap_or_else(|| self.core.req_id_for_instrument(comp.instrument));
-            wrapper.tick_option_computation(
-                req_id, MODEL_OPTION_COMPUTATION, 0,
-                comp.implied_vol, comp.delta, comp.opt_price, comp.pv_dividend,
-                comp.gamma, comp.vega, comp.theta, comp.und_price,
-            );
+            // A computation answering a specific request goes to that request.
+            // One published for the contract goes to every subscriber of it.
+            let to: Vec<i64> = match comp.answers {
+                Some(asked) => vec![asked],
+                None => {
+                    let owner = self.core.req_id_for_instrument(comp.instrument);
+                    std::iter::once(owner)
+                        .chain(self.core.followers_of(comp.instrument))
+                        .collect()
+                }
+            };
+            for req_id in to {
+                wrapper.tick_option_computation(
+                    req_id, MODEL_OPTION_COMPUTATION, 0,
+                    comp.implied_vol, comp.delta, comp.opt_price, comp.pv_dividend,
+                    comp.gamma, comp.vega, comp.theta, comp.und_price,
+                );
+            }
         }
 
         for event in self.core.drain_group_events() {
@@ -364,7 +510,10 @@ impl EClient {
 
         // Head timestamps → head_timestamp
         for (req_id, response) in self.shared.reference.drain_head_timestamps() {
-            wrapper.head_timestamp(req_id as i64, &response.head_timestamp);
+            // Returned in the form `format_date` asked for. The wire carries one
+            // form; `bar_time_for` converts it. 2 = seconds since the epoch.
+            let stated = self.core.bar_time_for(req_id as i64, &response.head_timestamp);
+            wrapper.head_timestamp(req_id as i64, &stated);
         }
 
         // Contract details → contract_details + contract_details_end
@@ -429,6 +578,12 @@ impl EClient {
         // The Some-arm fills the rich fields; the fallback covers deadline-
         // flushed partials where a secdef reply never arrived.
         for (req_id, result) in self.shared.reference.drain_scanner_data() {
+            // A refused scan arrives in the shape of a completed one and carries
+            // the reason. Reported against the requesting id, so a refusal is not
+            // delivered as an empty result.
+            if !result.error_text.is_empty() {
+                wrapper.error(req_id as i64, VENUE_REPORTED, &result.error_text, "");
+            }
             for (rank, entry) in result.entries.iter().enumerate() {
                 let mut contract = Contract { con_id: entry.con_id as i64, ..Default::default() };
                 if let Some(ac) = self.core.get_contract(entry.con_id as i64, &self.shared) {
@@ -484,10 +639,9 @@ impl EClient {
         // has already answered with its history.
         for (req_id, bar) in self.shared.market.drain_real_time_bars() {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
-                // A bar still forming is stamped where it opened, in seconds
-                // since the epoch. The initial answer's bars carry the venue's
-                // own stamp in the venue's own zone; naming a zone for this one
-                // would be a claim about a zone rather than a time.
+                // A forming bar is stamped at its open, in seconds since the
+                // epoch, and carries no timezone. Historical bars carry the
+                // wire's stamp and its zone.
                 let bd = BarData {
                     date: bar.timestamp.to_string(),
                     open: bar.open,
@@ -561,7 +715,7 @@ impl EClient {
         // ClientCore)
         if let Some(batch) = self.core.prepare_account_summary(&self.shared, &self.account_id) {
             for entry in &batch.entries {
-                wrapper.account_summary(batch.req_id, &self.account_id, entry.tag, &entry.value, &entry.currency);
+                wrapper.account_summary(batch.req_id, &self.account_id, &entry.tag, &entry.value, &entry.currency);
             }
             wrapper.account_summary_end(batch.req_id);
         }
@@ -570,20 +724,51 @@ impl EClient {
 
 #[cfg(test)]
 mod delivered_size_tests {
-    use crate::types::QTY_SCALE;
+    use crate::api::wrapper::Wrapper;
+    use crate::types::model::{TickAttribBidAsk, TickAttribLast};
+    use crate::types::{PRICE_SCALE, QTY_SCALE, TbtQuote, TbtTrade};
 
-    /// A size reaches a caller as the number of shares it is. Prices are
-    /// divided by their scale on the way out and sizes were not, so a hundred
-    /// shares arrived as ten thousand million.
-    #[test]
-    fn a_size_reaches_a_caller_as_itself() {
-        let hundred_shares = 100 * QTY_SCALE;
-        assert_eq!(hundred_shares as f64 / super::QTY_SCALE_F, 100.0);
+    #[derive(Default)]
+    struct Sizes(Vec<f64>);
+
+    impl Wrapper for Sizes {
+        fn tick_by_tick_all_last(
+            &mut self, _req_id: i64, _kind: i32, _time: i64, _price: f64, size: f64,
+            _attrib: &TickAttribLast, _exchange: &str, _conditions: &str,
+        ) {
+            self.0.push(size);
+        }
+        fn tick_by_tick_bid_ask(
+            &mut self, _req_id: i64, _time: i64, _bid: f64, _ask: f64,
+            bid_size: f64, ask_size: f64, _attrib: &TickAttribBidAsk,
+        ) {
+            self.0.push(bid_size);
+            self.0.push(ask_size);
+        }
     }
 
-    /// And the smallest size a venue counts in survives the trip.
+    /// A size reaches a caller as the number of shares it is.
+    ///
+    /// Sizes cross the wire scaled by `QTY_SCALE` and are divided on delivery.
+    /// Driven through `process_msgs` rather than checked as arithmetic, so this
+    /// fails if delivery stops or the scaling is dropped.
     #[test]
-    fn the_smallest_size_survives_the_trip() {
-        assert_eq!(1_f64 / super::QTY_SCALE_F, 1e-8);
+    fn a_size_reaches_a_caller_as_itself() {
+        let (client, _rx, shared) = crate::api::client::tests::test_client();
+        shared.market.push_tbt_trade(TbtTrade {
+            instrument: 0, req_id: 1, price: PRICE_SCALE, size: 100 * QTY_SCALE,
+            timestamp: 0, exchange: "NYSE".into(), conditions: String::new(),
+            past_limit: false, unreported: false,
+        });
+        shared.market.push_tbt_quote(TbtQuote {
+            instrument: 0, req_id: 2, bid: PRICE_SCALE, ask: PRICE_SCALE,
+            // The smallest representable size, beside an ordinary one.
+            bid_size: 50 * QTY_SCALE, ask_size: 1,
+            timestamp: 0, bid_past_low: false, ask_past_high: false,
+        });
+
+        let mut sizes = Sizes::default();
+        client.process_msgs(&mut sizes);
+        assert_eq!(sizes.0, vec![100.0, 50.0, 1e-8]);
     }
 }

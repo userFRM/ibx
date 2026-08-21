@@ -22,6 +22,13 @@ pub struct PortfolioState {
     account_download_complete: AtomicBool,
     /// Position info (conId -> PositionInfo) for reqPositions and P&L.
     position_infos: Mutex<HashMap<i64, PositionInfo>>,
+    /// Holdings that have moved since a caller last read them.
+    ///
+    /// `reqPositions` is a real-time subscription, so a caller is told each
+    /// time a holding changes and not only once when it asks. Held by
+    /// contract id rather than by value: a holding that moves twice before
+    /// the caller reads is delivered once, stating what it holds now.
+    position_changes: Mutex<std::collections::BTreeSet<i64>>,
     /// Holdings the venue reports that this broker does not itself hold:
     /// positions held away, and rows it marks as shown but not held. Kept
     /// apart from the account's own, which is what a caller asking for
@@ -48,6 +55,7 @@ impl PortfolioState {
             account_data_received: AtomicBool::new(false),
             account_download_complete: AtomicBool::new(false),
             position_infos: Mutex::new(HashMap::new()),
+            position_changes: Mutex::new(std::collections::BTreeSet::new()),
             positions_elsewhere: Mutex::new(HashMap::new()),
             values_elsewhere: Mutex::new(HashMap::new()),
             positions: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -154,6 +162,7 @@ impl PortfolioState {
     }
 
     #[doc(hidden)] pub fn set_position_info(&self, info: PositionInfo) {
+        let con_id = info.con_id;
         let mut map = self.position_infos.lock().unwrap();
         match map.get_mut(&info.con_id) {
             Some(existing) => {
@@ -172,6 +181,20 @@ impl PortfolioState {
             }
             None => { map.insert(info.con_id, info); }
         }
+        // Recorded while the holdings are still held, so the two locks are
+        // always taken in the same order and a reader cannot see the new
+        // value before the record that it moved. Taken the other way round, a
+        // drain running alongside this read the moved holding and then found
+        // it again on the next drain, reporting one move twice.
+        self.position_changes.lock().unwrap().insert(con_id);
+    }
+
+    /// The holdings that have moved since this was last called, as they stand
+    /// now. Empty where nothing has moved.
+    pub fn drain_position_changes(&self) -> Vec<PositionInfo> {
+        let map = self.position_infos.lock().unwrap();
+        let changed = std::mem::take(&mut *self.position_changes.lock().unwrap());
+        changed.iter().filter_map(|c| map.get(c).cloned()).collect()
     }
 
     /// Apply a fill of this account's own to the holding it changes.
@@ -206,6 +229,12 @@ impl PortfolioState {
             // wrong side. What is held now was bought at this price.
             row.avg_cost = price;
         }
+        // Recorded like any other move. The broker does not restate a holding
+        // when an order fills, so this is the only account this session gets
+        // of it: without the record, a caller watching positions never hears
+        // about the one thing it was most likely watching for — its own fill
+        // moving its own holding.
+        self.position_changes.lock().unwrap().insert(con_id);
     }
 
     /// Update the per-position marks (from the account-updates portfolio message).

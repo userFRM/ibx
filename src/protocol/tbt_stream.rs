@@ -1,10 +1,11 @@
 //! Every trade and every quote change, as the venue packs them.
 //!
-//! A frame carries one subscription's id, one timestamp, and then records until
-//! the bits run out. There is no marker between records and no length in front
-//! of one: a record ends when the fields its kind has are read, and each field
-//! ends itself — a variable-length integer by its continuation bit, a string by
-//! its own length.
+//! A frame carries records until the bits run out, each headed by the
+//! subscription it belongs to and the second it happened, so one frame can hold
+//! more than one moment. There is no marker between records and no length in
+//! front of one: a record ends when the fields its kind has are read, and each
+//! field ends itself — a variable-length integer by its continuation bit, a
+//! string by its own length.
 //!
 //! A price is not sent. What is sent is how far it moved, in whole ticks of the
 //! contract's own smallest increment, added to where the price already was.
@@ -138,9 +139,13 @@ pub enum TbtKind {
 }
 
 impl TbtKind {
-    /// A record's field count. The venue writes exactly this many and the next
-    /// record starts straight after, so reading a different number desynchronises
-    /// everything that follows rather than losing one record.
+    /// How many fields a record of this kind nominally carries.
+    ///
+    /// A description of the format, not a bound the reader is held to: a trade
+    /// record can restate its size at greater width, so `read_record` reads
+    /// what each kind's own fields say rather than counting to this. It is
+    /// here because it is the shape the venue writes, and what a reader of the
+    /// format wants to know first.
     pub fn fields(self) -> usize {
         match self {
             Self::Last | Self::AllLast | Self::BidAsk => 5,
@@ -227,16 +232,22 @@ pub struct RunningPrice {
     mid_ticks: i64,
 }
 
-/// A frame: one subscription, one time, and the records that share them.
+/// One record, and the second the venue stamped that record with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TbtStamped {
+    /// Seconds since the epoch, from this record's own header.
+    pub seconds: u64,
+    /// What the record says.
+    pub record: TbtRecord,
+}
+
+/// A frame: one subscription and the records it carries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TbtFrame {
-    /// The venue's own number for the stream.
+    /// The venue's number for the stream.
     pub ticker_id: u64,
-    /// Seconds since the epoch, as the venue stated them; every record in the
-    /// frame shares this one.
-    pub timestamp: u64,
-    /// The records in this frame.
-    pub records: Vec<TbtRecord>,
+    /// The records in this frame, each with the moment it happened.
+    pub records: Vec<TbtStamped>,
 }
 
 /// Read every record in a frame.
@@ -270,7 +281,6 @@ pub fn decode_frame(
     let mut bits = Bits::new(payload);
     let mut records = Vec::new();
     let mut ticker_id = 0;
-    let mut seconds = 0;
 
     // A record needs at least its own header, so anything shorter is what is
     // left over rather than a record that failed to read.
@@ -280,18 +290,17 @@ pub fn decode_frame(
         match read_record(&mut bits, kind, min_tick, running) {
             Some(record) => {
                 ticker_id = id;
-                seconds = at;
-                records.push(record);
+                // Kept with the record it came from. Held once for the frame,
+                // the last record's second overwrote every earlier one, and a
+                // frame carrying a second's worth of prints stamped them all
+                // at the moment the last of them happened.
+                records.push(TbtStamped { seconds: at, record });
             }
             None => break,
         }
     }
 
-    Some(TbtFrame {
-        ticker_id,
-        timestamp: seconds,
-        records,
-    })
+    Some(TbtFrame { ticker_id, records })
 }
 
 /// Which subscription a frame's records belong to, as the frame states it.
@@ -403,7 +412,7 @@ fn read_record(
 mod tests {
     use super::*;
 
-    /// Write the venue's own encodings, so a test frame is built the way a
+    /// Write the wire encodings, so a test frame is built the way a
     /// frame is built rather than by hand.
     ///
     /// These agreed with the decoder while both were wrong about which bit ends
@@ -497,12 +506,15 @@ mod tests {
             .expect("the frame decodes");
 
         // Seconds, as the wire states them and as the reference client's
-        // `tickByTickAllLast` hands them on. Scaling this to milliseconds put
-        // every print in the year 58553 once a caller read it as a moment.
-        assert_eq!(frame.timestamp, 1_786_340_548, "the second it happened");
-        assert_eq!(frame.records.len(), 5, "five records share the frame");
+        // `tickByTickAllLast` hands them on. Scaling to milliseconds places
+        // every print in the year 58553 when read as a moment.
+        assert_eq!(frame.records.len(), 5, "five records in the frame");
+        // Each record carries its own second rather than the frame's last.
+        for (at, stamped) in frame.records.iter().enumerate() {
+            assert_eq!(stamped.seconds, 1_786_340_548, "record {at}");
+        }
 
-        match &frame.records[0] {
+        match &frame.records[0].record {
             TbtRecord::Quote(q) => {
                 assert!((q.bid - 1.15510).abs() < 1e-9, "the bid was {}", q.bid);
                 assert!((q.ask - 1.15515).abs() < 1e-9, "the ask was {}", q.ask);
@@ -515,7 +527,7 @@ mod tests {
         // The first record states the whole price as a move from nothing; the
         // rest move from it, and a record that does not move the price is a
         // size change.
-        match &frame.records[1] {
+        match &frame.records[1].record {
             TbtRecord::Quote(q) => {
                 assert!((q.bid - 1.15510).abs() < 1e-9, "unmoved, the bid stands");
                 assert_eq!(q.bid_size, 32_750_000, "and the size changed");
@@ -524,7 +536,7 @@ mod tests {
         }
 
         // The ask moves one increment on the fourth record.
-        match &frame.records[3] {
+        match &frame.records[3].record {
             TbtRecord::Quote(q) => {
                 assert!((q.ask - 1.15520).abs() < 1e-9, "the ask was {}", q.ask);
             }
@@ -558,10 +570,31 @@ mod tests {
 
     /// One quote record, headed by its subscription and its moment.
     fn quote(bid_move: i64, ask_move: i64, bid_size: u64, ask_size: u64) -> Vec<u8> {
+        quote_at(1_786_340_548, bid_move, ask_move, bid_size, ask_size)
+    }
+
+    /// The same, at a moment the caller names.
+    fn quote_at(at: u64, bid_move: i64, ask_move: i64, bid_size: u64, ask_size: u64) -> Vec<u8> {
         let mut w = Writer::default();
-        w.unsigned(1).unsigned(1_786_340_548);
+        w.unsigned(1).unsigned(at);
         w.signed(bid_move).signed(ask_move).unsigned(0).unsigned(bid_size).unsigned(ask_size);
         w.out
+    }
+
+    /// A frame can carry records from more than one second, and each states
+    /// its own. Held once for the frame, the last record's second was put on
+    /// every earlier one and the prints before it moved forward in time.
+    #[test]
+    fn each_record_keeps_the_second_it_states() {
+        let body = frame(&[
+            quote_at(1_786_340_548, 23_102, 23_103, 1, 1),
+            quote_at(1_786_340_549, 1, 1, 1, 1),
+            quote_at(1_786_340_551, 1, 1, 1, 1),
+        ]);
+        let mut running = RunningPrice::default();
+        let f = decode_frame(&body, TbtKind::BidAsk, 0.00005, &mut running).expect("a frame");
+        let seconds: Vec<u64> = f.records.iter().map(|r| r.seconds).collect();
+        assert_eq!(seconds, vec![1_786_340_548, 1_786_340_549, 1_786_340_551]);
     }
 
     /// The first record states the whole price as a move from nothing, and
@@ -576,7 +609,7 @@ mod tests {
         let bids: Vec<f64> = f
             .records
             .iter()
-            .map(|r| match r {
+            .map(|r| match &r.record {
                 TbtRecord::Quote(q) => q.bid,
                 other => panic!("expected a quote, got {other:?}"),
             })
@@ -619,7 +652,7 @@ mod tests {
         // And the next good frame is measured from where the price really was.
         let f = decode_frame(&frame(&[quote(1, 1, 1, 1)]), TbtKind::BidAsk, 0.00005, &mut running)
             .expect("a frame");
-        match &f.records[0] {
+        match &f.records[0].record {
             TbtRecord::Quote(q) => assert!((q.bid - 1.15515).abs() < 1e-9, "{}", q.bid),
             other => panic!("expected a quote, got {other:?}"),
         }
@@ -633,7 +666,7 @@ mod tests {
             .expect("a frame");
         let f = decode_frame(&frame(&[quote(1, 1, 1, 1)]), TbtKind::BidAsk, 0.00005, &mut running)
             .expect("a frame");
-        match &f.records[0] {
+        match &f.records[0].record {
             TbtRecord::Quote(q) => assert!((q.bid - 1.15515).abs() < 1e-9, "{}", q.bid),
             other => panic!("expected a quote, got {other:?}"),
         }

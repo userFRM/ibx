@@ -621,8 +621,10 @@ class TestAccount:
             time.sleep(1)
 
         end_events = wrapper._get_events("position_end")
-        # position_end should fire (even with 0 positions)
-        assert len(end_events) > 0 or True  # non-fatal
+        # position_end fires whether or not the account holds anything, and is
+        # the only thing that says the replay is over. A caller waiting on it
+        # blocks indefinitely if it never arrives.
+        assert end_events, "the end of the position replay was never announced"
 
     def test_pnl_subscription(self, ib_connection):
         wrapper, client = ib_connection

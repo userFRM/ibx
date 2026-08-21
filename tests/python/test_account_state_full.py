@@ -152,8 +152,16 @@ class TestAccountDeep:
             print(f"    {p['symbol']} ({p['sec_type']}): qty={p['position']} "
                   f"avg_cost={p['avg_cost']:.2f} conId={p['con_id']}")
 
-    def test_account_values_90_tags(self):
-        """ReqAccountUpdates returns 90+ account value tags."""
+    def test_account_values_carry_the_tags_the_wire_states(self):
+        """The account figures the venue states, and the ones a caller needs.
+
+        Named after ninety tags and asserting fifteen, this read as a check on
+        a surface it does not cover: what arrives here is what the account
+        stream carries, and the rest of the published table is assembled by the
+        counterpart from messages this client does not yet read. Named after
+        what it checks instead, and the critical tags below are what it is
+        actually protecting.
+        """
         self.client.req_account_updates(True, "")
         assert self.wrapper.got_account_download_end.wait(timeout=30), \
             "account_download_end not received"
@@ -161,8 +169,6 @@ class TestAccountDeep:
 
         tag_count = len(self.wrapper.account_values)
         print(f"  Account tags: {tag_count}")
-        # CCP direct wire provides 18 tags from AccountState struct.
-        # Full 90+ tags require Gateway-internal UT/UM/RL parsing (wire capture).
         assert tag_count >= 15, f"Expected 15+ tags, got {tag_count}"
 
         # Verify critical tags
@@ -230,12 +236,19 @@ class TestAccountDeep:
             self.client.req_pnl_single(req_id, acct, "", pos["con_id"])
 
         time.sleep(10)
+        answered = []
         for req_id, pos in req_ids:
             self.client.cancel_pnl_single(req_id)
             data = self.wrapper.pnl_single.get(req_id)
             if data:
+                answered.append(req_id)
                 print(f"    {pos['symbol']}: pos={data['pos']} daily={data['daily_pnl']:.2f} "
                       f"unrealized={data['unrealized_pnl']:.2f} value={data['value']:.2f}")
+        # Printed and never checked, so a per-position P&L path that delivers
+        # nothing at all passed the test named after it.
+        assert answered, (
+            f"none of the {len(req_ids)} per-position P&L requests was answered"
+        )
 
     def test_histogram_data(self):
         """ReqHistogramData for SPY (1 week)."""

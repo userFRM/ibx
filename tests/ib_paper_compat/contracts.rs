@@ -16,7 +16,7 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
     );
 
     // Step 2: Send ControlCommand through the channel
-    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 1200, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 1200, filters: Default::default() }).unwrap();
     // The same contract asked for by name. A definition asked for by id and one
     // asked for by name are answered from the same record, so any field that
     // arrives for one and not the other is this client's reading of the reply
@@ -217,13 +217,20 @@ pub(super) fn phase_matching_symbols(conns: Conns) -> Conns {
     let m = matches.expect("No matching symbols response received for 'SPY'");
     assert!(!m.is_empty(), "Should have at least one match for 'SPY'");
     println!("  {} matches found", m.len());
-    let spy = m.iter().find(|s| s.symbol == "SPY" && s.sec_type == contracts::SecurityType::Stock && s.currency == "USD");
-    if let Some(spy) = spy {
-        assert_eq!(spy.con_id, 756733);
-        println!("  SPY: conId={} exchange={} desc={}", spy.con_id, spy.primary_exchange, spy.description);
-    } else {
-        println!("  WARNING: SPY STK not found in matches");
-    }
+    // Asking the venue for SPY and being handed a list without SPY in it is the
+    // reply having been read wrong, not a quiet day. This warned and passed, so
+    // a parser that dropped the symbol, the security type or the currency from
+    // every row still reported that matching symbols worked.
+    let spy = m.iter()
+        .find(|s| s.symbol == "SPY" && s.sec_type == contracts::SecurityType::Stock && s.currency == "USD")
+        .unwrap_or_else(|| panic!(
+            "the venue matched {} symbols for \"SPY\" and the US-dollar SPY stock was not \
+             among them: {:?}",
+            m.len(),
+            m.iter().map(|s| (&s.symbol, &s.sec_type, &s.currency)).collect::<Vec<_>>(),
+        ));
+    assert_eq!(spy.con_id, 756733);
+    println!("  SPY: conId={} exchange={} desc={}", spy.con_id, spy.primary_exchange, spy.description);
     println!("  PASS\n");
     conns
 }
@@ -239,7 +246,7 @@ pub(super) fn phase_market_rule_id(conns: Conns) -> Conns {
         conns.farm, conns.ccp, conns.hmds, None,
     );
 
-    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 8400, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 8400, filters: Default::default() }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let mut contract: Option<contracts::ContractDefinition> = None;
@@ -320,7 +327,7 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
         shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
-    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 1001, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 1001, filters: Default::default() }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     // A request in flight when the transport drops is answered by nobody. The
@@ -348,7 +355,7 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
             Ok(Event::Disconnected) if !reasked => {
                 reasked = true;
                 std::thread::sleep(Duration::from_secs(3));
-                let _ = control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 1001, filters: Default::default() });
+                let _ = control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 1001, filters: Default::default() });
             }
             _ => {}
         }
@@ -374,11 +381,13 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
         return conns;
     }
     assert!(got_details, "Event::ContractDetails not received for SPY");
-    if got_end {
-        println!("  ContractDetailsEnd received");
-    } else {
-        println!("  ContractDetailsEnd not received (single-conId request — non-fatal)");
-    }
+    // Every contract lookup ends with this callback, including one naming a
+    // single contract id: the phase in `main.rs` that asks by contract id
+    // requires it, on this same venue. Called non-fatal here, a parser that
+    // dropped only the completion passed, and a caller waiting for the end of
+    // the lookup would wait for ever.
+    assert!(got_end, "ContractDetailsEnd never fired for the SPY lookup");
+    println!("  ContractDetailsEnd received");
     println!("  PASS\n");
     conns
 }

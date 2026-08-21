@@ -202,9 +202,8 @@ class TestLiveE2E:
 
         The groups are the seven the reference client offers, kept by the
         client itself: a caller that puts a contract in a group and another
-        that follows it are kept in step here, where the counterpart kept them
-        in step between windows. Answering with none of them tells a caller
-        that followed one that there is nothing to follow.
+        that follows it are kept in step. Answering with none of them tells a
+        caller that followed one that there is nothing to follow.
         """
         assert self.wrapper.got_next_id.wait(timeout=10)
 

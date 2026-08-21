@@ -5,8 +5,9 @@
 //! file belongs to.
 
 use super::*;
+use crate::types::model as api;
 use crate::bridge::RichOrderInfo;
-use crate::types::{PositionInfo, Price, Side, PRICE_SCALE};
+use crate::types::{PositionInfo, Price, Side, PRICE_SCALE, QTY_SCALE};
 
 /// `Uncertain` promises the caller a reconciliation when the reconnect
 /// completes. Nothing completed it, so an order the recovery push left out
@@ -18,7 +19,7 @@ fn the_recovery_reports_the_orders_it_did_not_account_for() {
     let shared = SharedState::new();
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        7, instrument, crate::types::Side::Buy, 100,
+        7, instrument, crate::types::Side::Buy, 100 * crate::types::QTY_SCALE,
         150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
     ));
     context.mark_orders_uncertain();
@@ -222,7 +223,7 @@ fn what_if_test_state() -> (CcpState, Context, SharedState) {
         instrument,
         side: Side::Buy,
         price: 0,
-        qty: 100,
+        qty: 100 * QTY_SCALE,
         filled: 0,
         status: crate::types::OrderStatus::Submitted,
         ord_type: b'2',
@@ -302,7 +303,7 @@ fn leaves_qty_is_still_reported_as_the_remainder() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].remaining, 70, "the fill reports what is still working");
+    assert_eq!(fills[0].remaining, 70 * QTY_SCALE, "the fill reports what is still working");
 }
 
 /// `filled_quantity` was taken from tag 151 (LeavesQty), the *unfilled*
@@ -316,7 +317,7 @@ fn filled_quantity_is_the_filled_amount_not_the_remainder() {
     let shared = SharedState::new();
     let instrument = context.market.register(265598);
     context.insert_order(crate::types::Order {
-        order_id: 77, instrument, side: Side::Buy, price: 0, qty: 100,
+        order_id: 77, instrument, side: Side::Buy, price: 0, qty: 100 * QTY_SCALE,
         filled: 0, status: crate::types::OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -342,7 +343,7 @@ fn filled_quantity_is_the_filled_amount_not_the_remainder() {
     let shared = SharedState::new();
     let instrument = context.market.register(265598);
     context.insert_order(crate::types::Order {
-        order_id: 78, instrument, side: Side::Buy, price: 0, qty: 100,
+        order_id: 78, instrument, side: Side::Buy, price: 0, qty: 100 * QTY_SCALE,
         filled: 0, status: crate::types::OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -860,7 +861,7 @@ fn ord_status_test_state() -> (CcpState, Context, SharedState) {
     let mut context = Context::new();
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 1, 100 * PRICE_SCALE, b'2', b'0', 0,
+        42, instrument, Side::Buy, crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     )); // starts at PendingSubmit
     (CcpState::new(), context, SharedState::new())
 }
@@ -921,7 +922,7 @@ fn tracked_order_state() -> (CcpState, Context, SharedState) {
     let mut context = Context::new();
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 100, 100 * PRICE_SCALE, b'2', b'0', 0,
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     ));
     (CcpState::new(), context, SharedState::new())
 }
@@ -936,7 +937,7 @@ fn tracked_order_state() -> (CcpState, Context, SharedState) {
 fn a_resent_execution_does_not_book_a_fill() {
     for marker in [(97u32, "Y"), (43u32, "Y")] {
         let (mut ccp, mut context, shared) = tracked_order_state();
-        context.update_order_filled(42, 10); // already counted
+        context.adjust_order_filled(42, 10 * crate::types::QTY_SCALE); // already counted
         let frame = fill_frame(&[marker]);
         ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
@@ -980,7 +981,7 @@ fn a_fresh_process_does_not_book_the_history_it_is_replayed() {
     let _ = shared.orders.drain_fills();
 
     assert_eq!(
-        context.order(78).expect("recovered").filled, 10,
+        context.order(78).expect("recovered").filled, 10 * QTY_SCALE,
         "the record's own cumulative quantity is the baseline",
     );
 
@@ -999,7 +1000,7 @@ fn a_fresh_process_does_not_book_the_history_it_is_replayed() {
         shared.orders.drain_fills().is_empty(),
         "the replayed execution states nothing the record did not already carry",
     );
-    assert_eq!(context.order(78).expect("tracked").filled, 10, "and nothing is double-counted");
+    assert_eq!(context.order(78).expect("tracked").filled, 10 * QTY_SCALE, "and nothing is double-counted");
 }
 
 /// The case a blanket suppression of marked reports loses. A CCP reconnect
@@ -1013,7 +1014,7 @@ fn a_resent_execution_carrying_new_quantity_is_still_booked() {
     let (mut ccp, mut context, shared) = tracked_order_state();
 
     // Five already booked before the outage.
-    context.update_order_filled(42, 5);
+    context.adjust_order_filled(42, 5 * crate::types::QTY_SCALE);
 
     // The replay carries eight cumulative — three of which are news.
     let frame = fill_frame(&[(97, "Y"), (14, "8"), (32, "3"), (151, "92")]);
@@ -1088,7 +1089,7 @@ fn an_execution_without_an_exec_id_is_still_deduplicated() {
 #[test]
 fn a_replay_of_booked_history_adds_nothing_to_the_order() {
     let (mut ccp, mut context, shared) = tracked_order_state();
-    context.update_order_filled(42, 12); // both executions already booked
+    context.adjust_order_filled(42, 12 * crate::types::QTY_SCALE); // both executions already booked
 
     let mut later = fill_frame(&[(97, "Y"), (14, "12"), (32, "4"), (151, "88")]);
     later.remove(&17);
@@ -1098,7 +1099,7 @@ fn a_replay_of_booked_history_adds_nothing_to_the_order() {
     ccp.handle_exec_report(&earlier, b"", &mut context, &shared, &None, "");
 
     assert!(shared.orders.drain_fills().is_empty(), "history restated is not new quantity");
-    assert_eq!(context.order(42).unwrap().filled, 12, "and the order is not overcounted");
+    assert_eq!(context.order(42).unwrap().filled, 12 * QTY_SCALE, "and the order is not overcounted");
     assert_eq!(context.position(0), 0.0);
 
     // A fill from the same replay that this session has not booked is news
@@ -1117,12 +1118,12 @@ fn a_replay_of_booked_history_adds_nothing_to_the_order() {
 #[test]
 fn a_marked_execution_is_remembered_for_its_unmarked_twin() {
     let (mut ccp, mut context, shared) = tracked_order_state();
-    context.update_order_filled(42, 5);
+    context.adjust_order_filled(42, 5 * crate::types::QTY_SCALE);
 
     let marked = fill_frame(&[(97, "Y"), (17, "E-9"), (14, "9"), (32, "4"), (151, "91")]);
     ccp.handle_exec_report(&marked, b"", &mut context, &shared, &None, "");
     assert_eq!(shared.orders.drain_fills().len(), 1, "the marked copy books what is new");
-    assert_eq!(context.order(42).unwrap().filled, 9);
+    assert_eq!(context.order(42).unwrap().filled, 9 * QTY_SCALE);
 
     // The same execution again, this time without its marker.
     let unmarked = fill_frame(&[(17, "E-9"), (14, "9"), (32, "4"), (151, "91")]);
@@ -1132,7 +1133,7 @@ fn a_marked_execution_is_remembered_for_its_unmarked_twin() {
         shared.orders.drain_fills().is_empty(),
         "the window catches the copy the cumulative figure cannot judge",
     );
-    assert_eq!(context.order(42).unwrap().filled, 9, "and nothing is double-booked");
+    assert_eq!(context.order(42).unwrap().filled, 9 * QTY_SCALE, "and nothing is double-booked");
 }
 
 /// The ExecID window evicts oldest-first, so a replay batch deeper than
@@ -1147,7 +1148,7 @@ fn a_marked_execution_is_remembered_for_its_unmarked_twin() {
 #[test]
 fn a_replay_deeper_than_the_exec_id_window_does_not_double_count() {
     let (mut ccp, mut context, shared) = tracked_order_state();
-    context.update_order_filled(42, 12);
+    context.adjust_order_filled(42, 12 * crate::types::QTY_SCALE);
 
     // The window has rolled past this execution, so its ID is unseen here —
     // which is the whole point: the dedup window cannot be what saves this.
@@ -1159,7 +1160,7 @@ fn a_replay_deeper_than_the_exec_id_window_does_not_double_count() {
         shared.orders.drain_fills().is_empty(),
         "a replay the window has forgotten still adds no quantity the order holds",
     );
-    assert_eq!(context.order(42).unwrap().filled, 12);
+    assert_eq!(context.order(42).unwrap().filled, 12 * QTY_SCALE);
     assert_eq!(context.position(0), 0.0);
 }
 
@@ -1168,14 +1169,14 @@ fn a_replay_deeper_than_the_exec_id_window_does_not_double_count() {
 #[test]
 fn a_marked_execution_delivered_twice_books_once() {
     let (mut ccp, mut context, shared) = tracked_order_state();
-    context.update_order_filled(42, 5);
+    context.adjust_order_filled(42, 5 * crate::types::QTY_SCALE);
 
     let frame = fill_frame(&[(97, "Y"), (14, "12"), (32, "4"), (151, "88")]);
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
     assert_eq!(shared.orders.drain_fills().len(), 1, "the second copy adds nothing");
-    assert_eq!(context.order(42).unwrap().filled, 12);
+    assert_eq!(context.order(42).unwrap().filled, 12 * QTY_SCALE);
     assert_eq!(context.position(0), 7.0);
 }
 
@@ -1215,7 +1216,7 @@ fn a_key_is_not_spent_before_the_order_exists() {
 
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 100, 100 * PRICE_SCALE, b'2', b'0', 0,
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     ));
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
@@ -1230,10 +1231,11 @@ fn a_key_is_not_spent_before_the_order_exists() {
 fn a_matching_symbols_request_that_was_not_sent_is_not_recorded() {
     let mut ccp = CcpState::new();
     let mut hb = HeartbeatState::new();
+    let shared = SharedState::new();
 
     // No transport at all.
     let mut no_conn: Option<Connection> = None;
-    ccp.send_matching_symbols_request(7, "AAPL", &mut no_conn, &mut hb);
+    ccp.send_matching_symbols_request(7, "AAPL", &mut no_conn, &mut hb, &shared);
     assert!(
         ccp.pending_matching_symbols.is_empty(),
         "nothing was sent, so nothing is awaiting a reply",
@@ -1244,9 +1246,53 @@ fn a_matching_symbols_request_that_was_not_sent_is_not_recorded() {
     let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (_peer, _) = listener.accept().unwrap();
     let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
-    ccp.send_matching_symbols_request(8, "AAPL", &mut conn, &mut hb);
+    ccp.send_matching_symbols_request(8, "AAPL", &mut conn, &mut hb, &shared);
     assert_eq!(ccp.pending_matching_symbols.len(), 1, "a sent request is awaited");
     assert_eq!(ccp.pending_matching_symbols[0].0, 8);
+}
+
+/// An advisor's configuration request names its partition on tag 6906.
+///
+/// Tag 6158 carries the request's own number. The number is stated first and
+/// the partition second, which is the order asserted here.
+#[test]
+fn an_advisor_request_names_the_partition_on_the_tag_that_carries_it() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+    let sent = |peer: &mut std::net::TcpStream, buf: &mut [u8]| -> Vec<(String, String)> {
+        let n = peer.read(buf).unwrap();
+        String::from_utf8_lossy(&buf[..n])
+            .split('\u{1}')
+            .filter_map(|f| f.split_once('=').map(|(t, v)| (t.to_string(), v.to_string())))
+            .skip_while(|(t, _)| t != "6040")
+            .take_while(|(t, _)| t != "10")
+            .collect()
+    };
+
+    // Asking for one partition: the whole of it, under command five.
+    ccp.send_advisor_config(5, "Profile", None, &mut conn, &mut hb);
+    let fields = sent(&mut peer, &mut buf);
+    let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(names, ["6040", "6905", "6158", "6906"], "{fields:?}");
+    assert_eq!(fields[0].1, "116");
+    assert_eq!(fields[1].1, "5");
+    assert_eq!(fields[2].1, "1", "the first request of the session states itself as one");
+    assert_eq!(fields[3].1, "Profile", "the partition, on the tag that carries it");
+
+    // Replacing one carries the document beside it, and the next number.
+    ccp.send_advisor_config(3, "Group", Some("<xml/>"), &mut conn, &mut hb);
+    let fields = sent(&mut peer, &mut buf);
+    let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(names, ["6040", "6905", "6158", "6906", "6118"], "{fields:?}");
+    assert_eq!(fields[2].1, "2", "each request states a number of its own");
+    assert_eq!(fields[3].1, "Group");
+    assert_eq!(fields[4].1, "<xml/>");
 }
 
 /// The venue reads a chain request positionally, so the tags have to be
@@ -1299,6 +1345,14 @@ fn a_chain_request_states_its_tags_in_order() {
     let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(names, ["6040", "55", "310", "6457", "6320", "6994"], "a futures chain on an index: {fields:?}");
     assert_eq!(fields[2].1, "IND");
+
+    // A caller who states no type claims nothing. Standing STK in asked for a
+    // stock's chain on whatever that symbol is, which for an index or a future
+    // is a different contract or none.
+    ccp.send_option_params_request(10, "SPX", "", "", 416904, &mut conn, &mut hb, &shared);
+    let fields = sent(&mut peer, &mut buf);
+    let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(names, ["6040", "55", "6346", "6320", "6994"], "an unstated type: {fields:?}");
 }
 
 /// A caller is waiting for the end of a request that never reached the
@@ -1384,10 +1438,11 @@ fn an_unanswered_chain_request_is_given_up_on() {
 #[test]
 fn an_unanswered_matching_symbols_request_is_given_up_on() {
     let mut ccp = CcpState::new();
+    let shared = SharedState::new();
     ccp.pending_matching_symbols.push((7, Instant::now() - Duration::from_secs(1)));
     ccp.pending_matching_symbols.push((8, Instant::now() + MATCHING_SYMBOLS_TIMEOUT));
 
-    ccp.sweep_pending_matching_symbols();
+    ccp.sweep_pending_matching_symbols(&shared);
 
     assert_eq!(ccp.pending_matching_symbols.len(), 1, "the expired one is dropped");
     assert_eq!(ccp.pending_matching_symbols[0].0, 8, "and the live one is kept");
@@ -1487,20 +1542,38 @@ fn a_refused_revision_is_not_an_acknowledgement() {
     );
 }
 
-/// A busted trade arrives as an execution like any other. Adding its
-/// quantity booked a fill the account no longer has.
+/// A busted trade arrives as an execution like any other. Its quantity
+/// reconciles against the order's cumulative figure rather than adding to it,
+/// and the reconciliation may be negative.
 #[test]
 fn a_busted_execution_reconciles_rather_than_adds() {
     let (mut ccp, mut context, shared) = ord_status_test_state();
-    let frame = exec_report_frame(&[
+    // The order has already filled fifty, and the position holds them.
+    let booked = exec_report_frame(&[
         (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
-        (20, "1"), (32, "50"), (31, "412.25"), (14, "0"), (38, "100"),
+        (17, "exec-1"), (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
     ]);
-    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+    ccp.handle_exec_report(&booked, b"", &mut context, &shared, &None, "");
+    assert_eq!(context.order(42).unwrap().filled, 50 * QTY_SCALE, "the trade is booked");
+    assert_eq!(context.position(0), 50.0);
+    let _ = shared.orders.drain_fills();
+
+    // The venue busts it: the cumulative quantity goes back to nothing.
+    let bust = exec_report_frame(&[
+        (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
+        (17, "exec-2"), (20, "1"), (32, "50"), (31, "412.25"), (14, "0"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&bust, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        context.order(42).unwrap().filled, 0,
+        "the order no longer holds a trade the venue undid",
+    );
+    assert_eq!(context.position(0), 0.0, "and neither does the position");
     let fills = shared.orders.drain_fills();
     assert!(
-        fills.iter().all(|f| f.qty == 0),
-        "a bust does not add to what is filled: {fills:?}",
+        fills.iter().any(|f| f.qty == -50 * QTY_SCALE),
+        "the caller is told what was taken back: {fills:?}",
     );
 }
 
@@ -1517,7 +1590,7 @@ fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
     ]);
     ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
     let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
-    assert_eq!(booked, 50, "the original execution books what it states");
+    assert_eq!(booked, 50 * QTY_SCALE, "the original execution books what it states");
 
     let corrected = exec_report_frame(&[
         (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
@@ -1525,7 +1598,7 @@ fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
     ]);
     ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
     let after: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
-    assert_eq!(after, 10, "the correction books the difference, not the whole trade again");
+    assert_eq!(after, 10 * QTY_SCALE, "the correction books the difference, not the whole trade again");
 }
 
 /// A live order was retired by this: `D` is not in the terminal's terminal
@@ -1555,7 +1628,7 @@ fn an_unknown_status_still_books_its_fill() {
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1, "the fill survives a status this does not know");
-    assert_eq!(fills[0].qty, 50);
+    assert_eq!(fills[0].qty, 50 * QTY_SCALE);
 }
 
 /// Absent is not zero. Without 151 the caller was told nothing was left on an
@@ -1570,6 +1643,50 @@ fn a_missing_leaves_qty_falls_back_to_what_is_unfilled() {
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
     let updates = shared.orders.drain_order_updates();
     assert_eq!(updates[0].remaining_qty, 70.0, "100 ordered less 30 filled, not 0");
+}
+
+/// A report is written down in full before any of it is announced.
+///
+/// A caller acts on a notification the moment it arrives — withdrawing the
+/// order it names, reading the fill, listing what has finished — and each of
+/// those asks this session for a record. Announcing first meant answering those
+/// questions about a report still being applied: the caller was told, asked,
+/// and was told no such thing had happened.
+#[test]
+fn a_finished_order_is_written_down_before_it_is_announced() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let sink = Some(crate::engine::hot_loop::EventSink::new(
+        tx,
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+    ));
+    let frame = exec_report_frame(&[
+        (39, "2"), (150, "2"), (100, "ARCA"), (198, "ARCA:1"),
+        (38, "100"), (14, "100"), (32, "100"), (31, "412.25"), (6, "412.25"),
+        (151, "0"), (6008, "265598"),
+    ]);
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &sink, "");
+
+    // Everything the report changed is readable.
+    assert_eq!(shared.orders.drain_fills().len(), 1, "the fill is recorded");
+    assert_eq!(
+        shared.orders.drain_completed_orders().len(),
+        1,
+        "and so is the order having finished",
+    );
+    assert_eq!(shared.orders.drain_order_updates().len(), 1, "and the status it finished in");
+
+    // And the fill was announced before the status that followed from it.
+    let announced: Vec<_> = rx.try_iter().collect();
+    let kinds: Vec<&str> = announced
+        .iter()
+        .map(|e| match e {
+            crate::engine::hot_loop::Event::Fill(_) => "fill",
+            crate::engine::hot_loop::Event::OrderUpdate(_) => "status",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, ["fill", "status"], "what traded, then where the order stands");
 }
 
 /// The order id hash on tag 37 is a separate concern and must keep working.
@@ -1645,7 +1762,7 @@ fn an_unknown_time_in_force_falls_back_to_the_one_that_was_submitted() {
     // A tracked order submitted GTC, so a wrong answer is visibly wrong.
     let tracked = |ccp: &mut CcpState, context: &mut Context, shared: &SharedState, tif59: Option<&str>| {
         context.insert_order(crate::types::Order::new(
-            42, 0, Side::Buy, 1, 100 * PRICE_SCALE, b'2', b'1', 0,
+            42, 0, Side::Buy, crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'1', 0,
         ));
         let mut pairs = vec![(39u32, "0"), (150u32, "0"), (100u32, "ARCA"), (198u32, "ARCA:1")];
         if let Some(v) = tif59 {
@@ -1746,9 +1863,9 @@ fn cancel_reject_frame(reason_code: &str) -> std::collections::HashMap<u32, Stri
 fn tracked_for_cancel(context: &mut Context) {
     let instrument = context.register_instrument(756733);
     context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 100, 100 * PRICE_SCALE, b'2', b'0', 0,
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
     ));
-    context.update_order_status(42, crate::types::OrderStatus::PendingCancel);
+    context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false);
 }
 
 /// A cancel answered with UnknownOrder says the order does not exist on
@@ -2078,7 +2195,8 @@ fn sweep_times_out_incomplete_fanout() {
     ccp.pending_fanout.push(PendingFanout {
         api_req_id: 9,
         fanout_req_ids: (0..27).map(|i| format!("ibxfan-9-{i}")).collect(),
-        received: 26, // one reply lost — previously hung forever
+        // one leg never answered — previously hung forever
+        answered: (0..26).map(|i| format!("ibxfan-9-{i}")).collect(),
         deadline: Instant::now() - std::time::Duration::from_secs(1),
     });
 
@@ -2120,6 +2238,7 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
             what_to_show: "TRADES".into(),
         use_rth: true,
         keep_up_to_date: false,
+        include_expired: false,
         filters: Default::default(),
     };
 
@@ -2142,7 +2261,7 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
     }
 
     // And one the venue never names is reported rather than left waiting.
-    let unnamed = crate::types::ControlCommand::FetchHistorical { contract: crate::types::ContractRef { con_id: 0, symbol: "NOSUCH".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(), ..Default::default() }, end_date_time: String::new(), req_id: 8, duration: "1 D".into(), bar_size: "1 hour".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, filters: Default::default() };
+    let unnamed = crate::types::ControlCommand::FetchHistorical { contract: crate::types::ContractRef { con_id: 0, symbol: "NOSUCH".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(), ..Default::default() }, end_date_time: String::new(), req_id: 8, duration: "1 D".into(), bar_size: "1 hour".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() };
     ccp.hold_until_named(unnamed, &mut None, &mut HeartbeatState::new());
     ccp.pending_named[0].2 -= CcpState::NAMING_TIMEOUT + Duration::from_secs(1);
     ccp.sweep_pending_named(&shared);
@@ -2287,7 +2406,7 @@ fn a_fanout_reply_without_a_con_id_is_not_a_row() {
     ccp.pending_fanout.push(PendingFanout {
         api_req_id: 9,
         fanout_req_ids: vec!["ibxfan-9-0".to_string()],
-        received: 0,
+        answered: Vec::new(),
         deadline: Instant::now() + SECDEF_TIMEOUT,
     });
 
@@ -2358,7 +2477,7 @@ fn the_engine_answers_before_a_caller_gives_up() {
 #[test]
 fn a_lookup_the_venue_never_answers_is_ended_rather_than_left() {
     let (mut ccp, _context, shared) = u186_test_state();
-    // Asked for by the venue's own id for the contract, which is the shape
+    // Asked for by the venue's id for the contract, which is the shape
     // a caller uses when it names nothing else.
     ccp.pending_secdef.push((4242, true, Instant::now() - Duration::from_secs(1)));
 
@@ -2466,7 +2585,7 @@ fn sweep_spares_live_entries() {
     ccp.pending_fanout.push(PendingFanout {
         api_req_id: 9,
         fanout_req_ids: vec!["ibxfan-9-0".to_string()],
-        received: 0,
+        answered: Vec::new(),
         deadline: future,
     });
 
@@ -2517,7 +2636,7 @@ fn a_fill_for_an_untracked_order_is_still_booked() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1, "the fill must be reported");
-    assert_eq!(fills[0].qty, 5);
+    assert_eq!(fills[0].qty, 5 * QTY_SCALE);
     assert_eq!(fills[0].order_id, 99);
     assert_eq!(fills[0].side, Side::Buy);
     assert_eq!(
@@ -2620,6 +2739,36 @@ fn an_unbookable_fill_does_not_consume_its_exec_id() {
     );
 }
 
+/// A fractional order fills in fractions, and the venue states them as
+/// decimals. Read as an integer, `32=0.5` parsed to nothing: the fill was
+/// reported as zero shares and the position never moved, on a client that
+/// accepts fractional orders.
+#[test]
+fn a_fractional_print_books_the_fraction_it_states() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let before = context.position(0);
+    let frame = exec_report_frame(&[
+        (150, "F"), (17, "EXEC-FRAC"), (100, "ARCA"), (198, "ARCA:1"),
+        (32, "0.5"), (31, "101.00"), (14, "0.5"), (6, "101.00"), (151, "0.25"), (39, "1"),
+    ]);
+
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    let fills = shared.orders.drain_fills();
+    assert_eq!(fills.len(), 1, "the fill is reported");
+    assert_eq!(fills[0].qty, QTY_SCALE / 2, "half a share books as half a share");
+    assert_eq!(fills[0].cum_qty, QTY_SCALE / 2, "and the order total states the same");
+    assert_eq!(fills[0].remaining, QTY_SCALE / 4, "as does what is still working");
+    assert_eq!(
+        context.position(0) - before, 0.5,
+        "and the position moves by the fraction that filled",
+    );
+    assert_eq!(
+        context.order(42).unwrap().filled, QTY_SCALE / 2,
+        "and the order records the fraction as filled",
+    );
+}
+
 /// The cumulative pair has to come off the wire. Tag 14 is the order's
 /// filled total and tag 6 its volume-weighted average; 32 and 31 describe
 /// only the print that triggered the report.
@@ -2635,9 +2784,9 @@ fn the_fill_carries_the_orders_totals_not_the_prints() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].qty, 5, "qty stays the print");
+    assert_eq!(fills[0].qty, 5 * QTY_SCALE, "qty stays the print");
     assert_eq!(fills[0].price, 101 * PRICE_SCALE, "price stays the print");
-    assert_eq!(fills[0].cum_qty, 12, "cum_qty is the order total from tag 14");
+    assert_eq!(fills[0].cum_qty, 12 * QTY_SCALE, "cum_qty is the order total from tag 14");
     assert_eq!(
         fills[0].avg_price, 100 * PRICE_SCALE + PRICE_SCALE / 2,
         "avg_price is the volume-weighted average from tag 6",
@@ -2660,7 +2809,7 @@ fn a_missing_cumulative_quantity_does_not_walk_backwards() {
         &mut context, &shared, &None, "",
     );
     let first = shared.orders.drain_fills();
-    assert_eq!(first[0].cum_qty, 7);
+    assert_eq!(first[0].cum_qty, 7 * QTY_SCALE);
 
     // One more, with the cumulative fields absent.
     ccp.handle_exec_report(
@@ -2671,7 +2820,7 @@ fn a_missing_cumulative_quantity_does_not_walk_backwards() {
     );
     let second = shared.orders.drain_fills();
     assert_eq!(
-        second[0].cum_qty, 8,
+        second[0].cum_qty, 8 * QTY_SCALE,
         "the order's own total carries it, rather than dropping back to the print",
     );
 }
@@ -2700,7 +2849,7 @@ fn the_fill_falls_back_to_the_print_when_the_totals_are_absent() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].cum_qty, 5);
+    assert_eq!(fills[0].cum_qty, 5 * QTY_SCALE);
     assert_eq!(fills[0].avg_price, 101 * PRICE_SCALE);
 }
 
@@ -2782,7 +2931,7 @@ fn a_duplicate_exec_id_suppresses_the_fill_and_nothing_else() {
     // filled; the replay must not make it two.
     assert_eq!(position_after, 1.0, "the duplicate must not move the position again");
     assert_eq!(updates[0].filled_qty, 1.0, "nor inflate the filled quantity");
-    assert_eq!(completed[0].filled_qty, 1);
+    assert_eq!(completed[0].filled_qty, QTY_SCALE);
 
     // The event channel is a second delivery path for the same fill, and
     // every other test here passes None for it, so it is checked once.
@@ -2963,7 +3112,7 @@ fn secdef_no_match_on_internal_req_id_stays_silent() {
     assert!(ccp.pending_secdef.is_empty());
 }
 
-/// The venue's own answer, verbatim from a live session. Nothing read it,
+/// The venue's answer, verbatim from a live session. Nothing read it,
 /// so a caller could not know which algorithms the account may use.
 #[test]
 fn the_venue_states_which_algorithms_it_offers() {
@@ -3153,4 +3302,649 @@ mod stated_account_value_tests {
         assert_eq!(stated.len(), 1);
         assert_eq!(stated[0].1, "200");
     }
+}
+
+/// Every holding a position frame names is read, not only the last.
+///
+/// Captured from a session: one frame, five holdings. A flat parse keeps only
+/// the last value of each tag and reports a single holding of zero.
+#[test]
+fn a_position_frame_names_every_holding() {
+    use super::positions::split_position_entries;
+
+    let frame = concat!(
+        "35=UP\x016529=AR.1\x01",
+        "6068=IWM\x016288=0\x018001=PositionList\x016064=-80\x0115=USD\x016008=9579970\x01",
+        "6068=MES SEP2026\x016288=0\x018001=PositionList\x016064=1\x0115=USD\x016008=793356217\x01167=FUT\x01",
+        "6068=QQQ\x016288=0\x018001=PositionList\x016064=100\x0115=USD\x016008=320227571\x01",
+        "6068=SPY\x016288=0\x018001=PositionList\x016064=342\x0115=USD\x016008=756733\x01",
+        "6068=VOD\x016288=0\x018001=PositionList\x016064=0\x0115=GBP\x016008=140148322\x01",
+    );
+
+    let held = split_position_entries(frame.as_bytes());
+    assert_eq!(held.len(), 5, "five holdings were named, so five are read");
+
+    let by_con_id: Vec<(i64, f64)> = held
+        .iter()
+        .map(|h| (
+            h.get(&6008).unwrap().parse().unwrap(),
+            h.get(&6064).unwrap().parse().unwrap(),
+        ))
+        .collect();
+    assert_eq!(
+        by_con_id,
+        vec![(9579970, -80.0), (793356217, 1.0), (320227571, 100.0),
+             (756733, 342.0), (140148322, 0.0)],
+    );
+
+    // What the frame says about itself belongs to each holding in it.
+    for one in &held {
+        assert_eq!(one.get(&6529).map(String::as_str), Some("AR.1"));
+        assert_eq!(one.get(&35).map(String::as_str), Some("UP"));
+    }
+
+    // And the one that had just traded is present, which a flat parse lost.
+    assert!(by_con_id.iter().any(|(con_id, qty)| *con_id == 756733 && *qty == 342.0));
+
+    // A holding describes itself. Read flat, only the last holding's symbol
+    // and security type survived, so every other one — a future among them —
+    // reached a caller as an id and a quantity and nothing else, and looked
+    // like a contract the definition service had refused to name.
+    let future = held
+        .iter()
+        .find(|h| h.get(&6008).map(String::as_str) == Some("793356217"))
+        .expect("the future is one of the holdings");
+    assert_eq!(future.get(&6068).map(|s| s.trim_end()), Some("MES SEP2026"));
+    assert_eq!(future.get(&167).map(String::as_str), Some("FUT"));
+    assert_eq!(future.get(&15).map(String::as_str), Some("USD"));
+}
+
+/// A frame naming one holding still reads as one.
+#[test]
+fn a_single_holding_frame_is_unchanged() {
+    use super::positions::split_position_entries;
+
+    let frame = "35=UP\x016529=AR.1\x016068=SPY\x016064=342\x016008=756733\x01";
+    let held = split_position_entries(frame.as_bytes());
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].get(&6008).map(String::as_str), Some("756733"));
+    assert_eq!(held[0].get(&6064).map(String::as_str), Some("342"));
+}
+
+/// The conditions the venue states an order under are read back off it.
+///
+/// Captured from a session: the report for a resting order carrying one price
+/// condition. Nothing read these, so an order this session did not place came
+/// back stating none — and a program that read one back and placed it again
+/// sent an order that went live at once where the original waited for its
+/// price.
+#[test]
+fn an_order_states_the_conditions_it_waits_on() {
+    use super::executions::decode_conditions;
+    use crate::types::OrderCondition;
+
+    let report = concat!(
+        "35=8\x0111=1787087979010000.0\x016136=1\x01",
+        "6222=1\x016123=756733\x016169=Invalid\x016168=0\x016166=nan\x016220=0\x01",
+        "6124=BEST\x016126=<=\x016125=0.01\x018569=\x016223=\x016246=\x01",
+        "6947=\x016245=\x016263=\x016137=n\x016128=0\x016151=0\x01",
+    );
+
+    let waits_on = decode_conditions(report.as_bytes());
+    assert_eq!(waits_on.len(), 1, "the order states one condition");
+    match &waits_on[0] {
+        OrderCondition::Price { con_id, exchange, price, is_more, .. } => {
+            assert_eq!(*con_id, 756733);
+            assert_eq!(exchange, "BEST");
+            assert_eq!(*price, crate::types::PRICE_SCALE / 100, "one cent");
+            assert!(!*is_more, "`<=` is met below the price, not above it");
+        }
+        other => panic!("a price condition was stated, not {other:?}"),
+    }
+}
+
+/// Two conditions on one order are both read.
+///
+/// They arrive as a group per condition, and a flat parse keeps the last value
+/// of each tag — so an order waiting on two came back waiting on one.
+#[test]
+fn two_conditions_are_both_read() {
+    use super::executions::decode_conditions;
+
+    let report = concat!(
+        "35=8\x0111=1\x016136=2\x01",
+        "6222=1\x016123=756733\x016124=BEST\x016126=<=\x016125=0.01\x016137=a\x01",
+        "6222=1\x016123=9579970\x016124=SMART\x016126=>=\x016125=999.00\x016137=n\x01",
+    );
+
+    let waits_on = decode_conditions(report.as_bytes());
+    assert_eq!(waits_on.len(), 2, "both conditions are read, not only the last");
+}
+
+/// A report carrying no conditions states none, rather than one made up.
+#[test]
+fn an_unconditional_order_states_no_conditions() {
+    use super::executions::decode_conditions;
+
+    let report = "35=8\x0111=1\x0139=0\x0155=SPY\x01";
+    assert!(decode_conditions(report.as_bytes()).is_empty());
+}
+
+/// A condition whose direction the venue states in terms this cannot read is
+/// left out, the way every other unreadable field leaves its condition out.
+/// Read as "at most" it stated a trigger the venue never described, and an
+/// order read back and placed again waited for the opposite of what it had.
+#[test]
+fn a_condition_with_no_readable_direction_is_left_out() {
+    use super::executions::decode_conditions;
+
+    let report = concat!(
+        "35=8\x0111=1\x016136=2\x01",
+        "6222=1\x016123=756733\x016124=BEST\x016126=!!\x016125=0.01\x016137=a\x01",
+        "6222=1\x016123=9579970\x016124=SMART\x016126=>=\x016125=999.00\x016137=n\x01",
+    );
+
+    let waits_on = decode_conditions(report.as_bytes());
+    assert_eq!(waits_on.len(), 1, "only the condition that read is kept: {waits_on:?}");
+    match &waits_on[0] {
+        crate::types::OrderCondition::Price { con_id, is_more, .. } => {
+            assert_eq!(*con_id, 9579970);
+            assert!(*is_more, "the one that read is the `>=` one");
+        }
+        other => panic!("a price condition was stated, not {other:?}"),
+    }
+}
+
+/// An order restated by an ordinary report keeps the group it cancels
+/// together with. Read only on the recovery record, the first report about a
+/// recovered order replaced the cached row with one saying the order stood
+/// alone.
+#[test]
+fn a_restated_order_keeps_the_group_it_cancels_with() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let frame = exec_report_frame(&[
+        (39, "0"), (150, "0"), (55, "SPY"), (6008, "756733"), (583, "OCA_42"),
+    ]);
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+    let info = shared.orders.get_order_info(42).expect("the order was restated");
+    assert_eq!(info.order.oca_group, "OCA_42", "the group is on the report and was read");
+}
+
+/// The venue turning an order down and the venue saying something about one
+/// are different things, and a caller classifies on the code.
+#[test]
+fn a_refused_order_is_reported_under_the_rejection_code() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let frame = exec_report_frame(&[
+        (39, "8"), (150, "8"), (58, "No trading permissions"),
+    ]);
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+    let told = shared.orders.drain_order_inactive();
+    assert!(
+        told.iter().any(|(id, code, _)| *id == 42 && *code == 201),
+        "the refusal is reported as one: {told:?}",
+    );
+}
+
+/// A fan-out ends when every exchange it asked has answered. Counted per
+/// frame instead, a leg answered with more than one row completes the request
+/// twice over and drops the legs still outstanding.
+#[test]
+fn a_leg_that_answers_twice_does_not_end_the_fanout() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    ccp.pending_fanout.push(PendingFanout {
+        api_req_id: 9,
+        fanout_req_ids: vec!["ibxfan-9-0".to_string(), "ibxfan-9-1".to_string()],
+        answered: Vec::new(),
+        deadline: Instant::now() + SECDEF_TIMEOUT,
+    });
+
+    for _ in 0..2 {
+        ccp.process_ccp_message(&secdef_not_found("ibxfan-9-0"), &mut None, &mut context,
+            &shared, &None, &mut HeartbeatState::new(), "DU1");
+    }
+
+    assert!(
+        shared.reference.drain_contract_details_end().is_empty(),
+        "the second exchange has not answered, so the request has not ended",
+    );
+    assert_eq!(ccp.pending_fanout.len(), 1, "and it is still awaiting that leg");
+}
+
+/// A request the transport could not carry, and one the venue never answered,
+/// both leave a caller waiting on an end that nothing on the wire will send.
+#[test]
+fn a_matching_symbols_request_that_goes_nowhere_still_answers() {
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let shared = SharedState::new();
+
+    let mut no_conn: Option<Connection> = None;
+    ccp.send_matching_symbols_request(7, "AAPL", &mut no_conn, &mut hb, &shared);
+    assert_eq!(
+        shared.reference.drain_matching_symbols().len(), 1,
+        "a request that never went out is answered rather than dropped",
+    );
+
+    ccp.pending_matching_symbols.push((8, Instant::now() - Duration::from_secs(1)));
+    ccp.sweep_pending_matching_symbols(&shared);
+    let answered = shared.reference.drain_matching_symbols();
+    assert_eq!(answered.len(), 1, "and so is one the venue never answered");
+    assert_eq!(answered[0].0, 8);
+}
+
+/// A bulletin whose urgency names no type here is still a message the venue
+/// sent. Dropped in silence it left no callback, no log and nothing to say
+/// data had arrived and gone nowhere.
+#[test]
+fn a_bulletin_with_an_unnamed_urgency_is_recorded_as_unread() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let msg = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "B"),
+        (fix::TAG_URGENCY, "7"),
+        (fix::TAG_HEADLINE, "something the venue said"),
+    ], 1);
+
+    ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None,
+        &mut HeartbeatState::new(), "DU1");
+
+    assert!(
+        shared.market.unread_wire().iter().any(|(_, what)| what.contains("urgency 7")),
+        "the drop is recorded: {:?}", shared.market.unread_wire(),
+    );
+}
+
+/// A by-symbol lookup answers with the row that carries the trading hours.
+/// The master row waits for its schedule while the per-exchange legs answer
+/// for the same contract, and whichever reached the dedup gate first won —
+/// so a caller's hours were decided by which reply the venue sent faster.
+#[test]
+fn a_fanout_leg_does_not_displace_the_row_that_carries_the_hours() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let def = crate::control::contracts::ContractDefinition {
+        con_id: 265598,
+        symbol: "AAPL".to_string(),
+        ..Default::default()
+    };
+    ccp.pending_schedule_pair.push(PendingSchedulePair {
+        api_req_id: 9,
+        join_key: "AAPL".to_string(),
+        def,
+        is_last: true,
+        deadline: Instant::now() + Duration::from_secs(3),
+    });
+    ccp.pending_fanout.push(PendingFanout {
+        api_req_id: 9,
+        fanout_req_ids: vec!["ibxfan-9-0".to_string()],
+        answered: Vec::new(),
+        deadline: Instant::now() + SECDEF_TIMEOUT,
+    });
+
+    let leg = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "d"),
+        (crate::control::contracts::TAG_SECURITY_REQ_ID, "ibxfan-9-0"),
+        (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "2"),
+        (crate::control::contracts::TAG_IB_CON_ID, "265598"),
+        (55, "AAPL"),
+    ], 1);
+    ccp.process_ccp_message(&leg, &mut None, &mut context, &shared, &None,
+        &mut HeartbeatState::new(), "DU1");
+
+    assert!(
+        shared.reference.drain_contract_details().is_empty(),
+        "the row still waiting for its hours is the one that answers",
+    );
+    assert!(
+        shared.reference.drain_contract_details_end().is_empty(),
+        "and the end waits for it too",
+    );
+    assert!(
+        ccp.pending_schedule_pair.iter().any(|p| p.api_req_id == 9),
+        "the master row is still parked",
+    );
+}
+
+/// A reconnect has named nothing yet, so the replay flag is cleared. Left set
+/// from the previous connection, a caller asking what it has on is answered
+/// from the pre-drop book before the new account arrives.
+#[test]
+fn a_reconnect_waits_for_the_new_account_of_what_is_working() {
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    let market = crate::engine::market_state::MarketState::new();
+    let mut hb = HeartbeatState::new();
+    ccp.hydrated_any = true;
+    shared.orders.set_replay_done();
+
+    let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp_conn: Option<Connection> = None;
+    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &market, &shared);
+
+    assert!(!shared.orders.replay_done(), "the new connection has named nothing yet");
+    assert!(!ccp.hydrated_any, "and nothing has been hydrated from it");
+}
+
+/// The venue says why it would not cancel an order, and the structured
+/// rejection carries two numbers and no text. The reason went to a log no
+/// caller reads, where "the order does not exist" and "it is too late" look
+/// the same.
+#[test]
+fn a_refused_cancel_carries_the_reason_the_venue_gave() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let mut frame = std::collections::HashMap::new();
+    frame.insert(41u32, "42".to_string());
+    frame.insert(434u32, "1".to_string());
+    frame.insert(102u32, "0".to_string());
+    frame.insert(58u32, "Too late to cancel".to_string());
+
+    ccp.handle_cancel_reject(&frame, &mut context, &shared, &None);
+
+    let told = shared.orders.drain_order_inactive();
+    assert!(
+        told.iter().any(|(id, _, text)| *id == 42 && text == "Too late to cancel"),
+        "the caller is told what the venue said: {told:?}",
+    );
+}
+
+/// Whether the venue manages an order's price for it is a field of its own,
+/// beside the algo rather than part of it. Read off the algo, an adaptive
+/// order gained price management it may not have and every other order lost
+/// it.
+#[test]
+fn price_management_is_read_from_its_own_field() {
+    for (adaptive, stated, wanted) in [
+        ("Adaptive", None, 0),
+        ("Adaptive", Some("1"), 1),
+        ("", Some("1"), 1),
+        ("", None, 0),
+    ] {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        let mut pairs = vec![("39", "0"), ("150", "0"), ("55", "SPY")];
+        if !adaptive.is_empty() {
+            pairs.push(("847", adaptive));
+        }
+        if let Some(v) = stated {
+            pairs.push(("8339", v));
+        }
+        let frame = exec_report_frame(
+            &pairs.iter().map(|(t, v)| (t.parse().unwrap(), *v)).collect::<Vec<_>>(),
+        );
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+        let info = shared.orders.get_order_info(42).expect("the order was restated");
+        assert_eq!(
+            info.order.use_price_mgmt_algo, wanted,
+            "847={adaptive:?} 8339={stated:?}",
+        );
+    }
+}
+
+/// Each public identifier rides the tags the venue reads it on. A CUSIP was
+/// going out as `22=1|48=<id>`, which is the pair an ISIN uses, and a FIGI was
+/// not going out at all — the lookup fell through to the symbol and answered
+/// with whatever that matched.
+#[test]
+fn a_public_identifier_rides_the_tags_its_own_kind_uses() {
+    use std::io::Read;
+    for (kind, id, wanted, unwanted) in [
+        ("CUSIP", "037833100", vec!["454=1", "455=037833100", "456=1"], vec!["22=", "48="]),
+        ("ISIN", "US0378331005", vec!["22=4", "48=US0378331005"], vec!["454=", "455="]),
+        ("FIGI", "BBG000B9XRY4", vec!["22=S", "48=BBG000B9XRY4"], vec!["454=", "455="]),
+    ] {
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut ccp = CcpState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn = Some(conn);
+        let filters = crate::types::SecDefFilters {
+            sec_id: id.to_string(),
+            sec_id_type: kind.to_string(),
+            ..Default::default()
+        };
+        ccp.send_secdef_request_by_symbol(
+            9, "AAPL", "STK", "SMART", "USD", &filters, &mut conn, &mut hb,
+        );
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+        for field in wanted {
+            assert!(msg.contains(&format!("|{field}|")), "{kind} states {field}: {msg}");
+        }
+        for field in unwanted {
+            assert!(!msg.contains(&format!("|{field}")), "{kind} does not state {field}: {msg}");
+        }
+        // The identifier replaces the symbol, and asking by both is asking a
+        // different question from the one the caller put.
+        assert!(!msg.contains("|55=AAPL|"), "{kind} does not also ask by symbol: {msg}");
+    }
+}
+
+/// A lookup states the symbol and the venue's local symbol as two separate
+/// fields, because they are two separate statements about the contract. Sending
+/// only the local symbol asked a narrower question than the caller put, and a
+/// symbol that disagrees with it — which the venue would refuse — matched
+/// whatever the local symbol named.
+#[test]
+fn a_lookup_states_both_the_symbol_and_the_local_symbol() {
+    use std::io::Read;
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn = Some(conn);
+    let filters = crate::types::SecDefFilters {
+        local_symbol: "ESZ6".to_string(),
+        ..Default::default()
+    };
+    ccp.send_secdef_request_by_symbol(
+        11, "ES", "FUT", "CME", "USD", &filters, &mut conn, &mut hb,
+    );
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(msg.contains("|55=ES|"), "the symbol: {msg}");
+    assert!(msg.contains("|6035=ESZ6|"), "and the contract's own name: {msg}");
+}
+
+/// A news stream is withdrawn by naming which tick and which contract, not
+/// only the request number. The option model beside it is withdrawn the same
+/// way. Naming only the request leaves the venue serving the subscription.
+#[test]
+fn a_news_stream_is_withdrawn_by_naming_what_it_was() {
+    use std::io::Read;
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn = Some(conn);
+    ccp.send_news_subscribe(756733, 3, "BRFG", 41, &mut conn, &mut hb);
+    let mut buf = [0u8; 4096];
+    let _subscribe = peer.read(&mut buf).unwrap();
+
+    ccp.send_news_unsubscribe(3, &mut conn, &mut hb);
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(msg.contains("|263=2|"), "it is a withdrawal: {msg}");
+    assert!(msg.contains("|146=1|"), "of one entry: {msg}");
+    assert!(msg.contains("|262=41|"), "under the request it was asked under: {msg}");
+    assert!(msg.contains("|6008=756733|"), "naming the contract: {msg}");
+    assert!(msg.contains("|264=292|"), "and which tick: {msg}");
+    assert!(
+        ccp.news_subscriptions.is_empty(),
+        "and nothing is left waiting to deliver it",
+    );
+}
+
+/// A contract fetched without a caller asking is remembered so it is not
+/// fetched twice. The record is dropped when the fetch times out, or one lost
+/// request leaves that contract unnamed for the life of the session.
+#[test]
+fn a_fetch_that_is_never_answered_is_asked_again() {
+    let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let shared = SharedState::new();
+    let mut conn = Some(conn);
+
+    ccp.auto_fetch_secdef_if_cold(756733, &mut conn, &shared, &mut hb);
+    assert_eq!(ccp.pending_secdef.len(), 1, "the fetch went out");
+    assert!(ccp.auto_fetched_conids.contains_key(&756733), "and is remembered while it is out");
+
+    // Nothing answers it.
+    for entry in &mut ccp.pending_secdef {
+        entry.2 = Instant::now() - std::time::Duration::from_secs(1);
+    }
+    ccp.sweep_contract_details(&shared, &None);
+    assert!(
+        !ccp.auto_fetched_conids.contains_key(&756733),
+        "a fetch that never came back is forgotten, so the next report asks again",
+    );
+
+    ccp.auto_fetch_secdef_if_cold(756733, &mut conn, &shared, &mut hb);
+    assert_eq!(ccp.pending_secdef.len(), 1, "and it is asked again");
+}
+
+/// One frame names every holding in it, and the sets the account does not hold
+/// itself are no different from its own. Handed the flat map instead, the
+/// generic parser kept the last value of each repeated tag, so a frame naming
+/// three holdings arrived as one and the other two were gone before anything
+/// could see them.
+#[test]
+fn an_away_position_frame_names_every_holding_in_it() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let mut conn: Option<Connection> = None;
+    let mut hb = HeartbeatState::new();
+    let mut fields: Vec<(u32, &str)> = vec![
+        (crate::protocol::fix::TAG_MSG_TYPE, "AP"),
+    ];
+    for (symbol, con_id, qty, cost) in [
+        ("AAPL  ", "265598", "100", "150.0"),
+        ("MSFT  ", "272093", "25", "300.0"),
+        ("SPY   ", "756733", "7", "500.0"),
+    ] {
+        fields.push((6068, symbol));
+        fields.push((6008, con_id));
+        fields.push((167, "STK"));
+        fields.push((15, "USD"));
+        fields.push((6064, qty));
+        fields.push((6101, cost));
+    }
+    let frame = crate::protocol::fix::fix_build(&fields, 1);
+    ccp.process_ccp_message(&frame, &mut conn, &mut context, &shared, &None, &mut hb, "DU1");
+
+    let mut held = shared.portfolio.positions_elsewhere();
+    held.sort_by_key(|row| row.con_id);
+    assert_eq!(held.len(), 3, "every holding the frame names: {held:?}");
+    assert_eq!(held[0].symbol, "AAPL", "the venue pads a symbol out");
+    assert_eq!(held[0].position, 100.0);
+    assert_eq!(held[1].symbol, "MSFT");
+    assert_eq!(held[1].avg_cost, 300 * PRICE_SCALE);
+    assert_eq!(held[2].position, 7.0, "and the last one is not the only one");
+    assert!(
+        held.iter().all(|row| row.held == crate::types::HeldElsewhere::Away),
+        "and all of them in the set the frame belongs to: {held:?}",
+    );
+}
+
+/// A frame restating a holding without its cost was replacing a real basis
+/// with nothing. The account's own holdings already keep theirs.
+#[test]
+fn a_holding_elsewhere_keeps_the_basis_a_later_frame_leaves_out() {
+    let (_ccp, _context, shared) = u186_test_state();
+    let mut row = std::collections::HashMap::new();
+    row.insert(6008u32, "265598".to_string());
+    row.insert(6064u32, "100".to_string());
+    row.insert(6101u32, "150.0".to_string());
+    super::positions::handle_position_elsewhere(&row, &shared, crate::types::HeldElsewhere::Away);
+
+    row.remove(&6101);
+    row.insert(6064u32, "120".to_string());
+    super::positions::handle_position_elsewhere(&row, &shared, crate::types::HeldElsewhere::Away);
+
+    let held = shared.portfolio.positions_elsewhere();
+    assert_eq!(held[0].position, 120.0, "the new quantity");
+    assert_eq!(held[0].avg_cost, 150 * PRICE_SCALE, "and the basis it already had");
+}
+
+/// Subscribing to account updates asks the venue for the figures.
+///
+/// The venue restates them on its own schedule. Measured against a live
+/// session: a subscription alone is answered after 39 seconds, and the same
+/// subscription with this request after 750 milliseconds.
+#[test]
+fn an_account_refresh_asks_for_the_figures() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+
+    ccp.send_account_refresh("DU123456", &mut conn, &mut hb);
+
+    let n = peer.read(&mut buf).unwrap();
+    let text = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    let key_of = |t: &str| -> String {
+        t.split('|').find(|f| f.starts_with("6529=")).unwrap_or("").to_string()
+    };
+
+    // The display request carries the positions beside the figures.
+    assert!(text.contains("|6040=91|"), "the display request is stated: {text}");
+    assert!(text.contains("|6556=DR.1|"), "under its own key: {text}");
+    // The keyed account request.
+    assert!(text.contains("|6040=6|"), "the account request is stated: {text}");
+    let first = key_of(&text);
+
+    // A second request states a different key, and a second state does too:
+    // the venue answers a key it is already serving with nothing, and a
+    // connection outlives the loops that use it.
+    ccp.send_account_refresh("DU123456", &mut conn, &mut hb);
+    let n = peer.read(&mut buf).unwrap();
+    let second = key_of(&String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|"));
+    assert_ne!(first, second, "a second request states a key of its own");
+
+    let mut fresh = CcpState::new();
+    fresh.send_account_refresh("DU123456", &mut conn, &mut hb);
+    let n = peer.read(&mut buf).unwrap();
+    let third = key_of(&String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|"));
+    assert_ne!(second, third, "and so does a request from a state built later");
+
+    // The subscription is closed under the key it was opened with. Tag 6036
+    // states which of the two the request is.
+    fresh.send_account_unsubscribe("DU123456", &mut conn, &mut hb);
+    let n = peer.read(&mut buf).unwrap();
+    let closing = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(closing.contains("|6036=0|"), "the request closes rather than opens: {closing}");
+    assert_eq!(key_of(&closing), third, "and names the subscription it opened: {closing}");
+    assert!(text.contains("|6095=DU123456|"), "naming the account: {text}");
+    // The account rides its own tag on the display request, not inside a key.
+    assert!(text.contains("|1=DU123456|"), "and tag 1 names it too: {text}");
+}
+
+/// A holding names its own contract.
+///
+/// The feed states the symbol on 6068 and the security type on 167 beside the
+/// quantity. Read only for the contract id, a holding reaches the caller
+/// carrying an id and nothing else, and stays that way until a definition
+/// lookup answers.
+#[test]
+fn a_holding_carries_the_contract_the_feed_names() {
+    let shared = SharedState::new();
+    let mut context = Context::new();
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn = None;
+
+    let msg = ["6008=756733", "6068=SPY", "167=STK", "6064=100", "6101=768.5",
+               "6008=265598", "6068=AAPL", "167=STK", "6064=50", "6101=316.2",
+               "6008=0"].join("\u{1}");
+    ccp.handle_position_feed(msg.as_bytes(), &mut conn, &mut context, &shared, &None, &mut hb);
+
+    let held = shared.portfolio.position_infos();
+    let spy = held.iter().find(|p| p.con_id == 756733).expect("the first holding");
+    assert_eq!(spy.symbol, "SPY", "named as the feed names it");
+    assert_eq!(spy.sec_type, "STK");
+    let aapl = held.iter().find(|p| p.con_id == 265598).expect("the second holding");
+    assert_eq!(aapl.symbol, "AAPL", "each entry carries its own, not the one before it");
+    assert_eq!(aapl.sec_type, "STK");
 }

@@ -24,9 +24,6 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
     "FetchContractDetails",
     "CancelHeadTimestamp",
     "FetchMatchingSymbols",
-    "FetchCalendarMetaData",
-    "FetchCalendarEvents",
-    "CancelCalendar",
     "FetchScannerParams",
     "SubscribeScanner",
     "CancelScanner",
@@ -44,19 +41,20 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
     "UnsubscribeDepth",
     "SubscribePnl",
     "CancelPnl",
+    // Sent by the engine as it starts, and by `req_account_updates`. Every
+    // phase that builds a loop exercises it.
+    "RefreshAccount",
     // Covered live by `rtt_ping_phase_live`.
     "Ping",
-    // Sent by disconnecting, which every phase does through the graceful
-    // shutdown phase at the end of a run.
-    "Logout",
+    // Sent by the graceful shutdown phase, which stops the loop and hands the
+    // connections back.
     "Shutdown",
-    "ForceDisconnect",
 ];
 
 const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[
     (
         "AdvisorConfig",
-        "Built from the counterpart's own encoding, and not verifiable here: an \
+        "Not verifiable here: an \
          account that is not an advisor's holds no groups, profiles or models, \
          so the venue answers that it has none whatever is asked",
     ),
@@ -75,6 +73,35 @@ const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[
     (
         "FetchUserInfo",
         "Gateway-local response path, no CCP round-trip in hot loop yet",
+    ),
+    (
+        "Logout",
+        "Ends the session rather than the loop. A phase that sent one would \
+         take the session away from every phase after it, so the suite stops \
+         the engine and leaves the socket to say the rest",
+    ),
+    (
+        "ForceDisconnect",
+        "Drops the session without telling the venue, which every phase after \
+         it would then be running without",
+    ),
+    (
+        "FetchCalendarMetaData",
+        "No phase here asks for the calendar, and this harness names no \
+         security-definition farm for one to be answered on: see the note in \
+         `common.rs`",
+    ),
+    (
+        "FetchCalendarEvents",
+        "As above: no phase asks for the calendar",
+    ),
+    (
+        "CancelCalendar",
+        "As above: nothing is asked for, so there is nothing to withdraw",
+    ),
+    (
+        "FetchOptionParams",
+        "No phase asks for an option chain",
     ),
     (
         "FetchMktDepthExchanges",
@@ -157,13 +184,12 @@ fn enum_variants_from_types(enum_name: &str) -> Vec<String> {
             continue;
         }
 
-        depth += line.matches('{').count() as i32;
-        depth -= line.matches('}').count() as i32;
-
-        if depth == 0 {
-            break;
-        }
-
+        // Read at the depth the line starts at, not the depth it leaves
+        // behind. Counted first, a variant that opens a brace on the same line
+        // as its name — `Subscribe {`, and every other variant with fields —
+        // was already at depth two by the time the name was looked for, so it
+        // is not recorded. Only unit and single-line variants are visible that
+        // way, which leaves the manifest below unchecked against the rest.
         if depth == 1 && !line.starts_with('#') && line != "}" {
             let token = line
                 .split(['{', '(', ',', ' '])
@@ -174,6 +200,13 @@ fn enum_variants_from_types(enum_name: &str) -> Vec<String> {
                 variants.push(token.to_string());
             }
         }
+
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+
+        if depth == 0 {
+            break;
+        }
     }
 
     variants.sort();
@@ -183,7 +216,8 @@ fn enum_variants_from_types(enum_name: &str) -> Vec<String> {
 
 #[test]
 fn control_command_manifest_tracks_all_variants() {
-    let variants = enum_variants_from_types("ControlCommand");
+    let variants: BTreeSet<String> =
+        enum_variants_from_types("ControlCommand").into_iter().collect();
     let tested: BTreeSet<&str> = TESTED_CONTROL_COMMANDS.iter().copied().collect();
     let gaps: BTreeSet<&str> = KNOWN_CONTROL_COMMAND_GAPS.iter().map(|(k, _)| *k).collect();
     let missing: Vec<_> = variants
@@ -194,5 +228,18 @@ fn control_command_manifest_tracks_all_variants() {
     assert!(
         missing.is_empty(),
         "Missing coverage mapping for variants: {missing:?}"
+    );
+    // And nothing is claimed for a command that is not there. This is what
+    // establishes that the enum was read at all: a manifest naming commands the
+    // reading above cannot see would otherwise pass. It is also what a renamed
+    // variant meets, rather than keeping the coverage granted to its old name.
+    let unknown: Vec<&&str> = tested
+        .iter()
+        .chain(gaps.iter())
+        .filter(|named| !variants.contains(**named))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "coverage is claimed for commands ControlCommand does not have: {unknown:?}"
     );
 }

@@ -32,6 +32,7 @@ import time
 from eventkit import Event
 
 import ibx as _ibx
+from ._ib import _refuse_options
 
 
 class IbxClient:
@@ -114,15 +115,18 @@ class IbxClient:
                 paper=self._paper,
                 client_id=self.clientId,
                 session_file=self._session_file,
+                order_id_file=self._order_id_file,
             ),
         )
         self.connState = IbxClient.CONNECTED
 
-        # What the handshake tells ib_async before it considers the API ready.
-        self._accounts = [
-            a for a in self._client.get_account_id().split(",") if a
-        ]
-        self.wrapper.managedAccounts(",".join(self._accounts))
+        # What the handshake tells ib_async before it considers the API
+        # ready. Asked for rather than composed: the client answers this with
+        # every account the login holds, and the default account read off it
+        # is the first one — so an advisor with several saw one, standing for
+        # all of them.
+        self._client.req_managed_accts()
+        self._accounts = list(getattr(self.wrapper, "accounts", []))
         # Their wrapper's `nextValidId` does nothing; their client seeds the
         # counter itself when it sees one on the wire. `placeOrder` takes its
         # id from that counter, so an id announced and not seeded is an order
@@ -214,12 +218,13 @@ class IbxClient:
     # ── requests: the same shape, all the way down ──
 
     def reqContractDetails(self, reqId, contract):
-        self._client.req_contract_details(reqId, _contract(contract))
+        self._client.req_contract_details(reqId, _as_ours(contract))
 
     def reqMktData(self, reqId, contract, genericTickList, snapshot,
                    regulatorySnapshot, mktDataOptions):
+        _refuse_options("mktDataOptions", mktDataOptions)
         self._client.req_mkt_data(
-            reqId, _contract(contract), genericTickList, snapshot,
+            reqId, _as_ours(contract), genericTickList, snapshot,
             regulatorySnapshot,
         )
 
@@ -232,8 +237,9 @@ class IbxClient:
     def reqHistoricalData(self, reqId, contract, endDateTime, durationStr,
                           barSizeSetting, whatToShow, useRTH, formatDate,
                           keepUpToDate, chartOptions):
+        _refuse_options("chartOptions", chartOptions)
         self._client.req_historical_data(
-            reqId, _contract(contract), endDateTime, durationStr,
+            reqId, _as_ours(contract), endDateTime, durationStr,
             barSizeSetting, whatToShow, 1 if useRTH else 0, formatDate,
             keepUpToDate, [],
         )
@@ -391,9 +397,9 @@ def _field_of(value, name, zone):
     if got is None or name not in ("time", "date"):
         return got
     if isinstance(got, int) and not isinstance(got, bool):
-        # Seconds since the epoch, which their records declare as a datetime.
-        # Read by their own parser rather than by one written here, so the
-        # instant is the one their code would have made of it.
+        # Seconds since the epoch, which ib_async's records declare as a
+        # datetime. Parsed by ib_async's own parser, so the instant matches
+        # what the rest of ib_async reads.
         from ib_async.util import parseIBDatetime
 
         return parseIBDatetime(str(got))
@@ -511,14 +517,22 @@ class _LoopBound:
         self._wrapper.priceSizeTick(req_id, tick_type, price, size)
 
     def tick_size(self, req_id, tick_type, size):
+        """A size, delivered with the price that belongs to it.
+
+        A size can change while the price does not, so the price half comes
+        from what was last stated. Where nothing has stated one, their own
+        "no price" is what is sent: a zero there is a market quoted at
+        nothing, which is a different thing from a market not yet quoted.
+        """
         held = self._quotes.setdefault(req_id, {})
         held[tick_type] = size
         price_type = self._PRICE_OF.get(tick_type)
         if price_type is None:
             self._wrapper.tickSize(req_id, tick_type, size)
             return
+        unstated = getattr(self._wrapper, "defaultEmptyPrice", -1)
         self._wrapper.priceSizeTick(
-            req_id, price_type, held.get(price_type, 0.0), size
+            req_id, price_type, held.get(price_type, unstated), size
         )
 
     #: Where their wrapper names a callback something other than the
@@ -546,13 +560,17 @@ class _LoopBound:
             named = self._THEIR_NAME[name]
             if named is None:
                 return lambda *args: None
-            return getattr(self._wrapper, named)
-
-        method = getattr(self._wrapper, name, None)
-        if method is None:
-            words = name.split("_")
-            camel = words[0] + "".join(w.title() for w in words[1:])
-            method = getattr(self._wrapper, camel, None)
+            # Rebuilt on the way through, like every other callback. Handed
+            # over as it stands, a fill carries this engine's own cost record
+            # and ib_async's wrapper reads a field its own record spells
+            # differently, so the cost is dropped.
+            method = getattr(self._wrapper, named)
+        else:
+            method = getattr(self._wrapper, name, None)
+            if method is None:
+                words = name.split("_")
+                camel = words[0] + "".join(w.title() for w in words[1:])
+                method = getattr(self._wrapper, camel, None)
         if method is None:
             raise AttributeError(name)
 
@@ -562,14 +580,17 @@ class _LoopBound:
         return carrying
 
 
-#: What they mean by "the caller set nothing". This engine states the same
-#: thing as zero, except on the three fields where it keeps their sentinel
-#: because zero is a value a caller can mean there.
+#: What they mean by "the caller set nothing".
+#:
+#: Both sides spell it the same way, and this engine states it as zero on most
+#: fields but keeps the sentinel on the ones where zero is a value a caller can
+#: mean. Which fields those are is not a list to keep by hand — the engine's own
+#: default says so, and a list went stale: an order carrying their unset
+#: `basisPoints` was rewritten to zero, which this engine reads as a caller
+#: stating a field the protocol cannot carry, so every order through their API
+#: was refused for setting something nobody set.
 _UNSET_DOUBLE = 1.7976931348623157e308
 _UNSET_INTEGER = 2147483647
-_KEEPS_THE_SENTINEL = {
-    "trailStopPrice", "lmtPriceOffset", "adjustedTrailingAmount",
-}
 
 
 def _as_ours(value):
@@ -580,6 +601,21 @@ def _as_ours(value):
         # Their optional lists arrive as None; every request here takes a
         # list, and an absent one is an empty one.
         return []
+
+    named = isinstance(value, tuple) and hasattr(value, "_fields")
+    if isinstance(value, (list, tuple)) and not named:
+        # A list of ib_async objects is a list of objects to rebuild, not a
+        # value to hand across whole. Handed across, an algo's parameters and a
+        # combination's routing arrive as ib_async types and are refused, so
+        # the order carries the strategy without what tunes it.
+        return [_as_ours(item) for item in value]
+
+    if named:
+        # A tag and its value is a record they spell as a tuple. Read as a
+        # sequence it becomes two loose strings, which is not what either side
+        # means by one; read as a record it is the pair this engine holds.
+        rebuilt = getattr(_ibx, type(value).__name__, None)
+        return value if rebuilt is None else rebuilt(*value)
 
     if not dataclasses.is_dataclass(value):
         return value
@@ -601,27 +637,42 @@ def _as_ours(value):
         held = getattr(value, field.name, None)
         if held is None:
             continue
-        if held == _UNSET_DOUBLE and field.name not in _KEEPS_THE_SENTINEL:
+        # A field still at their default was not stated by whoever placed the
+        # order, and the two sides do not agree on what a default is — theirs
+        # says an order does not use the automatic hedge price, this engine's
+        # says it does, and neither was asked for. Carrying theirs over states
+        # a field nobody set, and where the protocol has nowhere to send it the
+        # order is refused for it. What the caller actually set is carried; the
+        # rest is left to this engine's own default.
+        if field.default is not dataclasses.MISSING and held == field.default:
+            continue
+        # Past the check above, this field was set to something other than
+        # their default — including, from a program that spells it out, their
+        # unset sentinel itself. That still means nothing was set, so it is
+        # translated the same way.
+        #
+        # `made` is untouched at this field until the line below, so what it
+        # holds here is this engine's own default — which is what says whether
+        # the sentinel means anything on this field.
+        unset_here = getattr(made, field.name, None)
+        if held == _UNSET_DOUBLE and unset_here != _UNSET_DOUBLE:
             held = 0.0
-        elif isinstance(held, int) and not isinstance(held, bool) and held == _UNSET_INTEGER:
+        elif (isinstance(held, int) and not isinstance(held, bool)
+              and held == _UNSET_INTEGER and unset_here != _UNSET_INTEGER):
             held = 0
+        carried = _as_ours(held)
         try:
-            setattr(made, field.name, _as_ours(held))
-        except (AttributeError, TypeError, ValueError):
-            pass
-    return made
+            setattr(made, field.name, carried)
+        except (AttributeError, TypeError, ValueError) as why:
+            # Only fields the caller set reach here. A field that cannot be
+            # carried is one the order goes out without, so it is raised rather
+            # than swallowed: an algo without its parameters or a commission
+            # directed nowhere is an order on terms nobody stated.
+            raise ValueError(
+                f"{type(value).__name__}.{field.name} was set to {held!r}, "
+                f"which this client cannot carry: {why}"
+            ) from why
 
-
-def _contract(contract):
-    """An ib_async contract, as this engine's own."""
-    made = _ibx.Contract()
-    for field in ("conId", "symbol", "secType", "exchange", "currency",
-                  "lastTradeDateOrContractMonth", "strike", "right",
-                  "multiplier", "localSymbol", "primaryExchange",
-                  "tradingClass"):
-        value = getattr(contract, field, None)
-        if value:
-            setattr(made, field, value)
     return made
 
 

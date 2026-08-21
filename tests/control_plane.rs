@@ -54,7 +54,7 @@ fn contract_request_response_roundtrip() {
     assert_eq!(def.con_id, 265598);
     assert_eq!(def.symbol, "AAPL");
     assert_eq!(def.sec_type, SecurityType::Stock);
-    // Handed back under the name the counterpart hands it back under.
+    // Handed back under the name the venue uses for it.
     assert_eq!(def.primary_exchange, "ISLAND");
     assert_eq!(def.currency, "USD");
     assert_eq!(def.min_tick, 0.01);
@@ -223,6 +223,7 @@ fn historical_request_full_workflow() {
         bar_size: BarSize::Min5,
         use_rth: true,
         keep_up_to_date: false,
+        include_expired: false,
     };
 
     // Build FIX message
@@ -313,6 +314,7 @@ fn historical_streaming_subscription_flow() {
         bar_size: BarSize::Sec5,
         use_rth: false,
         keep_up_to_date: false,
+        include_expired: false,
     };
     let msg = build_historical_request(&req, 1);
     let tags = fix::fix_parse(&msg);
@@ -487,6 +489,7 @@ fn contract_lookup_feeds_historical_request() {
         bar_size: BarSize::Min5,
         use_rth: true,
         keep_up_to_date: false,
+        include_expired: false,
     };
 
     let msg = build_historical_request(&req, 1);

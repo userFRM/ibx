@@ -13,12 +13,19 @@ from ibx import (
 # ── Contract ──
 
 def test_contract_defaults():
+    """A fresh contract states nothing, as the reference client's does.
+
+    A stock on SMART in dollars used to stand in these three, and a caller who
+    named an id and nothing else had them sent as though they had stated them:
+    a future described as a stock, a contract listed abroad asked for in
+    dollars on a US venue.
+    """
     c = Contract()
     assert c.con_id == 0
     assert c.symbol == ""
-    assert c.sec_type == "STK"
-    assert c.exchange == "SMART"
-    assert c.currency == "USD"
+    assert c.sec_type == ""
+    assert c.exchange == ""
+    assert c.currency == ""
     assert c.strike == 0.0
 
 
@@ -389,11 +396,12 @@ def test_ewrapper_pnl_callbacks():
 
 
 def test_auto_binding_is_refused_only_for_a_client_that_is_not_zero():
-    """The counterpart answers this itself and never sends it on.
+    """Nothing is sent to the wire for this request.
 
-    It refuses the request for any client but the one those orders bind to,
-    and otherwise sets a property of its own. This session hears about every
-    order on the account either way, so the refusal is the observable part.
+    It is refused for any client id but the one those orders bind to, and
+    otherwise sets state that does not apply here: this session hears about
+    every order on the account either way, so the refusal is the observable
+    part.
     """
     from ibx import EClient, EWrapper
 
@@ -422,8 +430,8 @@ def test_auto_binding_is_refused_only_for_a_client_that_is_not_zero():
 
 
 def test_solving_an_option_answers_rather_than_refusing():
-    """The counterpart computes these in its own process and answers on
-    `tick_option_computation`; the wire carries no such request.
+    """Both calculations are solved locally and answered on
+    `tick_option_computation`; the wire carries no request for either.
 
     This surface refused them while the Rust one answered, so the same call
     against the same session gave a number in one language and an error in

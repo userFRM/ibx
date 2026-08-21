@@ -39,7 +39,7 @@ pub enum Event {
     WhatIf(WhatIfResponse),
     /// Real-time news headline.
     News(TickNews),
-    /// The venue's own model for an option: its price, the greeks and the
+    /// The venue's model for an option: its price, the greeks and the
     /// volatility that price implies.
     OptionComputation(crate::types::OptionComputation),
     /// Historical bar data.
@@ -93,7 +93,7 @@ pub enum Event {
     /// Gateway logon completed. `ccp_session_id` matches the `x-ccp-session-id` header
     /// expected by webapp REST endpoints. `misc_urls` maps logical names (e.g.
     /// `region_dam`)
-    /// to host URLs as pushed by the gateway during logon. The map is empty when the
+    /// to host URLs as pushed by the venue during logon. The map is empty when the
     /// gateway does not push a URL set; callers should fall back to a documented
     /// literal
     /// (e.g. `api.ibkr.com`) in that case.

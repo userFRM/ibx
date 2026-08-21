@@ -122,8 +122,17 @@ pub struct ReconnectAuth {
     pub session_key: BigUint,
     /// The token it resumes with.
     pub session_token: BigUint,
-    /// The venue's own id for it.
+    /// Session id assigned by the venue.
     pub server_session_id: String,
+    /// Which account this session opened under.
+    ///
+    /// A reconnect states the same opening sequence a first logon does, and
+    /// the messages in it that name an account need one to name. A first logon
+    /// reads it off the wire and falls back to the login name where the venue
+    /// states none; a reconnect carries whichever of the two that left it
+    /// with, so the rebuilt sequence states the same account the first one
+    /// did rather than a different one — or none.
+    pub account_id: String,
     /// What this machine identified itself as.
     pub hw_info: String,
     /// What the client string encoded to.
@@ -193,7 +202,7 @@ pub struct Gateway {
     pub session_token: BigUint,
     /// Session ID surfaced to webapp REST clients as `x-ccp-session-id`.
     /// Sourced from the post-auth FIX logon ACK, falling back to the locally generated
-    /// session ID when the gateway does not echo one back.
+    /// session ID when the server does not echo one back.
     pub server_session_id: String,
     /// What the trading connection authenticates with.
     pub ccp_token: String,
@@ -214,16 +223,16 @@ pub struct Gateway {
     /// What the venue says it has turned on for this session, as it states
     /// them at logon (tag 6542).
     ///
-    /// Several of the counterpart's behaviours are conditioned on these rather
-    /// than on any setting: whether it hands a Nasdaq listing back under its
-    /// older spelling is one. Kept so that what this client does can be told
-    /// apart from what it was permitted to do.
+    /// Server behaviour is conditioned on these rather than on any client
+    /// setting; the spelling a Nasdaq listing comes back under is one such
+    /// case. Kept so that what this client does can be told apart from what
+    /// the account was permitted to do.
     pub enabled_features: String,
     /// Raw enabled-feature token list from CCP logon tag 6542.
     pub raw_enabled_features: String,
     /// White branding ID from CCP logon (empty for standard accounts).
     pub white_branding_id: String,
-    /// Logical-name → host URL map pushed by the gateway during logon. Empty when no
+    /// Logical-name → host URL map pushed by the server during logon. Empty when no
     /// URL set was pushed (callers should then fall back to a documented literal,
     /// e.g. `api.ibkr.com` for `region_dam`).
     pub misc_urls: std::collections::HashMap<String, String>,
@@ -309,10 +318,10 @@ impl Farm {
     }
 }
 
-/// A session: the gateway, and the connections it opened.
+/// A session: the [`Gateway`], and the connections it opened.
 ///
-/// Named rather than returned as a row of five, two of which are optional and
-/// none of which said which farm it was.
+/// Named fields rather than a five-element tuple: two are optional and none
+/// would state which farm it belongs to.
 pub struct Session {
     /// The session itself.
     pub gateway: Gateway,
@@ -693,23 +702,16 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     let auth_fields: Vec<&str> = auth_text.split(';').collect();
     let auth_mode: u32 = auth_fields.get(5).and_then(|s| s.parse().ok()).unwrap_or(0);
 
+    // A message the gate reads that belongs to the loop below, which cannot
+    // ask the socket for it a second time.
+    let mut post_auth_unread: Option<Vec<u8>> = None;
     if auth_mode == 2 {
         // SOFT_TOKEN challenge-response (4 states)
         do_ccp_soft_token(&mut tls, &auth.session_key)?;
 
-        // Consume AUTH_FINISH (msg_id=771) after SOFT_TOKEN PASSED
-        match session::recv_msg(&mut tls) {
-            Ok(session::RecvMsg::Xyz { state, fields, .. }) => {
-                let result = fields.iter().rev().find(|s| !s.is_empty()).map(|s| s.as_str()).unwrap_or("");
-                log::info!("CCP reconnect AUTH_FINISH: state={state} result={result}");
-            }
-            Ok(session::RecvMsg::Ns { msg_type, .. }) => {
-                log::info!("CCP reconnect post-auth NS type={msg_type}");
-            }
-            Err(e) => {
-                log::warn!("CCP reconnect AUTH_FINISH recv: {e}");
-            }
-        }
+        // AUTH_FINISH, which has to say the authentication passed rather than
+        // merely arrive.
+        expect_auth_finish(&mut tls, "CCP reconnect")?;
     } else {
         // Server requires full SRP (auth_mode != 2). Re-run the SRP handshake
         // with the credentials cached on ReconnectAuth — the same path
@@ -724,7 +726,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         // ponytail: a SOFT token issued here is not written back to `auth`,
         // which the reconnect thread only holds by reference — the next
         // reconnect runs SRP again rather than the cheaper token path.
-        run_second_factor(&mut tls, SecondFactor {
+        post_auth_unread = run_second_factor(&mut tls, SecondFactor {
             paper: auth.paper,
             username: &auth.username,
             token_type,
@@ -732,7 +734,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
             code_provider: auth.code_provider.as_ref(),
             timeout_secs: auth.ib_key_timeout_secs,
             default_sub_type: &auth.ib_key_token_sub_type,
-        })?;
+        })?.unread;
     }
 
     // Post-auth: wait for NS_CONNECT_RESPONSE → NEWCOMMPORTTYPE → NS_FIX_START.
@@ -751,8 +753,13 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     let mut took_from: Option<(String, String, bool)> = None;
     let mut stated_heartbeat: Option<u64> = None;
     while std::time::Instant::now() < fix_deadline {
-        let (payload, _) = match ns::ns_recv(&mut tls) {
-            Ok(r) => r,
+        // As on the first login: what the gate read past its own answer is the
+        // first message here, not something to wait for again.
+        let payload = if let Some(carried) = post_auth_unread.take() {
+            carried
+        } else {
+            match ns::ns_recv(&mut tls) {
+            Ok((payload, _)) => payload,
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock
                     || e.kind() == io::ErrorKind::TimedOut
@@ -764,6 +771,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
             Err(e) => {
                 log::warn!("CCP reconnect post-auth recv: {e}");
                 break;
+            }
             }
         };
         let text = String::from_utf8_lossy(&payload);
@@ -885,13 +893,11 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     }
     tls.get_ref().set_read_timeout(None)?;
 
-    // Order mass status request
-    let mut ccp_seq: u32 = 1;
-    ccp_seq += 1;
     let now = chrono_free_timestamp();
-    let status_req = fix_build(&[(35, "H"), (52, &now), (11, "*"), (54, "*"), (55, "*")], ccp_seq);
-    tls.write_all(&status_req)?;
-    tls.flush()?;
+    let account = if auth.account_id.is_empty() { &auth.username } else { &auth.account_id };
+    let ccp_seq = logon::send_reconnect_opening(
+        &mut tls, auth.settings.execution_reports, account, &now,
+    )?;
 
     let mut conn = Connection::new(tls)?;
     if !carry.is_empty() {
@@ -1002,6 +1008,7 @@ fn wait_for_data_start(
     tls: &mut native_tls::TlsStream<TcpStream>,
     channel: &mut SecureChannel,
     port: u16,
+    mut unread: Option<Vec<u8>>,
 ) -> io::Result<PostAuth> {
     // Receive post-auth messages (encrypted via 534) and wait for the
     // data-farm start (NS_FIX_START). A transient stall here must not be
@@ -1018,18 +1025,26 @@ fn wait_for_data_start(
     // said so in its answer to the connect.
     let mut competing: Option<CompetingSession> = None;
     while std::time::Instant::now() < fix_deadline {
-        let (payload, _) = match ns::ns_recv(&mut *tls) {
-            Ok(r) => r,
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                log::warn!("Post-auth recv timeout, retrying until deadline: {e}");
-                continue;
-            }
-            Err(e) => {
-                log::warn!("Post-auth recv error: {e}");
-                break;
+        // Whatever the second-factor gate read past its own answer is the
+        // first message here. Dropped instead, a connect response leaves this
+        // loop waiting out its whole deadline for a message already
+        // delivered.
+        let payload = if let Some(carried) = unread.take() {
+            carried
+        } else {
+            match ns::ns_recv(&mut *tls) {
+                Ok((payload, _)) => payload,
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
+                {
+                    log::warn!("Post-auth recv timeout, retrying until deadline: {e}");
+                    continue;
+                }
+                Err(e) => {
+                    log::warn!("Post-auth recv error: {e}");
+                    break;
+                }
             }
         };
         let text = String::from_utf8_lossy(&payload);
@@ -1243,7 +1258,7 @@ fn authenticate(
     config: &GatewayConfig,
     auth_start: &[u8],
     resume_key: Option<BigUint>,
-) -> io::Result<(BigUint, Option<BigUint>)> {
+) -> io::Result<(BigUint, Option<BigUint>, Option<Vec<u8>>)> {
     // AUTH_START field 4 names the second-factor token type and its
     // per-session subtype, e.g. "5.2i" = tokenType 5 (IBKey), subtype "2i".
     // The subtype is account- and session-specific, so the compiled-in
@@ -1269,20 +1284,12 @@ fn authenticate(
             log::info!("Resuming the session for {} — no handshake", config.username);
             do_ccp_soft_token(tls, &key)?;
             // AUTH_FINISH follows the challenge exactly as it follows a
-            // handshake, and carries nothing this needs.
-            match session::recv_msg(tls) {
-                Ok(session::RecvMsg::Xyz { state, .. }) => {
-                    log::info!("Resume AUTH_FINISH: state={state}");
-                }
-                Ok(session::RecvMsg::Ns { msg_type, .. }) => {
-                    log::info!("Resume post-auth NS type={msg_type}");
-                }
-                Err(e) => log::warn!("Resume AUTH_FINISH recv: {e}"),
-            }
+            // handshake, and it says whether the session exists.
+            expect_auth_finish(tls, "Resume")?;
             // The stored token is the session key, so the farm logons that
             // follow have what they need without a second factor: the
             // approval that made this session is the one being resumed.
-            (key, None)
+            (key, None, None)
         }
         (resume_key, _) => {
             if resume_key.is_some() {
@@ -1300,7 +1307,7 @@ fn authenticate(
             // Would capture a SOFT session token from AUTH_FINISH PASSED, but per
             // that body carries none, so this stays `None` on both
             // live paths and the farm logon falls back to the SRP session key.
-            let soft_token = run_second_factor(tls, SecondFactor {
+            let gate = run_second_factor(tls, SecondFactor {
                 paper: config.paper,
                 username: &config.username,
                 token_type: server_token_type,
@@ -1309,7 +1316,7 @@ fn authenticate(
                 timeout_secs: config.ib_key_timeout_secs,
                 default_sub_type: &config.ib_key_token_sub_type,
             })?;
-            (session_key, soft_token)
+            (session_key, gate.soft_token, gate.unread)
         }
     };
     Ok(key)
@@ -1459,9 +1466,12 @@ impl Gateway {
             Err(e) => return Err(e),
         };
 
-        let (session_key, soft_token) = authenticate(&mut tls, config, &auth_start, resume_key)?;
+        let (session_key, soft_token, mut post_auth_unread) =
+            authenticate(&mut tls, config, &auth_start, resume_key)?;
 
-        let competing = match wait_for_data_start(&mut tls, &mut channel, port)? {
+        let competing = match wait_for_data_start(
+            &mut tls, &mut channel, port, post_auth_unread.take(),
+        )? {
             PostAuth::Ready(competing) => competing,
             PostAuth::Redirect(redirect_host, redirect_port) => {
                 log::info!("Reconnecting to {redirect_host}:{redirect_port}");
@@ -1640,8 +1650,8 @@ impl Gateway {
         };
         let (trading_host, trading_farm, trading_route_port) = parsed_trading.clone()
             .unwrap_or_else(|| invented("trading", DEFAULT_TRADING_FARM));
-        // Tag first, then the route, then the configured port — the order the
-        // counterpart resolves them in.
+        // Tag first, then the route, then the configured port: the order the
+        // protocol resolves them in.
         let trading_port = trading_port.or(trading_route_port);
         let (mktdata_host, mktdata_farm, mktdata_port) = parse_farm_route(&mktdata_route)
             .unwrap_or_else(|| invented("market data", "ushmds"));
@@ -1745,11 +1755,11 @@ impl Gateway {
 
         // News providers, as the logon stated them and only as it stated them.
         //
-        // There is no request for this list: the counterpart serves it from the
-        // logon alone, and an empty tag means the account is entitled to
-        // nothing. A fallback list would state entitlements the account does
-        // not hold, and a caller enumerating providers and then asking for an
-        // article receives a refusal it cannot explain.
+        // There is no request for this list. It arrives on the logon and
+        // nowhere else, and an empty tag means the account is entitled to no
+        // providers. A fallback list would state entitlements the account does
+        // not hold, and an article request against one of them is refused with
+        // no explanation the caller can act on.
         //
         // Wire format: "code1/name1,code2/name2,…". Read as though the pairs
         // were separated by semicolons and the halves by commas, one provider
@@ -1895,6 +1905,7 @@ impl Gateway {
             session_key: self.session_token.clone(),
             session_token: self.session_token.clone(),
             server_session_id: self.server_session_id.clone(),
+            account_id: self.account_id.clone(),
             hw_info: self.hw_info.clone(),
             encoded: self.encoded.clone(),
             secdef_host: self.secdef_host.clone(),

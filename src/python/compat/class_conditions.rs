@@ -45,7 +45,10 @@ impl PriceCondition {
     fn set_trigger_method_alias(&mut self, v: i32) { self.trigger_method = v; }
 
     #[new]
-    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), price=0.0, is_more=true, trigger_method=0, **keywords))]
+    // Empty, which is what the reference client holds for a condition nobody
+    // named an exchange on. Named as SMART here, a condition watching a
+    // contract that trades elsewhere watched it on a venue nobody chose.
+    #[pyo3(signature = (con_id=0, exchange=String::new(), price=0.0, is_more=true, trigger_method=0, **keywords))]
     fn new(con_id: i64, exchange: String, price: f64, is_more: bool, trigger_method: i32, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { con_id, exchange, price, is_more, trigger_method })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
@@ -231,7 +234,7 @@ impl VolumeCondition {
     fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
 
     #[new]
-    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), volume=0, is_more=true, **keywords))]
+    #[pyo3(signature = (con_id=0, exchange=String::new(), volume=0, is_more=true, **keywords))]
     fn new(con_id: i64, exchange: String, volume: i64, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { con_id, exchange, volume, is_more })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
@@ -292,7 +295,7 @@ impl PercentChangeCondition {
     fn set_change_percent_alias(&mut self, v: f64) { self.change_percent = v; }
 
     #[new]
-    #[pyo3(signature = (con_id=0, exchange="SMART".to_string(), change_percent=0.0, is_more=true, **keywords))]
+    #[pyo3(signature = (con_id=0, exchange=String::new(), change_percent=0.0, is_more=true, **keywords))]
     fn new(con_id: i64, exchange: String, change_percent: f64, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { con_id, exchange, change_percent, is_more })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
@@ -313,5 +316,106 @@ impl PercentChangeCondition {
             percent: self.change_percent,
             is_more: self.is_more,
         }
+    }
+}
+
+/// A condition the engine holds, as the class a caller builds one with.
+///
+/// The engine keeps what a condition means rather than the object it came
+/// from, so an order read back carries none and, placed again, works at once
+/// with nothing holding it. Each kind the venue carries has a class here with
+/// the same fields the engine keeps, so what the venue
+/// reported is what comes back.
+pub(crate) fn condition_from_internal(
+    py: Python<'_>,
+    held: &OrderCondition,
+) -> PyResult<Py<PyAny>> {
+    Ok(match held {
+        OrderCondition::Price { con_id, exchange, price, is_more, trigger_method } => {
+            Py::new(py, PriceCondition {
+                con_id: *con_id,
+                exchange: exchange.clone(),
+                price: *price as f64 / PRICE_SCALE_F,
+                is_more: *is_more,
+                trigger_method: *trigger_method as i32,
+            })?.into_any()
+        }
+        OrderCondition::Time { time, is_more } => Py::new(py, TimeCondition {
+            time: time.clone(),
+            is_more: *is_more,
+        })?.into_any(),
+        OrderCondition::Margin { percent, is_more } => Py::new(py, MarginCondition {
+            percent: *percent,
+            is_more: *is_more,
+        })?.into_any(),
+        OrderCondition::Execution { symbol, exchange, sec_type } => {
+            Py::new(py, ExecutionCondition {
+                symbol: symbol.clone(),
+                exchange: exchange.clone(),
+                sec_type: sec_type.clone(),
+            })?.into_any()
+        }
+        OrderCondition::Volume { con_id, exchange, volume, is_more } => {
+            Py::new(py, VolumeCondition {
+                con_id: *con_id,
+                exchange: exchange.clone(),
+                volume: *volume,
+                is_more: *is_more,
+            })?.into_any()
+        }
+        OrderCondition::PercentChange { con_id, exchange, percent, is_more } => {
+            Py::new(py, PercentChangeCondition {
+                con_id: *con_id,
+                exchange: exchange.clone(),
+                change_percent: *percent,
+                is_more: *is_more,
+            })?.into_any()
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An order read back states what it is waiting for.
+    ///
+    /// The engine keeps what a condition means rather than the object it was
+    /// read from, and for a while nothing built one back — so an order read
+    /// back through open orders, completed orders or a reconnect came back
+    /// holding none, and placing it again placed an order that worked at once.
+    #[test]
+    fn a_condition_read_back_is_the_condition_that_was_sent() {
+        let sent = vec![
+            OrderCondition::Price {
+                con_id: 756733,
+                exchange: "SMART".into(),
+                price: (412.25 * PRICE_SCALE_F) as Price,
+                is_more: true,
+                trigger_method: 0,
+            },
+            OrderCondition::Time { time: "20260101 09:30:00".into(), is_more: false },
+            OrderCondition::Volume {
+                con_id: 756733,
+                exchange: "SMART".into(),
+                volume: 1_000_000,
+                is_more: true,
+            },
+        ];
+        let held = crate::types::model::Order { conditions: sent.clone(), ..Default::default() };
+
+        // The test binary embeds the interpreter rather than being loaded by
+        // one, so nothing has started it yet.
+        Python::initialize();
+        Python::attach(|py| {
+            let back = super::super::class_orders::Order::from_api(py, &held, 7)
+                .expect("the order comes back");
+            assert_eq!(back.conditions.len(), sent.len(), "each one comes back");
+            assert_eq!(
+                back.convert_conditions(py).expect("and reads as itself"),
+                sent,
+                "what the venue reported is what a caller would place again",
+            );
+        });
     }
 }

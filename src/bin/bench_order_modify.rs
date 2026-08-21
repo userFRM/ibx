@@ -53,7 +53,7 @@ fn main() {
         "[{:.3}s] Submitting initial GTC limit BUY 1 @ $1.00...",
         start.elapsed().as_secs_f64(),
     );
-    session.send_order(OrderRequest::SubmitEx { order_id: current_order_id, instrument, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: PRICE_SCALE }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } });
+    session.send_order(OrderRequest::SubmitEx { order_id: current_order_id, instrument, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: PRICE_SCALE }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } });
 
     // Wait for initial ack
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -101,7 +101,7 @@ fn main() {
         session.send_order(OrderRequest::Modify {
             order_id: current_order_id,
             price: new_price,
-            qty: 1,
+            qty: ibx::types::QTY_SCALE,
             // Matches the outside_rth=true the order was placed with above.
             outside_rth: true,
             ord_type: 0,

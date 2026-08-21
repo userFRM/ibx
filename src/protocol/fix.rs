@@ -77,7 +77,7 @@ pub const MSG_LOGOUT: &str = "5";
 pub const MSG_LOGON: &str = "A";
 /// Message type `B`: a news item.
 pub const MSG_NEWS: &str = "B";
-/// Message type `U`: one of the venue's own messages.
+/// Message type `U`: a venue-defined message.
 pub const MSG_IB_CUSTOM: &str = "U";
 /// Message type `8`: an execution report.
 pub const MSG_EXEC_REPORT: &str = "8";
@@ -167,7 +167,12 @@ fn push_u32(buf: &mut Vec<u8>, mut val: u32) {
     buf[start..].reverse();
 }
 
-/// Write a u32 as N zero-padded decimal digits (no alloc).
+/// Write a u32 as at least N zero-padded decimal digits (no alloc).
+///
+/// A value too large for N digits keeps every digit rather than losing the
+/// high ones. Truncation states a number that is not the value: a body of
+/// 10500 bytes announced as 0500 is framed ten thousand bytes short, and a
+/// sequence number past 999999 restarts the session's count.
 #[inline]
 fn push_u32_padded<const N: usize>(buf: &mut Vec<u8>, val: u32) {
     let mut digits = [b'0'; N];
@@ -175,6 +180,10 @@ fn push_u32_padded<const N: usize>(buf: &mut Vec<u8>, val: u32) {
     for d in digits.iter_mut().rev() {
         *d = b'0' + (v % 10) as u8;
         v /= 10;
+    }
+    if v > 0 {
+        push_u32(buf, val);
+        return;
     }
     buf.extend_from_slice(&digits);
 }
@@ -193,6 +202,50 @@ pub fn fix_parse(data: &[u8]) -> HashMap<u32, String> {
             }
     }
     result
+}
+
+/// Parse a message whose fields repeat, one map per repetition.
+///
+/// [`fix_parse`] keeps the last value of each tag, which is right for a message
+/// that states each field once and wrong for one that states a group of them
+/// per item. A holding list and an order's conditions are both groups: read
+/// flat, only the last holding survives and the conditions are not read at
+/// all.
+///
+/// A repetition begins at `start_tag`. What appears before the first one
+/// describes the message rather than any repetition, so it is carried onto
+/// each; what follows the last belongs to it, because nothing on the wire marks
+/// where a group ends. A message with no `start_tag` yields nothing, which is
+/// what a message carrying no such group means.
+pub fn fix_parse_repeating(data: &[u8], start_tag: u32) -> Vec<HashMap<u32, String>> {
+    let mut header: Vec<(u32, String)> = Vec::new();
+    let mut groups: Vec<Vec<(u32, String)>> = Vec::new();
+
+    for part in data.split(|&b| b == SOH) {
+        if part.is_empty() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(part);
+        let Some((tag_str, value)) = text.split_once('=') else { continue };
+        let Ok(tag) = tag_str.parse::<u32>() else { continue };
+
+        if tag == start_tag {
+            groups.push(vec![(tag, value.to_string())]);
+        } else if let Some(current) = groups.last_mut() {
+            current.push((tag, value.to_string()));
+        } else {
+            header.push((tag, value.to_string()));
+        }
+    }
+
+    groups
+        .into_iter()
+        .map(|group| {
+            let mut map: HashMap<u32, String> = header.iter().cloned().collect();
+            map.extend(group);
+            map
+        })
+        .collect()
 }
 
 /// Fold 20-byte HMAC digest to 4 bytes → 8-char uppercase hex.
@@ -222,7 +275,12 @@ fn sig_hex_eq(expected: &[u8; 4], hex_ascii: &[u8]) -> bool {
     for i in 0..4 {
         let hi = hex_nibble(hex_ascii[i * 2]);
         let lo = hex_nibble(hex_ascii[i * 2 + 1]);
-        if (hi << 4 | lo) != expected[i] {
+        // A character that is not hexadecimal is not a signature. Left to
+        // arithmetic alone, its `0xFF` lost its top four bits to the shift and
+        // read as an `F`, so any expected byte from `F0` to `FF` was matched by
+        // text that is not hexadecimal at all — a signature check a malformed
+        // frame could pass.
+        if hi > 0xF || lo > 0xF || (hi << 4 | lo) != expected[i] {
             return false;
         }
     }
@@ -311,7 +369,16 @@ pub fn fix_sign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut new_msg = Vec::with_capacity(hdr_end + 8 + signed_body_len + 8);
     new_msg.extend_from_slice(header);
     new_msg.extend_from_slice(b"9=");
-    push_u32(&mut new_msg, signed_body_len as u32);
+    // Each header writes its length the way it was built: `fix_build` pads a
+    // FIX.4.1 body length to four digits, `fixcomp_build` writes a compressed
+    // one plain. Rebuilding both plain here re-wrote every short signed FIX
+    // frame's `9=0052` as `9=52`, so the bytes leaving this client stopped
+    // matching the ones it sends unsigned.
+    if is_fix41 {
+        push_u32_padded::<4>(&mut new_msg, signed_body_len as u32);
+    } else {
+        push_u32(&mut new_msg, signed_body_len as u32);
+    }
     new_msg.push(SOH);
     new_msg.extend_from_slice(body);
     new_msg.extend_from_slice(b"8349=");
@@ -429,8 +496,17 @@ pub fn fix_unsign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>, b
 
 /// The end of the first complete FIX message in a buffer, if there is one.
 ///
-/// A message ends at its checksum field, which is the last field it carries.
+/// A FIX.4.1 message ends at its checksum field, which is the last field it
+/// carries. A compressed one carries no checksum at all: it ends where its body
+/// length says it does, and the bytes before that are deflate output that can
+/// hold anything, including the `10=` a checksum scan is looking for. Framed by
+/// that scan, a compressed frame either never completed — the auth ACK arrives
+/// as one, so the logon read timed out on it — or ended early inside its own
+/// payload and took the message behind it with it.
 fn frame_end(buf: &[u8]) -> Option<usize> {
+    if buf.starts_with(b"8=FIXCOMP\x01") {
+        return super::fixcomp::fixcomp_length(buf);
+    }
     let idx = buf.windows(4).position(|w| w == b"\x0110=")?;
     let end = buf[idx + 4..].iter().position(|&b| b == SOH)?;
     Some(idx + 4 + end + 1)
@@ -515,6 +591,66 @@ mod tests {
         let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
         let err = fix_read_deadline(&mut reader, &mut Vec::new(), deadline).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    /// The auth ACK arrives compressed and carries no checksum, so the reader
+    /// has to take its length from tag 9. Framed by a checksum scan it never
+    /// completes at all, and the logon times out waiting for a message that had
+    /// already arrived in full.
+    #[test]
+    fn a_compressed_frame_is_read_whole_and_alone() {
+        let inner = fix_build(&[(35, "A"), (108, "30")], 1);
+        let comp = crate::protocol::fixcomp::fixcomp_build(&inner);
+        let mut reader = std::io::Cursor::new(comp.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let got = fix_read_deadline(&mut reader, &mut Vec::new(), deadline).unwrap();
+        assert_eq!(got, comp);
+    }
+
+    /// And the message behind it is still there to be read, rather than having
+    /// been swallowed as part of the compressed one.
+    #[test]
+    fn a_message_behind_a_compressed_frame_survives_it() {
+        let comp = crate::protocol::fixcomp::fixcomp_build(&fix_build(&[(35, "A")], 1));
+        let plain = fix_build(&[(35, "0")], 2);
+        let mut wire = comp.clone();
+        wire.extend_from_slice(&plain);
+        let mut reader = std::io::Cursor::new(wire);
+        let mut carry = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        assert_eq!(fix_read_deadline(&mut reader, &mut carry, deadline).unwrap(), comp);
+        assert_eq!(fix_read_deadline(&mut reader, &mut carry, deadline).unwrap(), plain);
+    }
+
+    /// Signing rebuilds the header, and the length it writes there has to be
+    /// the one the unsigned build wrote: four digits for FIX.4.1, plain for the
+    /// compressed header that was never padded.
+    #[test]
+    fn signing_writes_the_body_length_the_way_the_header_was_built() {
+        let iv = [7u8; 16];
+        let (signed, _) = fix_sign(&fix_build(&[(35, "0")], 1), b"key0000000000000", &iv);
+        let at = signed.windows(2).position(|w| w == b"9=").expect("a tag 9") + 2;
+        let end = at + signed[at..].iter().position(|&b| b == SOH).expect("its delimiter");
+        assert_eq!(end - at, 4, "FIX.4.1 states its body length in four digits");
+
+        let comp = crate::protocol::fixcomp::fixcomp_build(&fix_build(&[(35, "0")], 1));
+        let (signed, _) = fix_sign(&comp, b"key0000000000000", &iv);
+        let at = signed.windows(2).position(|w| w == b"9=").expect("a tag 9") + 2;
+        let end = at + signed[at..].iter().position(|&b| b == SOH).expect("its delimiter");
+        assert_ne!(signed[at], b'0', "a compressed length is written plain");
+        assert!(end > at);
+    }
+
+    /// A body longer than the padding keeps its high digits. Dropped, the field
+    /// names a shorter body than the one that follows it.
+    #[test]
+    fn a_length_too_long_to_pad_keeps_every_digit() {
+        let mut out = Vec::new();
+        push_u32_padded::<4>(&mut out, 10_500);
+        assert_eq!(out, b"10500");
+        let mut out = Vec::new();
+        push_u32_padded::<4>(&mut out, 52);
+        assert_eq!(out, b"0052");
     }
 
     #[test]
@@ -836,6 +972,27 @@ mod tests {
         let iv: Vec<u8> = (0..16).collect();
         let (_, _, valid) = fix_unsign(b"8=FIXCOMP\x01", &mac_key, &iv);
         assert!(!valid);
+    }
+
+    /// A signature that is not hexadecimal is not a signature.
+    ///
+    /// Every expected byte whose top half is `F` was matched by text carrying
+    /// any character at all in that position, because the invalid nibble's
+    /// `0xFF` was truncated to `F` by the shift that placed it.
+    #[test]
+    fn a_signature_that_is_not_hexadecimal_does_not_match() {
+        let expected = [0xF5u8, 0xFA, 0xFB, 0xFC];
+        assert!(sig_hex_eq(&expected, b"F5FAFBFC"), "the signature itself matches");
+        assert!(sig_hex_eq(&expected, b"f5fafbfc"), "and matches in either case");
+        for bad in [
+            &b"G5FAFBFC"[..], &b"F5ZAFBFC"[..], &b"F5FA.BFC"[..], &b"F5FAFB C"[..],
+        ] {
+            assert!(
+                !sig_hex_eq(&expected, bad),
+                "{} is not hexadecimal and must not match",
+                String::from_utf8_lossy(bad),
+            );
+        }
     }
 
     #[test]

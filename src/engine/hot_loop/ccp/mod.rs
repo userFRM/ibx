@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 /// How long a matching-symbols request waits for its reply. Matches the
@@ -10,7 +10,6 @@ const MATCHING_SYMBOLS_TIMEOUT: Duration = Duration::from_secs(60);
 const OPTION_CHAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 use crate::bridge::{Event, SharedState};
-use crate::types::model as api;
 use crate::engine::context::Context;
 use crate::protocol::datetime::chrono_free_timestamp;
 use crate::protocol::connection::Connection;
@@ -259,11 +258,11 @@ pub(crate) struct CcpState {
     /// replay of a recently-seen ExecID double-count a fill.
     pub(crate) exec_id_order: VecDeque<String>,
     pub(crate) bulletin_next_id: i32,
-    /// Live news subscriptions: instrument, request id, and the providers the
-    /// caller asked for. The providers are kept because a reconnect has to
-    /// send the same request again, and the request is the only place they
-    /// appear.
-    pub(crate) news_subscriptions: Vec<(InstrumentId, u32, String)>,
+    /// Live news subscriptions: instrument, request id, the providers the
+    /// caller asked for, and the contract. The providers are kept because a
+    /// reconnect has to send the same request again, and the request is the
+    /// only place they appear; the contract because the withdrawal names it.
+    pub(crate) news_subscriptions: Vec<(InstrumentId, u32, String, i64)>,
     pub(crate) disconnected: bool,
     /// When to account for orders the reconnect did not explain.
     ///
@@ -298,12 +297,6 @@ pub(crate) struct CcpState {
     /// ties a reply back to it, and the conId is held because the callback
     /// names the underlying the caller asked about.
     pub(crate) pending_option_params: Vec<(u32, String, i64, Instant)>,
-    /// keepUpToDate historical queries routed through CCP: (query_id, req_id)
-    pub(crate) pending_kut_historical: Vec<(String, u32)>,
-    /// tickerId → req_id mapping for keepUpToDate 35=G bar updates
-    pub(crate) kut_ticker_map: std::collections::HashMap<u32, u32>,
-    /// tickerId → minTick for bar decoding
-    pub(crate) kut_min_tick: std::collections::HashMap<u32, f64>,
     /// HMAC signing key for XML-carrying CCP messages (selective signing).
     pub(crate) ccp_sign_key: Vec<u8>,
     /// HMAC signing IV — advances only for signed messages, independent of unsigned
@@ -330,6 +323,17 @@ pub(crate) struct CcpState {
     pub(crate) next_fanout_id: u32,
     /// Counter for internal secdef req IDs (auto-fetch on cold-cache positions).
     pub(crate) next_internal_secdef_id: u32,
+    /// The number the next advisor-configuration request states as its own.
+    ///
+    /// These are counted from one for the session, and the request sends the
+    /// count as a string, so a reply can be matched to the question that asked
+    /// it.
+    pub(crate) next_advisor_request: u32,
+    /// The key the open account subscription was asked for under, so the
+    /// withdrawal can name it. Tag 6036 carries whether the request opens the
+    /// subscription or closes it; a session that only ever opens them holds one
+    /// per loop for the life of the connection.
+    pub(crate) account_request_key: Option<String>,
     /// User-message subtypes the venue has sent that nothing here reads, so
     /// each is named once rather than on every arrival.
     unread_subtypes: std::collections::HashSet<String>,
@@ -352,8 +356,12 @@ pub(crate) struct CcpState {
     /// Those the venue has now named, ready to be handled as though the id had
     /// been there all along.
     pub(crate) resolved_named: Vec<crate::types::ControlCommand>,
-    /// conIds already auto-fetched a secdef for, keyed by con_id (dedup).
-    pub(crate) auto_fetched_conids: HashSet<i64>,
+    /// conIds a secdef has been fetched for without a caller asking, and the
+    /// request that fetched each. The request is kept so a fetch that is never
+    /// answered can be forgotten; held indefinitely, one lost request leaves
+    /// that contract unasked for the life of the session and every position on
+    /// it unnamed.
+    pub(crate) auto_fetched_conids: HashMap<i64, u32>,
     /// Scanner results awaiting per-conId contract-detail enrichment.
     /// Each entry parks a parsed `<ScanResponse>` until every con_id the
     /// cache missed has been resolved via the same 35=d path that user-initiated
@@ -384,7 +392,13 @@ pub(crate) struct PendingSchedulePair {
 pub(crate) struct PendingFanout {
     pub api_req_id: u32,
     pub fanout_req_ids: Vec<String>,
-    pub received: usize,
+    /// Which legs have answered.
+    ///
+    /// The exchanges that have answered. A fan-out ends when every exchange it
+    /// asked has answered. Counting frames instead completes it twice over for
+    /// a leg answered with more than one row, and drops the legs still
+    /// outstanding.
+    pub answered: Vec<String>,
     /// Idle deadline, refreshed on every per-exchange reply.
     ///
     /// A fan-out asks each exchange the contract lists on and ends when every
@@ -407,9 +421,6 @@ impl CcpState {
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
             pending_option_params: Vec::new(),
-            pending_kut_historical: Vec::new(),
-            kut_ticker_map: std::collections::HashMap::new(),
-            kut_min_tick: std::collections::HashMap::new(),
             ccp_sign_key: Vec::new(),
             ccp_sign_iv: std::sync::Mutex::new(Vec::new()),
             pending_schedule_pair: Vec::new(),
@@ -418,13 +429,15 @@ impl CcpState {
             details_delivered: std::collections::HashMap::new(),
             next_fanout_id: 1,
             next_internal_secdef_id: 0xF000_0000,
+            next_advisor_request: 1,
+            account_request_key: None,
             unread_subtypes: std::collections::HashSet::new(),
             unread_types: std::collections::HashSet::new(),
             pending_md_subscribe: Vec::new(),
             resolved_md_subscribe: Vec::new(),
             pending_named: Vec::new(),
             resolved_named: Vec::new(),
-            auto_fetched_conids: HashSet::new(),
+            auto_fetched_conids: HashMap::new(),
             pending_scanner_enrichment: Vec::new(),
         }
     }
@@ -562,11 +575,11 @@ impl CcpState {
                                 };
                                 if let Some(pos) = pos {
                                     let (req_id, _) = self.pending_matching_symbols.remove(pos);
-                                    // An empty result is a legitimate answer
-                                    // ("no such symbol") and MUST be delivered:
-                                    // dropping it left the caller waiting forever
-                                    // and the stale queue head misattributed
-                                    // every later reply.
+                                    // An empty result is an answer in its own
+                                    // right ("no such symbol") and is
+                                    // delivered. Dropped, the caller waits
+                                    // indefinitely and the stale queue head
+                                    // misattributes every later reply.
                                     shared.reference.push_matching_symbols(req_id, matches);
                                 } else {
                                     log::warn!(
@@ -577,7 +590,7 @@ impl CcpState {
                                 }
                             }
                         }
-                        // The venue's own error channel. Two subtypes, one
+                        // The venue's error channel. Two subtypes, one
                         // channel: which number it arrives under depends only
                         // on a capability the session negotiated at logon, not
                         // on the error.
@@ -612,86 +625,6 @@ impl CcpState {
                     }
                 }
             }
-            "W" => {
-                // keepUpToDate historical data responses routed through CCP
-                if let Some(xml_tag) = parsed.get(&6118) {
-                    if let Some(resp) = crate::control::historical::parse_bar_response(xml_tag) {
-                        if let Some(pos) = self.pending_kut_historical.iter().position(|(qid, _)| *qid == resp.query_id) {
-                            let (_, req_id) = self.pending_kut_historical[pos];
-                            shared.reference.push_historical_data(req_id, resp.clone());
-                            if resp.is_complete {
-                                // Initial batch done — keep entry for streaming
-                            }
-                        }
-                    }
-                    else if let Some(ticker_id_str) = crate::control::historical::parse_ticker_id(xml_tag) {
-                        let ticker_id: u32 = ticker_id_str.parse().unwrap_or(0);
-                        // No unit, no bars: a price counted in a unit nobody
-                        // stated is wrong and looks right.
-                        let Some(min_tick) =
-                            crate::control::historical::min_tick_of(xml_tag, &ticker_id_str)
-                        else {
-                            return;
-                        };
-                        // Match ticker to a pending keepUpToDate query
-                        for (qid, req_id) in &self.pending_kut_historical {
-                            if xml_tag.contains(qid) {
-                                self.kut_ticker_map.insert(ticker_id, *req_id);
-                                self.kut_min_tick.insert(ticker_id, min_tick);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            "G" => {
-                // keepUpToDate streaming bar updates (same binary format as rtbar)
-                let body = match super::find_body_after_tag(msg, b"35=G\x01") {
-                    Some(b) => b,
-                    None => return,
-                };
-                let sig_pos = body.windows(6).position(|w| w == b"\x018349=");
-                let body = if let Some(pos) = sig_pos { &body[..pos] } else { body };
-                if body.len() >= 11 {
-                    let ticker_id = u32::from_be_bytes([body[2], body[3], body[4], body[5]]);
-                    let timestamp = u32::from_be_bytes([body[6], body[7], body[8], body[9]]);
-                    let payload_len = body[10] as usize;
-                    if body.len() >= 11 + payload_len
-                        && let Some(&req_id) = self.kut_ticker_map.get(&ticker_id) {
-                            // Only the unit the venue stated for this ticker.
-                            // Absent, the bar is left rather than decoded as
-                            // though it moved in pennies.
-                            let Some(&min_tick) = self.kut_min_tick.get(&ticker_id) else {
-                                log::warn!(
-                                    "bar for ticker {ticker_id} arrived before the venue \
-                                     stated what its prices are counted in; not decoded",
-                                );
-                                return;
-                            };
-                            let payload = &body[11..11 + payload_len];
-                            if let Some(mut bar) = crate::control::historical::decode_bar_payload(payload, min_tick) {
-                                bar.timestamp = timestamp;
-                                let hist_bar = crate::control::historical::HistoricalBar {
-                                    time: format!("{timestamp}"),
-                                    open: bar.open,
-                                    high: bar.high,
-                                    low: bar.low,
-                                    close: bar.close,
-                                    volume: bar.volume as i64,
-                                    wap: bar.wap,
-                                    count: bar.count as u32,
-                                };
-                                let resp = crate::control::historical::HistoricalResponse {
-                                    query_id: String::new(),
-                                    timezone: String::new(),
-                                    bars: vec![hist_bar],
-                                    is_complete: true,
-                                };
-                                shared.reference.push_historical_data(req_id, resp);
-                            }
-                        }
-                }
-            }
             // The end of a batch the venue was sending. An account request is
             // otherwise only known to be finished when its rows arrive, and an
             // account holding nothing sends no rows — so a caller waiting on
@@ -710,14 +643,32 @@ impl CcpState {
             // describe are kept.
             "AL" => handle_account_update_elsewhere(msg, shared, crate::types::HeldElsewhere::Away),
             "UL" => handle_account_update_elsewhere(msg, shared, crate::types::HeldElsewhere::Aside),
-            "UP" => positions::handle_position_update(&parsed, context, shared, event_tx),
+            // One frame, every holding it names — see `split_position_entries`.
+            "UP" => {
+                for one in positions::split_position_entries(msg) {
+                    positions::handle_position_update(&one, context, shared, event_tx);
+                }
+            }
             // The venue keeps three sets of holdings and this client read one.
             // The others carry the same fields in the same tags — they differ
             // only in which set they belong to — and were discarded, so a
             // caller could not learn the account held anything away at all.
-            "AP" => positions::handle_position_elsewhere(&parsed, shared, crate::types::HeldElsewhere::Away),
-            "DO" => positions::handle_position_elsewhere(&parsed, shared, crate::types::HeldElsewhere::DisplayOnly),
-            "DP" => positions::handle_position_elsewhere(&parsed, shared, crate::types::HeldElsewhere::Aside),
+            //
+            // One frame, every holding it names, the same way the account's own
+            // set is read. Handed the flat map instead, a frame naming several
+            // holdings arrived as one: the generic parser keeps the last value
+            // of a repeated tag, so every holding but the last was gone before
+            // anything could see it.
+            "AP" | "DO" | "DP" => {
+                let held = match msg_type {
+                    "AP" => crate::types::HeldElsewhere::Away,
+                    "DO" => crate::types::HeldElsewhere::DisplayOnly,
+                    _ => crate::types::HeldElsewhere::Aside,
+                };
+                for one in positions::split_position_entries(msg) {
+                    positions::handle_position_elsewhere(&one, shared, held);
+                }
+            }
             "d" => {
                 let response_req_id = crate::control::contracts::secdef_response_req_id(msg);
                 // A reply can describe several contracts: a symbol asked for
@@ -764,17 +715,16 @@ impl CcpState {
                         && rid < 0xF000_0000
                     {
                         for def in all.into_iter().filter(|d| d.con_id != 0) {
-                            shared.reference.cache_contract(def.con_id as i64, api::Contract {
-                                con_id: def.con_id as i64,
-                                symbol: def.symbol.clone(),
-                                sec_type: def.sec_type.to_api_str().to_string(),
-                                exchange: def.exchange.clone(),
-                                currency: def.currency.clone(),
-                                local_symbol: def.local_symbol.clone(),
-                                primary_exchange: def.primary_exchange.clone(),
-                                trading_class: def.trading_class.clone(),
-                                ..Default::default()
-                            });
+                            shared.reference.cache_contract(
+                            def.con_id as i64,
+                            // Mapped where every other reader of a
+                            // definition maps it. Written out here, an
+                            // option was cached without its strike, its
+                            // right, its expiry or its multiplier — which
+                            // is all that tells two options on one
+                            // underlying apart.
+                            crate::types::model::ContractDetails::from_definition(&def).contract,
+                        );
                             if self.details_delivered.entry(rid).or_default().insert(def.con_id as i64) {
                                 let for_event = clone_for_event(event_tx, &def);
                                 shared.reference.push_contract_details(rid, def);
@@ -791,7 +741,7 @@ impl CcpState {
                         p.fanout_req_ids.iter().any(|id| id == rid)
                     })
                 });
-                if let Some(idx) = fanout_idx {
+                if let (Some(idx), Some(rid)) = (fanout_idx, response_req_id.as_ref()) {
                     if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
                         let api_req_id = self.pending_fanout[idx].api_req_id;
                         // No con_id is "no definition for this
@@ -799,22 +749,30 @@ impl CcpState {
                         // still counts toward the fan-out below, so the
                         // request completes.
                         if def.con_id != 0 {
-                            let sec_type_str = def.sec_type.to_api_str();
-                            shared.reference.cache_contract(def.con_id as i64, api::Contract {
-                                con_id: def.con_id as i64,
-                                symbol: def.symbol.clone(),
-                                sec_type: sec_type_str.to_string(),
-                                exchange: def.exchange.clone(),
-                                currency: def.currency.clone(),
-                                local_symbol: def.local_symbol.clone(),
-                                primary_exchange: def.primary_exchange.clone(),
-                                trading_class: def.trading_class.clone(),
-                                ..Default::default()
+                            shared.reference.cache_contract(
+                            def.con_id as i64,
+                            // Mapped where every other reader of a
+                            // definition maps it. Written out here, an
+                            // option was cached without its strike, its
+                            // right, its expiry or its multiplier — which
+                            // is all that tells two options on one
+                            // underlying apart.
+                            crate::types::model::ContractDetails::from_definition(&def).contract,
+                        );
+                            identify_position(shared, &def);
+                            self.try_release_scanner_enrichments(def.con_id as i64, shared);
+                            // The master row for this same contract may be
+                            // parked waiting for its trading hours. It is the
+                            // richer of the two and claims the same dedup slot,
+                            // so delivering this one first hands the caller a
+                            // contract with no trading or liquid hours and
+                            // drops the enriched row when it arrives.
+                            let awaiting_schedule = self.pending_schedule_pair.iter().any(|p| {
+                                p.api_req_id == api_req_id && p.def.con_id == def.con_id
                             });
-                            identify_position(shared, &def);
-                            identify_position(shared, &def);
-                        self.try_release_scanner_enrichments(def.con_id as i64, shared);
-                            if self.details_delivered.entry(api_req_id).or_default().insert(def.con_id as i64) {
+                            if !awaiting_schedule
+                                && self.details_delivered.entry(api_req_id).or_default().insert(def.con_id as i64)
+                            {
                                 let for_event = clone_for_event(event_tx, &def);
                                 shared.reference.push_contract_details(api_req_id, def);
                                 if let Some(details) = for_event {
@@ -825,12 +783,25 @@ impl CcpState {
                         // A leg the gateway cannot resolve carries no contract:
                         // it still completes the fan-out, but a zeroed row is
                         // not a listing.
-                        self.pending_fanout[idx].received += 1;
+                        if !self.pending_fanout[idx].answered.iter().any(|id| id == rid) {
+                            self.pending_fanout[idx].answered.push(rid.clone());
+                        }
                         self.pending_fanout[idx].deadline = Instant::now() + SECDEF_TIMEOUT;
-                        if self.pending_fanout[idx].received >= self.pending_fanout[idx].fanout_req_ids.len() {
-                            shared.reference.push_contract_details_end(api_req_id);
-                            emit(event_tx, Event::ContractDetailsEnd(api_req_id));
+                        if self.pending_fanout[idx].answered.len() >= self.pending_fanout[idx].fanout_req_ids.len() {
                             self.pending_fanout.swap_remove(idx);
+                            // The master row may still be parked awaiting its
+                            // schedule. Ending here would order the end before
+                            // the row, so the pair carries it — the same way the
+                            // single-exchange case above hands the end over.
+                            match self.pending_schedule_pair.iter_mut()
+                                .find(|p| p.api_req_id == api_req_id)
+                            {
+                                Some(pair) => pair.is_last = true,
+                                None => {
+                                    shared.reference.push_contract_details_end(api_req_id);
+                                    emit(event_tx, Event::ContractDetailsEnd(api_req_id));
+                                }
+                            }
                         }
                     }
                     let rules = crate::control::contracts::parse_market_rules(msg);
@@ -843,18 +814,16 @@ impl CcpState {
                 if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
                     let is_last_wire = crate::control::contracts::secdef_response_is_last(msg);
                     if def.con_id != 0 {
-                        let sec_type_str = def.sec_type.to_api_str();
-                        shared.reference.cache_contract(def.con_id as i64, api::Contract {
-                            con_id: def.con_id as i64,
-                            symbol: def.symbol.clone(),
-                            sec_type: sec_type_str.to_string(),
-                            exchange: def.exchange.clone(),
-                            currency: def.currency.clone(),
-                            local_symbol: def.local_symbol.clone(),
-                            primary_exchange: def.primary_exchange.clone(),
-                            trading_class: def.trading_class.clone(),
-                            ..Default::default()
-                        });
+                        shared.reference.cache_contract(
+                            def.con_id as i64,
+                            // Mapped where every other reader of a
+                            // definition maps it. Written out here, an
+                            // option was cached without its strike, its
+                            // right, its expiry or its multiplier — which
+                            // is all that tells two options on one
+                            // underlying apart.
+                            crate::types::model::ContractDetails::from_definition(&def).contract,
+                        );
                         identify_position(shared, &def);
                         self.try_release_scanner_enrichments(def.con_id as i64, shared);
                         // A subscription held back for want of an id. Answered
@@ -1007,8 +976,8 @@ impl CcpState {
                                 self.pending_fanout.push(PendingFanout {
                                     api_req_id: req_id,
                                     fanout_req_ids,
-                                    received: 0,
-                                                            deadline: Instant::now() + SECDEF_TIMEOUT,
+                                    answered: Vec::new(),
+                                    deadline: Instant::now() + SECDEF_TIMEOUT,
                                 });
                             }
                         }
@@ -1047,7 +1016,20 @@ impl CcpState {
             .map(|(_, v)| *v);
         let api_type = match api_type {
             Some(t) => t,
-            None => return,
+            None => {
+                // Dropped, and said so. A bulletin whose urgency this does not
+                // name is still a bulletin the venue sent, and returning here in
+                // silence left no callback, no log and nothing in the unread
+                // record to say a message had arrived and gone nowhere.
+                shared.market.note_unread_wire(
+                    "trading",
+                    format!("news bulletin urgency {fix_type}"),
+                );
+                log::warn!(
+                    "news bulletin states urgency {fix_type}, which names no bulletin type here — dropped",
+                );
+                return;
+            }
         };
         let message = parsed.get(&fix::TAG_HEADLINE).cloned().unwrap_or_default();
         let exchange = parsed.get(&fix::TAG_SECURITY_EXCHANGE).cloned().unwrap_or_default();
@@ -1181,23 +1163,31 @@ impl CcpState {
         // caller learning that, once per request.
         let over = shared.reference.session_over();
         let mut expired: Vec<u32> = Vec::new();
+        let mut lost_auto_fetch: Vec<u32> = Vec::new();
         self.pending_secdef.retain(|(req_id, _, deadline)| {
             if now >= *deadline || over.is_some() {
                 if *req_id < 0xF000_0000 {
                     expired.push(*req_id);
                 } else {
                     log::warn!("Internal secdef timeout: req_id={req_id:#x}");
+                    // Forgotten, so the next report naming that contract asks
+                    // again. Held, one lost request leaves the contract unnamed
+                    // for the life of the session.
+                    lost_auto_fetch.push(*req_id);
                 }
                 false
             } else {
                 true
             }
         });
+        if !lost_auto_fetch.is_empty() {
+            self.auto_fetched_conids.retain(|_, rid| !lost_auto_fetch.contains(rid));
+        }
         self.pending_fanout.retain(|p| {
             if now >= p.deadline || over.is_some() {
                 log::warn!(
                     "Contract-details fan-out timeout: api_req_id={} received {} of {}",
-                    p.api_req_id, p.received, p.fanout_req_ids.len(),
+                    p.api_req_id, p.answered.len(), p.fanout_req_ids.len(),
                 );
                 expired.push(p.api_req_id);
                 false
@@ -1344,12 +1334,22 @@ impl CcpState {
         if let Some(conn) = ccp_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let command = command.to_string();
+            // Which partition, and which request. The partition rides 6906 and
+            // 6158 is the request's own number, counted from one for the
+            // session and sent as a string, which the reply carries back so an
+            // answer can be matched to its question. Writing the partition
+            // into 6158 and omitting 6906 leaves every advisor request naming
+            // no partition, so a replacement carries a document for a partition
+            // none of them named. The two are written in this order.
+            let key = self.next_advisor_request.to_string();
+            self.next_advisor_request = self.next_advisor_request.wrapping_add(1);
             let mut fields: Vec<(u32, &str)> = vec![
                 (fix::TAG_MSG_TYPE, "U"),
                 (fix::TAG_SENDING_TIME, &ts),
                 (6040, "116"),
                 (6905, &command),
-                (6158, partition),
+                (6158, &key),
+                (6906, partition),
             ];
             // Only a replacement carries a document; asking for one that states
             // a document would be asking and telling at once.
@@ -1362,7 +1362,77 @@ impl CcpState {
         }
     }
 
-    /// Send P&L subscribe: 6040=142 with 6529=PLR.{N}|1={account}|
+    /// Ask the venue to state the account's figures now.
+    ///
+    /// The same pair the connection sends when it re-establishes itself: the
+    /// keyed account request on 6040=6, and the display request on 6040=91 that
+    /// carries the positions beside it. Subscribing alone does not produce
+    /// them — the venue restates them on its own schedule, and a session that
+    /// has just opened waits tens of seconds for its first set.
+    pub(crate) fn send_account_refresh(
+        &mut self,
+        account: &str,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        let Some(conn) = ccp_conn.as_mut() else { return };
+        let ts = chrono_free_timestamp();
+        let _ = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "91"),
+            (1, account),
+            (6556, "DR.1"),
+            (6712, "1"),
+        ]);
+        // The key is unique for the life of the process, not of this state.
+        // The venue keys the subscription on 6529 and answers a key it is
+        // already serving with nothing; a connection outlives the loops that
+        // use it, so a counter reset with each loop asks under a key the
+        // connection has already seen and is not answered at all. The opening
+        // sequence has used AR.1.
+        static NEXT_ACCOUNT_REQUEST: std::sync::atomic::AtomicU32 =
+            std::sync::atomic::AtomicU32::new(2);
+        let n = NEXT_ACCOUNT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let key = format!("AR.{n}");
+        self.account_request_key = Some(key.clone());
+        let _ = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "6"),
+            (6036, "1"),
+            (6095, account),
+            (6529, &key),
+        ]);
+        hb.last_ccp_sent = Instant::now();
+    }
+
+    /// Send P&L subscribe: 6040=142, 6529=PLR.{N}, 1={account}.
+    /// Close the account subscription this state opened.
+    ///
+    /// Tag 6036 states whether the request opens the subscription or closes it,
+    /// and the key on 6529 names which. Left open, each loop holds one for the
+    /// life of the connection and the venue stops answering new ones.
+    pub(crate) fn send_account_unsubscribe(
+        &mut self,
+        account: &str,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        let Some(key) = self.account_request_key.take() else { return };
+        let Some(conn) = ccp_conn.as_mut() else { return };
+        let ts = chrono_free_timestamp();
+        let _ = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "6"),
+            (6036, "0"),
+            (6095, account),
+            (6529, &key),
+        ]);
+        hb.last_ccp_sent = Instant::now();
+    }
+
     pub(crate) fn send_pnl_subscribe(
         &mut self,
         req_id: i64,
@@ -1371,13 +1441,19 @@ impl CcpState {
         hb: &mut HeartbeatState,
     ) {
         if let Some(conn) = ccp_conn.as_mut() {
-            let pnl_payload = format!("PLR.{req_id}|1={account}|");
+            // The key names the request; the account rides tag 1 beside it, as
+            // the protocol defines it and as the opening sequence in
+            // `logon::send_post_burst_grace` already wrote it. Written into the
+            // key instead, the account rides as literal bytes inside a field
+            // that names a request, and tag 1 is not sent at all.
+            let pnl_key = format!("PLR.{req_id}");
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"),
                 (fix::TAG_SENDING_TIME, &ts),
                 (6040, "142"),
-                (6529, &pnl_payload),
+                (6529, &pnl_key),
+                (1, account),
             ]);
             hb.last_ccp_sent = Instant::now();
             log::info!("Sent P&L subscribe: req_id={req_id} account={account}");
@@ -1393,7 +1469,7 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        self.news_subscriptions.push((instrument, req_id, providers.to_string()));
+        self.news_subscriptions.push((instrument, req_id, providers.to_string(), con_id));
         if let Some(conn) = ccp_conn.as_mut() {
             let req_id_str = req_id.to_string();
             let con_id_str = (con_id as u32).to_string();
@@ -1447,22 +1523,47 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        let req_id = match self.news_subscriptions.iter().position(|(id, _, _)| *id == instrument) {
-            Some(pos) => {
-                let (_, rid, _) = self.news_subscriptions.remove(pos);
-                rid
-            }
-            None => return,
-        };
+        let (req_id, con_id) =
+            match self.news_subscriptions.iter().position(|(id, ..)| *id == instrument) {
+                Some(pos) => {
+                    let (_, rid, _, con_id) = self.news_subscriptions.remove(pos);
+                    (rid, con_id)
+                }
+                None => return,
+            };
         if let Some(conn) = ccp_conn.as_mut() {
             let req_id_str = req_id.to_string();
-            let _ = conn.send_fix(&[
+            let con_id_str = (con_id as u32).to_string();
+            // Withdrawn the way it was asked for: the venue is told which tick,
+            // on which contract, not merely which request. The option model
+            // beside it is already withdrawn that way, and the protocol
+            // writes the same group on a withdrawal as on a subscription: the
+            // action, then the number of entries, then each entry's request id,
+            // contract, venue and type — the entry is written the same way
+            // whichever action it belongs to.
+            let sent = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                (262, &req_id_str),
                 (263, "2"),
+                (146, "1"),
+                (262, &req_id_str),
+                (6008, &con_id_str),
+                (207, "NEWS"),
+                (167, "CS"),
+                (264, "292"),
             ]);
             hb.last_ccp_sent = Instant::now();
-            log::info!("Sent news unsubscribe: instrument={instrument:?} req_id={req_id}");
+            match sent {
+                Ok(()) => log::info!(
+                    "Sent news unsubscribe: instrument={instrument:?} req_id={req_id}",
+                ),
+                // Reported as what it is. Logged as sent, a withdrawal that
+                // never left reads as one the venue took, and headlines keep
+                // arriving for a subscription no caller is reading.
+                Err(e) => log::warn!(
+                    "News unsubscribe for instrument={instrument:?} req_id={req_id} was not \
+                     sent: {e}; the venue goes on serving it until the session ends",
+                ),
+            }
         }
     }
 
@@ -1584,15 +1685,36 @@ impl CcpState {
             let fix_sec_type = match sec_type {
                 "STK" => "CS", "FUT" => "FUT", "OPT" => "OPT", "IND" => "IND", other => other,
             };
-            // Identifier lookup (ISIN/CUSIP): SecurityIDSource is the standard FIX
-            // code, 1 = CUSIP, 4 = ISIN. When a known one is set the
-            // lookup rides the identifier and drops the symbol/secType/filters.
-            let sec_id_source = match filters.sec_id_type.to_uppercase().as_str() {
-                "ISIN" => "4",
-                "CUSIP" => "1",
-                _ => "",
+            // A public identifier and the tags it rides on. Each kind has its
+            // own: a CUSIP goes out as 454=1|455=<id>|456=1, and 22/48 carry an
+            // ISIN or a FIGI under the character that names the source rather
+            // than a number. Sent as 22=1|48=<cusip>, a CUSIP named a source on
+            // the pair that carries an ISIN, and a FIGI was not
+            // sent at all — the lookup fell through to whatever the symbol
+            // matched. When one is set the lookup rides the identifier and
+            // drops the symbol/secType/filters.
+            let sec_id = filters.sec_id.as_str();
+            let identifier_fields: Vec<(u32, &str)> = if sec_id.is_empty() {
+                Vec::new()
+            } else {
+                match filters.sec_id_type.to_uppercase().as_str() {
+                    "CUSIP" => vec![(454, "1"), (455, sec_id), (456, "1")],
+                    "ISIN" => vec![(22, "4"), (48, sec_id)],
+                    "FIGI" => vec![(22, "S"), (48, sec_id)],
+                    // The caller named an identifier and a kind this client
+                    // states no source for, so the lookup below asks by symbol
+                    // instead. That is a different question, and answering it
+                    // without saying so hands back whatever the symbol matches.
+                    other => {
+                        log::warn!(
+                            "contract lookup states a {other} identifier, which this client \
+                             carries no source for; asking by symbol instead",
+                        );
+                        Vec::new()
+                    }
+                }
             };
-            let identifier_lookup = !filters.sec_id.is_empty() && !sec_id_source.is_empty();
+            let identifier_lookup = !identifier_fields.is_empty();
 
             let strike_str = if filters.strike > 0.0 { format!("{}", filters.strike) } else { String::new() };
             // PutOrCall: Call = 1, Put = 0.
@@ -1614,13 +1736,20 @@ impl CcpState {
             if identifier_lookup {
                 // Identifier lookup: the identifier and its source replace the
                 // symbol/secType/filters; exchange and currency still ride.
-                fields.push((22, sec_id_source));
-                fields.push((48, &filters.sec_id));
+                fields.extend_from_slice(&identifier_fields);
             } else {
+                // Both, where the caller stated both. The protocol carries
+                // the symbol and then the venue's local symbol from
+                // separate fields of the request, and neither suppresses the
+                // other. Sending only
+                // the local symbol asked a narrower question than the caller
+                // put, and a symbol that disagrees with it — which the venue
+                // would refuse — matched whatever the local symbol named.
+                if !symbol.is_empty() {
+                    fields.push((55, symbol));
+                }
                 if !filters.local_symbol.is_empty() {
                     fields.push((6035, &filters.local_symbol));
-                } else {
-                    fields.push((55, symbol));
                 }
                 if !filters.trading_class.is_empty() {
                     fields.push((6058, &filters.trading_class));
@@ -1685,12 +1814,16 @@ impl CcpState {
         }
     }
 
-    pub(crate) fn send_matching_symbols_request(&mut self, req_id: u32, pattern: &str, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_matching_symbols_request(&mut self, req_id: u32, pattern: &str, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
         // Recorded only where the request went out, so a request issued while
         // the transport is down is not queued as pending with nothing on the
         // wire to answer it.
         let Some(conn) = ccp_conn.as_mut() else {
             log::warn!("Matching symbols request req_id={req_id} pattern='{pattern}' not sent: no CCP transport");
+            // Answered empty rather than left unanswered, the same as a chain
+            // request that cannot go out: the caller is blocked on the end of a
+            // request nothing on the wire will ever end.
+            shared.reference.push_matching_symbols(req_id, Vec::new());
             return;
         };
         let req_id_str = req_id.to_string();
@@ -1703,6 +1836,7 @@ impl CcpState {
             (58, pattern),
         ]) {
             log::warn!("Matching symbols request req_id={req_id} pattern='{pattern}' not sent: {e}");
+            shared.reference.push_matching_symbols(req_id, Vec::new());
             return;
         }
         hb.last_ccp_sent = Instant::now();
@@ -1716,7 +1850,7 @@ impl CcpState {
     /// the life of the process — and the reply matcher falls back to the head
     /// of that queue when a reply carries no echoed request id, so a stale entry
     /// could absorb a later request's answer.
-    pub(crate) fn sweep_pending_matching_symbols(&mut self) {
+    pub(crate) fn sweep_pending_matching_symbols(&mut self, shared: &SharedState) {
         if self.pending_matching_symbols.is_empty() {
             return;
         }
@@ -1724,6 +1858,11 @@ impl CcpState {
         self.pending_matching_symbols.retain(|(req_id, deadline)| {
             if now >= *deadline {
                 log::warn!("Matching symbols request req_id={req_id} unanswered after {MATCHING_SYMBOLS_TIMEOUT:?} — giving up");
+                // The timeout is answered, not merely recorded: a caller
+                // told nothing waits on a request this session has abandoned.
+                // An empty answer is the shape of a lookup that found nothing,
+                // which is what a timeout amounts to.
+                shared.reference.push_matching_symbols(*req_id, Vec::new());
                 false
             } else {
                 true
@@ -1751,8 +1890,15 @@ impl CcpState {
         // The request names the UNDERLYING's own type, not the derivative being
         // enumerated. Naming the derivative is answered "Unknown contract":
         // there is no option contract by that symbol, only a stock that has
-        // options on it. A caller who states nothing claims nothing.
-        let underlying = if underlying_sec_type.is_empty() { "STK" } else { underlying_sec_type };
+        // options on it.
+        //
+        // A caller who states nothing claims nothing. An unstated type sent as
+        // STK asks about a stock of that symbol where the caller meant an index
+        // or a future. Tag 310 is omitted for an empty
+        // security type rather than standing one in: its chain-request writer
+        // states the type only when the caller gave one, and treats its own
+        // empty-named type as absent.
+        let underlying = underlying_sec_type;
         // A futures option whose underlying is not itself a future names that
         // underlying on a tag of its own.
         let futures_option = !fut_fop_exchange.is_empty() && underlying != "FUT";
@@ -1770,7 +1916,9 @@ impl CcpState {
             (6040, "138"),
             (55, &symbol),
         ];
-        fields.push((310, underlying));
+        if !underlying.is_empty() {
+            fields.push((310, underlying));
+        }
         fields.push((con_id_tag, &con_id_str));
         fields.push((6320, "1"));
         fields.push((6994, "1"));
@@ -1975,10 +2123,26 @@ impl CcpState {
         hb: &mut HeartbeatState,
         account_id: &str,
         market: &crate::engine::market_state::MarketState,
+        shared: &SharedState,
     ) {
         *ccp_conn = Some(conn);
         self.disconnected = false;
+        // This connection has named nothing yet. Both of these said otherwise
+        // from the connection before it, so a caller asking what it had on was
+        // answered at once from the pre-drop book — every order in it
+        // Uncertain — while the venue's account of what it holds was still
+        // on its way. Cleared here, that caller waits for the new push the way
+        // it waited for the first.
+        self.hydrated_any = false;
+        shared.orders.clear_replay_done();
         self.recovery_sweep_at = Some(Instant::now() + RECOVERY_PUSH_GRACE);
+        // This connection has not yet named what it has working, and neither
+        // "none" nor the last connection's answer is that. Left set from
+        // before, a caller asking what it has on at the moment it reconnects is
+        // answered from the old session's record without waiting for the new
+        // one's, which is how the same order is placed twice.
+        self.hydrated_any = false;
+        shared.orders.replay_is_pending();
         hb.last_ccp_sent = Instant::now();
         hb.last_ccp_recv = Instant::now();
         hb.pending_ccp_test = None;
@@ -2007,9 +2171,9 @@ impl CcpState {
         // News streams belonged to the dead session and are not part of what
         // the server pushes back. Left alone they went quiet for good, with
         // the connection reporting healthy the whole time.
-        let stale: Vec<_> = self.news_subscriptions.drain(..).collect();
+        let stale = std::mem::take(&mut self.news_subscriptions);
         let wanted = stale.len();
-        for (instrument, req_id, providers) in stale {
+        for (instrument, req_id, providers, _) in stale {
             match market.con_id(instrument) {
                 Some(con_id) => self.send_news_subscribe(
                     con_id, instrument, &providers, req_id, ccp_conn, hb,
@@ -2107,11 +2271,11 @@ impl CcpState {
         hb: &mut HeartbeatState,
     ) {
         if con_id == 0 { return; }
-        if self.auto_fetched_conids.contains(&con_id) { return; }
+        if self.auto_fetched_conids.contains_key(&con_id) { return; }
         if shared.reference.get_contract(con_id).is_some() { return; }
         let req_id = self.next_internal_secdef_id;
         self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
-        self.auto_fetched_conids.insert(con_id);
+        self.auto_fetched_conids.insert(con_id, req_id);
         self.send_secdef_request(req_id, con_id, ccp_conn, hb);
     }
 
@@ -2146,10 +2310,10 @@ impl CcpState {
         // is skipped and the wait stands: that reply populates the cache and
         // release this entry via try_release_scanner_enrichments.
         for &con_id in &awaiting {
-            if !self.auto_fetched_conids.contains(&con_id) {
+            if !self.auto_fetched_conids.contains_key(&con_id) {
                 let req_id = self.next_internal_secdef_id;
                 self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
-                self.auto_fetched_conids.insert(con_id);
+                self.auto_fetched_conids.insert(con_id, req_id);
                 self.send_secdef_request(req_id, con_id, ccp_conn, hb);
             }
         }

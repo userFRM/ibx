@@ -174,12 +174,16 @@ class TestMultiScanner:
         results = self.wrapper.scanner_results.get(req_id, [])
         print(f"  Filtered scanner: {len(results)} results")
 
-        symbols = []
-        for rank, cd in results[:10]:
-            sym = cd.contract.symbol if hasattr(cd, "contract") and hasattr(cd.contract, "symbol") else "?"
-            symbols.append(sym)
-        if symbols:
-            print(f"    Top: {', '.join(symbols)}")
+        # The end marker arrived, so the venue ran the scan. Nothing here
+        # looked at what came back, so a filtered scan that answered with
+        # nothing at all passed under the name of one that answered.
+        assert results, "the filtered scan ended without naming a single row"
+        assert len(results) <= sub.numberOfRows, (
+            f"asked for {sub.numberOfRows} rows and got {len(results)}"
+        )
+        symbols = [cd.contract.symbol for _, cd in results[:10]]
+        assert all(symbols), f"a row came back naming no contract: {results[:10]}"
+        print(f"    Top: {', '.join(symbols)}")
 
     def test_matching_symbols(self):
         """ReqMatchingSymbols("TSLA") returns cross-exchange matches."""

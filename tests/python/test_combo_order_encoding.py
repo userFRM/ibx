@@ -1,14 +1,18 @@
-"""Combo/spread order encoding (SPY vertical call spread).
+"""The two legs of a SPY vertical call spread, quoted one at a time.
 
-Tests multi-leg BAG contract construction and order placement.
-Note: ComboLeg population from Python is not yet implemented — this test
-verifies individual option leg market data as a fallback.
+What this actually does, which is not what it used to say: it names each leg
+and subscribes to its quote, so a leg the venue cannot resolve is caught. It
+builds no BAG, no ComboLeg and no order, and the note claiming ComboLeg
+population was unimplemented is out of date besides — the order path reads legs
+off the contract and refuses one it cannot read.
 
 Run: pytest tests/python/test_combo_order_encoding.py -v -s
 """
 
 import os, threading, time
 import pytest
+
+from conftest import next_option_expiry
 from ibx import EWrapper, EClient, Contract
 
 pytestmark = pytest.mark.skipif(
@@ -118,7 +122,7 @@ class TestComboSpread:
         buy_leg.currency = "USD"
         buy_leg.right = "C"
         buy_leg.strike = float(atm_strike)
-        buy_leg.last_trade_date_or_contract_month = "20260424"
+        buy_leg.last_trade_date_or_contract_month = next_option_expiry()
         buy_leg.multiplier = "100"
 
         sell_leg = Contract()
@@ -128,7 +132,7 @@ class TestComboSpread:
         sell_leg.currency = "USD"
         sell_leg.right = "C"
         sell_leg.strike = float(otm_strike)
-        sell_leg.last_trade_date_or_contract_month = "20260424"
+        sell_leg.last_trade_date_or_contract_month = next_option_expiry()
         sell_leg.multiplier = "100"
 
         # Subscribe to both legs

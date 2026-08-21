@@ -8,10 +8,10 @@ The same settings are stated on the Rust client as ``EClientConfig.gateway``.
 This is the same list, reached the other way: both put the values where the
 code that needs them reads them, and both take effect for the whole process.
 
-Each setting below names the one it stands in for. A few of the gateway's have
-no meaning without a gateway — a port to listen on, the addresses allowed to
-reach it, how much heap the runtime may take — and those are named at the bottom
-rather than quietly dropped, so nobody goes looking for them.
+Each setting below names the IB Gateway setting it corresponds to. A few of
+those have no meaning without a local process to configure — a port to listen
+on, the addresses allowed to reach it, how much heap the runtime may take — and
+are named at the bottom rather than dropped, so nobody goes looking for them.
 
 Settings are read when a session opens, so set them before ``connect()``.
 Setting one afterwards affects the next session, not the running one.
@@ -21,29 +21,29 @@ from __future__ import annotations
 
 import os
 
-#: Each setting, the variable it is held in, and the gateway setting it stands
-#: in for. Held in the environment because that is where this client already
+#: Each setting, the variable it is held in, and the equivalent IB Gateway
+#: setting. Held in the environment because that is where this client already
 #: reads them from; the names here are the interface, the variables are not.
 #
 # ponytail: environment-backed because every read site already does env::var
 # lazily. If settings ever need to differ between two sessions in one process,
 # this becomes a per-session struct passed through connect().
 _SETTINGS: dict[str, tuple[str, str]] = {
-    "timezone": ("IBX_TZ", "the gateway's time zone"),
+    "timezone": ("IBX_TZ", "session time zone"),
     "log_level": ("IBX_LOG_LEVEL", "verbose logging"),
-    "log_dir": ("IBX_LOG_DIR", "where the gateway wrote its logs"),
-    "log_queue": ("IBX_LOG_QUEUE", "the gateway's log buffering"),
+    "log_dir": ("IBX_LOG_DIR", "log directory"),
+    "log_queue": ("IBX_LOG_QUEUE", "log buffering"),
     "market_data_host": ("IBX_FARM_HOST", "the market data connection"),
-    "port": ("IBX_MISC_PORT", "the port the gateway reached the venue on"),
+    "port": ("IBX_MISC_PORT", "the port the session reaches the venue on"),
     "registration_timeout_ms": (
         "IBX_REGISTRATION_TIMEOUT_MS",
-        "how long the gateway waited to be admitted",
+        "how long to wait to be admitted",
     ),
-    "locale": ("IBX_LOCALE", "the gateway's locale"),
-    "build": ("IBX_BUILD", "the build the gateway announced itself as"),
-    "version": ("IBX_VERSION", "the version the gateway announced itself as"),
-    "encoded": ("IBX_ENCODED", "the longer string it announced with them"),
-    "hardware_id": ("IBX_HWID", "the machine identity the gateway presented"),
+    "locale": ("IBX_LOCALE", "session locale"),
+    "build": ("IBX_BUILD", "the build announced at logon"),
+    "version": ("IBX_VERSION", "the version announced at logon"),
+    "encoded": ("IBX_ENCODED", "the longer string announced with them"),
+    "hardware_id": ("IBX_HWID", "the machine identity presented at logon"),
     "execution_reports": (
         "IBX_EXECUTION_REPORTS",
         "which executions arrive when a session opens: 'today' or 'all'",
@@ -96,7 +96,7 @@ def settings() -> dict[str, str | None]:
 
 
 def describe() -> str:
-    """Every setting, its value, and the gateway setting it stands in for."""
+    """Every setting, its value, and the IB Gateway setting it corresponds to."""
     lines = ["settings:"]
     for name, (var, stands_for) in sorted(_SETTINGS.items()):
         value = os.environ.get(var)

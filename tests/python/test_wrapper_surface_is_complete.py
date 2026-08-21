@@ -42,7 +42,37 @@ def test_the_wrapper_has_ninety_calls_and_they_are_all_here():
 
 
 def test_none_of_them_is_a_placeholder_that_only_raises():
-    """A name that resolves to something refusing to run is not carried."""
-    from ibx._ib import _NOT_YET
+    """A name that resolves to something refusing to run is not carried.
 
-    assert not (set(WRAPPER_METHODS) & _NOT_YET)
+    `callable()` alone said nothing about this: a method whose whole body is
+    `raise NotImplementedError` is callable, and passed the test named after
+    the thing it is. So the bodies are read. A refusal reached under some
+    condition — an argument this client will not send, say — is a method that
+    does its job, and only a body that is nothing but a raise is a placeholder.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from ibx._ib import IB
+
+    def placeholder(name):
+        held = getattr(IB, name, None)
+        # A property is reached without calling it, and reads as not callable
+        # on the class where it is declared.
+        if not (callable(held) or isinstance(held, property)):
+            return True
+        held = held.fget if isinstance(held, property) else held
+        try:
+            body = ast.parse(textwrap.dedent(inspect.getsource(held))).body[0].body
+        except (OSError, TypeError, SyntaxError, IndexError):
+            # Reached through __getattr__ or otherwise not readable as source.
+            # Nothing to judge, and judging it a placeholder would fail the
+            # test for the wrong reason.
+            return False
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+            body = body[1:]          # its docstring is not its body
+        return len(body) == 1 and isinstance(body[0], ast.Raise)
+
+    unusable = [m for m in WRAPPER_METHODS if placeholder(m)]
+    assert not unusable, f"named and not usable: {unusable}"

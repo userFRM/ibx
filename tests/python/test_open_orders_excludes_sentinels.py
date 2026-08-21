@@ -1,7 +1,7 @@
-"""Req_open_orders must not surface gateway sentinel records.
+"""Req_open_orders must not surface wildcard sentinel records.
 
 Regression: the mass-order-status request sent on (re)connect uses ClOrdID="*",
-Symbol="*". The gateway's reply burst includes an echo of that wildcard with
+Symbol="*". The reply burst includes an echo of that wildcard with
 ClOrdID=0 / Symbol="*" / Qty=0 that was being parsed as if it were a real
 order, then surfaced through wrapper.open_order.
 

@@ -852,6 +852,35 @@ mod price_scaling_tests {
         );
     }
 
+    /// A price too large to scale leaves the quote unchanged, so no tick is
+    /// announced for it.
+    #[test]
+    fn a_price_that_cannot_be_scaled_announces_no_tick() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(16);
+        let sink = Some(crate::engine::hot_loop::EventSink::new(
+            tx,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        ));
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let id = context.market.register(756733);
+        context.market.register_server_tag(7, id);
+        context.market.set_min_tick(id, 0.01);
+
+        farm.handle_tick_data(
+            &framed_extended(7, tick_decoder::O_LAST_PRICE, 2, 15_000),
+            &mut context, &shared, &sink,
+        );
+        assert_eq!(rx.try_iter().count(), 1, "the ordinary tick is announced");
+
+        farm.handle_tick_data(
+            &framed_extended(7, tick_decoder::O_LAST_PRICE, 8, u64::MAX >> 1),
+            &mut context, &shared, &sink,
+        );
+        assert_eq!(rx.try_iter().count(), 0, "the refused one is not");
+    }
+
     /// A frame the venue sent for a deep in-the-money call, byte for byte.
     /// Nothing here is constructed: a wrong alignment does not produce a price
     /// that decomposes into the other two fields by accident.
@@ -1051,5 +1080,103 @@ mod depth_identity_tests {
         assert!(farm.depth_subs.is_empty());
         assert!(farm.depth_fanout_exchange.is_empty());
         assert!(farm.depth_resub_info.is_empty(), "and no reconnect asks again");
+    }
+}
+
+mod depth_position_tests {
+    use super::super::*;
+
+    /// One frame can carry sections for more than one stream. Each book's
+    /// levels are numbered from zero.
+    #[test]
+    fn each_book_in_a_frame_starts_at_its_own_top() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        farm.depth_tag_to_req.push((0x11, 1, false, 0.01, 1.0, "IEX".to_string()));
+        farm.depth_tag_to_req.push((0x22, 2, false, 0.01, 1.0, "ARCA".to_string()));
+
+        // Two sections, one per stream, each a bid and an ask at level 0.
+        // Field tags carry bit 5 for size, bit 3 for ask and bit 2 for
+        // snapshot; the snapshot bit is set so no tag is 0x00, which is what
+        // opens a section. 0x58 closes one.
+        let level = [0x04u8, 100, 0x24, 5, 0x0C, 101, 0x2C, 6, 0x58];
+        let mut body = vec![0x00, 0x00, 0x00, 0x11];
+        body.extend_from_slice(&level);
+        body.extend_from_slice(&[0x00, 0x00, 0x00, 0x22]);
+        body.extend_from_slice(&level);
+
+        farm.handle_depth_35p(&body, &shared);
+
+        let updates = shared.market.drain_depth_updates();
+        assert!(!updates.is_empty(), "the frame carried levels");
+        for u in &updates {
+            assert_eq!(
+                u.position, 0,
+                "every book in the frame starts at its own top: {updates:?}",
+            );
+        }
+    }
+
+    /// A level requires both a price and a size. One alone would report the
+    /// other as zero, which is not a quoted level.
+    #[test]
+    fn a_half_stated_level_is_not_a_level() {
+        let farm = FarmState::new();
+        // A price with no size beside it.
+        let body = [0x00u8, 100];
+        let mut pos = 0;
+        assert!(
+            farm.parse_depth_fields(&body, &mut pos, 0.01, 1.0).is_none(),
+            "a price alone is not a level",
+        );
+        // And both together still read.
+        let body = [0x00u8, 100, 0x80, 5];
+        let mut pos = 0;
+        assert!(farm.parse_depth_fields(&body, &mut pos, 0.01, 1.0).is_some());
+    }
+}
+
+mod exchange_map_tests {
+    use super::super::*;
+    use crate::bridge::SharedState;
+    use crate::engine::context::Context;
+
+    /// The exchange map payload states its length before its text and pads to
+    /// a four-byte boundary after it. Read end to end as text, the length
+    /// bytes join the first name and the padding joins the last, so the mask's
+    /// bits are reported against names that do not exist.
+    #[test]
+    fn the_exchange_map_reads_the_text_its_payload_states() {
+        let text = b"NYSE/N;NASDAQ/Q;ARCA/P";
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(text.len() as u32).to_be_bytes());
+        payload.extend_from_slice(text);
+        // Alignment: bytes after the text are discarded until the count is a
+        // multiple of four.
+        while (payload.len() - 4) % 4 != 0 {
+            payload.push(0);
+        }
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&7u32.to_be_bytes());
+        body.push(payload.len() as u8);
+        body.extend_from_slice(&payload);
+        let mut msg = b"35=G\x01".to_vec();
+        msg.extend_from_slice(&(((body.len() * 8) % 65_536) as u16).to_be_bytes());
+        msg.extend_from_slice(&body);
+
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.generic_tick_tags.push((7, BBO_EXCHANGE_MAP_REQUEST_TYPE, instrument));
+        farm.handle_generic_tick(&msg, &mut context, &shared, &None);
+
+        let named = shared.reference.smart_components();
+        assert_eq!(named.len(), 3, "every venue the map names: {named:?}");
+        assert_eq!(named[0].exchange, "NYSE", "and the first one is its own name: {named:?}");
+        assert_eq!(named[0].exchange_letter, "N");
+        assert_eq!(named[2].exchange, "ARCA", "as is the last: {named:?}");
+        assert_eq!(named[2].exchange_letter, "P");
     }
 }

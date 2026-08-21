@@ -39,6 +39,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{:<8} {:>10}", position.contract.symbol, position.quantity);
     }
 
-    client.disconnect();
+    client.disconnect().await;
     Ok(())
 }

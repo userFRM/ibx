@@ -80,9 +80,7 @@ A user message carries what it is for on tag 6040.
 | `8` | Execution report |
 | `9` | Cancel reject |
 | `B` | News |
-| `G` | Order replace |
 | `U` | User message |
-| `W` | Chart request |
 | `d` | Security definition |
 | `AL` | not named here |
 | `AP` | not named here |

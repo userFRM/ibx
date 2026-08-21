@@ -24,8 +24,10 @@ pytestmark = pytest.mark.skipif(
     reason="IB_USERNAME and IB_PASSWORD not set",
 )
 
-# Resting states that mean "the gateway accepted the order" (not the bug's Inactive).
-ACCEPTED = {"PreSubmitted", "Submitted", "PendingSubmit"}
+# Resting states that mean the venue took the order. `PendingSubmit` is not
+# among them: this client records it when the order is handed over, before the
+# venue has read the expiry encoding, so it precedes any later Inactive.
+ACCEPTED = {"PreSubmitted", "Submitted"}
 
 
 class Collector(EWrapper):
@@ -121,7 +123,7 @@ class TestGtdLifecycle:
         pytest.fail(f"GTD order {oid} never reached an accepted state: {self.wrapper.statuses(oid)}")
 
     def test_time_precise_gtd_acks_and_cancels_on_schedule(self):
-        """Time-precise GTD (tag 126, UTC) acks, rests, and the gateway
+        """Time-precise GTD (tag 126, UTC) acks, rests, and the venue
         broker-side cancels it at the requested instant without a client cancel."""
         expiry_dt = datetime.now(timezone.utc) + timedelta(seconds=75)
         gtd = expiry_dt.strftime("%Y%m%d %H:%M:%S UTC")

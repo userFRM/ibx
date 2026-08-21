@@ -45,10 +45,10 @@ impl ReportType {
 pub struct FundamentalRequest {
     /// The venue's id for the contract.
     pub con_id: u32,
-    /// What kind of contract it is.
-    pub sec_type: &'static str,
+    /// What kind of contract it is, as the venue names it.
+    pub sec_type: String,
     /// What currency that is in.
-    pub currency: &'static str,
+    pub currency: String,
     /// Which report is wanted.
     pub report_type: ReportType,
 }
@@ -120,8 +120,8 @@ mod tests {
     fn fundamental_request_xml_structure() {
         let req = FundamentalRequest {
             con_id: 265598,
-            sec_type: "STK",
-            currency: "USD",
+            sec_type: "STK".to_string(),
+            currency: "USD".to_string(),
             report_type: ReportType::Snapshot,
         };
         let xml = build_fundamental_request_xml(&req);
@@ -170,7 +170,7 @@ mod tests {
         );
         assert!(
             build_fundamental_request_xml(&FundamentalRequest {
-                con_id: 265598, sec_type: "STK", currency: "USD",
+                con_id: 265598, sec_type: "STK".to_string(), currency: "USD".to_string(),
                 report_type: ReportType::Snapshot,
             }).contains(&format!("<id>{FUNDAMENTALS_QUERY_ID}</id>")),
             "the request and the withdrawal name the same thing",

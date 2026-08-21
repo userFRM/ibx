@@ -159,7 +159,7 @@ fn recv_8eq1_preserves_coalesced_tail() {
     use std::net::TcpListener;
 
     let auth_msg = framed_8eq1(b"PASSED");
-    // Stand-in for the farm logon ACK the gateway pipelines right after.
+    // Stand-in for the farm logon ACK that follows immediately.
     let ack_tail = b"8=FIX.4.1\x019=0005\x0135=A\x0110=000\x01".to_vec();
 
     let mut wire = auth_msg.clone();
@@ -294,9 +294,10 @@ fn recv_msg_ns_variant() {
         version: 534,
         msg_type: 99,
         fields: vec!["a".into(), "b".into()],
+        raw: Vec::new(),
     };
     match msg {
-        RecvMsg::Ns { version, msg_type, fields } => {
+        RecvMsg::Ns { version, msg_type, fields, .. } => {
             assert_eq!(version, 534);
             assert_eq!(msg_type, 99);
             assert_eq!(fields.len(), 2);
@@ -1230,7 +1231,8 @@ fn ib_key_2fa_skipped_when_server_passes_immediately() {
     let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 5, "user", &["PASSED"]);
         let mut stream = ScriptedStream::new(frame_xyz(&auth_finish));
     let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap();
-    assert_eq!(outcome, IbKeyOutcome::Skipped);
+    assert_eq!(outcome, IbKeyOutcome::Skipped { unread: None });
+
 
     // The SWCR_TOKEN init carries the tokenSubType.
     let written_payload = &stream.written[8..]; // skip NS frame header
@@ -1503,8 +1505,8 @@ fn ib_key_2fa_cr_code_rejected_on_state_4_failed() {
     // Server: state=2 → (client submits a wrong code) → state=4 FAILED. The
     // server tears the socket down after, with no AUTH_FINISH on the wire.
     // Client must surface PermissionDenied on FAILED, without waiting for
-    // further frames. The gateway withholds FAILED until the code is on the
-    // wire, so this also pins that the rejection follows a real submission.
+    // further frames. FAILED is not sent until a code has been submitted, so
+    // this also pins that the rejection follows a real submission.
     const WRONG_CODE: &str = "99999999";
     let challenge = xyz::xyz_build(xyz::XYZ_MSG_SWCR_TOKEN, 2, "user", &[
             "e7429fde5b4c26f81fff956be6749908a8653558e7429fde5b4c26f81fff956b",
@@ -1698,3 +1700,36 @@ fn an_unusable_srp_group_falls_back_to_this_clients_own() {
     }
 }
 
+/// A server that answers the gate's init with the connect response hands the
+/// gate a message meant for the loop behind it.
+///
+/// Logged and dropped, that message was gone: the loop cannot ask the socket
+/// for it twice, so it waited out its whole deadline for something already
+/// delivered and the login failed with no data start.
+#[test]
+fn a_connect_response_read_by_the_gate_is_handed_on() {
+    let payload = format!("{NS_VERSION};{NS_CONNECT_RESPONSE};ok;");
+    let mut stream = ScriptedStream::new(frame_xyz(payload.as_bytes()));
+    let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap();
+    match outcome {
+        IbKeyOutcome::Skipped { unread: Some(raw) } => {
+            assert_eq!(raw, payload.as_bytes(), "handed back as it arrived");
+        }
+        other => panic!("the gate kept a message it did not own: {other:?}"),
+    }
+}
+
+/// The same for the sibling gate, which shares the outcome and had the same
+/// catch-all.
+#[test]
+fn a_fix_start_read_by_the_security_code_gate_is_handed_on() {
+    let payload = format!("{NS_VERSION};{NS_FIX_START};;");
+    let mut stream = ScriptedStream::new(frame_xyz(payload.as_bytes()));
+    let provider = code_provider_returning("123456");
+    let outcome =
+        do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider)).unwrap();
+    assert!(
+        matches!(outcome, IbKeyOutcome::Skipped { unread: Some(ref raw) } if raw == payload.as_bytes()),
+        "the gate kept a message it did not own: {outcome:?}",
+    );
+}

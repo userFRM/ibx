@@ -36,6 +36,11 @@ pub fn fixcomp_build(inner_msg: &[u8]) -> Vec<u8> {
 /// Returns `Err` if the frame is malformed (no tag 95, bad raw-data-length, etc.)
 /// or if the zlib payload fails to inflate. Hot-loop callers should `log::warn!`
 /// and skip the frame rather than propagate.
+///
+/// Inflated content that cannot be framed into a message is warned about and
+/// the messages before it are still returned: discarding the whole frame loses
+/// what did arrive, and returning the prefix with nothing said loses the rest
+/// silently.
 pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
     let raw = if let Some(idx95) = find_tag(data, b"\x0195=").map(|p| p + 1) {
         let soh = data[idx95..]
@@ -88,32 +93,105 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
         return Err(e);
     }
 
-    Ok(split_messages(&decompressed))
+    let (messages, unread) = split_messages(&decompressed);
+    if unread > 0 {
+        // The bytes after the last message this could frame. They are a
+        // message the venue sent, and reporting nothing about them turns a
+        // framing fault into an order ack or routing tag that never arrives.
+        let head = &decompressed[decompressed.len() - unread..];
+        let head_hex: String =
+            head.iter().take(64).map(|b| format!("{b:02x}")).collect();
+        log::warn!(
+            "fixcomp: {} of {} inflated bytes follow the last message this \
+             could frame, after {} message(s); first bytes hex={head_hex}",
+            unread, decompressed.len(), messages.len(),
+        );
+    }
+    Ok(messages)
 }
 
 /// Return total byte length of a compressed message, or None if incomplete.
 pub fn fixcomp_length(data: &[u8]) -> Option<usize> {
-    if data.len() < 10 {
-        return None;
-    }
-    let soh1 = data.iter().position(|&b| b == SOH)?;
-    let tag9 = find_tag(&data[soh1..], b"9=").map(|p| soh1 + p)?;
-    let soh2 = data[tag9..].iter().position(|&b| b == SOH).map(|p| tag9 + p)?;
-    let body_len: usize = std::str::from_utf8(&data[tag9 + 2..soh2]).ok()?.parse().ok()?;
-    let total = soh2 + 1 + body_len;
-    if data.len() < total {
-        None
-    } else {
-        Some(total)
+    match fixcomp_frame_length(data) {
+        FrameLength::Complete(total) => Some(total),
+        _ => None,
     }
 }
+
+/// What a frame's stated length says about the bytes in hand.
+///
+/// The three answers are not the same answer. A frame still arriving is worth
+/// waiting for; one whose own header cannot be read never becomes complete, and
+/// waiting for it holds every frame behind it forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameLength {
+    /// The whole frame is here, and this is how long it is.
+    Complete(usize),
+    /// The header reads, and the rest of the frame has not arrived yet.
+    Incomplete,
+    /// The header does not read, and no number of further bytes will change
+    /// that.
+    Unreadable,
+}
+
+/// Read a compressed frame's stated length.
+pub fn fixcomp_frame_length(data: &[u8]) -> FrameLength {
+    // Too short to hold a header yet, which says nothing about whether the
+    // header is good.
+    if data.len() < 10 {
+        return FrameLength::Incomplete;
+    }
+    let Some(soh1) = data.iter().position(|&b| b == SOH) else {
+        // No field separator in what is here. It may still be coming, unless
+        // there is already more than a header's worth of it.
+        return if data.len() > MAX_HEADER_SCAN {
+            FrameLength::Unreadable
+        } else {
+            FrameLength::Incomplete
+        };
+    };
+    let Some(tag9) = find_tag(&data[soh1..], b"9=").map(|p| soh1 + p) else {
+        return if data.len() > MAX_HEADER_SCAN {
+            FrameLength::Unreadable
+        } else {
+            FrameLength::Incomplete
+        };
+    };
+    let Some(soh2) = data[tag9..].iter().position(|&b| b == SOH).map(|p| tag9 + p) else {
+        return if data.len() > MAX_HEADER_SCAN {
+            FrameLength::Unreadable
+        } else {
+            FrameLength::Incomplete
+        };
+    };
+    // The length itself. A field that is not a number is not a length, and no
+    // further bytes make it one.
+    let Some(body_len) = std::str::from_utf8(&data[tag9 + 2..soh2]).ok().and_then(|t| t.parse::<usize>().ok()) else {
+        return FrameLength::Unreadable;
+    };
+    let total = soh2 + 1 + body_len;
+    if data.len() < total {
+        FrameLength::Incomplete
+    } else {
+        FrameLength::Complete(total)
+    }
+}
+
+/// How far into a frame its header may reasonably sit. Past this, a header that
+/// has not read is one that will not.
+const MAX_HEADER_SCAN: usize = 128;
 
 fn find_tag(data: &[u8], needle: &[u8]) -> Option<usize> {
     data.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Split decompressed content into individual messages.
-fn split_messages(buf: &[u8]) -> Vec<Vec<u8>> {
+///
+/// Returns the messages read and how many bytes were left unread behind them.
+/// Every framing error here stops the scan, so what follows is a message the
+/// venue sent and this client did not deliver — the caller says so rather than
+/// letting the count come out short in silence.
+fn split_messages(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
     let mut messages = Vec::new();
     let mut pos = 0;
 
@@ -213,7 +291,7 @@ fn split_messages(buf: &[u8]) -> Vec<Vec<u8>> {
         }
     }
 
-    messages
+    (messages, buf.len() - pos)
 }
 
 #[cfg(test)]
@@ -288,6 +366,32 @@ mod tests {
         let parsed2 = fix_parse(&messages[1]);
         assert_eq!(parsed2[&35], "D");
         assert_eq!(parsed2[&55], "GOOG");
+    }
+
+    /// Every framing error inside the inflated content stops the scan, so what
+    /// follows is a message the venue sent and this client did not deliver.
+    /// The messages before it are still returned — discarding the whole frame
+    /// loses what did arrive — and the bytes left over are counted so the loss
+    /// is not silent.
+    #[test]
+    fn the_bytes_no_message_could_be_framed_from_are_counted() {
+        let good = fix_build(&[(35, "0")], 1);
+        let mut content = good.clone();
+        // A second header whose body length reads as nothing, so the scan for
+        // its checksum runs off the end of the content.
+        content.extend_from_slice(b"8=FIX.4.1\x019=0099\x0135=D\x01");
+
+        let (messages, unread) = split_messages(&content);
+        assert_eq!(messages.len(), 1, "the whole message before it is read");
+        assert_eq!(
+            unread, content.len() - good.len(),
+            "and everything after it is reported rather than dropped",
+        );
+
+        // Nothing left over when every message frames.
+        let (messages, unread) = split_messages(&good);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(unread, 0);
     }
 
     #[test]

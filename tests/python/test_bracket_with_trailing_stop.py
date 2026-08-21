@@ -182,25 +182,33 @@ class TestBracketOrder:
         parent_statuses = self.wrapper.order_statuses.get(parent_id, [])
         assert len(parent_statuses) > 0, "Parent should have status"
 
-        # Children should be PreSubmitted or Inactive (parent not filled)
+        # Children should be PreSubmitted or Inactive (parent not filled).
+        # Their statuses are required rather than checked if present: a child
+        # that never reached the venue has none, and the test that names them
+        # passed while both exits were missing and the parent stood naked.
         for child_id in (tp_id, sl_id):
             child_statuses = self.wrapper.order_statuses.get(child_id, [])
-            if child_statuses:
-                last_status = child_statuses[-1][0]
-                assert last_status in ("PreSubmitted", "Inactive", "Submitted"), \
-                    f"Child {child_id} unexpected status: {last_status}"
+            assert child_statuses, f"Child {child_id} was never acknowledged"
+            last_status = child_statuses[-1][0]
+            assert last_status in ("PreSubmitted", "Inactive", "Submitted"), \
+                f"Child {child_id} unexpected status: {last_status}"
 
         # Verify all have permIds
         for oid in (parent_id, tp_id, sl_id):
-            if oid in self.wrapper.perm_ids:
-                assert self.wrapper.perm_ids[oid] > 0, \
-                    f"Order {oid} should have positive permId"
+            assert oid in self.wrapper.perm_ids, f"Order {oid} was given no permId"
+            assert self.wrapper.perm_ids[oid] > 0, \
+                f"Order {oid} should have positive permId"
 
         # Verify via reqOpenOrders
         self.client.req_open_orders()
         self.wrapper.got_open_order_end.wait(timeout=15)
         our_orders = {o[0] for o in self.wrapper.open_orders_list
                       if o[0] in (parent_id, tp_id, sl_id)}
+        # Worked out and then dropped, so all three going missing passed.
+        assert our_orders == {parent_id, tp_id, sl_id}, (
+            f"the venue holds {sorted(our_orders)} of "
+            f"{sorted((parent_id, tp_id, sl_id))}"
+        )
 
         # Cancel all
         self.client.cancel_order(parent_id, "")
