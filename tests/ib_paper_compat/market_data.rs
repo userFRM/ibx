@@ -63,10 +63,7 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
     }
 
     std::thread::sleep(Duration::from_secs(5));
-    // drain remaining ticks
-    while let Ok(Event::Tick(_)) = event_rx.try_recv() {
-        tick_count += 1;
-    }
+    tick_count += drain_ticks(&event_rx);
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     println!("  PASS ({tick_count} ticks)\n");
@@ -129,9 +126,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
     }
 
     std::thread::sleep(Duration::from_secs(5));
-    while let Ok(Event::Tick(_)) = event_rx.try_recv() {
-        tick_count += 1;
-    }
+    tick_count += drain_ticks(&event_rx);
 
     // Check each instrument received distinct prices
     let mut instruments_with_data = 0u32;
@@ -175,23 +170,45 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
         conns.hmds,
         None,
     );
+    let (registered_tx, registered_rx) = std::sync::mpsc::sync_channel(1);
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: Some(registered_tx),
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
 
+    // Which slot the engine gave this contract, so the withdrawal below names
+    // the subscription that was actually opened. Assuming the first slot makes
+    // the silence that follows prove nothing: an unsubscribe aimed at a slot
+    // nobody holds is quiet for the same reason a working one is.
+    let instrument = registered_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the engine never answered the subscription")
+        .expect("the subscription was refused");
+
+    // The feed has to be waited for rather than sampled. A fixed window opened
+    // at the send is spent on starting the loop, resolving the contract and
+    // the round trip to the venue, so what it measures is whatever is left of
+    // it — on a liquid name that is the difference between one tick and none.
     let mut tick_count = 0u32;
-    let sub_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < sub_deadline {
+    let first_tick_by = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < first_tick_by && tick_count == 0 {
         if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) {
             tick_count += 1;
         }
     }
+    if tick_count > 0 {
+        let observe = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < observe {
+            if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+                tick_count += 1;
+            }
+        }
+    }
 
     control_tx
-        .send(ControlCommand::Unsubscribe { instrument: 0 })
+        .send(ControlCommand::Unsubscribe { instrument })
         .unwrap();
     // Ticks already in flight when the withdrawal is sent are absorbed rather
     // than counted.

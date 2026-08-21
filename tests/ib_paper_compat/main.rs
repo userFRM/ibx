@@ -198,6 +198,12 @@ fn compat_suite() {
     conns = account::phase_pnl_subscribe_command(conns);
     conns = account::phase_news_bulletins(conns);
 
+    // Contract lookups are answered over the CCP, and the phases above run long
+    // enough that the venue may have closed it in the meantime. Reviving it here
+    // keeps a closed connection from reading as a definition this client asked
+    // for wrongly, which is the one thing these phases exist to detect.
+    conns = ensure_ccp_alive(conns, &mut gw, &config);
+
     conns = contracts::phase_contract_details(conns);
     conns = contracts::phase_contract_details_by_symbol(conns);
     conns = contracts::phase_trading_hours(conns);

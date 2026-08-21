@@ -1184,6 +1184,23 @@ pub(super) fn format_utc_timestamp(epoch_secs: u64) -> String {
     format!("{y:04}{m:02}{day:02}-{hour:02}:{min:02}:{sec:02}")
 }
 
+/// Count the ticks already queued, leaving nothing behind.
+///
+/// A drain written as `while let Ok(Event::Tick(_)) = rx.try_recv()` ends at
+/// the first event that is not a tick, so what it reports is however many
+/// ticks happened to sit at the head of the queue rather than how many
+/// arrived. The engine interleaves its other events freely, which makes that
+/// count a property of the ordering and not of the feed.
+pub(super) fn drain_ticks(rx: &std::sync::mpsc::Receiver<Event>) -> u32 {
+    let mut ticks = 0;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, Event::Tick(_)) {
+            ticks += 1;
+        }
+    }
+    ticks
+}
+
 #[cfg(test)]
 mod holiday_tests {
     use super::*;
