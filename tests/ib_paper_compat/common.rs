@@ -1184,6 +1184,19 @@ pub(super) fn format_utc_timestamp(epoch_secs: u64) -> String {
     format!("{y:04}{m:02}{day:02}-{hour:02}:{min:02}:{sec:02}")
 }
 
+/// Start logging the way a program running this client starts it.
+///
+/// The suite reached for the subscriber's own default, which is `error`, so a
+/// session discarded every record below it — including the report this client
+/// makes when the venue sends something nothing here reads. That report exists
+/// to be read on a real session, which is the only place the venue sends
+/// anything, and it was being dropped on every one of them.
+pub(super) fn start_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
+
 /// Count the ticks already queued, leaving nothing behind.
 ///
 /// A drain written as `while let Ok(Event::Tick(_)) = rx.try_recv()` ends at

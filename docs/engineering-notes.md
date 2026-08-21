@@ -213,12 +213,13 @@ vanish.
 | `6040` 10031 | Cancelling a news subscription | Not yet built. Historical news is answered once, so there is nothing outstanding for a caller to withdraw |
 | `6040` 110 | A live order's price and state, keyed by the order's own id | Not sent to this account: a full order lifecycle — placed, modified, cancelled — produced none. Order state arrives on execution reports here |
 | `6040` 7 | The price increments a contract trades in, pushed | Not sent to this account. The same rules arrive attached to a contract's details, which is where this client reads them |
-| `6040` 60, 146, 151, 208 | Execution and trade-report records, including per-leg fills on a combination | Not sent to this account. Fills arrive on execution reports here |
+| `6040` 60 | A trade record | Sent, and read past. What it reports arrives first on the execution reports this client already reads, and a fill counted from both would be counted twice |
+| `6040` 146, 151, 208 | Trade-report records, including per-leg fills on a combination | Not sent to this account |
 | `6040` 200 | Execution history | Not sent to this account |
 | `6040` 109 | An advisor's allocation groups and profiles | Needs an advisor account |
 | `6040` 141, 154, 175 | Combination position state and leg definitions | Not sent to this account |
 | `6040` 145 | A session-level control message, sibling of the error channel | Not sent to this account |
-| `6040` 18 | The venue's clock, for drift against the local one | Not sent to this account |
+| `6040` 18 | The venue's clock, for drift against the local one | Sent, and read past. Every message the venue sends carries the time it sent it, and that is what this client keeps and answers a caller with, so a message stating the same clock again adds nothing |
 | `6040` 188 | A newly added or linked account, and what it may do | The one of these with a consequence: a client managing linked accounts that ignores it does not learn of a new one until it reconnects. This session holds a single account and is sent none |
 | `6040` 119 | Model allocation figures, per account | Answers a request for them, which this client does not send |
 | `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |

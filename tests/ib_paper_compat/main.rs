@@ -63,7 +63,7 @@ fn watch_for_a_stuck_suite() {
 
 #[test]
 fn compat_suite() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     watch_for_a_stuck_suite();
     let config = match get_config() {
         Some(c) => c,
@@ -467,7 +467,7 @@ fn compat_suite() {
 /// pay the full ~128-phase suite cost just to validate this fix.
 #[test]
 fn query_error_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -494,7 +494,7 @@ fn query_error_phase_live() {
 /// result and the full suite is a long way to read one line.
 #[test]
 fn peg_bench_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -519,7 +519,7 @@ fn peg_bench_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn non_usd_order_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() { Some(c) => c, None => return };
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let mut conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -533,7 +533,7 @@ fn non_usd_order_phase_live() {
 /// the same question and are cheaper asked together.
 #[test]
 fn non_stock_order_phases_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() { Some(c) => c, None => return };
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let mut conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -548,7 +548,7 @@ fn non_stock_order_phases_live() {
 /// The options order, which the maturity-tag rule must not break.
 #[test]
 fn options_order_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() { Some(c) => c, None => return };
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -561,7 +561,7 @@ fn options_order_phase_live() {
 /// The nightly-maintenance case: the farm goes away and comes back by itself.
 #[test]
 fn farm_recovery_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() { Some(c) => c, None => return };
     let ibx::gateway::Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -576,7 +576,7 @@ fn farm_recovery_phase_live() {
 /// The multi-condition order, which a change to the condition encoder broke.
 #[test]
 fn multi_condition_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() { Some(c) => c, None => return };
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -589,7 +589,7 @@ fn multi_condition_phase_live() {
 /// Instructions the encoder only just started sending.
 #[test]
 fn carried_instructions_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() { Some(c) => c, None => return };
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -602,7 +602,7 @@ fn carried_instructions_phase_live() {
 /// The iceberg order, whose display size the venue keeps refusing.
 #[test]
 fn iceberg_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() { Some(c) => c, None => return };
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -615,7 +615,7 @@ fn iceberg_phase_live() {
 /// The one condition type the venue refuses, on its own.
 #[test]
 fn time_condition_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() { Some(c) => c, None => return };
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
@@ -629,7 +629,7 @@ fn time_condition_phase_live() {
 /// group and are cheaper to ask that way than through the whole suite.
 #[test]
 fn vwap_algo_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -660,7 +660,7 @@ fn vwap_algo_phase_live() {
 /// hundred-odd phases that happen to run before it.
 #[test]
 fn box_top_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -695,7 +695,7 @@ fn box_top_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn cross_session_recovery_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -836,7 +836,7 @@ fn cross_session_recovery_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn routing_table_probe() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -974,7 +974,7 @@ fn routing_table_probe() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn cancel_by_perm_id_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1107,7 +1107,7 @@ fn cancel_by_perm_id_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn what_an_advisor_request_is_answered_with_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1175,7 +1175,7 @@ fn what_an_advisor_request_is_answered_with_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn a_cancel_racing_an_unacked_replace_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1279,7 +1279,7 @@ fn a_cancel_racing_an_unacked_replace_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn european_fill_books_what_the_venue_reported_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1428,7 +1428,7 @@ fn european_fill_books_what_the_venue_reported_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn fractional_order_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1526,7 +1526,7 @@ fn fractional_order_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn submit_ex_bracket_child_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1647,7 +1647,7 @@ fn submit_ex_bracket_child_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn snap_to_tick_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1744,7 +1744,7 @@ fn snap_to_tick_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn timeout_sweeps_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1846,7 +1846,7 @@ fn timeout_sweeps_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn reclaim_and_symbol_search_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1932,7 +1932,7 @@ fn reclaim_and_symbol_search_phase_live() {
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn rtt_ping_phase_live() {
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -2014,7 +2014,7 @@ fn conditions_round_trip_phase_live() {
         }
     }
 
-    let _ = tracing_subscriber::fmt::try_init();
+    start_logging();
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
