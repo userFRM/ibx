@@ -1087,6 +1087,71 @@ fn cancel_by_perm_id_phase_live() {
     println!("\n  PASS — cancel_order_by_perm_id works\n");
 }
 
+/// What the venue answers an advisor request with, on an account that is not
+/// an advisor.
+///
+/// The request reaches the venue and its answer is not read back, because
+/// nothing here has seen the reply and inventing its shape would be a guess.
+/// This asks for the answer and prints whatever comes, so the shape is
+/// recorded from the wire rather than assumed. An account that is not an
+/// advisor still answers — a refusal is an answer, and it names the frame the
+/// reply arrives on.
+///
+/// Nothing is asserted about the contents. This exists to be read.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn what_an_advisor_request_is_answered_with_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== What an advisor request is answered with ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+    let join = run_hot_loop(hot_loop);
+
+    // Each partition the reference client names, asked for by the word the
+    // venue knows it by.
+    for (which, partition) in [(1, "GROUPS"), (2, "PROFILES"), (3, "ALIASES")] {
+        println!("  asking for {partition} ({which})");
+        control_tx.send(ControlCommand::AdvisorConfig {
+            command: 5,
+            partition: partition.to_string(),
+            document: None,
+        }).expect("send failed");
+    }
+
+    // Long enough for a refusal, which is what an account that is not an
+    // advisor is expected to answer with.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if let Ok(other) = event_rx.recv_timeout(Duration::from_millis(200)) {
+            println!("  [event] {other:?}");
+        }
+    }
+
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+
+    println!("\n  --- what arrived and nothing read ---");
+    for (kind, body) in shared.market.unread_wire() {
+        println!("  {kind}: {}", body.chars().take(400).collect::<String>());
+    }
+    println!("\n  (nothing asserted; this is a reading)");
+}
+
 /// A cancel sent before the replace it follows has been acknowledged names
 /// the version the venue was last sent, not the one it last confirmed.
 ///
