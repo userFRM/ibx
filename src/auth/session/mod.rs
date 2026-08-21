@@ -27,6 +27,21 @@ use crate::protocol::xyz;
 /// `token_type` is one of `"st"`, `"tst"`, or `"zenith"` and corresponds verbatim to
 /// the
 /// `stoken_type` value used by SSO authenticators in the upstream Java auth flow.
+/// The message id the venue states an SRP verdict under.
+///
+/// The exchange runs on odd ids out and even ids back: 1 asks for the
+/// parameters and 2 answers, 3 offers the public value and 4 answers, 5 sends
+/// the client's proof and 6 carries the verdict. An id outside that set
+/// belongs to something else the venue is saying.
+const SRP_AUTH_RESULT: u32 = 6;
+
+/// How many messages of the venue's own to read past before giving up on a
+/// verdict that is not coming.
+///
+/// Bounded rather than open: a venue that states no result at all should end
+/// the attempt instead of holding the connection open reading forever.
+const OTHER_MESSAGES_BEFORE_THE_RESULT: usize = 8;
+
 pub struct AuthResult {
     /// SRP shared secret K. Use [`session_token_bytes`](Self::session_token_bytes) for
     /// the
@@ -280,6 +295,42 @@ pub fn recv_secure<R: Read>(
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Read on until the venue states an SRP verdict, and answer with its fields.
+///
+/// A message carrying an id this exchange does not use is passed over rather
+/// than read as the verdict. The venue puts its own between the client's proof
+/// and the result, and taking the first thing to arrive for the answer refused
+/// a logon over a message that states no answer at all.
+fn srp_result_fields<R: Read>(stream: &mut R) -> io::Result<Vec<String>> {
+    let mut skipped = 0usize;
+    loop {
+        match recv_msg(stream)? {
+            RecvMsg::Xyz { state, fields, .. } if state == SRP_AUTH_RESULT => {
+                return Ok(fields);
+            }
+            RecvMsg::Xyz { state, .. } => {
+                skipped += 1;
+                if skipped > OTHER_MESSAGES_BEFORE_THE_RESULT {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "no SRP result after {skipped} other messages, \
+                             the last of them id {state}"
+                        ),
+                    ));
+                }
+                log::info!("received unknown msg id {state} while awaiting the SRP result");
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Expected XYZ response for SRP state 6",
+                ));
+            }
+        }
+    }
+}
+
 /// Receive a framed message and classify as text or binary.
 pub fn recv_msg<R: Read>(stream: &mut R) -> io::Result<RecvMsg> {
     let (payload, _) = ns::ns_recv(stream)?;
@@ -484,17 +535,17 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     let msg5 = xyz::xyz_build_srp_v20(5, &[("N", &m1_hex)]);
     stream.write_all(&xyz::xyz_wrap(&msg5))?;
 
-    // State 6: Receive AUTH_RESULT
-    let recv6 = recv_msg(stream)?;
-    let (state6, fields6) = match recv6 {
-        RecvMsg::Xyz { state, fields, .. } => (state, fields),
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Expected XYZ response for SRP state 6",
-            ));
-        }
-    };
+    // State 6: Receive AUTH_RESULT.
+    //
+    // A message carrying an id this exchange does not use is skipped, not read
+    // as the verdict. The venue puts its own between the proof and the result,
+    // and taking the first thing to arrive for the answer refused a logon over
+    // a message that states no answer at all — the reading was `UNKNOWN`,
+    // which was a field of something else entirely.
+    //
+    // Bounded so a venue that never states a result ends the attempt rather
+    // than reading forever.
+    let fields6 = srp_result_fields(stream)?;
 
     let result = fields6
         .get(9)
@@ -503,7 +554,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
         .map(|s| s.as_str())
         .unwrap_or("");
 
-    if state6 == 6 && result == "PASSED" {
+    if result == "PASSED" {
         Ok(k)
     } else if result == "NEEDSSL" {
         Err(io::Error::other(
@@ -512,7 +563,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("SRP Authentication FAILED (state={state6}): {result}"),
+            format!("SRP Authentication FAILED: {result}"),
         ))
     }
 }
@@ -1527,11 +1578,32 @@ pub fn do_srp_farm(
     let msg5 = xyz::xyz_build_srp_v20(5, &[("N", &m1_hex)]);
     stream.write_all(&wrap_xyz_fix(&msg5))?;
 
-    // State 6: Receive AUTH_RESULT (FIX-framed)
-    let recv6 = recv_8eq1(stream, carry)?;
-    let xyz6 = extract_xyz(&recv6);
-    let (_, _, state6, fields6) = xyz::xyz_parse_response(xyz6)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Farm SRP: invalid state 6"))?;
+    // State 6: Receive AUTH_RESULT (FIX-framed).
+    //
+    // As on the session's own SRP: a message carrying an id this exchange does
+    // not use is skipped rather than read as the verdict.
+    let mut skipped = 0usize;
+    let fields6 = loop {
+        let frame = recv_8eq1(stream, carry)?;
+        let xyz = extract_xyz(&frame);
+        let (_, _, state, fields) = xyz::xyz_parse_response(xyz).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Farm SRP: invalid state 6")
+        })?;
+        if state == SRP_AUTH_RESULT {
+            break fields;
+        }
+        skipped += 1;
+        if skipped > OTHER_MESSAGES_BEFORE_THE_RESULT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "no farm SRP result after {skipped} other messages, \
+                     the last of them id {state}"
+                ),
+            ));
+        }
+        log::info!("received unknown msg id {state} while awaiting the farm SRP result");
+    };
 
     let result = fields6
         .get(9)
@@ -1540,13 +1612,13 @@ pub fn do_srp_farm(
         .map(|s| s.as_str())
         .unwrap_or("");
 
-    if state6 == 6 && result == "PASSED" {
+    if result == "PASSED" {
         log::info!("Farm SRP auth PASSED");
         Ok(())
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("Farm SRP FAILED (state={state6}): {result}"),
+            format!("Farm SRP FAILED: {result}"),
         ))
     }
 }

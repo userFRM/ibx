@@ -18,7 +18,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Requests | 78. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
 | Order fields | 154. 114 are sent; 35 have no field in the protocol to carry them and the call says so rather than dropping them; 5 are what the venue fills on the way back, which an order does not carry out |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 2,260 offline, and 166 more that only run against a broker session |
+| Tests | 2,262 offline, and 166 more that only run against a broker session |
 
 45 of the 47 capabilities are verified against IBKR production servers. Of the
 other two, advisor configuration reaches the server and needs an advisor
@@ -148,6 +148,23 @@ official gateway behaves the same way.
   provided by folding the 5-second bar stream into the requested bar size.
 - **Historical execution reports require a window within 7 days.** A request
   without one is rejected in full.
+- **The option-exercise interest rate series is not served.**
+  `OptExInterestRate` is accepted as a tick query against an option contract
+  and rejected by name against the underlying, and every window tested returns
+  an empty result set.
+- **A crypto's book and its trade stream are acknowledged and carry nothing.**
+  The request sent for a crypto is the request sent for a share and differs
+  only in the security type, and that same request against a future is answered
+  with the entitlement — so the shape reaches the server and is understood.
+  Both increments of the trade stream are acknowledged and produce no records,
+  while on the same contract in the same session top of book streams
+  continuously and a historical tick request is answered. The server holds the
+  data and does not stream it.
+- **The fourth integer on tick 437 has no stated meaning.** The tick carries
+  four: a status mask, a number, an index naming one status, and one more. The
+  protocol establishes no unit for the last two, so any reading of them would be
+  invented rather than found; both are carried on the tick as sent, so a caller
+  who knows what they mean has them.
 
 ## Sessions
 
@@ -183,28 +200,16 @@ not hold. `scripts/endurance.py --minutes 175`.
 
 ## Known limitations
 
-- The option-exercise interest rate series (`OptExInterestRate`) is accepted as
-  a tick query against an option contract and rejected by name against the
-  underlying. Every window tested returns an empty result set. Until it
-  resolves, the model's carry term is fitted rather than read, and absorbs
-  model differences: two contracts on one underlying and expiry fitted 4.9% and
-  20.1%.
-- A crypto's book and its tick-by-tick stream are acknowledged and produce
-  nothing, with no response of any kind. The request sent for a crypto is the
-  request sent for a share and differs only in the security type, and that same
-  request against a future is answered with the entitlement — so the shape
-  reaches the server and is understood. The silence is the venue's, not the
-  request's.
-- Crypto tick-by-tick subscriptions are acknowledged with both increments and
-  produce no records. In the same session and on the same contract, top of book
-  streams continuously and a historical tick request is answered; equities and
-  FX stream throughout. The server holds crypto tick data and does not stream
-  it.
-- Tick 437 carries four 32-bit integers. Three are read — a status mask, a
-  number, and an index naming one status — and the fourth is delivered
-  unread. The number is kept exactly as stated: the protocol does not establish
-  its unit, so any reading of it would be invented rather than found. Both are
-  carried on the tick, so a caller who knows what they mean has them.
+One, and it is this client's own.
+
+- **The carry term in a hypothetical solve is fitted, not read.** The series
+  that would state it (`OptExInterestRate`, under the protocol constraints
+  above) is not served, so a caller-supplied price or volatility is solved
+  against a rate inferred from the venue's own model rather than one the venue
+  stated. It absorbs whatever else the two models disagree about: two contracts
+  on one underlying and expiry fitted 4.9% and 20.1%. It does not affect the
+  volatility or the greeks a caller reads, which are the venue's and are not
+  solved here.
 
 ## Refusals
 
