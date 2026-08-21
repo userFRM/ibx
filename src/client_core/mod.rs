@@ -681,12 +681,16 @@ pub struct ClientCore {
     /// Every provider this account may read.
     pub news_providers: Mutex<String>,
     /// Which contracts news was asked for on.
-    /// Which requests asked for news on an instrument.
+    /// Which requests asked for the headlines on a contract.
     ///
-    /// Held by request and not merely by instrument, because the headlines
-    /// stop when the last caller that asked for them goes — not when the
-    /// first one does, and not when the quotes happen to end.
-    pub news_instruments: Mutex<HashMap<InstrumentId, HashSet<i64>>>,
+    /// Held by request, because the headlines stop when the last caller that
+    /// asked for them goes — not when the first one does, and not when the
+    /// quotes happen to end. Keyed by the contract rather than by the
+    /// instrument, because the venue is asked by contract and the decision to
+    /// ask is made before the instrument is known: keyed by instrument, two
+    /// requests racing for a contract neither had registered yet both found
+    /// nobody had asked, and both asked.
+    pub news_askers: Mutex<HashMap<i64, HashSet<i64>>>,
 
     // Contract cache for enrichment
     /// What the venue has said about each contract, kept so a second
@@ -790,7 +794,7 @@ impl ClientCore {
             // standing in for it asked for news from providers the account
             // may not be entitled to and left out the ones it is.
             news_providers: Mutex::new(String::new()),
-            news_instruments: Mutex::new(HashMap::new()),
+            news_askers: Mutex::new(HashMap::new()),
             contract_cache: Mutex::new(HashMap::new()),
             named_by_description: Mutex::new(HashMap::new()),
         }
@@ -847,7 +851,7 @@ impl ClientCore {
         self.epoch_dates_by_req.lock().unwrap().clear();
         self.hist_initial_complete.lock().unwrap().clear();
         self.news_providers.lock().unwrap().clear();
-        self.news_instruments.lock().unwrap().clear();
+        self.news_askers.lock().unwrap().clear();
         self.contract_cache.lock().unwrap().clear();
         // What the venue named for a description belongs to the session that
         // asked. Kept across a reconnect — or a login as somebody else — the
@@ -1030,11 +1034,19 @@ impl ClientCore {
     /// this request was being made — and the subscription is sent before any
     /// of them. A door that does not record it sends headlines nothing will
     /// ever withdraw.
-    fn note_news_request(&self, instrument: InstrumentId, req_id: i64, wants_news: bool) {
-        if wants_news {
-            self.news_instruments.lock().unwrap()
-                .entry(instrument).or_default().insert(req_id);
-        }
+    /// Record that this request wants the headlines on a contract, and say
+    /// whether it is the first to ask.
+    ///
+    /// Decided and recorded together, so two requests racing for one contract
+    /// cannot both find that nobody has asked. The venue is asked by contract
+    /// and withdrawn by contract, so asking twice leaves a subscription the
+    /// one withdrawal cannot match.
+    pub(crate) fn first_to_ask_for_news(&self, con_id: i64, req_id: i64) -> bool {
+        let mut news = self.news_askers.lock().unwrap();
+        let askers = news.entry(con_id).or_default();
+        let first = askers.is_empty();
+        askers.insert(req_id);
+        first
     }
 
     /// Register a market data subscription mapping.
@@ -1079,15 +1091,10 @@ impl ClientCore {
                 unsent.join(", "),
             );
         }
-        // Asked for once per contract. The venue is asked by contract and
-        // withdrawn by contract, so a second caller asking for the same one
-        // added a subscription that the single withdrawal could not match, and
-        // it was left running with nobody listening.
-        let news_already_asked = wants_news
-            && self.cached_instrument(con_id).is_some_and(|instrument| {
-                self.news_instruments.lock().unwrap().contains_key(&instrument)
-            });
-        if wants_news && !news_already_asked {
+        // Asked for once per contract, whoever asks. Recorded as the decision
+        // is made, so two callers racing for one contract cannot both find
+        // that nobody has asked.
+        if wants_news && self.first_to_ask_for_news(con_id, req_id) {
             // What the logon said this account may read, unless a caller has
             // named its own set. The venue separates codes with a star.
             let named = self.news_providers.lock().unwrap().clone();
@@ -1130,7 +1137,6 @@ impl ClientCore {
             // were already up, so it is recorded here as well. Recorded only
             // on the path that also opened the quotes, it was never withdrawn:
             // the caller stopped watching and the headlines kept coming.
-            self.note_news_request(instrument, req_id, wants_news);
             return Ok(instrument);
         }
 
@@ -1170,7 +1176,6 @@ impl ClientCore {
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, None);
             }
-            self.note_news_request(instrument_id, req_id, wants_news);
             return Ok(instrument_id);
         }
         // Somebody may have taken this contract while this request was being
@@ -1191,23 +1196,31 @@ impl ClientCore {
         if snapshot {
             self.snapshot_reqs.lock().unwrap().insert(req_id, None);
         }
-        self.note_news_request(instrument_id, req_id, wants_news);
         Ok(instrument_id)
     }
 
     /// Drop this request's claim on the headlines, and say whether that was
     /// the last one. Called on every path out of a withdrawal: the quotes may
     /// stay up for another caller while the headlines this one asked for stop.
-    fn release_news(&self, instrument: InstrumentId, req_id: i64) -> bool {
-        let mut news = self.news_instruments.lock().unwrap();
-        let Some(askers) = news.get_mut(&instrument) else {
-            return false;
+    pub(crate) fn release_news(&self, req_id: i64) -> Option<InstrumentId> {
+        let emptied = {
+            let mut news = self.news_askers.lock().unwrap();
+            let mut done: Option<i64> = None;
+            for (con_id, askers) in news.iter_mut() {
+                if askers.remove(&req_id) {
+                    if askers.is_empty() {
+                        done = Some(*con_id);
+                    }
+                    break;
+                }
+            }
+            let con_id = done?;
+            news.remove(&con_id);
+            con_id
         };
-        if !askers.remove(&req_id) || !askers.is_empty() {
-            return false;
-        }
-        news.remove(&instrument);
-        true
+        // Named by the instrument, which is what a withdrawal states. Known by
+        // now: nothing is withdrawn that was never registered.
+        self.cached_instrument(emptied)
     }
 
     /// Unregister a market data subscription.
@@ -1247,11 +1260,11 @@ impl ClientCore {
                     self.mdt_sent.lock().unwrap().remove(&req_id);
                     self.mdt_by_req.lock().unwrap().remove(&req_id);
                     if was_following {
-                        return (None, self.release_news(instrument, req_id).then_some(instrument));
+                        return (None, self.release_news(req_id));
                     }
                     if let Some(next) = next {
                         self.instrument_to_req.lock().unwrap().insert(instrument, next);
-                        return (None, self.release_news(instrument, req_id).then_some(instrument));
+                        return (None, self.release_news(req_id));
                     }
                 }
             }
@@ -1259,7 +1272,7 @@ impl ClientCore {
             self.last_quotes.lock().unwrap().remove(&instrument);
             self.mdt_sent.lock().unwrap().remove(&req_id);
             self.mdt_by_req.lock().unwrap().remove(&req_id);
-            let stop_news = self.release_news(instrument, req_id).then_some(instrument);
+            let stop_news = self.release_news(req_id);
             self.forget_instrument(instrument);
             (Some(instrument), stop_news)
         } else {

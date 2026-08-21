@@ -1097,9 +1097,15 @@ fn news_is_asked_for_from_the_providers_the_logon_named() {
 
     // Every provider named on this attempt, and nothing if news was not asked
     // for. The register also emits its own commands, which are not these.
+    // A contract of its own each time. The venue is asked for the headlines
+    // once per contract, so asking again for one already asked about would
+    // answer nothing whatever the entry said, and this is about the entry.
+    let next = std::cell::Cell::new(265598i64);
     let asked = |tick_list: &str| -> Option<String> {
+        let con_id = next.get();
+        next.set(con_id + 1);
         let _ = core.register_mkt_data(
-            &shared, &tx, 1, 265598, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            &shared, &tx, con_id, con_id, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
             false, tick_list, 0,
         );
         let mut named = None;

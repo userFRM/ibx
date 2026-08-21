@@ -911,6 +911,26 @@ fn a_stream_outlives_the_snapshot_it_was_watching() {
     );
 }
 
+/// Two callers asking for the headlines on a contract neither has registered
+/// yet still ask once between them. Decided against the instrument, both
+/// found nobody had asked — the instrument is not known that early — and both
+/// asked, leaving a subscription the one withdrawal could not match.
+#[test]
+fn two_callers_racing_for_one_contract_ask_for_the_headlines_once() {
+    let (client, rx, _shared) = test_client();
+    // Asked against the contract, which both callers name before either has
+    // an instrument to name instead.
+    let first = client.core.first_to_ask_for_news(spy().con_id, 1);
+    let second = client.core.first_to_ask_for_news(spy().con_id, 2);
+
+    assert!(first, "the first caller asks");
+    assert!(!second, "and the second finds it already asked");
+
+    // And the headlines outlast the first of them.
+    assert_eq!(client.core.release_news(1), None, "one of two left");
+    let _ = rx.try_recv();
+}
+
 /// The venue is asked for the headlines by contract and withdrawn by
 /// contract, so it is asked once. Asked once per caller, a second caller
 /// added a subscription the single withdrawal could not match, and it was

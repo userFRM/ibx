@@ -1087,6 +1087,117 @@ fn cancel_by_perm_id_phase_live() {
     println!("\n  PASS — cancel_order_by_perm_id works\n");
 }
 
+/// A cancel sent before the replace it follows has been acknowledged names
+/// the version the venue was last sent, not the one it last confirmed.
+///
+/// A replace is sent under a new ClOrdID and the order keeps its own id, so a
+/// cancel has to state which version it is withdrawing. This client advances
+/// its record of that when it sends the replace rather than when the venue
+/// confirms it, which is the reading FIX states and the opposite of waiting
+/// for the acknowledgement. Nothing in the gateway settles it — the tag is
+/// not written as a literal anywhere in it — so it is settled here, against
+/// the venue, by racing a cancel past an unacknowledged replace and seeing
+/// whether the order goes away.
+///
+/// A cancel naming the wrong version is answered as an order the venue does
+/// not have, and the order is left working.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn a_cancel_racing_an_unacked_replace_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== A cancel racing an unacknowledged replace ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    let order_id = common::next_order_id();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+
+    // Resting far below the market so it neither fills nor moves.
+    println!("  orderId = {order_id}");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        kind: ibx::types::OrderKind::Limit { price: 1_00_000_000 },
+        tif: b'0',
+        attrs: ibx::types::OrderAttrs { outside_rth: true, ..Default::default() },
+    })).expect("send failed");
+
+    let join = run_hot_loop(hot_loop);
+    let mut working = false;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline && !working {
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if u.order_id != order_id { continue; }
+            println!("  [update] status={:?}", u.status);
+            working = matches!(u.status, OrderStatus::Submitted | OrderStatus::PreSubmitted);
+            if matches!(u.status, OrderStatus::Rejected | OrderStatus::Inactive) {
+                let _ = control_tx.send(ControlCommand::Shutdown);
+                let _ = join.join();
+                println!(
+                    "\n  SKIP: the venue refused the order — {}",
+                    common::reject_reason(&shared, order_id),
+                );
+                return;
+            }
+        }
+    }
+    assert!(working, "the order never reached the book — clean up {order_id} by hand");
+
+    // The race: a replace, and a cancel behind it with no wait between them.
+    // The cancel names the version the replace was sent under.
+    println!("  replacing, then cancelling with no wait between");
+    control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+        order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE,
+        outside_rth: true, ord_type: 0, tif: 0, stop_price: 0,
+    })).expect("replace failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
+        .expect("cancel failed");
+
+    let mut withdrawn = false;
+    let mut refused_the_cancel = false;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    while Instant::now() < deadline && !withdrawn {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::OrderUpdate(u)) if u.order_id == order_id => {
+                println!("  [update] status={:?}", u.status);
+                withdrawn = u.status == OrderStatus::Cancelled;
+            }
+            Ok(Event::CancelReject(r)) if r.order_id == order_id => {
+                println!("  [cancel refused] type={} code={}", r.reject_type, r.reason_code);
+                refused_the_cancel = true;
+            }
+            _ => {}
+        }
+    }
+
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+
+    assert!(
+        withdrawn,
+        "the cancel did not withdraw the order (the venue refused it: {refused_the_cancel}) — \
+         the version it named is not the one the venue was holding. Clean up {order_id} by hand.",
+    );
+    println!(
+        "\n  PASS — the cancel named the version the venue was last sent, and it was taken"
+    );
+}
+
 /// A real fill books the quantity the venue reported, and moves the holding.
 ///
 /// Run against a European listing, which trades while New York is closed, so
