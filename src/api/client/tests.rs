@@ -878,6 +878,39 @@ fn req_mkt_data_ex_propagates_mode_9887() {
     }
 }
 
+/// A snapshot is an ordinary subscription that this client withdraws once it
+/// has what it asked for — the wire carries no such thing, and one contract
+/// carries one subscription. So a stream asked for while a snapshot is up
+/// watches that subscription, and the snapshot finishing hands it over rather
+/// than taking it down.
+#[test]
+fn a_stream_outlives_the_snapshot_it_was_watching() {
+    let (client, rx, _shared) = test_client();
+    // The snapshot holds the contract.
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+    client.core.req_to_instrument.lock().unwrap().insert(1, 0);
+    client.core.snapshot_reqs.lock().unwrap().insert(1, None);
+
+    // A stream watches what is already up.
+    client.req_mkt_data(2, &spy(), "", false, false).expect("watches what is up");
+    while rx.try_recv().is_ok() {}
+
+    // The snapshot has what it asked for and withdraws.
+    client.cancel_mkt_data(1).expect("the snapshot is done");
+
+    let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        !sent.iter().any(|c| matches!(c, ControlCommand::Unsubscribe { .. })),
+        "the snapshot took the stream's subscription down with it: {sent:?}",
+    );
+    assert_eq!(
+        client.core.instrument_to_req.lock().unwrap().get(&0).copied(),
+        Some(2),
+        "and the stream holds it now",
+    );
+}
+
 /// The venue is asked for the headlines by contract and withdrawn by
 /// contract, so it is asked once. Asked once per caller, a second caller
 /// added a subscription the single withdrawal could not match, and it was
