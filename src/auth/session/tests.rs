@@ -329,17 +329,19 @@ fn a_message_that_is_not_the_srp_verdict_is_read_past() {
     );
 }
 
-/// And a venue that states no verdict at all ends the attempt rather than
-/// reading for ever.
+/// Nothing bounds the reading but the connection.
+///
+/// A count of its own would be this client's invention: a venue that states no
+/// verdict is read until the socket ends, and that is where the attempt ends.
 #[test]
-fn a_venue_that_never_states_a_verdict_ends_the_attempt() {
+fn reading_past_ends_when_the_connection_does() {
     let mut wire = Vec::new();
     for _ in 0..40 {
         wire.extend_from_slice(&xyz::xyz_wrap(&xyz::xyz_build_srp_v20(7, &[("N", "0")])));
     }
     let mut cursor = io::Cursor::new(wire);
-    let why = super::srp_result_fields(&mut cursor).expect_err("read past every one of them");
-    assert_eq!(why.kind(), io::ErrorKind::InvalidData);
+    super::srp_result_fields(&mut cursor)
+        .expect_err("a verdict was answered where the venue stated none");
 }
 
 #[test]
@@ -501,13 +503,28 @@ fn recv_ns_error_response_519() {
         assert!(err.to_string().contains("malformed user name"));
 }
 
+/// A type this read is not waiting for is read past, and the secure message
+/// behind it is the one answered.
+///
+/// The venue states messages of its own accord — a backup host among them —
+/// and refusing the login over one ends a session the venue had no complaint
+/// about.
 #[test]
-fn recv_secure_unknown_type_returns_error() {
-    let frame = build_ns_frame("50;999;payload;");
-    let mut cursor = io::Cursor::new(frame);
+fn recv_secure_reads_past_a_type_it_is_not_waiting_for() {
+    let mut wire = build_ns_frame("50;527;host.example;");
+    wire.extend_from_slice(&build_ns_frame("50;999;payload;"));
+    // Then the one being waited for. Its body is not decipherable by a channel
+    // that never shook hands, so what is checked is which message was reached.
+    wire.extend_from_slice(&build_ns_frame("50;534;bm90LWNpcGhlcnRleHQ=;"));
+
+    let mut cursor = io::Cursor::new(wire);
     let mut channel = SecureChannel::new();
     let err = recv_secure(&mut cursor, &mut channel).unwrap_err();
-    assert!(err.to_string().contains("Expected 534, got 999"));
+    let said = err.to_string();
+    assert!(
+        !said.contains("527") && !said.contains("999"),
+        "stopped on a message it was not waiting for: {said}",
+    );
 }
 
 // ── Constants ───────────────────────────────────────────────────────

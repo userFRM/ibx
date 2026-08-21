@@ -35,13 +35,6 @@ use crate::protocol::xyz;
 /// belongs to something else the venue is saying.
 const SRP_AUTH_RESULT: u32 = 6;
 
-/// How many messages of the venue's own to read past before giving up on a
-/// verdict that is not coming.
-///
-/// Bounded rather than open: a venue that states no result at all should end
-/// the attempt instead of holding the connection open reading forever.
-const OTHER_MESSAGES_BEFORE_THE_RESULT: usize = 8;
-
 pub struct AuthResult {
     /// SRP shared secret K. Use [`session_token_bytes`](Self::session_token_bytes) for
     /// the
@@ -249,46 +242,56 @@ pub fn recv_secure<R: Read>(
     stream: &mut R,
     channel: &mut SecureChannel,
 ) -> io::Result<Vec<u8>> {
-    let (payload, _) = ns::ns_recv(stream)?;
-    let text = String::from_utf8_lossy(&payload);
-    let parts: Vec<&str> = text.split(';').collect();
+    // A message the venue states while this one is awaited is read past, not
+    // taken for a failure. It states a backup host without being asked, and
+    // refusing the login over one would end a session the venue had no
+    // complaint about.
+    let body = loop {
+        let (payload, _) = ns::ns_recv(stream)?;
+        let text = String::from_utf8_lossy(&payload);
+        let parts: Vec<&str> = text.split(';').collect();
 
-    if parts.len() < 2 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed NS response"));
-    }
+        if parts.len() < 2 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed NS response"));
+        }
 
-    let msg_type: u32 = parts[1]
-        .parse()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid msg type"))?;
+        let msg_type: u32 = parts[1]
+            .parse()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid msg type"))?;
 
-    if msg_type == NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
-        return Err(io::Error::other(
-            format!("Auth error: {}", parts[2..].join(";")),
-        ));
-    }
-    if msg_type == NS_REDIRECT {
-        let target = parts.get(2).unwrap_or(&"");
-        return Err(io::Error::new(
-            io::ErrorKind::ConnectionReset,
-            format!("REDIRECT:{target}"),
-        ));
-    }
-    if msg_type != NS_SECURE_MESSAGE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Expected 534, got {msg_type}: {text}"),
-        ));
-    }
+        if msg_type == NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
+            return Err(io::Error::other(
+                format!("Auth error: {}", parts[2..].join(";")),
+            ));
+        }
+        if msg_type == NS_REDIRECT {
+            let target = parts.get(2).unwrap_or(&"");
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                format!("REDIRECT:{target}"),
+            ));
+        }
+        if msg_type == NS_SECURE_MESSAGE {
+            // Read rather than indexed: the guard above establishes two fields,
+            // and a secure message states three. A frame with the type and
+            // nothing after it is malformed, which is a thing to report —
+            // indexing it takes the login thread down instead.
+            break parts
+                .get(2)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "secure message carries no body",
+                    )
+                })?
+                .to_string();
+        }
 
-    // Read rather than indexed: the guard above establishes two fields, and a
-    // secure message states three. A frame with the type and nothing after it
-    // is malformed, which is a thing to report — indexing it takes the login
-    // thread down instead.
-    let body = parts.get(2).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "secure message carries no body")
-    })?;
+        log::info!("received msg id {msg_type} while awaiting a secure message; read past");
+    };
+
     let ct = B64
-        .decode(body)
+        .decode(&body)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     channel
         .decrypt(&ct)
@@ -302,23 +305,12 @@ pub fn recv_secure<R: Read>(
 /// and the result, and taking the first thing to arrive for the answer refused
 /// a logon over a message that states no answer at all.
 fn srp_result_fields<R: Read>(stream: &mut R) -> io::Result<Vec<String>> {
-    let mut skipped = 0usize;
     loop {
         match recv_msg(stream)? {
             RecvMsg::Xyz { state, fields, .. } if state == SRP_AUTH_RESULT => {
                 return Ok(fields);
             }
             RecvMsg::Xyz { state, .. } => {
-                skipped += 1;
-                if skipped > OTHER_MESSAGES_BEFORE_THE_RESULT {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!(
-                            "no SRP result after {skipped} other messages, \
-                             the last of them id {state}"
-                        ),
-                    ));
-                }
                 log::info!("received unknown msg id {state} while awaiting the SRP result");
             }
             _ => {
@@ -1582,7 +1574,6 @@ pub fn do_srp_farm(
     //
     // As on the session's own SRP: a message carrying an id this exchange does
     // not use is skipped rather than read as the verdict.
-    let mut skipped = 0usize;
     let fields6 = loop {
         let frame = recv_8eq1(stream, carry)?;
         let xyz = extract_xyz(&frame);
@@ -1591,16 +1582,6 @@ pub fn do_srp_farm(
         })?;
         if state == SRP_AUTH_RESULT {
             break fields;
-        }
-        skipped += 1;
-        if skipped > OTHER_MESSAGES_BEFORE_THE_RESULT {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "no farm SRP result after {skipped} other messages, \
-                     the last of them id {state}"
-                ),
-            ));
         }
         log::info!("received unknown msg id {state} while awaiting the farm SRP result");
     };
