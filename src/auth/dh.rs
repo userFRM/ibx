@@ -111,7 +111,32 @@ impl SecureChannel {
     ///
     /// The range check on the public value below is the only check made here.
     /// The farm connections have no outer TLS, so on those this is the whole
-    /// of the peer authentication.
+    /// of the peer authentication. The primary connection is carried inside
+    /// TLS, which is verified against the system trust store, so there the
+    /// peer is authenticated before any of this runs.
+    ///
+    /// ## What the hello carries
+    ///
+    /// Eight fields, of which two are read:
+    ///
+    /// | | |
+    /// |---|---|
+    /// | 0 | the server's random, 32 bytes |
+    /// | 1 | the server's public value, 128 bytes |
+    /// | 2 | a 256-byte signature |
+    /// | 3 | how many certificates follow |
+    /// | 4.. | that many certificates, leaf first |
+    ///
+    /// The chain runs from a leaf naming the venue's own host, through an
+    /// intermediate of the venue's, to a public certificate authority — so
+    /// checking it needs no pinned copy and carries no rotation hazard.
+    ///
+    /// Reading them is worth doing on the farm connections, where nothing
+    /// else authenticates the peer. It is worth little on the primary, where
+    /// TLS has already done it. What the signature covers is not established:
+    /// the two randoms and the two public values, alone and combined, in
+    /// their raw and encoded forms, do not verify against the leaf under
+    /// PKCS#1 v1.5 with SHA-1, SHA-256 or SHA-384.
     pub fn process_server_hello(&mut self, fields: &[&str]) -> std::io::Result<()> {
         let invalid = |what: &str| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("DH server hello: {what}"))
