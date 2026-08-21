@@ -128,6 +128,14 @@ impl EClient {
                     ..unstated()
                 },
             ),
+            // The venue states a model for a contract that is watched. Asking
+            // about one nobody is watching opens the watch and answers when
+            // the model arrives, which is what the caller asked for — rather
+            // than refusing the question for having been asked first.
+            Err(why) if self.watch_for_option_model(req_id, contract, true,
+                                                    option_price, under_price) => {
+                let _ = why;
+            }
             Err(why) => self.report_reason(req_id, &why),
         }
     }
@@ -149,8 +157,86 @@ impl EClient {
                     ..unstated()
                 },
             ),
+            // As above: the watch is opened and the answer follows.
+            Err(why) if self.watch_for_option_model(req_id, contract, false,
+                                                    volatility, under_price) => {
+                let _ = why;
+            }
             Err(why) => self.report_reason(req_id, &why),
         }
+    }
+
+    /// Answer a kept implied-volatility question, if the venue has stated a
+    /// model by now. Answers whether it did.
+    pub(crate) fn solve_and_push_volatility(
+        &self, req_id: i64, calc: &super::PendingOptionCalc,
+    ) -> bool {
+        let (opt, und) = (calc.option_price, calc.under_price);
+        match self.solve_option(&calc.contract, |terms, model| {
+            crate::control::option_model::implied_volatility(terms, model, opt, und)
+        }) {
+            Ok(volatility) => {
+                self.shared.market.push_option_computation(crate::types::OptionComputation {
+                    answers: Some(req_id),
+                    implied_vol: volatility,
+                    opt_price: opt,
+                    und_price: und,
+                    ..unstated()
+                });
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Answer a kept option-price question, if the venue has stated a model by
+    /// now. Answers whether it did.
+    pub(crate) fn solve_and_push_price(
+        &self, req_id: i64, calc: &super::PendingOptionCalc,
+    ) -> bool {
+        let (vol, und) = (calc.option_price, calc.under_price);
+        match self.solve_option(&calc.contract, |terms, model| {
+            crate::control::option_model::option_price(terms, model, vol, und)
+        }) {
+            Ok(price) => {
+                self.shared.market.push_option_computation(crate::types::OptionComputation {
+                    answers: Some(req_id),
+                    implied_vol: vol,
+                    opt_price: price,
+                    und_price: und,
+                    ..unstated()
+                });
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Watch a contract so the venue states a model for it, and keep the
+    /// question until it does.
+    ///
+    /// Answers whether the question was kept, which is only false where the
+    /// watch could not be opened at all.
+    fn watch_for_option_model(
+        &self, req_id: i64, contract: &super::Contract,
+        wants_volatility: bool, option_price: f64, under_price: f64,
+    ) -> bool {
+        // Knowing the contract is not watching it, and only a watched
+        // contract has a model stated for it. Already watching, the question
+        // is kept as it stands and the model is waited for.
+        let watched = self.core.cached_instrument(contract.con_id).is_some_and(|instrument| {
+            self.core.instrument_to_req.lock().unwrap().contains_key(&instrument)
+        });
+        if !watched && self.req_mkt_data(req_id, contract, "", false, false).is_err() {
+            return false;
+        }
+        self.pending_option_calcs.lock().unwrap().insert(req_id, super::PendingOptionCalc {
+            contract: contract.clone(),
+            wants_volatility,
+            option_price,
+            under_price,
+        });
+        true
     }
 
     /// The contract's terms and the venue's model for it, or why neither
@@ -166,11 +252,27 @@ impl EClient {
         self.core.solve_option(&self.shared, contract, solve)
     }
 
-    /// Nothing was started, so there is nothing to stop.
-    pub fn cancel_calculate_implied_volatility(&self, _req_id: i64) {}
+    /// Withdraw a question that was waiting on the venue to state a model.
+    ///
+    /// A question answered from a model already stated started nothing and
+    /// stops nothing. One that opened a watch to get an answer withdraws it
+    /// here, so a caller that changes its mind is not left watching a
+    /// contract it no longer asks about.
+    pub fn cancel_calculate_implied_volatility(&self, req_id: i64) {
+        self.forget_option_calc(req_id);
+    }
 
-    /// Nothing was started, so there is nothing to stop.
-    pub fn cancel_calculate_option_price(&self, _req_id: i64) {}
+    /// As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
+    pub fn cancel_calculate_option_price(&self, req_id: i64) {
+        self.forget_option_calc(req_id);
+    }
+
+    /// Drop a kept question and the watch it opened.
+    fn forget_option_calc(&self, req_id: i64) {
+        if self.pending_option_calcs.lock().unwrap().remove(&req_id).is_some() {
+            let _ = self.cancel_mkt_data(req_id);
+        }
+    }
 
     // ── Display Groups ──
 

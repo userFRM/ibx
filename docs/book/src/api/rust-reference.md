@@ -1579,10 +1579,10 @@ pub fn calculate_option_price( &self, req_id: i64, contract: &super::Contract, v
 
 #### `cancel_calculate_implied_volatility`
 
-Nothing was started, so there is nothing to stop.
+Withdraw a question that was waiting on the venue to state a model. A question answered from a model already stated started nothing and stops nothing. One that opened a watch to get an answer withdraws it here, so a caller that changes its mind is not left watching a contract it no longer asks about.
 
 ```rust
-pub fn cancel_calculate_implied_volatility(&self, _req_id: i64)
+pub fn cancel_calculate_implied_volatility(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |
@@ -1593,10 +1593,10 @@ pub fn cancel_calculate_implied_volatility(&self, _req_id: i64)
 
 #### `cancel_calculate_option_price`
 
-Nothing was started, so there is nothing to stop.
+As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
 
 ```rust
-pub fn cancel_calculate_option_price(&self, _req_id: i64)
+pub fn cancel_calculate_option_price(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |

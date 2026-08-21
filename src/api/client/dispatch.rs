@@ -110,6 +110,27 @@ impl EClient {
         }
     }
 
+    /// Answer the calculations that were waiting on the venue to state a
+    /// model, and forget them.
+    ///
+    /// A question the venue still cannot answer is kept: the watch is open, so
+    /// the model may yet arrive. It is dropped when the caller withdraws it.
+    fn answer_kept_option_calcs(&self) {
+        let kept: Vec<(i64, crate::api::client::PendingOptionCalc)> = self
+            .pending_option_calcs.lock().unwrap()
+            .iter().map(|(k, v)| (*k, v.clone())).collect();
+        for (req_id, calc) in kept {
+            let answered = if calc.wants_volatility {
+                self.solve_and_push_volatility(req_id, &calc)
+            } else {
+                self.solve_and_push_price(req_id, &calc)
+            };
+            if answered {
+                self.pending_option_calcs.lock().unwrap().remove(&req_id);
+            }
+        }
+    }
+
     fn dispatch_orders(&self, wrapper: &mut impl Wrapper) {
         // Fills → order_status + exec_details + commission_and_fees_report
         // One `order_status` per execution report: a report carrying both a fill
@@ -389,6 +410,14 @@ impl EClient {
         // The venue's option model → tick_option_computation. Tick type 13 is
         // the model computation, and the attribute says the model is the
         // venue's rather than a price-based reading.
+        // A calculation asked for before the venue had stated a model waited
+        // on the watch that asking opened. The model has arrived, so answer
+        // the question that was kept rather than leaving the caller with the
+        // model it did not ask for.
+        if !self.pending_option_calcs.lock().unwrap().is_empty() {
+            self.answer_kept_option_calcs();
+        }
+
         for comp in self.shared.market.drain_option_computations() {
             // A computation answering a specific request goes to that request.
             // One published for the contract goes to every subscriber of it.

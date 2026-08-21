@@ -898,7 +898,7 @@ impl ClientCore {
     /// The instrument this conId is already known to hold. `0` means the
     /// contract carries no conId and answers for no one: the engine
     /// resolves those by descriptor, so only it can say which slot they got.
-    fn cached_instrument(&self, con_id: i64) -> Option<InstrumentId> {
+    pub(crate) fn cached_instrument(&self, con_id: i64) -> Option<InstrumentId> {
         if con_id == 0 {
             return None;
         }

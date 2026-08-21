@@ -931,6 +931,34 @@ fn two_callers_racing_for_one_contract_ask_for_the_headlines_once() {
     let _ = rx.try_recv();
 }
 
+/// A calculation asked before the venue has stated a model keeps the question
+/// and waits, rather than refusing it for having been asked first. The venue
+/// states a model for a contract that is watched, so asking about one that is
+/// not watched opens the watch; asking about one that is waits for the model
+/// the watch will bring.
+#[test]
+fn a_calculation_waits_for_the_model_rather_than_refusing() {
+    let (client, _rx, _shared) = test_client();
+    // Already watched, so the watch needs no opening — what is at issue is
+    // whether the question survives the venue not having stated a model yet.
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+
+    client.calculate_implied_volatility(7, &spy(), 12.5, 600.0);
+
+    assert!(
+        client.pending_option_calcs.lock().unwrap().contains_key(&7),
+        "the question was not kept, so the model will arrive with nobody asking",
+    );
+
+    // Withdrawn by the caller: the watch goes with it.
+    client.cancel_calculate_implied_volatility(7);
+    assert!(
+        !client.pending_option_calcs.lock().unwrap().contains_key(&7),
+        "the question outlived the caller's interest in it",
+    );
+}
+
 /// The venue is asked for the headlines by contract and withdrawn by
 /// contract, so it is asked once. Asked once per caller, a second caller
 /// added a subscription the single withdrawal could not match, and it was

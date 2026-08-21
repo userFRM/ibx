@@ -180,6 +180,20 @@ pub struct EClientConfig {
     pub order_id_file: Option<std::path::PathBuf>,
 }
 
+/// A calculation asked for before the venue had stated a model, kept until it
+/// does.
+#[derive(Clone)]
+pub(crate) struct PendingOptionCalc {
+    /// The contract it is on.
+    pub(crate) contract: crate::types::model::Contract,
+    /// Whether it inverts a price or prices a volatility.
+    pub(crate) wants_volatility: bool,
+    /// The price the caller supplied, where it supplied one.
+    pub(crate) option_price: f64,
+    /// The underlying price the caller supplied.
+    pub(crate) under_price: f64,
+}
+
 /// ibapi-compatible EClient. Matches C++ `EClientSocket` method signatures.
 ///
 /// # Thread lifecycle
@@ -229,6 +243,13 @@ pub struct EClient {
     /// request id and withdrawn under it. Held apart from that flag because
     /// both may be watching at once and each is answered on its own callback.
     pub(crate) positions_multi_requested: Mutex<std::collections::HashSet<i64>>,
+    /// Option calculations waiting on the venue to state a model.
+    ///
+    /// The calculation is answered from the venue's model for the contract,
+    /// and a contract nobody is watching has no model stated for it. Asking
+    /// opens the watch and the answer follows, rather than the question being
+    /// refused because it was asked first.
+    pub(crate) pending_option_calcs: Mutex<std::collections::HashMap<i64, PendingOptionCalc>>,
     pub(crate) next_order_id: AtomicU64,
     /// Where the last id handed out is kept, and under which key.
     pub(crate) order_id_store: Option<(std::path::PathBuf, String)>,
@@ -457,6 +478,7 @@ impl EClient {
             positions_requested: AtomicBool::new(false),
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
+            pending_option_calcs: Mutex::new(std::collections::HashMap::new()),
             next_order_id: AtomicU64::new(start_id),
             order_id_store,
             asking: Mutex::new(()),
@@ -493,6 +515,7 @@ impl EClient {
             positions_requested: AtomicBool::new(false),
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
+            pending_option_calcs: Mutex::new(std::collections::HashMap::new()),
             next_order_id: AtomicU64::new(start_id),
             // Built from parts, so nothing is remembered anywhere.
             order_id_store: None,
