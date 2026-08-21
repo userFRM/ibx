@@ -536,10 +536,8 @@ def set_news_providers(providers)
 
 #### `req_mkt_data`
 
-Request market data for a contract.  `mkt_data_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.
-
 ```python
-def req_mkt_data(req_id, contract, generic_tick_list="", snapshot=False, regulatory_snapshot=False, mkt_data_options=[])
+def req_mkt_data(req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, mkt_data_options)
 ```
 
 | Parameter | Type | Description |
@@ -1151,7 +1149,7 @@ def calculate_option_price(req_id, contract, volatility, under_price, opt_prc_op
 
 #### `cancel_calculate_implied_volatility`
 
-Stop waiting on an implied-volatility request.
+Stop waiting on an implied-volatility request.  A question answered in the call it was asked in leaves nothing to withdraw. One that opened a watch is holding a subscription the caller never asked for by name, and this is what releases it.
 
 ```python
 def cancel_calculate_implied_volatility(req_id)
@@ -1165,7 +1163,7 @@ def cancel_calculate_implied_volatility(req_id)
 
 #### `cancel_calculate_option_price`
 
-Stop waiting on an option-price request.
+As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
 
 ```python
 def cancel_calculate_option_price(req_id)

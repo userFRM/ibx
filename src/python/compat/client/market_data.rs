@@ -21,7 +21,7 @@ impl EClient {
     /// carries no free-form option list, so what a caller puts in one cannot be
     /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, contract, generic_tick_list="", snapshot=false, regulatory_snapshot=false, mkt_data_options=Vec::new()))]
-    fn req_mkt_data(
+    pub(crate) fn req_mkt_data(
         &self,
         py: Python<'_>,
         req_id: i64,

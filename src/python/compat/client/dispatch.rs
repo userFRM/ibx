@@ -376,6 +376,13 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "error", (req_id, 200i64, reason, ""));
         }
 
+        // A calculation asked for before the venue had stated a model waited on
+        // the watch that asking opened. Answer it here, before the drain, so
+        // the caller gets the question they asked rather than only the model.
+        if !self.pending_option_calcs.lock().unwrap().is_empty() {
+            self.answer_kept_option_calcs();
+        }
+
         for comp in shared.market.drain_option_computations() {
             // A locally solved calculation answers the request that asked for
             // it. The venue's model belongs to the contract, so it goes to
