@@ -1194,8 +1194,15 @@ impl ClientCore {
     }
 
     /// Unregister a market data subscription.
-    /// Returns `(instrument_id, needs_news_unsub)`.
-    pub fn unregister_mkt_data(&self, req_id: i64) -> (Option<InstrumentId>, bool) {
+    ///
+    /// Answers with the subscription to withdraw, and separately with the
+    /// instrument whose headlines stop. They are not the same question: the
+    /// quotes stay up for another caller while the headlines this one asked
+    /// for end, and a caller told only that the quotes stay up sent nothing
+    /// and left the headlines running.
+    pub fn unregister_mkt_data(
+        &self, req_id: i64,
+    ) -> (Option<InstrumentId>, Option<InstrumentId>) {
         // Whatever this id was waiting to finish, it is not waiting any
         // more. Left behind, the same id handed out again for an ordinary
         // stream reads as a snapshot and is withdrawn as soon as it has both
@@ -1223,11 +1230,11 @@ impl ClientCore {
                     self.mdt_sent.lock().unwrap().remove(&req_id);
                     self.mdt_by_req.lock().unwrap().remove(&req_id);
                     if was_following {
-                        return (None, self.release_news(instrument, req_id));
+                        return (None, self.release_news(instrument, req_id).then_some(instrument));
                     }
                     if let Some(next) = next {
                         self.instrument_to_req.lock().unwrap().insert(instrument, next);
-                        return (None, self.release_news(instrument, req_id));
+                        return (None, self.release_news(instrument, req_id).then_some(instrument));
                     }
                 }
             }
@@ -1235,11 +1242,11 @@ impl ClientCore {
             self.last_quotes.lock().unwrap().remove(&instrument);
             self.mdt_sent.lock().unwrap().remove(&req_id);
             self.mdt_by_req.lock().unwrap().remove(&req_id);
-            let needs_news = self.release_news(instrument, req_id);
+            let stop_news = self.release_news(instrument, req_id).then_some(instrument);
             self.forget_instrument(instrument);
-            (Some(instrument), needs_news)
+            (Some(instrument), stop_news)
         } else {
-            (None, false)
+            (None, None)
         }
     }
 

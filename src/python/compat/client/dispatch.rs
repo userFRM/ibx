@@ -101,6 +101,18 @@ impl EClient {
         // produces one `orderStatus` and not two. The engine announces the fill
         // and the order's resulting status together; emitting them separately
         // reports one execution twice, the second at no price.
+        // Records held back while a fill for them was queued. Freed here too,
+        // so a caller that reads the completed orders once and then only
+        // pumps does not keep them for the rest of the session.
+        if !self.deferred_evictions.lock().unwrap().is_empty() {
+            self.deferred_evictions.lock().unwrap().retain(|oid| {
+                if shared.orders.has_pending_fill(*oid) {
+                    return true;
+                }
+                shared.orders.remove_order_info(*oid);
+                false
+            });
+        }
         let mut paired: Vec<crate::types::OrderUpdate> = shared.orders.drain_order_updates();
 
         // A holding that moved since the caller last heard, where the caller

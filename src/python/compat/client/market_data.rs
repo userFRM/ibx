@@ -132,13 +132,19 @@ impl EClient {
 
     /// Cancel market data.
     pub fn cancel_mkt_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let (instrument, needs_news_unsub) = self.core.unregister_mkt_data(req_id);
+        let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
+        if instrument.is_none() && stop_news.is_none() {
+            return Ok(());
+        }
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        // Asked separately, because the quotes stay up for another caller
+        // while the headlines this one asked for stop. Withdrawn only
+        // alongside the quotes, they carried on with nobody listening.
+        if let Some(instrument) = stop_news {
+            let _ = Self::send_control(py, &tx, ControlCommand::UnsubscribeNews { instrument });
+        }
         if let Some(instrument) = instrument {
-            let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
             Self::send_control(py, &tx, ControlCommand::Unsubscribe { instrument })?;
-            if needs_news_unsub {
-                let _ = Self::send_control(py, &tx, ControlCommand::UnsubscribeNews { instrument });
-            }
         }
         Ok(())
     }

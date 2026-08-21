@@ -106,12 +106,15 @@ impl EClient {
 
     /// Cancel market data. Matches `cancelMktData` in C++.
     pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), Refusal> {
-        let (instrument, needs_news_unsub) = self.core.unregister_mkt_data(req_id);
+        let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
+        // Asked separately, because the quotes stay up for another caller
+        // while the headlines this one asked for stop. Withdrawn only
+        // alongside the quotes, they carried on with nobody listening.
+        if let Some(instrument) = stop_news {
+            let _ = self.send(ControlCommand::UnsubscribeNews { instrument });
+        }
         if let Some(instrument) = instrument {
             self.send(ControlCommand::Unsubscribe { instrument })?;
-            if needs_news_unsub {
-                let _ = self.send(ControlCommand::UnsubscribeNews { instrument });
-            }
         }
         Ok(())
     }

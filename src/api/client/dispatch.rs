@@ -103,6 +103,18 @@ impl EClient {
         // Held as a list in arrival order. Each status change is a separate
         // report, so two changes to one order in a single pass are two
         // callbacks.
+        // Records held back while a fill for them was queued. Freed here too,
+        // so a caller that reads the completed orders once and then only
+        // pumps does not keep them for the rest of the session.
+        if !self.deferred_evictions.lock().unwrap().is_empty() {
+            self.deferred_evictions.lock().unwrap().retain(|oid| {
+                if self.shared.orders.has_pending_fill(*oid) {
+                    return true;
+                }
+                self.shared.orders.remove_order_info(*oid);
+                false
+            });
+        }
         let mut paired: Vec<crate::types::OrderUpdate> =
             self.shared.orders.drain_order_updates();
         for fill in self.shared.orders.drain_fills() {

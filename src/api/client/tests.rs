@@ -884,7 +884,7 @@ fn req_mkt_data_ex_propagates_mode_9887() {
 /// and the news it asked for was never withdrawn on that one.
 #[test]
 fn the_headlines_stop_with_the_last_caller_that_asked_for_them() {
-    let (client, _rx, _shared) = test_client();
+    let (client, rx, _shared) = test_client();
     // Someone already watches the quotes, and asked for no headlines.
     client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
@@ -892,17 +892,27 @@ fn the_headlines_stop_with_the_last_caller_that_asked_for_them() {
 
     // A second caller watches the same contract and does want them.
     client.req_mkt_data(2, &spy(), "292", false, false).expect("watches what is up");
-    let (withdraw, stop_news) = client.core.unregister_mkt_data(2);
-    assert!(withdraw.is_none(), "the quotes stay up for the caller still watching");
-    assert!(stop_news, "but the only caller that asked for headlines has gone");
+    while rx.try_recv().is_ok() {}
+    // Cancelled through the client, so the withdrawal has to reach the wire
+    // and not merely be decided on.
+    client.cancel_mkt_data(2).expect("cancelled");
+    let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        sent.iter().any(|c| matches!(c, ControlCommand::UnsubscribeNews { .. })),
+        "the headlines were left running: {sent:?}",
+    );
+    assert!(
+        !sent.iter().any(|c| matches!(c, ControlCommand::Unsubscribe { .. })),
+        "the quotes stay up for the caller still watching: {sent:?}",
+    );
 
     // Two callers asking: the headlines outlast the first of them.
     client.req_mkt_data(3, &spy(), "292", false, false).expect("watches what is up");
     client.req_mkt_data(4, &spy(), "292", false, false).expect("watches what is up");
     let (_, stop_news) = client.core.unregister_mkt_data(3);
-    assert!(!stop_news, "one of two left, so the headlines carry on");
+    assert_eq!(stop_news, None, "one of two left, so the headlines carry on");
     let (_, stop_news) = client.core.unregister_mkt_data(4);
-    assert!(stop_news, "and stop when the last of them goes");
+    assert_eq!(stop_news, Some(0), "and stop when the last of them goes");
 }
 
 // A second live subscription on the same contract would clobber
@@ -2884,7 +2894,7 @@ fn a_queued_fill_survives_a_completed_orders_read() {
         shared.orders.get_order_info(77).is_some(),
         "the record was freed while the fill still needed it",
     );
-    client.req_completed_orders(false, &mut w);
+    client.process_msgs(&mut w);
     assert!(
         shared.orders.get_order_info(77).is_none(),
         "the record was kept back and then never freed",
