@@ -3136,6 +3136,10 @@ fn the_venue_states_which_algorithms_it_offers() {
 fn a_message_not_read_on_purpose_is_told_apart_from_one_overlooked() {
     // 93 is excused on what it carries — the account, a request id and two
     // flags — read off a live session, not on an assumption about it.
+    // Both of these arrive on a real session, which is how they came to be
+    // named here: the notes had them down as never sent.
+    assert!(super::known_unread("18").is_some(), "the clock every message already carries");
+    assert!(super::known_unread("60").is_some(), "a fill the execution reports already state");
     assert!(super::known_unread("93").is_some(), "an answer carrying nothing new");
     assert!(super::known_unread("194").is_some(), "defaults for a user interface");
     assert!(super::known_unread("81").is_none(), "the algorithms are read, not excused");

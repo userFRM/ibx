@@ -88,6 +88,15 @@ fn known_unread(subtype: &str) -> Option<&'static str> {
              not deliver itself. Named in the vendor's own inventory as a dimension response, \
              which is what it would carry on an account that had dimensions",
         ),
+        "18" => Some(
+            "it states the venue's clock. Every message the venue sends carries the time it \
+             sent it, which this client keeps as it arrives, so a message stating the same \
+             clock again adds nothing to answer a caller with",
+        ),
+        "60" => Some(
+            "it is a trade record. What it reports arrives first on the execution reports \
+             this client already reads, and a fill counted from both would be counted twice",
+        ),
         "194" => Some(
             "it carries the order presets the vendor's own ticket fills its fields from. \
              They are defaults for a user interface, and this client has none: an order \
