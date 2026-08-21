@@ -101,9 +101,10 @@ impl EClient {
         // produces one `orderStatus` and not two. The engine announces the fill
         // and the order's resulting status together; emitting them separately
         // reports one execution twice, the second at no price.
-        // Records held back while a fill for them was queued. Freed here too,
-        // so a caller that reads the completed orders once and then only
-        // pumps does not keep them for the rest of the session.
+        // Records held back while a fill for them was queued, freed once that
+        // fill has been read. Freed here and nowhere else: this is the side
+        // that reads the fills, so a record cannot be freed between a fill
+        // being taken off the queue and the report that is built from it.
         if !self.deferred_evictions.lock().unwrap().is_empty() {
             self.deferred_evictions.lock().unwrap().retain(|oid| {
                 if shared.orders.has_pending_fill(*oid) {

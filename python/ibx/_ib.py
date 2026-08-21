@@ -226,6 +226,13 @@ class Client:
         """
         _refuse_options("mktDataOptions", mktDataOptions)
         _refuse_regulatory_snapshot(regulatorySnapshot)
+        # One quote per contract object, and the same one back. The registry
+        # holds a single request against the object, so opening a second left
+        # the first running with nothing holding its id: the cancel names the
+        # object and withdraws whichever was registered last.
+        already = self._by_contract.get(("quote", id(contract)))
+        if already is not None:
+            return self.wrapper.ticker_for(already)
         req_id, ticker = self._start_quote(contract, genericTickList, snapshot)
         self._by_contract[("quote", id(contract))] = req_id
         return ticker

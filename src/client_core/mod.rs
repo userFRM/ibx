@@ -1023,6 +1023,20 @@ impl ClientCore {
 
     // ── Subscription management ──
 
+    /// Record that this request asked for the headlines on an instrument.
+    ///
+    /// Called on every way out of a registration. Registration leaves by more
+    /// than one door — the quotes may already be up, and may come up while
+    /// this request was being made — and the subscription is sent before any
+    /// of them. A door that does not record it sends headlines nothing will
+    /// ever withdraw.
+    fn note_news_request(&self, instrument: InstrumentId, req_id: i64, wants_news: bool) {
+        if wants_news {
+            self.news_instruments.lock().unwrap()
+                .entry(instrument).or_default().insert(req_id);
+        }
+    }
+
     /// Register a market data subscription mapping.
     /// If `generic_tick_list` contains "292", also subscribes to per-contract news.
     pub fn register_mkt_data(
@@ -1108,10 +1122,7 @@ impl ClientCore {
             // were already up, so it is recorded here as well. Recorded only
             // on the path that also opened the quotes, it was never withdrawn:
             // the caller stopped watching and the headlines kept coming.
-            if wants_news {
-                self.news_instruments.lock().unwrap()
-                    .entry(instrument).or_default().insert(req_id);
-            }
+            self.note_news_request(instrument, req_id, wants_news);
             return Ok(instrument);
         }
 
@@ -1151,6 +1162,7 @@ impl ClientCore {
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, None);
             }
+            self.note_news_request(instrument_id, req_id, wants_news);
             return Ok(instrument_id);
         }
         // Somebody may have taken this contract while this request was being
@@ -1171,10 +1183,7 @@ impl ClientCore {
         if snapshot {
             self.snapshot_reqs.lock().unwrap().insert(req_id, None);
         }
-        if wants_news {
-            self.news_instruments.lock().unwrap()
-                .entry(instrument_id).or_default().insert(req_id);
-        }
+        self.note_news_request(instrument_id, req_id, wants_news);
         Ok(instrument_id)
     }
 

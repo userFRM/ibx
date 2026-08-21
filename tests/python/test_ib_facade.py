@@ -246,6 +246,24 @@ def test_a_snapshot_does_not_take_a_running_stream_s_place():
     assert streaming in ib._subscribed
 
 
+def test_a_second_quote_on_one_contract_is_the_first_one_back():
+    """The registry holds one request against a contract object. Opening a
+    second subscription left the first running with nothing holding its id:
+    the cancel names the object, so it withdrew whichever was registered last
+    and the other stayed up at the venue."""
+    ib = connected_ib()
+    contract = spy()
+    first = ib.reqMktData(contract)
+    req_id = ib._by_contract[("quote", id(contract))]
+    before = len(ib._subscribed)
+
+    second = ib.reqMktData(contract)
+
+    assert second is first, "the same quote back, not a second subscription"
+    assert ib._by_contract[("quote", id(contract))] == req_id, "and the same id"
+    assert len(ib._subscribed) == before, "nothing further was opened"
+
+
 def test_a_pnl_cancel_names_the_subscription_it_was_asked_about():
     """It used to send the newest request id of any kind, so any request in
     between made the cancel name something else and the stream carried on."""

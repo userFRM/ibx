@@ -448,7 +448,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
 | Rust unit and integration | 1,783 | No |
-| Python | 464 | No |
+| Python | 465 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (136 phases) | 27 tests | Yes |
 

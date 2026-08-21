@@ -519,16 +519,6 @@ impl EClient {
         // on this same mutex.
         let shared = self.shared.lock().unwrap().clone();
         if let Some(shared) = shared {
-            // Records held back on an earlier read because a fill for them was
-            // still queued. The fill has been delivered by now, or it has not
-            // and they wait another pass.
-            self.deferred_evictions.lock().unwrap().retain(|oid| {
-                if shared.orders.has_pending_fill(*oid) {
-                    return true;
-                }
-                shared.orders.remove_order_info(*oid);
-                false
-            });
             // Read off the queue once and kept. It empties as it is read and
             // the venue does not send these again, so a second request would
             // otherwise be answered with none of them, and with default objects
