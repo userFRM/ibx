@@ -246,6 +246,21 @@ def test_a_snapshot_does_not_take_a_running_stream_s_place():
     assert streaming in ib._subscribed
 
 
+def test_a_snapshot_asked_for_as_market_data_answers_no_later_ask():
+    """A snapshot ends on its own, so an entry naming it would name a request
+    that is already over — and a later ask for the stream would be answered
+    with it. It stays out of the per-contract registry, as `reqTickers` is
+    careful to."""
+    ib = connected_ib()
+    contract = spy()
+    ib.reqMktData(contract, snapshot=True)
+    assert ("quote", id(contract)) not in ib._by_contract, "a snapshot took the slot"
+
+    stream = ib.reqMktData(contract)
+    assert ib._by_contract[("quote", id(contract))] in ib._subscribed
+    assert stream is not None, "the stream was answered with the finished snapshot"
+
+
 def test_a_second_quote_on_one_contract_is_the_first_one_back():
     """The registry holds one request against a contract object. Opening a
     second subscription left the first running with nothing holding its id:

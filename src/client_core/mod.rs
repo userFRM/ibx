@@ -1079,7 +1079,15 @@ impl ClientCore {
                 unsent.join(", "),
             );
         }
-        if wants_news {
+        // Asked for once per contract. The venue is asked by contract and
+        // withdrawn by contract, so a second caller asking for the same one
+        // added a subscription that the single withdrawal could not match, and
+        // it was left running with nobody listening.
+        let news_already_asked = wants_news
+            && self.cached_instrument(con_id).is_some_and(|instrument| {
+                self.news_instruments.lock().unwrap().contains_key(&instrument)
+            });
+        if wants_news && !news_already_asked {
             // What the logon said this account may read, unless a caller has
             // named its own set. The venue separates codes with a star.
             let named = self.news_providers.lock().unwrap().clone();

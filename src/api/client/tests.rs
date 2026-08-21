@@ -878,6 +878,27 @@ fn req_mkt_data_ex_propagates_mode_9887() {
     }
 }
 
+/// The venue is asked for the headlines by contract and withdrawn by
+/// contract, so it is asked once. Asked once per caller, a second caller
+/// added a subscription the single withdrawal could not match, and it was
+/// left running with nobody listening.
+#[test]
+fn the_headlines_are_asked_for_once_however_many_callers_want_them() {
+    let (client, rx, _shared) = test_client();
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+    client.core.req_to_instrument.lock().unwrap().insert(1, 0);
+
+    client.req_mkt_data(2, &spy(), "292", false, false).expect("watches what is up");
+    client.req_mkt_data(3, &spy(), "292", false, false).expect("watches what is up");
+    let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+
+    let asked = sent.iter()
+        .filter(|c| matches!(c, ControlCommand::SubscribeNews { .. }))
+        .count();
+    assert_eq!(asked, 1, "asked more times than it can be withdrawn: {sent:?}");
+}
+
 /// The headlines stop when the last caller that asked for them goes, not when
 /// the first one does and not when the quotes happen to end. A caller
 /// watching a subscription someone else opened leaves by a different path,

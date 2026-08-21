@@ -550,16 +550,12 @@ impl EClient {
                     archive.push((contract, order, state));
                     // Bound `order_cache` growth: terminal entries are no
                     // longer needed once what they carried has been read out.
-                    // Kept while a fill for the order is still queued, because
-                    // that fill is read against this record: dropping it first
-                    // delivers an execution with no contract and no execution
-                    // id, which is also the id its commission is reported
-                    // under.
-                    if shared.orders.has_pending_fill(co.order_id) {
-                        self.deferred_evictions.lock().unwrap().push(co.order_id);
-                    } else {
-                        shared.orders.remove_order_info(co.order_id);
-                    }
+                    // Handed to the side that reads the fills rather than
+                    // freed here. That side is the only one that can tell when
+                    // a record is finished with: a fill taken off the queue but
+                    // not yet reported still needs it, and from here looks like
+                    // no fill at all.
+                    self.deferred_evictions.lock().unwrap().push(co.order_id);
                 }
             }
             // Copied before anything is called back: a callback may ask for
