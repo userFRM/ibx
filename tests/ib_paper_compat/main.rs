@@ -1,10 +1,18 @@
 //! Compatibility tests against IB paper account.
 //!
 //! Requires IB_USERNAME and IB_PASSWORD environment variables.
-//! Run with: cargo test --test ib_paper_compat -- --ignored --nocapture
 //!
-//! All tests share a single Gateway connection to avoid session throttling.
-//! Each phase builds a fresh HotLoop, runs it, then reclaims connections.
+//! Run with: `cargo test --test ib_paper_compat -- --test-threads=1 --nocapture`
+//!
+//! One at a time: the account allows one session and each test opens its own.
+//!
+//! `compat_suite` is not `#[ignore]`d, so `--ignored` excludes it and runs only
+//! the focused phases below, which are asked for by name:
+//!
+//! `cargo test --test ib_paper_compat <phase> -- --ignored --nocapture`
+//!
+//! Every phase builds a fresh HotLoop, runs it, then reclaims the connections
+//! for the next, so the run holds one session throughout.
 //!
 //! Prices here are written scaled, grouped as dollars and cents:
 //! `1_00_000_000` is $1.00 at `PRICE_SCALE`. The grouping is the unit, which
@@ -129,16 +137,17 @@ fn compat_suite() {
                             Frame::Control(r) => (r, "Control"),
                         };
                         let Some(unsigned) = conn.unsign(raw) else { continue };
-                        let valid = true;
+                        // Printed as read. This probe validates nothing about a
+                        // frame, so it labels nothing valid.
                         if label == "FIXCOMP" {
                             let inner = fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default();
                             for m in &inner {
                                 let preview = String::from_utf8_lossy(&m[..std::cmp::min(150, m.len())]);
-                                println!("  {label} inner (valid={valid}): {preview}");
+                                println!("  {label} inner: {preview}");
                             }
                         } else {
                             let preview = String::from_utf8_lossy(&unsigned[..std::cmp::min(150, unsigned.len())]);
-                            println!("  {label} (valid={valid}): {preview}");
+                            println!("  {label}: {preview}");
                         }
                         got_data = true;
                     }
@@ -157,20 +166,14 @@ fn compat_suite() {
         // Raw subscribe kills connections (server may close farm, hmds, and/or CCP).
         // Reconnect everything if CCP died, or just farm+hmds if CCP survived.
         conns = ensure_ccp_alive(conns, &mut gw, &config);
-        // If CCP was alive but farm/hmds died, reconnect them individually.
-        match ibx::gateway::connect_farm(&Default::default(), 
-            &config.host, "usfarm", &config.username, &config.password, config.paper,
-            &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        ibx::gateway::Farm::MarketData, None
-        ) {
+        // If CCP survived but farm or hmds did not, rebuild each on the route the
+        // venue gave this session: its farm name, host and port. A farm reached
+        // on another host closes rather than refusing.
+        match historical::open_farm(ibx::gateway::Farm::MarketData) {
             Ok(c) => { conns.farm = c; println!("  farm reconnected"); }
             Err(e) => { println!("  farm reconnect failed (may already be fresh): {e}"); }
         }
-        match ibx::gateway::connect_farm(&Default::default(), 
-            &config.host, "ushmds", &config.username, &config.password, config.paper,
-            &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        ibx::gateway::Farm::Historical, None
-        ) {
+        match historical::open_farm(ibx::gateway::Farm::Historical) {
             Ok(c) => { conns.hmds = Some(c); println!("  hmds reconnected"); }
             Err(e) => { println!("  hmds reconnect failed (may already be fresh): {e}"); }
         }
@@ -199,14 +202,14 @@ fn compat_suite() {
     conns = contracts::phase_contract_details_by_symbol(conns);
     conns = contracts::phase_trading_hours(conns);
     conns = contracts::phase_matching_symbols(conns);
-    conns = historical::phase_historical_data(conns, &gw, &config);
-    conns = historical::phase_historical_daily_bars(conns, &gw, &config);
-    conns = historical::phase_cancel_historical(conns, &gw, &config);
-    conns = historical::phase_query_error_surfaces(conns, &gw, &config);
-    conns = historical::phase_head_timestamp(conns, &gw, &config);
-    conns = historical::phase_scanner_subscription(conns, &gw, &config);
-    conns = historical::phase_historical_news(conns, &gw, &config);
-    conns = historical::phase_fundamental_data(conns, &gw, &config);
+    conns = historical::phase_historical_data(conns);
+    conns = historical::phase_historical_daily_bars(conns);
+    conns = historical::phase_cancel_historical(conns);
+    conns = historical::phase_query_error_surfaces(conns);
+    conns = historical::phase_head_timestamp(conns);
+    conns = historical::phase_scanner_subscription(conns);
+    conns = historical::phase_historical_news(conns);
+    conns = historical::phase_fundamental_data(conns);
     conns = contracts::phase_market_rule_id(conns);
 
     if needs_ticks {
@@ -294,6 +297,10 @@ fn compat_suite() {
     conns = market_data::phase_news_ticks(conns);
     conns = heartbeat::phase_heartbeat_keepalive(conns);
     conns = heartbeat::phase_farm_heartbeat_keepalive(conns);
+    // Both phases above leave the trading connection idle longer than the venue
+    // holds a quiet one open. Rebuilt rather than probed: the venue can answer a
+    // liveness check and close immediately after.
+    conns = rebuild_ccp(conns);
     // Those two sit idle for longer than the venue leaves a quiet trading
     // connection open, which is the point of them. What follows places orders
     // and needs that connection, so it is brought back before they run rather
@@ -318,14 +325,14 @@ fn compat_suite() {
 
     conns = contracts::phase_contract_details_channel(conns);
     conns = orders::phase_cancel_reject(conns);
-    conns = historical::phase_historical_ticks(conns, &gw, &config);
-    conns = historical::phase_histogram_data(conns, &gw, &config);
-    conns = historical::phase_historical_schedule(conns, &gw, &config);
-    conns = historical::phase_realtime_bars(conns, &gw, &config);
-    conns = historical::phase_news_article(conns, &gw, &config);
-    conns = historical::phase_fundamental_data_channel(conns, &gw, &config);
-    conns = historical::phase_parallel_historical(conns, &gw, &config);
-    conns = historical::phase_scanner_params(conns, &gw, &config);
+    conns = historical::phase_historical_ticks(conns);
+    conns = historical::phase_histogram_data(conns);
+    conns = historical::phase_historical_schedule(conns);
+    conns = historical::phase_realtime_bars(conns);
+    conns = historical::phase_news_article(conns);
+    conns = historical::phase_fundamental_data_channel(conns);
+    conns = historical::phase_parallel_historical(conns);
+    conns = historical::phase_scanner_params(conns);
     if needs_ticks {
         conns = account::phase_position_tracking(conns);
     } else {
@@ -345,7 +352,7 @@ fn compat_suite() {
     } else {
         println!("--- Phase 102: Streaming Data Validation (SPY) ---\n  SKIP: {session:?} — needs ticks\n");
     }
-    conns = historical::phase_historical_ohlc_validation(conns, &gw, &config);
+    conns = historical::phase_historical_ohlc_validation(conns);
     conns = error_handling::phase_ib_error_handling(conns);
     if needs_ticks {
         conns = connection::phase_reconnection_state_recovery(conns, &gw, &config);
@@ -360,8 +367,8 @@ fn compat_suite() {
     } else {
         println!("--- Phase 110: Tick Stress Test (SPY+AAPL+MSFT) ---\n  SKIP: {session:?} — needs ticks\n");
     }
-    conns = historical::phase_large_historical_dataset(conns, &gw, &config);
-    conns = historical::phase_dst_boundary_historical(conns, &gw, &config);
+    conns = historical::phase_large_historical_dataset(conns);
+    conns = historical::phase_dst_boundary_historical(conns);
     conns = orders::phase_rapid_order_dedup(conns);
     conns = error_handling::phase_pacing_violation_recovery(conns);
 
@@ -394,7 +401,7 @@ fn compat_suite() {
     }
 
     // ── P1: Cancel data requests (historical, fundamental, histogram, head timestamp) ──
-    conns = historical::phase_cancel_data_requests(conns, &gw, &config);
+    conns = historical::phase_cancel_data_requests(conns);
 
     // ── P2: TBT + regular quotes dual stream ──
     if needs_ticks && conns.hmds.is_some() {
@@ -411,7 +418,7 @@ fn compat_suite() {
     }
 
     // ── P2: Historical data + live orders coexistence ──
-    conns = historical::phase_historical_and_orders(conns, &gw, &config);
+    conns = historical::phase_historical_and_orders(conns);
 
     // ── P2: RegisterInstrument via ControlCommand channel ──
     conns = connection::phase_register_instrument_channel(conns);
@@ -471,7 +478,7 @@ fn query_error_phase_live() {
         account_id: gw.account_id.clone(),
     };
 
-    let conns = historical::phase_query_error_surfaces(conns, &gw, &config);
+    let conns = historical::phase_query_error_surfaces(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
 }
@@ -504,7 +511,7 @@ fn peg_bench_phase_live() {
 /// only in the morning there.
 /// Run: cargo test --test ib_paper_compat non_usd_order_phase_live -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn non_usd_order_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() { Some(c) => c, None => return };
@@ -553,9 +560,11 @@ fn farm_recovery_phase_live() {
     let ibx::gateway::Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
-    let (data_resumed, healthy) = connection::phase_farm_recovers_with_credentials(gw, conns, &config);
+    let (data_resumed, order_acked, healthy) =
+        connection::phase_farm_recovers_with_credentials(gw, conns, &config);
     assert!(data_resumed, "the farm did not come back on its own and resume data");
     assert!(healthy, "data resumed but the connection still reports itself lost");
+    assert!(order_acked, "the farm resumed data but an order placed after it was not accepted");
 }
 
 /// The multi-condition order, which a change to the condition encoder broke.
@@ -678,7 +687,7 @@ fn box_top_phase_live() {
 /// so the test waits 90s between sessions. Run:
 ///   cargo test --test ib_paper_compat cross_session_recovery_phase_live -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn cross_session_recovery_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() {
@@ -707,8 +716,12 @@ fn cross_session_recovery_phase_live() {
         );
         let inst_id = hot_loop.context_mut().register_instrument(756733);
         hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+        // A US stock routed smart. Registered by id alone it states no
+        // security type, and the venue answers an order carrying an empty
+        // tag 167 with "Unsupported type".
+        hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
-        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("Session A: send order failed");
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("Session A: send order failed");
 
         let join = run_hot_loop(hot_loop);
 
@@ -758,6 +771,10 @@ fn cross_session_recovery_phase_live() {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let join = run_hot_loop(hot_loop);
 
@@ -811,7 +828,7 @@ fn cross_session_recovery_phase_live() {
 ///
 /// Run: cargo test --test ib_paper_compat routing_table_probe -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn routing_table_probe() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() {
@@ -949,7 +966,7 @@ fn routing_table_probe() {
 /// local orderId) and asserts Cancelled.
 /// Run: cargo test --test ib_paper_compat cancel_by_perm_id_phase_live -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn cancel_by_perm_id_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() {
@@ -974,8 +991,12 @@ fn cancel_by_perm_id_phase_live() {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
 
     let join = run_hot_loop(hot_loop);
 
@@ -1010,15 +1031,24 @@ fn cancel_by_perm_id_phase_live() {
     // collect_open_orders merges shared.orders.order_cache (populated by 35=8 ack)
     // with ClientCore.open_orders.
     let core = ibx::client_core::ClientCore::new();
-    let found = core.collect_open_orders(&shared)
-        .into_iter()
-        .find(|(_, t)| t.order.perm_id == perm_id);
+    let open = core.collect_open_orders(&shared);
+    let found = open.iter().find(|(_, t)| t.order.perm_id == perm_id).map(|(oid, _)| *oid);
     let resolved_order_id = match found {
-        Some((oid, _)) => oid,
+        Some(oid) => oid,
         None => {
+            // Reports what the cache holds: a missing order and an order present
+            // without its permId are different faults.
+            let held = open.iter()
+                .map(|(oid, t)| format!("{oid}:perm={} status={}", t.order.perm_id, t.status))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let direct = shared.orders.get_order_info(order_id)
+                .map_or("absent from the cache entirely".to_string(),
+                        |i| format!("cached with perm={} status={}", i.order.perm_id, i.order_state.status));
             let _ = control_tx.send(ControlCommand::Shutdown);
             let _ = join.join();
-            panic!("permId {perm_id} not found in open orders cache — cleanup orderId={order_id} via GUI");
+            panic!("permId {perm_id} not found among open orders — cleanup orderId={order_id} via GUI. \
+                    The order itself is {direct}. Open orders collected: [{held}]");
         }
     };
     assert_eq!(resolved_order_id, order_id,
@@ -1057,6 +1087,425 @@ fn cancel_by_perm_id_phase_live() {
     println!("\n  PASS — cancel_order_by_perm_id works\n");
 }
 
+/// What the venue answers an advisor request with, on an account that is not
+/// an advisor.
+///
+/// The request reaches the venue and its answer is not read back, because
+/// nothing here has seen the reply and inventing its shape would be a guess.
+/// This asks for the answer and prints whatever comes, so the shape is
+/// recorded from the wire rather than assumed. An account that is not an
+/// advisor still answers — a refusal is an answer, and it names the frame the
+/// reply arrives on.
+///
+/// Nothing is asserted about the contents. This exists to be read.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn what_an_advisor_request_is_answered_with_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== What an advisor request is answered with ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+    let join = run_hot_loop(hot_loop);
+
+    // Each partition the reference client names, asked for by the word the
+    // venue knows it by.
+    for (which, partition) in [(1, "GROUPS"), (2, "PROFILES"), (3, "ALIASES")] {
+        println!("  asking for {partition} ({which})");
+        control_tx.send(ControlCommand::AdvisorConfig {
+            command: 5,
+            partition: partition.to_string(),
+            document: None,
+        }).expect("send failed");
+    }
+
+    // Long enough for a refusal, which is what an account that is not an
+    // advisor is expected to answer with.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if let Ok(other) = event_rx.recv_timeout(Duration::from_millis(200)) {
+            println!("  [event] {other:?}");
+        }
+    }
+
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+
+    println!("\n  --- what arrived and nothing read ---");
+    for (kind, body) in shared.market.unread_wire() {
+        println!("  {kind}: {}", body.chars().take(400).collect::<String>());
+    }
+    println!("\n  (nothing asserted; this is a reading)");
+}
+
+/// A cancel sent before the replace it follows has been acknowledged names
+/// the version the venue was last sent, not the one it last confirmed.
+///
+/// A replace is sent under a new ClOrdID and the order keeps its own id, so a
+/// cancel has to state which version it is withdrawing. This client advances
+/// its record of that when it sends the replace rather than when the venue
+/// confirms it, which is the reading FIX states and the opposite of waiting
+/// for the acknowledgement. Nothing in the gateway settles it — the tag is
+/// not written as a literal anywhere in it — so it is settled here, against
+/// the venue, by racing a cancel past an unacknowledged replace and seeing
+/// whether the order goes away.
+///
+/// A cancel naming the wrong version is answered as an order the venue does
+/// not have, and the order is left working.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn a_cancel_racing_an_unacked_replace_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== A cancel racing an unacknowledged replace ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    let order_id = common::next_order_id();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+
+    // Resting far below the market so it neither fills nor moves.
+    println!("  orderId = {order_id}");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        kind: ibx::types::OrderKind::Limit { price: 1_00_000_000 },
+        tif: b'0',
+        attrs: ibx::types::OrderAttrs { outside_rth: true, ..Default::default() },
+    })).expect("send failed");
+
+    let join = run_hot_loop(hot_loop);
+    let mut working = false;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline && !working {
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if u.order_id != order_id { continue; }
+            println!("  [update] status={:?}", u.status);
+            working = matches!(u.status, OrderStatus::Submitted | OrderStatus::PreSubmitted);
+            if matches!(u.status, OrderStatus::Rejected | OrderStatus::Inactive) {
+                let _ = control_tx.send(ControlCommand::Shutdown);
+                let _ = join.join();
+                println!(
+                    "\n  SKIP: the venue refused the order — {}",
+                    common::reject_reason(&shared, order_id),
+                );
+                return;
+            }
+        }
+    }
+    assert!(working, "the order never reached the book — clean up {order_id} by hand");
+
+    // The race: a replace, and a cancel behind it with no wait between them.
+    // The cancel names the version the replace was sent under.
+    println!("  replacing, then cancelling with no wait between");
+    control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+        order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE,
+        outside_rth: true, ord_type: 0, tif: 0, stop_price: 0,
+    })).expect("replace failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
+        .expect("cancel failed");
+
+    let mut withdrawn = false;
+    let mut refused_the_cancel = false;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    while Instant::now() < deadline && !withdrawn {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::OrderUpdate(u)) if u.order_id == order_id => {
+                println!("  [update] status={:?}", u.status);
+                withdrawn = u.status == OrderStatus::Cancelled;
+            }
+            Ok(Event::CancelReject(r)) if r.order_id == order_id => {
+                println!("  [cancel refused] type={} code={}", r.reject_type, r.reason_code);
+                refused_the_cancel = true;
+            }
+            _ => {}
+        }
+    }
+
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+
+    assert!(
+        withdrawn,
+        "the cancel did not withdraw the order (the venue refused it: {refused_the_cancel}) — \
+         the version it named is not the one the venue was holding. Clean up {order_id} by hand.",
+    );
+    println!(
+        "\n  PASS — the cancel named the version the venue was last sent, and it was taken"
+    );
+}
+
+/// A real fill books the quantity the venue reported, and moves the holding.
+///
+/// Run against a European listing, which trades while New York is closed, so
+/// the order actually fills rather than resting. What is proven is the whole
+/// path a fill takes: the quantity is read off the wire as a decimal, held
+/// fixed-point, booked against the order, and moves the holding — which the
+/// broker does not restate on a fill, so the fill is the only account of it.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn european_fill_books_what_the_venue_reported_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== A fill on an open market ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: mut ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    // Vodafone in London, in sterling. Asked for rather than written down:
+    // the venue names its own listings, and an id copied into a test goes
+    // stale the day the listing changes.
+    let now = ibx::protocol::datetime::chrono_free_timestamp();
+    ccp.send_fix(&[
+        (fix::TAG_MSG_TYPE, "c"),
+        (fix::TAG_SENDING_TIME, &now),
+        (ibx::control::contracts::TAG_SECURITY_REQ_ID, "RFILL"),
+        (ibx::control::contracts::TAG_SECURITY_REQ_TYPE, "2"),
+        (ibx::control::contracts::TAG_SYMBOL, "VOD"),
+        (ibx::control::contracts::TAG_SECURITY_TYPE, "CS"),
+        (ibx::control::contracts::TAG_EXCHANGE, "SMART"),
+        (ibx::control::contracts::TAG_CURRENCY, "GBP"),
+        (ibx::control::contracts::TAG_IB_SOURCE, "Socket"),
+    ]).expect("failed to ask for the listing");
+
+    let mut listing: Option<ibx::control::contracts::ContractDefinition> = None;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && listing.is_none() {
+        match ccp.try_recv() {
+            Ok(0) => { std::thread::sleep(Duration::from_millis(50)); continue; }
+            Err(e) => { println!("  CCP recv error: {e}"); break; }
+            Ok(_) => {}
+        }
+        for frame in ccp.extract_frames() {
+            let messages = match frame {
+                Frame::FixComp(raw) => {
+                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
+                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
+                }
+                Frame::Fix(raw) => vec![raw],
+                _ => continue,
+            };
+            for msg in messages {
+                let tags = fix::fix_parse(&msg);
+                if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
+                    && let Some(def) = ibx::control::contracts::parse_secdef_response(&msg, true)
+                    && def.currency == "GBP"
+                {
+                    listing = Some(def);
+                }
+            }
+        }
+    }
+    let Some(def) = listing else {
+        println!("\n  SKIP: no sterling listing of VOD came back");
+        return;
+    };
+    println!("  listing: con_id={} currency={}", def.con_id, def.currency);
+
+    let order_id = common::next_order_id();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+
+    // Registered by id alone it states no security type, and the venue
+    // answers an order carrying an empty tag 167 with "Unsupported type".
+    let inst_id = hot_loop.context_mut().register_instrument(def.con_id as i64);
+    hot_loop.context_mut().set_symbol(inst_id, "VOD".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+    let before = hot_loop.context_mut().position(inst_id);
+
+    // One share, priced through the offer so it trades rather than rests.
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        kind: ibx::types::OrderKind::Market,
+        tif: b'0',
+        attrs: ibx::types::OrderAttrs::default(),
+    })).expect("send failed");
+
+    let join = run_hot_loop(hot_loop);
+    let mut filled: Option<ibx::types::Fill> = None;
+    let mut refused = false;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline && filled.is_none() && !refused {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Fill(f)) if f.order_id == order_id => filled = Some(f),
+            Ok(Event::OrderUpdate(u)) if u.order_id == order_id => {
+                println!("  [update] status={:?}", u.status);
+                refused = matches!(u.status, OrderStatus::Rejected | OrderStatus::Inactive);
+            }
+            _ => {}
+        }
+    }
+
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let mut hl = join.join().expect("the hot loop must not panic on a fill");
+
+    let Some(fill) = filled else {
+        if refused {
+            println!(
+                "\n  SKIP: the venue refused it — {}",
+                common::reject_reason(&shared, order_id),
+            );
+            return;
+        }
+        println!("\n  SKIP: nothing traded within the wait — the listing may be closed");
+        return;
+    };
+
+    println!(
+        "  filled {} at {:.4}, cumulative {}",
+        ibx::types::qty_to_f64(fill.qty),
+        fill.price as f64 / ibx::types::PRICE_SCALE as f64,
+        ibx::types::qty_to_f64(fill.cum_qty),
+    );
+
+    assert_eq!(
+        fill.qty, ibx::types::QTY_SCALE,
+        "one share was asked for and {} was booked",
+        ibx::types::qty_to_f64(fill.qty),
+    );
+    let after = hl.context_mut().position(inst_id);
+    assert!(
+        (after - before - 1.0).abs() < 1e-9,
+        "the holding went from {before} to {after} on a fill of one share",
+    );
+    println!("\n  PASS — the fill booked one share and the holding moved by one");
+}
+
+/// A fraction of a share reaches the venue as the decimal it was asked for.
+///
+/// The quantity used to be carried whole from the caller down to tag 38, so a
+/// fraction could not be stated at all and was refused before it was sent.
+/// This places a resting order for half a share far below the market, reads
+/// what the venue says about it, and withdraws it.
+///
+/// A refusal naming the account's permissions is not a failure of the
+/// encoding and is reported as what it is: the order was stated, and the
+/// venue understood it well enough to say who may place it.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn fractional_order_phase_live() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== Fractional order ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    let order_id = common::next_order_id();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+
+    // Half a share, resting far below the market so it cannot fill. Kept to
+    // regular hours: the venue serves a fraction of a share only then, and an
+    // order marked for outside them is refused on that ground before the
+    // quantity is judged at all.
+    let half = ibx::types::QTY_SCALE / 2;
+    println!("  orderId = {order_id}, qty = half a share");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: half,
+        kind: ibx::types::OrderKind::Limit { price: 1_00_000_000 },
+        tif: b'0',
+        attrs: ibx::types::OrderAttrs::default(),
+    })).expect("send failed");
+
+    let join = run_hot_loop(hot_loop);
+    let mut acked = false;
+    let mut refused = false;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline && !acked && !refused {
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if u.order_id != order_id { continue; }
+            println!("  [update] status={:?}", u.status);
+            match u.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => acked = true,
+                OrderStatus::Rejected | OrderStatus::Inactive => refused = true,
+                _ => {}
+            }
+        }
+    }
+
+    if acked {
+        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
+            .expect("cancel failed");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut withdrawn = false;
+        while Instant::now() < deadline && !withdrawn {
+            if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+                withdrawn = u.order_id == order_id
+                    && matches!(u.status, OrderStatus::Cancelled);
+            }
+        }
+        let _ = control_tx.send(ControlCommand::Shutdown);
+        let _ = join.join();
+        assert!(withdrawn, "the fraction rested and was not withdrawn — clean up {order_id} by hand");
+        println!("\n  PASS — half a share was stated, taken, and withdrawn");
+        return;
+    }
+
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+    if refused {
+        println!(
+            "\n  SKIP: the venue refused it — {}; the quantity was stated and read, \n\
+             so this says who may place one rather than whether it can be written",
+            common::reject_reason(&shared, order_id),
+        );
+        return;
+    }
+    panic!("no answer within 30s — clean up {order_id} by hand");
+}
+
 /// Live entry that validates the `SubmitEx` wire path:
 /// a bracket-style child (STP, GTC, parent_id + oca_group) placed against a
 /// resting parent. Without them the attributes are dropped and the child
@@ -1069,7 +1518,7 @@ fn cancel_by_perm_id_phase_live() {
 /// parent link.
 /// Run: cargo test --test ib_paper_compat submit_ex_bracket_child_phase_live -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn submit_ex_bracket_child_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() {
@@ -1096,15 +1545,19 @@ fn submit_ex_bracket_child_phase_live() {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Parent: resting far-below-market entry (proven pattern from the
     // cross-session test).
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: parent_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send parent failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: parent_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send parent failed");
 
     // Child shape: STP + GTC + parent_id + oca_group. A sell
     // stop at $0.50 can never trigger even if something goes wrong.
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: child_id, instrument: inst_id, side: Side::Sell, qty: 1,
+        order_id: child_id, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE,
         kind: ibx::types::OrderKind::Stop { stop_price: 50_000_000 },
         tif: b'1', // GTC
         attrs: ibx::types::OrderAttrs {
@@ -1186,7 +1639,7 @@ fn submit_ex_bracket_child_phase_live() {
 /// assertion reads the price back from the server-echoed open-order cache.
 /// Run: cargo test --test ib_paper_compat snap_to_tick_phase_live -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn snap_to_tick_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() {
@@ -1211,11 +1664,15 @@ fn snap_to_tick_phase_live() {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Subscribe first: the subscribe ack is what populates the engine's
     // per-instrument tick size. Without it the snap is a no-op.
     control_tx.send(ControlCommand::Subscribe {
-        contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+        contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
     }).expect("send subscribe failed");
 
     let join = run_hot_loop(hot_loop);
@@ -1224,7 +1681,7 @@ fn snap_to_tick_phase_live() {
     std::thread::sleep(Duration::from_secs(5));
 
     // Off-grid on a $0.01 grid: must go out as $1.00.
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_123_400 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_123_400 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).expect("send order failed");
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let (mut acked, mut rejected) = (false, false);
@@ -1279,7 +1736,7 @@ fn snap_to_tick_phase_live() {
 /// the changed end-ordering for by-symbol lookups.
 /// Run: cargo test --test ib_paper_compat timeout_sweeps_phase_live -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn timeout_sweeps_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() {
@@ -1301,19 +1758,32 @@ fn timeout_sweeps_phase_live() {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
     let join = run_hot_loop(hot_loop);
 
     // Helper: wait for rows + end on a req_id, in order.
     let wait_details = |req_id: u32, label: &str| -> (usize, bool, bool) {
         let deadline = Instant::now() + Duration::from_secs(30);
         let (mut rows, mut end, mut row_after_end) = (0usize, false, false);
-        while Instant::now() < deadline && !end {
+        // Reads on past the end callback: a row arriving after it is what this
+        // reports, and stopping at the end makes that unobservable.
+        let mut settle_by: Option<Instant> = None;
+        while Instant::now() < deadline {
+            if settle_by.is_some_and(|at| Instant::now() >= at) {
+                break;
+            }
             match event_rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Event::ContractDetails { req_id: r, .. }) if r == req_id => {
                     if end { row_after_end = true; }
                     rows += 1;
                 }
-                Ok(Event::ContractDetailsEnd(r)) if r == req_id => end = true,
+                Ok(Event::ContractDetailsEnd(r)) if r == req_id => {
+                    end = true;
+                    settle_by = Some(Instant::now() + Duration::from_millis(500));
+                }
                 _ => {}
             }
         }
@@ -1322,10 +1792,11 @@ fn timeout_sweeps_phase_live() {
     };
 
     // 1. By con_id — single record.
-    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: String::new(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 6001, filters: Default::default() }).expect("send details by con_id failed");
-    let (rows, end, _) = wait_details(6001, "by-conId SPY");
+    control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 6001, filters: Default::default() }).expect("send details by con_id failed");
+    let (rows, end, row_after_end) = wait_details(6001, "by-conId SPY");
     assert!(rows >= 1, "by-conId lookup returned no rows");
     assert!(end, "by-conId end never fired — sweep may have eaten the reply");
+    assert!(!row_after_end, "a row arrived AFTER end — ordering regression");
 
     // 2. By symbol — exercises the fan-out counter and the deferred-end path.
     control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 0, symbol: "AAPL".into(), sec_type: "STK".into(), exchange: String::new(), currency: "USD".into(), ..Default::default() }, req_id: 6002, filters: Default::default() }).expect("send details by symbol failed");
@@ -1335,7 +1806,7 @@ fn timeout_sweeps_phase_live() {
     assert!(!row_after_end, "a row arrived AFTER end — ordering regression");
 
     // 3. Historical bars — must complete without tripping the idle sweep.
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 6003, end_date_time: String::new(), duration: "5 D".into(), bar_size: "1 day".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).expect("send historical failed");
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 6003, end_date_time: String::new(), duration: "5 D".into(), bar_size: "1 day".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).expect("send historical failed");
     let deadline = Instant::now() + Duration::from_secs(45);
     let (mut bars, mut complete, mut hist_err) = (0usize, false, None::<String>);
     while Instant::now() < deadline && !complete && hist_err.is_none() {
@@ -1367,7 +1838,7 @@ fn timeout_sweeps_phase_live() {
 /// later reply was misattributed.
 /// Run: cargo test --test ib_paper_compat reclaim_and_symbol_search_phase_live -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn reclaim_and_symbol_search_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() {
@@ -1392,7 +1863,7 @@ fn reclaim_and_symbol_search_phase_live() {
     let subscribe = |req: &str| {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0,
+            contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0,
             reply_tx: Some(tx),
         }).expect("send subscribe failed");
         rx.recv_timeout(Duration::from_secs(10))
@@ -1453,7 +1924,7 @@ fn reclaim_and_symbol_search_phase_live() {
 /// ping, expect a round-trip measurement to land in shared state.
 /// Run: cargo test --test ib_paper_compat rtt_ping_phase_live -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn rtt_ping_phase_live() {
     let _ = tracing_subscriber::fmt::try_init();
     let config = match get_config() {
@@ -1496,4 +1967,132 @@ fn rtt_ping_phase_live() {
     println!("
  PASS — on-demand RTT sample delivered
 ");
+}
+
+/// Whether the conditions on an order survive the trip back from the venue.
+///
+/// An order this session placed is held locally with its conditions, so reading
+/// it back returns what was sent. An order placed by another session is rebuilt
+/// from the venue's open-order report; the condition tags are written outbound
+/// and not parsed inbound, so recovery depends on the venue restating them.
+///
+/// One session places a conditional order priced so it cannot fill and
+/// conditioned so it cannot trigger, then exits. A second session asks what is
+/// working. Needs no market: the order rests either way.
+///
+/// Run: cargo test --test ib_paper_compat conditions_round_trip_phase_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn conditions_round_trip_phase_live() {
+    use ibx::api::{EClientConfig, Wrapper};
+
+    #[derive(Default)]
+    struct Stated {
+        orders: Vec<(i64, usize)>,
+        finished: Vec<i64>,
+    }
+    impl Wrapper for Stated {
+        fn open_order(
+            &mut self, order_id: i64, _c: &ApiContract, order: &ApiOrder,
+            _s: &ibx::api::types::OrderState,
+        ) {
+            self.orders.push((order_id, order.conditions.len()));
+        }
+        fn order_status(
+            &mut self, order_id: i64, status: &str, _f: f64, _r: f64, _a: f64,
+            _p: i64, _pi: i64, _l: f64, _c: i64, _w: &str, _m: f64,
+        ) {
+            if matches!(status, "Cancelled" | "Filled" | "Inactive") {
+                self.finished.push(order_id);
+            }
+        }
+    }
+
+    let _ = tracing_subscriber::fmt::try_init();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    let settings = || EClientConfig {
+        username: config.username.clone(),
+        password: config.password.to_string(),
+        paper: config.paper,
+        ..Default::default()
+    };
+
+    println!("=== conditions, read back on a session that did not place them ===");
+
+    let placed_id = {
+        let client = EClient::connect(&settings()).expect("connect failed");
+        let spy = client.qualify_contract(&ApiContract {
+            symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(),
+            currency: "USD".into(), ..Default::default()
+        }).expect("qualify failed");
+
+        let mut order = ApiOrder {
+            action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+            lmt_price: 1.00, tif: "GTC".into(), ..Default::default()
+        };
+        // Cannot trigger: the contract below one cent. Cannot fill: a dollar.
+        order.conditions = vec![OrderCondition::Price {
+            // The exchange from the qualification reply, not the request: a
+            // condition names the contract as the venue describes it.
+            con_id: spy.con_id, exchange: spy.exchange.clone(),
+            price: PRICE_SCALE / 100, is_more: false, trigger_method: 0,
+        }];
+
+        let id = next_order_id() as i64;
+        client.place_order(id, &spy, &order).expect("place failed");
+        std::thread::sleep(Duration::from_secs(4));
+        println!("  placed {id} carrying {} condition(s)", order.conditions.len());
+        client.disconnect();
+        id
+    };
+    std::thread::sleep(Duration::from_secs(5));
+
+    let client = EClient::connect(&settings()).expect("reconnect failed");
+    let mut stated = Stated::default();
+    client.req_all_open_orders(&mut stated);
+
+    let stated_with = stated.orders.iter()
+        .find(|(id, _)| *id == placed_id)
+        .map(|(_, carried)| *carried);
+
+    // Withdrawn before any assertion, and the withdrawal confirmed. This order is
+    // GTC: an unconfirmed cancel, or an assertion returning first, leaves it
+    // resting on the account.
+    client.cancel_order(placed_id, "").expect("the resting order is withdrawn");
+    let withdrawn_by = std::time::Instant::now() + Duration::from_secs(15);
+    let cancelled = loop {
+        // Each snapshot is read independently: a retained result would answer for
+        // every snapshot after the first.
+        stated.orders.clear();
+        client.req_all_open_orders(&mut stated);
+        if stated.finished.contains(&placed_id)
+            || !stated.orders.iter().any(|(id, _)| *id == placed_id)
+        {
+            break true;
+        }
+        if std::time::Instant::now() >= withdrawn_by {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    client.disconnect();
+    assert!(cancelled, "order {placed_id} is still resting, and it is good-till-cancelled");
+
+    match stated_with {
+        Some(carried) => {
+            println!("  the venue states it with {carried} condition(s)");
+            assert_eq!(
+                carried, 1,
+                "the venue states the condition this order waits on, so a session \
+                 reading it back has it: an order that came back stating none and \
+                 was placed again went live at once where the first one waited",
+            );
+        }
+        // Not a pass. A session that cannot see its own resting order has
+        // nothing to say about what the order carries.
+        None => panic!("the venue did not state the resting order at all"),
+    }
 }

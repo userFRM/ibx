@@ -46,9 +46,9 @@ pub type Qty = i64;
 /// How a price is held here: a whole number of hundred-millionths.
 ///
 /// This is not how the venue sends one. The venue sends a price as a whole
-/// number of the CONTRACT'S OWN smallest increment — the counterpart holds a
-/// price as that count beside the increment it counts, and converts only when
-/// something needs a decimal. That representation has no floor: a contract
+/// number of the contract's own smallest increment, carried alongside that
+/// increment and converted to a decimal only where one is needed. That
+/// representation has no floor: a contract
 /// quoted in millionths works exactly as well as one quoted in pennies, because
 /// the count is relative to the contract rather than to a fixed scale.
 ///
@@ -81,6 +81,39 @@ pub const QTY_SCALE: i64 = 100_000_000; // 10^8
 #[inline(always)]
 pub fn qty_from_wire(magnitude: i64) -> Qty {
     magnitude.saturating_mul(QTY_SCALE)
+}
+
+/// Convert a fixed-point `Qty` into the decimal a caller reads it as.
+///
+/// The inverse of [`qty_from_wire`], and the one place the division lives: a
+/// quantity handed out without it is `QTY_SCALE` times what filled.
+#[inline(always)]
+pub fn qty_to_f64(qty: Qty) -> f64 {
+    qty as f64 / QTY_SCALE as f64
+}
+
+/// The largest share count whose fixed-point form is exact.
+///
+/// The conversion multiplies by `QTY_SCALE` in floating point, and a product
+/// past the 53 bits an `f64` carries loses its low digits. Callers bound the
+/// quantity by this so every quantity that is accepted converts exactly,
+/// rather than one near the top of the range converting to a size nobody
+/// asked for. It is some ninety million shares, which is orders of magnitude
+/// above any single order.
+pub const MAX_EXACT_QTY_SHARES: f64 = (1u64 << 53) as f64 / QTY_SCALE as f64;
+
+/// Convert a caller's decimal quantity into the fixed-point form `Qty` holds.
+///
+/// The inverse of [`qty_to_f64`], and the one place the multiplication lives.
+/// Rounded rather than truncated: a caller asking for a fraction of a share
+/// stated it as a decimal, and truncation places an order for none of it.
+/// Exact for any quantity up to [`MAX_EXACT_QTY_SHARES`].
+#[inline]
+pub fn qty_from_f64(shares: f64) -> Qty {
+    if !shares.is_finite() {
+        return 0;
+    }
+    (shares * QTY_SCALE as f64).round() as Qty
 }
 
 /// Convert a counted size into the `QTY_SCALE` fixed-point form, where the
@@ -253,7 +286,7 @@ pub struct OptionComputation {
     /// The option this models.
     pub instrument: InstrumentId,
     /// The request this answers, where the computation was made here rather
-    /// than by the venue. The venue's own arrive against an instrument and are
+    /// than by the venue. Venue-sent bulletins arrive against an instrument and are
     /// reported under whichever request subscribed it; a local calculation
     /// answers the call that asked for it and has no subscription behind it,
     /// so it names that call rather than borrowing the instrument field.
@@ -321,7 +354,7 @@ pub struct TbtTrade {
     pub price: Price,
     /// How much.
     pub size: i64,
-    /// When, in seconds since the epoch — the venue's own second, handed on
+    /// When, in seconds since the epoch, as the venue states it — handed on
     /// unscaled, which is what the reference client's tick-by-tick callbacks
     /// carry.
     pub timestamp: u64,
@@ -359,7 +392,7 @@ pub struct TbtQuote {
     pub bid_size: i64,
     /// How much at the ask.
     pub ask_size: i64,
-    /// When, in seconds since the epoch — the venue's own second, handed on
+    /// When, in seconds since the epoch, as the venue states it — handed on
     /// unscaled, which is what the reference client's tick-by-tick callbacks
     /// carry.
     pub timestamp: u64,
@@ -501,7 +534,15 @@ pub struct HistoricalTickLast {
     /// What it traded at.
     pub price: f64,
     /// How much.
-    pub size: i64,
+    ///
+    /// A historical size crosses as text rather than as a number, because a
+    /// size can be a fraction of a share. Read as a whole number, `0.5` was
+    /// no size at all. Held as a decimal, like the price beside it.
+    ///
+    /// A historical size crosses as text rather than as a number, because a
+    /// size can be a fraction of a share. Read as a whole number, `0.5` was
+    /// no size at all.
+    pub size: f64,
     /// Which venue.
     pub exchange: String,
     /// What the venue notes about it.
@@ -518,9 +559,9 @@ pub struct HistoricalTickBidAsk {
     /// The ask.
     pub ask_price: f64,
     /// How much at the bid.
-    pub bid_size: i64,
+    pub bid_size: f64,
     /// How much at the ask.
-    pub ask_size: i64,
+    pub ask_size: f64,
 }
 
 /// Historical tick data (one of three types based on whatToShow).

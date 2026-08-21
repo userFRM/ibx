@@ -37,6 +37,12 @@ class Wrapper(EWrapper):
         self.all_acked = threading.Event()
         self.next_order_id = 0
         self._expected_oids = set()
+        # Which contract the venue holds under each order id. A status carries
+        # no contract, so acknowledgement alone cannot say which instrument the
+        # order reached: three orders all routed to one valid symbol are
+        # acknowledged exactly like three routed correctly.
+        self.order_symbols = {}        # oid -> symbol the venue named
+        self.got_open_order_end = threading.Event()
 
     def connect_ack(self):
         self.connected.set()
@@ -59,6 +65,13 @@ class Wrapper(EWrapper):
             self.order_statuses.setdefault(order_id, []).append(status)
             if self._expected_oids and self._expected_oids.issubset(self.order_statuses.keys()):
                 self.all_acked.set()
+
+    def open_order(self, order_id, contract, order, order_state):
+        with self.lock:
+            self.order_symbols[order_id] = contract.symbol
+
+    def open_order_end(self):
+        self.got_open_order_end.set()
 
 
 @pytest.mark.skipif(
@@ -106,12 +119,21 @@ def test_rapid_multi_symbol_order_routing():
         f"expected: {[o for o, _ in oids]}"
     )
 
-    # Verify: each order should have at least one status that is NOT "Rejected"
+    # Ask the venue which contract it holds under each id. Acknowledgement says
+    # an order was taken, not which instrument it was taken on, so it cannot
+    # tell three correctly routed orders from three sent to one symbol.
+    client.req_open_orders()
+    assert wrapper.got_open_order_end.wait(timeout=15), "open orders never listed"
+
     for oid, symbol in oids:
         statuses = wrapper.order_statuses.get(oid, [])
         assert len(statuses) > 0, f"Order {oid} ({symbol}): no status received"
-        assert not all(s == "Rejected" for s in statuses), (
-            f"Order {oid} ({symbol}): rejected — likely misrouted. Statuses: {statuses}"
+        # `Rejected` is not a status this client emits; a rejection surfaces as
+        # `Inactive` beside an error, so the old check here could not fire.
+        # A rejection is caught by the error assertion below instead.
+        assert wrapper.order_symbols.get(oid) == symbol, (
+            f"Order {oid} was sent for {symbol} and the venue holds "
+            f"{wrapper.order_symbols.get(oid)!r} under it"
         )
         print(f"  {symbol} (oid={oid}): {statuses}")
 

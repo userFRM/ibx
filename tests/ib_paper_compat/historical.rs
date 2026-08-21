@@ -3,21 +3,57 @@
 use super::common::*;
 use ibx::control::historical::{self};
 use ibx::control::scanner;
-use ibx::gateway::{connect_farm, Gateway, GatewayConfig};
+use ibx::gateway::connect_farm;
 
-pub(super) fn phase_historical_data(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+/// A farm this session was routed to, opened on the route the venue gave.
+///
+/// Every phase here named its farm as a literal on the configured host, with
+/// fresh default settings and no port. The venue states which farm this session
+/// belongs to, on which host, at which port, and a farm reached on the wrong
+/// host does not refuse the connection — it closes it, so the phase reads as a
+/// venue holding no data rather than a request sent to the wrong farm. This
+/// reads the same route the engine's own rebuild reads.
+///
+/// A route the venue did not state connects nothing rather than
+/// falling back to a literal: that fallback is the client's own, it is not
+/// visible from here, and writing it in again is the defect this replaces.
+pub(super) fn open_farm(kind: ibx::gateway::Farm) -> std::io::Result<Connection> {
+    let auth = RECOVERY_AUTH.get().ok_or_else(|| {
+        std::io::Error::other("no session credentials were remembered to reach a farm with")
+    })?;
+    let (host, farm, port) = match kind {
+        ibx::gateway::Farm::Historical => {
+            (&auth.hmds_host, &auth.hmds_farm, auth.hmds_port)
+        }
+        ibx::gateway::Farm::MarketData => {
+            (&auth.trading_host, &auth.trading_farm, auth.trading_port)
+        }
+        ibx::gateway::Farm::SecurityDefinition => {
+            (&auth.secdef_host, &auth.secdef_farm, auth.secdef_port)
+        }
+    };
+    if host.is_empty() || farm.is_empty() {
+        return Err(std::io::Error::other(format!(
+            "the venue named no {kind:?} farm for this session",
+        )));
+    }
+    connect_farm(
+        &auth.settings, host, farm,
+        &auth.username, &auth.password, auth.paper,
+        &auth.server_session_id, &auth.session_key,
+        &auth.hw_info, &auth.encoded, kind, port,
+    )
+}
+
+
+pub(super) fn phase_historical_data(mut conns: Conns) -> Conns {
     println!("--- Phase 11: Historical Data Bars (SPY, 1 day of 5-min bars) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), 
-        &config.host, "ushmds",
-        &config.username, &config.password, config.paper,
-        &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        ibx::gateway::Farm::Historical, None,
-    ) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
         Err(e) => {
-            println!("  SKIP: ushmds reconnect failed: {e}\n");
+            println!("  SKIP: the historical farm could not be reached: {e}\n");
             return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id };
         }
     };
@@ -38,7 +74,7 @@ pub(super) fn phase_historical_data(mut conns: Conns, gw: &Gateway, config: &Gat
         bar_size: "5 mins".into(),
         what_to_show: "TRADES".into(),
         use_rth: true,
-        keep_up_to_date: false,
+        keep_up_to_date: false, include_expired: false,
         filters: Default::default(),
     }).unwrap();
     let join = run_hot_loop(hot_loop);
@@ -81,13 +117,13 @@ pub(super) fn phase_historical_data(mut conns: Conns, gw: &Gateway, config: &Gat
     conns
 }
 
-pub(super) fn phase_historical_daily_bars(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_historical_daily_bars(mut conns: Conns) -> Conns {
     println!("--- Phase 76: Historical Daily Bars (SPY, 5 days of 1-day bars) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     // Step 1: Create HotLoop with HMDS connection
@@ -106,7 +142,7 @@ pub(super) fn phase_historical_daily_bars(mut conns: Conns, gw: &Gateway, config
         bar_size: "1 day".into(),
         what_to_show: "TRADES".into(),
         use_rth: true,
-        keep_up_to_date: false,
+        keep_up_to_date: false, include_expired: false,
         filters: Default::default(),
     }).unwrap();
     let join = run_hot_loop(hot_loop);
@@ -146,13 +182,13 @@ pub(super) fn phase_historical_daily_bars(mut conns: Conns, gw: &Gateway, config
     conns
 }
 
-pub(super) fn phase_cancel_historical(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_cancel_historical(mut conns: Conns) -> Conns {
     println!("--- Phase 77: Cancel Historical Request (SPY) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -162,7 +198,7 @@ pub(super) fn phase_cancel_historical(mut conns: Conns, gw: &Gateway, config: &G
     );
 
     // Request 5-min bars for 5 days (multi-chunk response, cancelable)
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 7700, end_date_time: now_ib_timestamp(), duration: "5 D".into(), bar_size: "5 mins".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 7700, end_date_time: now_ib_timestamp(), duration: "5 D".into(), bar_size: "5 mins".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     // Wait for first chunk
@@ -188,28 +224,39 @@ pub(super) fn phase_cancel_historical(mut conns: Conns, gw: &Gateway, config: &G
     // Cancel via ControlCommand
     control_tx.send(ControlCommand::CancelHistorical { req_id: 7700 }).unwrap();
     println!("  Cancel sent");
+    // Chunks already in flight when the cancel is sent are absorbed rather than
+    // counted.
     std::thread::sleep(Duration::from_secs(2));
+    let in_flight = shared.reference.drain_historical_data()
+        .iter().filter(|(id, _)| *id == 7700).count();
+    // After that, nothing more: without this the phase shows only that a command
+    // was queued, which a cancel reaching nobody also satisfies.
+    std::thread::sleep(Duration::from_secs(2));
+    let still_coming = shared.reference.drain_historical_data()
+        .iter().filter(|(id, _)| *id == 7700).count();
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-    println!("  PASS (cancel sent through hot_loop, connection intact)\n");
+    assert_eq!(
+        still_coming, 0,
+        "{still_coming} more chunks arrived two seconds after the cancel \
+         ({in_flight} were already in flight when it went out): the query is still running",
+    );
+    println!("  PASS (the query stopped; {in_flight} chunks were in flight)\n");
     conns
 }
 
-/// The gateway rejects certain bar_size/duration combinations with a QueryError
+/// The venue rejects certain bar_size/duration combinations with a QueryError
 /// XML payload on HMDS. Validates that the rejection now surfaces as a queued
 /// error (code 162) + terminal historical_data sentinel rather than leaking the
 /// pending entry forever.
-pub(super) fn phase_query_error_surfaces(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_query_error_surfaces(mut conns: Conns) -> Conns {
     println!("--- Phase 186: HMDS QueryError surfaces (15 mins / 1 W rejection) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), 
-        &config.host, "ushmds", &config.username, &config.password, config.paper,
-        &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None,
-    ) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
         Err(e) => {
-            println!("  SKIP: ushmds reconnect failed: {e}\n");
+            println!("  SKIP: the historical farm could not be reached: {e}\n");
             return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id };
         }
     };
@@ -225,7 +272,7 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns, gw: &Gateway, config:
     // docs' allowed ranges but is rejected by the live gateway with
     // <QueryError>Invalid time length</QueryError>. If IB ever lifts this
     // restriction, the phase will report SKIP rather than fail.
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: REQ_ID, end_date_time: now_ib_timestamp(), duration: "1 W".into(), bar_size: "15 mins".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: REQ_ID, end_date_time: now_ib_timestamp(), duration: "1 W".into(), bar_size: "15 mins".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -253,12 +300,24 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns, gw: &Gateway, config:
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     match error {
-        None => {
-            // Either the gateway accepted the combo (rare — would deliver bars)
-            // or HMDS was throttled. Don't fail the suite for an upstream policy
-            // change; surface as SKIP with diagnostic.
-            println!("  SKIP: no QueryError received (bars_seen={bars_seen}, end={got_end_sentinel})\n");
+        // The venue answered with data, so the restriction this phase relies on
+        // has been lifted. That is an upstream policy change and not this
+        // client's doing.
+        None if bars_seen > 0 => {
+            println!(
+                "  SKIP: the combination was accepted and {bars_seen} bars came back — \
+                 the rejection this phase relies on is gone\n"
+            );
         }
+        // Nothing at all, on a farm this phase reached. The one thing this is
+        // here to catch is a QueryError that arrives and is discarded, and that
+        // looks exactly like this — so reporting SKIP was reporting the defect
+        // as a clean run.
+        None => panic!(
+            "nothing came back for a request the venue rejects: no error, no bars, \
+             end sentinel {got_end_sentinel}. Either the venue said nothing, or the \
+             refusal it sent was dropped before anyone could read it"
+        ),
         Some((_, code, msg)) => {
             assert_eq!(code, 162, "expected canonical HMDS error code 162");
             assert!(!msg.is_empty(), "error message must not be empty");
@@ -273,13 +332,13 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns, gw: &Gateway, config:
     conns
 }
 
-pub(super) fn phase_head_timestamp(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_head_timestamp(mut conns: Conns) -> Conns {
     println!("--- Phase 79: Head Timestamp (SPY, TRADES) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -317,13 +376,13 @@ pub(super) fn phase_head_timestamp(mut conns: Conns, gw: &Gateway, config: &Gate
     conns
 }
 
-pub(super) fn phase_scanner_subscription(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_scanner_subscription(mut conns: Conns) -> Conns {
     println!("--- Phase 82: Scanner Subscription (TOP_PERC_GAIN, STK.US.MAJOR) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -374,11 +433,11 @@ pub(super) fn phase_scanner_subscription(mut conns: Conns, gw: &Gateway, config:
     conns
 }
 
-pub(super) fn phase_fundamental_data(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_fundamental_data(mut conns: Conns) -> Conns {
     println!("--- Phase 83: Fundamental Data (AAPL, ReportSnapshot) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
         Err(e) => { println!("  SKIP: HMDS reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
@@ -434,13 +493,13 @@ pub(super) fn phase_fundamental_data(mut conns: Conns, gw: &Gateway, config: &Ga
 ///   ControlCommand::FetchHistoricalNews → hot_loop → HMDS FIX request
 ///   → real server → FIX response → hot_loop parses j.c codec + ZIP
 ///   → SharedState → drain_historical_news → verify headline values
-pub(super) fn phase_historical_news(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_historical_news(mut conns: Conns) -> Conns {
     println!("--- Phase 85: Historical News (AAPL, end-to-end) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     // Step 1: Create HotLoop with ALL real connections (farm + CCP + HMDS)
@@ -513,13 +572,13 @@ pub(super) fn phase_historical_news(mut conns: Conns, gw: &Gateway, config: &Gat
     bg_conns
 }
 
-pub(super) fn phase_historical_ticks(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_historical_ticks(mut conns: Conns) -> Conns {
     println!("--- Phase 88: Historical Ticks (SPY, TRADES) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -539,6 +598,7 @@ pub(super) fn phase_historical_ticks(mut conns: Conns, gw: &Gateway, config: &Ga
         number_of_ticks: 100,
         what_to_show: "TRADES".to_string(),
         use_rth: true,
+        include_expired: false,
         filters: Default::default(),
     }).unwrap();
     let join = run_hot_loop(hot_loop);
@@ -595,13 +655,13 @@ pub(super) fn phase_historical_ticks(mut conns: Conns, gw: &Gateway, config: &Ga
     conns
 }
 
-pub(super) fn phase_histogram_data(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_histogram_data(mut conns: Conns) -> Conns {
     println!("--- Phase 89: Histogram Data (SPY, 1 week) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -613,6 +673,8 @@ pub(super) fn phase_histogram_data(mut conns: Conns, gw: &Gateway, config: &Gate
     control_tx.send(ControlCommand::FetchHistogramData {
         req_id: 3001,
         con_id: 756733,
+        sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(),
         use_rth: true,
         period: "1 week".to_string(),
     }).unwrap();
@@ -647,13 +709,13 @@ pub(super) fn phase_histogram_data(mut conns: Conns, gw: &Gateway, config: &Gate
     conns
 }
 
-pub(super) fn phase_historical_schedule(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_historical_schedule(mut conns: Conns) -> Conns {
     println!("--- Phase 90: Historical Schedule (SPY) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -705,13 +767,13 @@ pub(super) fn phase_historical_schedule(mut conns: Conns, gw: &Gateway, config: 
     conns
 }
 
-pub(super) fn phase_realtime_bars(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_realtime_bars(mut conns: Conns) -> Conns {
     println!("--- Phase 91: Real-Time Bars (SPY, 5-second) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -761,13 +823,13 @@ pub(super) fn phase_realtime_bars(mut conns: Conns, gw: &Gateway, config: &Gatew
     conns
 }
 
-pub(super) fn phase_news_article(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_news_article(mut conns: Conns) -> Conns {
     println!("--- Phase 92: News Article Fetch (AAPL) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -852,13 +914,13 @@ pub(super) fn phase_news_article(mut conns: Conns, gw: &Gateway, config: &Gatewa
     }
 }
 
-pub(super) fn phase_fundamental_data_channel(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_fundamental_data_channel(mut conns: Conns) -> Conns {
     println!("--- Phase 93: Fundamental Data via HotLoop (AAPL) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -899,13 +961,13 @@ pub(super) fn phase_fundamental_data_channel(mut conns: Conns, gw: &Gateway, con
     conns
 }
 
-pub(super) fn phase_parallel_historical(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_parallel_historical(mut conns: Conns) -> Conns {
     println!("--- Phase 94: Parallel Historical Requests (SPY: 1d/5min, 5d/1day, 1w/1h) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -918,9 +980,9 @@ pub(super) fn phase_parallel_historical(mut conns: Conns, gw: &Gateway, config: 
     let end_dt = format_utc_timestamp(now);
 
     // Send 3 requests in quick succession
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 8001, end_date_time: end_dt.clone(), duration: "1 d".to_string(), bar_size: "5 mins".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 8002, end_date_time: end_dt.clone(), duration: "5 d".to_string(), bar_size: "1 day".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 8003, end_date_time: end_dt, duration: "1 W".to_string(), bar_size: "1 hour".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 8001, end_date_time: end_dt.clone(), duration: "1 d".to_string(), bar_size: "5 mins".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 8002, end_date_time: end_dt.clone(), duration: "5 d".to_string(), bar_size: "1 day".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 8003, end_date_time: end_dt, duration: "1 W".to_string(), bar_size: "1 hour".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -954,13 +1016,13 @@ pub(super) fn phase_parallel_historical(mut conns: Conns, gw: &Gateway, config: 
     conns
 }
 
-pub(super) fn phase_scanner_params(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_scanner_params(mut conns: Conns) -> Conns {
     println!("--- Phase 95: Scanner Parameters + HOT_BY_VOLUME Scan ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1025,7 +1087,7 @@ pub(super) fn phase_scanner_params(mut conns: Conns, gw: &Gateway, config: &Gate
     conns
 }
 
-pub(super) fn phase_historical_ohlc_validation(conns: Conns, _gw: &Gateway, _config: &GatewayConfig) -> Conns {
+pub(super) fn phase_historical_ohlc_validation(conns: Conns) -> Conns {
     println!("--- Phase 103: Historical Bar OHLC Validation (SPY 1-hour bars) ---");
 
     let account_id = conns.account_id;
@@ -1044,7 +1106,7 @@ pub(super) fn phase_historical_ohlc_validation(conns: Conns, _gw: &Gateway, _con
         bar_size: "1 hour".into(),
         what_to_show: "TRADES".into(),
         use_rth: true,
-        keep_up_to_date: false,
+        keep_up_to_date: false, include_expired: false,
         filters: Default::default(),
     }).unwrap();
 
@@ -1117,13 +1179,13 @@ pub(super) fn phase_historical_ohlc_validation(conns: Conns, _gw: &Gateway, _con
 
 // ─── Phase 111: Large historical dataset — 1 year daily bars ───
 
-pub(super) fn phase_large_historical_dataset(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_large_historical_dataset(mut conns: Conns) -> Conns {
     println!("--- Phase 111: Large Historical Dataset (SPY, 1 year of daily bars) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1135,7 +1197,7 @@ pub(super) fn phase_large_historical_dataset(mut conns: Conns, gw: &Gateway, con
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let end_dt = format_utc_timestamp(now);
 
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 11001, end_date_time: end_dt, duration: "1 Y".to_string(), bar_size: "1 day".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 11001, end_date_time: end_dt, duration: "1 Y".to_string(), bar_size: "1 day".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1181,13 +1243,13 @@ pub(super) fn phase_large_historical_dataset(mut conns: Conns, gw: &Gateway, con
 
 // ─── Phase 112: DST boundary historical data ───
 
-pub(super) fn phase_dst_boundary_historical(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_dst_boundary_historical(mut conns: Conns) -> Conns {
     println!("--- Phase 112: DST Boundary Historical Data (SPY, bars spanning March DST) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), &config.host, "ushmds", &config.username, &config.password, config.paper, &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded, ibx::gateway::Farm::Historical, None) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: ushmds reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1199,7 +1261,7 @@ pub(super) fn phase_dst_boundary_historical(mut conns: Conns, gw: &Gateway, conf
     // Request 2 weeks of 1-hour bars ending after the March DST transition
     // DST 2026: March 8 (second Sunday of March) — spring forward
     // End date: March 14 2026, covering March 2-14 (spans DST)
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 12001, end_date_time: "20260314-20:00:00".to_string(), duration: "2 W".to_string(), bar_size: "1 hour".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 12001, end_date_time: "20260314-20:00:00".to_string(), duration: "2 W".to_string(), bar_size: "1 hour".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -1250,19 +1312,14 @@ pub(super) fn phase_dst_boundary_historical(mut conns: Conns, gw: &Gateway, conf
 
 // ─── Phase 127: Cancel Data Requests (historical, fundamental, histogram, head timestamp) ───
 
-pub(super) fn phase_cancel_data_requests(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_cancel_data_requests(mut conns: Conns) -> Conns {
     println!("--- Phase 127: Cancel Data Requests (4 cancel ControlCommands) ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), 
-        &config.host, "ushmds",
-        &config.username, &config.password, config.paper,
-        &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        ibx::gateway::Farm::Historical, None,
-    ) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); Some(c) }
         Err(e) => {
-            println!("  SKIP: ushmds reconnect failed: {e}\n");
+            println!("  SKIP: the historical farm could not be reached: {e}\n");
             return conns;
         }
     };
@@ -1277,7 +1334,7 @@ pub(super) fn phase_cancel_data_requests(mut conns: Conns, gw: &Gateway, config:
     let now = now_ib_timestamp();
 
     // 1. FetchHistorical + CancelHistorical
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 20001, end_date_time: now.clone(), duration: "1 d".to_string(), bar_size: "5 mins".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 20001, end_date_time: now.clone(), duration: "1 d".to_string(), bar_size: "5 mins".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
     control_tx.send(ControlCommand::CancelHistorical { req_id: 20001 }).unwrap();
 
     // 2. FetchHeadTimestamp + CancelHeadTimestamp
@@ -1292,7 +1349,8 @@ pub(super) fn phase_cancel_data_requests(mut conns: Conns, gw: &Gateway, config:
 
     // 4. FetchHistogramData + CancelHistogramData
     control_tx.send(ControlCommand::FetchHistogramData {
-        req_id: 20004, con_id: 756733, use_rth: true, period: "1 week".to_string(),
+        req_id: 20004, con_id: 756733, sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(), use_rth: true, period: "1 week".to_string(),
     }).unwrap();
     control_tx.send(ControlCommand::CancelHistogramData { req_id: 20004 }).unwrap();
 
@@ -1319,28 +1377,38 @@ pub(super) fn phase_cancel_data_requests(mut conns: Conns, gw: &Gateway, config:
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    // Cancelled requests should produce no responses (or at most partial data
-    // that arrived before the cancel was processed, which is tolerated)
-    println!("  All 4 cancel commands processed without crash");
-    println!("  PASS\n");
+    // The four counts above were computed, printed and then discarded, so this
+    // passed whether or not a single cancel did anything. There is no race to
+    // tolerate: every fetch and its cancel are queued before the loop starts,
+    // so each cancel is applied before the loop has read one byte of a reply.
+    // Anything reaching a caller here is a request that was withdrawn and
+    // answered anyway.
+    for (label, arrived) in [
+        ("historical bars", hist_for_req.len()),
+        ("head timestamp", head_for_req.len()),
+        ("fundamental report", fund_for_req.len()),
+        ("histogram", histo_for_req.len()),
+    ] {
+        assert_eq!(
+            arrived, 0,
+            "{arrived} {label} responses reached the caller for a request cancelled \
+             before the loop started",
+        );
+    }
+    println!("  PASS (all four cancels took, nothing was answered)\n");
     conns
 }
 
 // ─── Phase 130: Historical Data + Live Orders Coexistence ───
 
-pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config: &GatewayConfig) -> Conns {
+pub(super) fn phase_historical_and_orders(mut conns: Conns) -> Conns {
     println!("--- Phase 130: Historical Data + Live Orders Coexistence ---");
 
     ccp_keepalive(&mut conns.ccp);
-    let hmds = match connect_farm(&Default::default(), 
-        &config.host, "ushmds",
-        &config.username, &config.password, config.paper,
-        &gw.server_session_id, &gw.session_token, &gw.hw_info, &gw.encoded,
-        ibx::gateway::Farm::Historical, None,
-    ) {
+    let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); Some(c) }
         Err(e) => {
-            println!("  SKIP: ushmds reconnect failed: {e}\n");
+            println!("  SKIP: the historical farm could not be reached: {e}\n");
             return conns;
         }
     };
@@ -1353,18 +1421,22 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns, gw: &Gateway, config
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Step 1: Submit a limit order (far from market, won't fill)
     let oid = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
     // Step 2: Fire 5 historical requests while order is pending
     let now = now_ib_timestamp();
     for i in 0..5u32 {
-        control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 30001 + i, end_date_time: now.clone(), duration: "1 d".to_string(), bar_size: "1 hour".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, filters: Default::default() }).unwrap();
+        control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".to_string(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: 30001 + i, end_date_time: now.clone(), duration: "1 d".to_string(), bar_size: "1 hour".to_string(), what_to_show: "TRADES".to_string(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
     }
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);

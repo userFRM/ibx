@@ -5,6 +5,7 @@
 //! file belongs to.
 
 use super::*;
+use crate::types::QTY_SCALE;
 
 // --- Order submission & drain ---
 
@@ -30,7 +31,7 @@ fn submit_limit_drains_correctly() {
         } => {
             assert_eq!(instrument, 0);
             assert_eq!(side, Side::Buy);
-            assert_eq!(qty, 100);
+            assert_eq!(qty, 100 * crate::types::QTY_SCALE);
             assert_eq!(price, 150 * PRICE_SCALE);
         }
         _ => panic!("expected SubmitLimit"),
@@ -51,7 +52,7 @@ fn submit_market_drains_correctly() {
         } => {
             assert_eq!(instrument, 1);
             assert_eq!(side, Side::Sell);
-            assert_eq!(qty, 200);
+            assert_eq!(qty, 200 * crate::types::QTY_SCALE);
         }
         _ => panic!("expected SubmitMarket"),
     }
@@ -96,7 +97,7 @@ fn modify_drains_correctly() {
         } => {
             assert_eq!(order_id, 7);
             assert_eq!(price, 200 * PRICE_SCALE);
-            assert_eq!(qty, 50);
+            assert_eq!(qty, 50 * crate::types::QTY_SCALE);
         }
         _ => panic!("expected Modify"),
     }
@@ -162,7 +163,7 @@ fn insert_and_query_order() {
         instrument: 0,
         side: Side::Buy,
         price: 150 * PRICE_SCALE,
-        qty: 100,
+        qty: 100 * QTY_SCALE,
         filled: 0,
         status: OrderStatus::Submitted,
         ord_type: b'2',
@@ -171,7 +172,7 @@ fn insert_and_query_order() {
     };
     ctx.insert_order(order);
     assert!(ctx.order(1).is_some());
-    assert_eq!(ctx.order(1).unwrap().qty, 100);
+    assert_eq!(ctx.order(1).unwrap().qty, 100 * crate::types::QTY_SCALE);
 }
 
 #[test]
@@ -222,7 +223,7 @@ fn update_order_status() {
         tif: b'0',
         stop_price: 0,
     });
-    ctx.update_order_status(1, OrderStatus::Cancelled);
+    ctx.update_order_status(1, OrderStatus::Cancelled, false);
     assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Cancelled);
 
     // Cancelled orders not in open_orders_for (filters by Submitted)
@@ -243,7 +244,7 @@ fn submitted_order(ctx: &mut Context, oid: u64) {
 fn stale_presubmitted_does_not_regress_submitted() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(!ctx.update_order_status(1, OrderStatus::PreSubmitted),
+    assert!(!ctx.update_order_status(1, OrderStatus::PreSubmitted, false),
         "regression must be rejected");
     assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Submitted);
 }
@@ -252,10 +253,10 @@ fn stale_presubmitted_does_not_regress_submitted() {
 fn terminal_states_are_absorbing() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(ctx.update_order_status(1, OrderStatus::Filled));
+    assert!(ctx.update_order_status(1, OrderStatus::Filled, false));
     // A late mass-status snapshot must not resurrect the order.
     for stale in [OrderStatus::Submitted, OrderStatus::Cancelled, OrderStatus::PendingCancel] {
-        assert!(!ctx.update_order_status(1, stale), "{stale:?} must not overwrite Filled");
+        assert!(!ctx.update_order_status(1, stale, false), "{stale:?} must not overwrite Filled");
     }
     assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Filled);
 }
@@ -266,28 +267,56 @@ fn cancel_and_fill_progressions_still_flow() {
     submitted_order(&mut ctx, 1);
     // Cancel of a partially filled order, and a fill landing while the
     // cancel is pending, are both legitimate.
-    assert!(ctx.update_order_status(1, OrderStatus::PartiallyFilled));
-    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel));
-    assert!(ctx.update_order_status(1, OrderStatus::Filled));
+    assert!(ctx.update_order_status(1, OrderStatus::PartiallyFilled, false));
+    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel, false));
+    assert!(ctx.update_order_status(1, OrderStatus::Filled, false));
 }
 
 #[test]
 fn modify_ack_returns_to_submitted() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(ctx.update_order_status(1, OrderStatus::PendingReplace));
-    assert!(ctx.update_order_status(1, OrderStatus::Submitted),
+    assert!(ctx.update_order_status(1, OrderStatus::PendingReplace, false));
+    assert!(ctx.update_order_status(1, OrderStatus::Submitted, false),
         "modify ack returns the order to working");
+}
+
+/// A cancel in flight is not undone by the venue restating the past.
+///
+/// A report stating the order is working moves it out of PendingCancel. A
+/// replayed report does not: recent activity is replayed when a session opens,
+/// and a replayed working status predates any cancel sent since.
+#[test]
+fn a_replay_does_not_undo_a_cancel_in_flight() {
+    let mut ctx = Context::new();
+    submitted_order(&mut ctx, 1);
+    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel, false));
+
+    for replayed in [OrderStatus::PreSubmitted, OrderStatus::Submitted] {
+        assert!(
+            !ctx.update_order_status(1, replayed, true),
+            "{replayed:?} restating history must leave the cancel standing",
+        );
+        assert_eq!(ctx.order(1).unwrap().status, OrderStatus::PendingCancel);
+    }
+
+    // The report that announces something new still gets the order back.
+    assert!(ctx.update_order_status(1, OrderStatus::Submitted, false));
 }
 
 #[test]
 fn forced_setter_bypasses_guard() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel));
-    // The guard blocks the ordinary path,
-    assert!(!ctx.update_order_status(1, OrderStatus::Submitted));
-    // ...but a cancel reject restores the working status deliberately.
+    assert!(ctx.update_order_status(1, OrderStatus::PendingCancel, false));
+    // PendingCancel does not supersede the working states, so a report
+    // stating the order is working moves it out on the ordinary path.
+    assert!(ctx.update_order_status(1, OrderStatus::Submitted, false));
+
+    // The guard blocks leaving a terminal state. The forced setter exists for
+    // a cancel this session reported and the venue then refused.
+    assert!(ctx.update_order_status(1, OrderStatus::Cancelled, false));
+    assert!(!ctx.update_order_status(1, OrderStatus::Submitted, false));
     ctx.set_order_status_forced(1, OrderStatus::Submitted);
     assert_eq!(ctx.order(1).unwrap().status, OrderStatus::Submitted);
 }
@@ -296,8 +325,8 @@ fn forced_setter_bypasses_guard() {
 fn unchanged_status_reports_no_change() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(!ctx.update_order_status(1, OrderStatus::Submitted));
-    assert!(!ctx.update_order_status(999, OrderStatus::Cancelled), "unknown order");
+    assert!(!ctx.update_order_status(1, OrderStatus::Submitted, false));
+    assert!(!ctx.update_order_status(999, OrderStatus::Cancelled, false), "unknown order");
     }
 
 #[test]
@@ -519,7 +548,7 @@ fn multiple_orders_same_instrument() {
 fn update_order_status_nonexistent_no_panic() {
     let mut ctx = Context::new();
     // Should not panic when order doesn't exist
-    ctx.update_order_status(999, OrderStatus::Cancelled);
+    ctx.update_order_status(999, OrderStatus::Cancelled, false);
 }
 
 #[test]
@@ -543,7 +572,7 @@ fn submit_stop_returns_id_and_drains() {
             assert_eq!(order_id, id);
             assert_eq!(instrument, 0);
             assert_eq!(side, Side::Sell);
-            assert_eq!(qty, 50);
+            assert_eq!(qty, 50 * crate::types::QTY_SCALE);
             assert_eq!(stop_price, 140 * PRICE_SCALE);
         }
         _ => panic!("Expected SubmitStop"),
@@ -551,33 +580,33 @@ fn submit_stop_returns_id_and_drains() {
 }
 
 #[test]
-fn update_order_filled_accumulates() {
+fn adjust_order_filled_accumulates() {
     let mut ctx = Context::new();
     ctx.insert_order(Order {
         order_id: 1, instrument: 0, side: Side::Buy,
-        price: PRICE_SCALE, qty: 100, filled: 0,
+        price: PRICE_SCALE, qty: 100 * QTY_SCALE, filled: 0,
         status: OrderStatus::PendingSubmit,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
-    ctx.update_order_filled(1, 30);
-    assert_eq!(ctx.order(1).unwrap().filled, 30);
-    ctx.update_order_filled(1, 50);
-    assert_eq!(ctx.order(1).unwrap().filled, 80);
+    ctx.adjust_order_filled(1, 30 * QTY_SCALE);
+    assert_eq!(ctx.order(1).unwrap().filled, 30 * QTY_SCALE);
+    ctx.adjust_order_filled(1, 50 * QTY_SCALE);
+    assert_eq!(ctx.order(1).unwrap().filled, 80 * QTY_SCALE);
 }
 
 /// A gateway figure large enough to overflow the counter must not wrap the
 /// order's filled quantity round to nothing.
 #[test]
-fn update_order_filled_saturates() {
+fn adjust_order_filled_saturates() {
     let mut ctx = Context::new();
     ctx.insert_order(Order {
         order_id: 1, instrument: 0, side: Side::Buy,
-        price: PRICE_SCALE, qty: u32::MAX, filled: u32::MAX - 1,
+        price: PRICE_SCALE, qty: crate::types::Qty::MAX, filled: crate::types::Qty::MAX - 1,
         status: OrderStatus::PartiallyFilled,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
-    ctx.update_order_filled(1, 10);
-    assert_eq!(ctx.order(1).unwrap().filled, u32::MAX);
+    ctx.adjust_order_filled(1, 10 * QTY_SCALE);
+    assert_eq!(ctx.order(1).unwrap().filled, crate::types::Qty::MAX);
 }
 
 #[test]
@@ -619,7 +648,7 @@ fn submit_limit_auc_drains_correctly() {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
-            assert_eq!(*qty, 100);
+            assert_eq!(*qty, 100 * crate::types::QTY_SCALE);
             assert_eq!(*price, 150 * PRICE_SCALE);
         }
         _ => panic!("expected SubmitLimitAuc"),
@@ -638,7 +667,7 @@ fn submit_mtl_auc_drains_correctly() {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
-            assert_eq!(*qty, 100);
+            assert_eq!(*qty, 100 * crate::types::QTY_SCALE);
         }
         _ => panic!("expected SubmitMtlAuc"),
     }
@@ -658,7 +687,7 @@ fn submit_box_top_reuses_mtl() {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
-            assert_eq!(*qty, 100);
+            assert_eq!(*qty, 100 * crate::types::QTY_SCALE);
         }
         _ => panic!("expected SubmitMtl from box_top"),
     }
@@ -667,7 +696,7 @@ fn submit_box_top_reuses_mtl() {
 #[test]
 fn submit_what_if_drains_correctly() {
     let mut ctx = Context::new();
-    let id = ctx.submit(0, Side::Buy, 100, OrderKind::WhatIf { price: 25620 * (PRICE_SCALE / 100), ord_type: b'2' },
+    let id = ctx.submit(0, Side::Buy, 100, OrderKind::WhatIf { price: 25620 * (PRICE_SCALE / 100), aux: 0, ord_type: b'2' },
         b'0', OrderAttrs::default());
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
@@ -678,7 +707,7 @@ fn submit_what_if_drains_correctly() {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
-            assert_eq!(*qty, 100);
+            assert_eq!(*qty, 100 * crate::types::QTY_SCALE);
             assert_eq!(*price, 25620 * (PRICE_SCALE / 100));
         }
         _ => panic!("expected a what-if"),
@@ -692,14 +721,16 @@ fn submit_limit_fractional_drains_correctly() {
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
     match &orders[0] {
-        OrderRequest::SubmitLimitFractional { order_id, instrument, side, qty, price } => {
+        OrderRequest::SubmitEx {
+            order_id, instrument, side, qty, kind: OrderKind::Limit { price }, ..
+        } => {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);
             assert_eq!(*side, Side::Buy);
             assert_eq!(*qty as f64 / QTY_SCALE as f64, 0.5, "half a share");
             assert_eq!(*price, 150 * PRICE_SCALE);
         }
-        _ => panic!("expected SubmitLimitFractional"),
+        _ => panic!("expected a limit order carrying the fraction"),
     }
 }
 
@@ -729,7 +760,7 @@ fn submit_adjustable_stop_drains_correctly() {
             adjusted_stop_limit_price, .. }, tif, attrs, .. } => {
             assert_eq!(*order_id, id);
             assert_eq!(*side, Side::Sell);
-            assert_eq!(*qty, 1);
+            assert_eq!(*qty, crate::types::QTY_SCALE);
             assert_eq!(*stop_price, 25120 * (PRICE_SCALE / 100));
             assert_eq!(*trigger_price, 25620 * (PRICE_SCALE / 100));
             assert_eq!(*adjusted_order_type, AdjustedOrderType::StopLimit);
@@ -740,4 +771,28 @@ fn submit_adjustable_stop_drains_correctly() {
         }
         _ => panic!("expected SubmitEx carrying AdjustableStop"),
     }
+}
+
+/// A disconnect makes every held order's state unknown, `Inactive` included:
+/// the venue holds such an order and it can return to working.
+#[test]
+fn an_inactive_order_is_one_the_reconnect_has_to_account_for() {
+    let mut ctx = Context::new();
+    let instrument = ctx.register_instrument(756733);
+    let held = crate::types::Order::new(
+        7, instrument, Side::Buy, crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    );
+    ctx.insert_order(held);
+    ctx.set_order_status_forced(7, OrderStatus::Inactive);
+    assert_eq!(
+        ctx.open_orders_for(instrument).len(), 1,
+        "a cancel-all already reaches it, so it is an order the venue holds",
+    );
+
+    ctx.mark_orders_uncertain();
+    assert_eq!(
+        ctx.order(7).map(|o| o.status), Some(OrderStatus::Uncertain),
+        "so the reconnect has to say what became of it",
+    );
+    assert_eq!(ctx.uncertain_orders().len(), 1, "and it is reported as one of them");
 }

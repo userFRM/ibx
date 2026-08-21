@@ -33,7 +33,7 @@ use crate::protocol::datetime::chrono_free_timestamp;
 use crate::gateway::{connect_farm, reconnect_ccp, Farm, ReconnectAuth};
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
-use crate::types::{ContractRef, ControlCommand, Fill, InstrumentId, Price, Qty, PRICE_SCALE, QTY_SCALE};
+use crate::types::{ContractRef, ControlCommand, Fill, InstrumentId, Price, Qty, PRICE_SCALE, QTY_SCALE, qty_to_f64};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 
 use farm::FarmState;
@@ -52,10 +52,13 @@ pub const LIVENESS_TEST_SECS: u64 = 15;
 /// this long. The old scheme declared death at ~21s — racing the server's
 /// own ~35s reset and losing to transient stalls the server tolerates.
 pub const LIVENESS_DEAD_SECS: u64 = 35;
-/// Grace window after (re)connect before liveness is enforced:
-/// early-connection jitter must not trigger a false disconnect during a
-/// period the server itself treats as warm-up. Heartbeats are still sent.
-pub const LIVENESS_WARMUP_SECS: u64 = 60;
+/// Longest plausible gap between two liveness checks.
+///
+/// A gap above this means the check did not run. Silence measured across it is
+/// this process's own and says nothing about the connection.
+pub const LIVENESS_STALL_SECS: u64 = 10;
+/// How long liveness stays suspended after a stall.
+pub const LIVENESS_STALL_COOLDOWN_SECS: u64 = 60;
 // The ladder is ordered by construction, so it is checked by construction: a
 // heartbeat that outlives the test window, or a test that outlives the dead
 // window, fails the build rather than a test the optimizer folds away.
@@ -164,15 +167,15 @@ pub struct HeartbeatState {
     pub ccp_interval_secs: u64,
     /// Pending test request for auth: (test_req_id, sent_at).
     pub pending_ccp_test: Option<(String, Instant)>,
-    /// When each connection (re)connected — liveness is not enforced during
-    /// the warm-up window that follows.
-    pub ccp_up_since: Instant,
-    pub farm_up_since: Instant,
-    pub hmds_up_since: Instant,
+    /// When liveness last ran, and when it last detected a stall.
+    pub last_liveness_check: Instant,
+    pub stalled_at: Option<Instant>,
     /// Pending test request for farm: (test_req_id, sent_at).
     pub pending_farm_test: Option<(String, Instant)>,
     /// Pending test request for historical: (test_req_id, sent_at).
     pub pending_hmds_test: Option<(String, Instant)>,
+    /// Test request outstanding on the security-definition connection.
+    pub pending_secdef_test: Option<(String, Instant)>,
     /// Counter for generating unique test request IDs.
     test_req_counter: u32,
 }
@@ -181,7 +184,7 @@ pub struct HeartbeatState {
 ///
 /// A session that answers on the deadline has no margin: one heartbeat delayed
 /// by a slow link or a scheduling hiccup is late. Half leaves room for one to
-/// be lost outright, which is what the counterpart allows itself.
+/// be lost outright, which is what the protocol allows.
 fn half_of(interval_secs: u64) -> u64 {
     (interval_secs / 2).max(1)
 }
@@ -189,7 +192,7 @@ fn half_of(interval_secs: u64) -> u64 {
 impl HeartbeatState {
     /// How often to send, given what the venue asked for.
     ///
-    /// Half the stated interval, which is what the counterpart sends at: a
+    /// Half the stated interval, which is the defined send rate: a
     /// session that answers exactly on the deadline has no margin, and one
     /// heartbeat delayed by a scheduling hiccup or a slow link is late. Half
     /// leaves room for one to be lost entirely.
@@ -212,9 +215,9 @@ impl HeartbeatState {
 
     /// How long of silence before the connection is treated as gone.
     ///
-    /// Three of the venue's own intervals at least: two heartbeats can be lost
+    /// Three of the venue's intervals at least: two heartbeats can be lost
     /// without the session being dead, and declaring it on a shorter window
-    /// than the venue's own cadence kills connections that are working.
+    /// than the venue's cadence kills connections that are working.
     pub fn ccp_dead_after(&self) -> u64 {
         LIVENESS_DEAD_SECS.max(self.ccp_interval_secs.saturating_mul(3))
     }
@@ -256,11 +259,11 @@ impl HeartbeatState {
             last_hmds_recv: now,
             ccp_interval_secs: CCP_HEARTBEAT_SECS,
             pending_ccp_test: None,
-            ccp_up_since: Instant::now(),
-            farm_up_since: Instant::now(),
-            hmds_up_since: Instant::now(),
+            last_liveness_check: now,
+            stalled_at: None,
             pending_farm_test: None,
             pending_hmds_test: None,
+            pending_secdef_test: None,
             test_req_counter: 0,
         }
     }
@@ -483,7 +486,7 @@ impl HotLoop {
         if self.hmds.tbt_subscriptions.iter().any(|sub| sub.instrument == instrument) {
             return;
         }
-        if self.ccp.news_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
+        if self.ccp.news_subscriptions.iter().any(|(id, ..)| *id == instrument) {
             return;
         }
         // A subscription waiting on the lookup that will name its contract is
@@ -548,18 +551,25 @@ impl HotLoop {
             Self::pin_to_core(core);
         }
 
+        // The venue restates the account's figures on its own schedule, which
+        // is unhurried: a loop that has just started waits tens of seconds for
+        // its first set, and reports an account holding nothing until then.
+        // Asking on the way in is answered in under a second.
+        let account = self.account_id.clone();
+        if !account.is_empty() {
+            self.ccp.send_account_refresh(&account, &mut self.ccp_conn, &mut self.hb);
+        }
+
         self.running = true;
 
         while self.running {
             self.context.loop_iterations += 1;
 
             // 1. Busy-poll market data farm socket (non-blocking recv)
-            let farm_was_ok = !self.farm.disconnected;
             self.farm.poll_market_data(
                 &mut self.farm_conn, &mut self.context, &self.shared,
                 &self.event_tx, &mut self.hb,
             );
-            let _ = farm_was_ok; // reconnects are scheduled below
 
             // 1b. Busy-poll historical socket for tick-by-tick data
             self.hmds.poll(
@@ -576,7 +586,7 @@ impl HotLoop {
             // 1c. Hand off any scanner results with cache-miss con_ids to CCP for
             // contract-detail fan-out. Mirrors what the gateway does
             // internally for binary-API scanner clients.
-            for (req_id, result) in self.hmds.cold_scanner_results.drain(..).collect::<Vec<_>>() {
+            for (req_id, result) in std::mem::take(&mut self.hmds.cold_scanner_results) {
                 self.ccp.start_scanner_enrichment(
                     req_id, result, &mut self.ccp_conn, &self.shared, &mut self.hb,
                 );
@@ -599,7 +609,6 @@ impl HotLoop {
             self.disconnect_write_dead_transports();
 
             // 3. Busy-poll auth socket for execution reports
-            let ccp_was_ok = !self.ccp.disconnected;
             self.ccp.poll_executions(
                 &mut self.ccp_conn, &mut self.context, &self.shared,
                 &self.event_tx, &mut self.hb, &self.account_id,
@@ -611,8 +620,10 @@ impl HotLoop {
                     // The slot keeps the id so a reconnect resubscribes by it
                     // rather than starting the lookup again.
                     self.context.market.adopt_con_id(p.instrument, con_id);
+                    let (sec_type, exchange) =
+                        self.described_as(con_id, &p.sec_type, &p.exchange);
                     self.farm.send_mktdata_subscribe(
-                        con_id, &p.symbol, &p.exchange, &p.sec_type,
+                        con_id, &p.symbol, &exchange, &sec_type,
                         &p.last_trade_date, p.strike, &p.right, &p.multiplier,
                         p.instrument, p.mode_9887,
                         &mut self.farm_conn,
@@ -644,7 +655,7 @@ impl HotLoop {
                 }
             }
             self.ccp.sweep_recovery(&mut self.context, &self.shared, &self.event_tx);
-            self.ccp.sweep_pending_matching_symbols();
+            self.ccp.sweep_pending_matching_symbols(&self.shared);
             self.ccp.sweep_pending_option_params(&self.shared);
             self.ccp.sweep_pending_schedule_pairs(&self.shared, &self.event_tx);
             self.ccp.sweep_scanner_enrichments(&self.shared);
@@ -652,7 +663,6 @@ impl HotLoop {
             self.ccp.sweep_pending_subscribes(&self.shared);
             self.ccp.sweep_pending_named(&self.shared);
             self.hmds.sweep_pending_historical(&self.shared);
-            let _ = ccp_was_ok; // reconnects are scheduled below
 
             // 4. Check control_plane_rx (SPSC) for commands
             self.poll_control_commands();
@@ -669,7 +679,14 @@ impl HotLoop {
             self.poll_ccp_reconnect();
             self.poll_hmds_reconnect();
             self.poll_secdef_reconnect();
-            self.budget.settle(Instant::now(), self.reconnect_cfg.stable_window);
+            // The stability clock starts only when both transports the retry
+            // budget covers are carrying traffic. One side alone does not
+            // refund attempts.
+            self.budget.settle(
+                Instant::now(),
+                self.reconnect_cfg.stable_window,
+                !self.farm.disconnected && !self.ccp.disconnected,
+            );
             self.maybe_spawn_farm_reconnect();
             self.maybe_spawn_ccp_reconnect();
             self.maybe_spawn_hmds_reconnect();
@@ -721,8 +738,11 @@ impl HotLoop {
         if !self.depth_awaiting_venues.is_empty()
             && !self.shared.reference.depth_exchanges().is_empty()
         {
+            // Queued ahead of what is already buffered. A subscription held
+            // for the exchange list and withdrawn in the same batch must not
+            // have its withdrawal processed first.
             let held = std::mem::take(&mut self.depth_awaiting_venues);
-            self.cmd_buf.extend(held);
+            self.cmd_buf.splice(0..0, held);
         }
         let mut cmds: Vec<ControlCommand> = std::mem::take(&mut self.ccp.resolved_named);
         cmds.append(&mut self.cmd_buf);
@@ -797,6 +817,8 @@ impl HotLoop {
                                     &mut self.hb,
                                 );
                             } else {
+                                let (sec_type, exchange) =
+                                    self.described_as(con_id, &sec_type, &exchange);
                                 self.farm.send_mktdata_subscribe(
                                     con_id, &symbol, &exchange, &sec_type,
                                     &last_trade_date, strike, &right, &multiplier,
@@ -821,7 +843,7 @@ impl HotLoop {
                     // one reader that outlives the L1 request: ticker setup
                     // registers into the same map and news routes on it, so a
                     // live news subscription keeps them.
-                    if !self.ccp.news_subscriptions.iter().any(|(id, _, _)| *id == instrument) {
+                    if !self.ccp.news_subscriptions.iter().any(|(id, ..)| *id == instrument) {
                         self.context.market.clear_server_tags_for(instrument);
                     }
                     self.try_reclaim_instrument(instrument);
@@ -900,7 +922,7 @@ impl HotLoop {
                     let ContractRef { con_id, symbol, sec_type, exchange, .. } = contract;
                     self.register_or_reject(con_id, symbol, &sec_type, &exchange, &identity, &reply_tx);
                 }
-                ControlCommand::FetchHistorical { contract, req_id, end_date_time, duration, bar_size, what_to_show, use_rth, keep_up_to_date, .. } => {
+                ControlCommand::FetchHistorical { contract, req_id, end_date_time, duration, bar_size, what_to_show, use_rth, keep_up_to_date, include_expired, .. } => {
                     let ContractRef { con_id, symbol, sec_type, exchange, .. } = contract;
                     // keepUpToDate sends via CCP but bars/end arrive on HMDS — both
                     // paths require an authed HMDS socket to deliver a completion.
@@ -915,7 +937,7 @@ impl HotLoop {
                         // folded from those.
                         self.hmds.send_historical_request_ex(
                             req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show,
-                            use_rth, false, &symbol, &sec_type, &exchange,
+                            use_rth, false, include_expired, &symbol, &sec_type, &exchange,
                             &mut self.hmds_conn, &mut self.hb, &self.shared,
                         );
                         if let Ok(size) = crate::control::historical::BarSize::from_api_str(&bar_size) {
@@ -928,26 +950,30 @@ impl HotLoop {
                                 bar: Default::default(),
                                 weighted: 0.0,
                             });
-                            self.hmds.kut_resub.retain(|k| k.req_id != req_id);
-                            self.hmds.kut_resub.push(crate::engine::hot_loop::hmds::KutRequest {
-                                req_id, con_id, end_date_time, duration, bar_size,
-                                what_to_show: what_to_show.clone(), use_rth,
-                                symbol: symbol.clone(), sec_type: sec_type.clone(),
-                                exchange: exchange.clone(),
-                            });
                             self.hmds.send_realtime_bar_subscribe(
                                 req_id, con_id, &symbol, &sec_type, &exchange, &what_to_show,
                                 use_rth, &mut self.hmds_conn, &mut self.hb,
                             );
                         }
                     } else {
-                        self.hmds.send_historical_request_ex(req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show, use_rth, false, &symbol, &sec_type, &exchange, &mut self.hmds_conn, &mut self.hb, &self.shared);
+                        self.hmds.send_historical_request_ex(req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show, use_rth, false, include_expired, &symbol, &sec_type, &exchange, &mut self.hmds_conn, &mut self.hb, &self.shared);
                     }
                 }
                 ControlCommand::CancelHistorical { req_id } => {
                     self.hmds.keep_up_to_date_reqs.remove(&req_id);
-                    self.hmds.kut_resub.retain(|k| k.req_id != req_id);
+                    // A keep-up-to-date request rides a five-second bar
+                    // stream held as a separate query. Cancelling withdraws
+                    // that query as well as the batch query below, and clears
+                    // it from the resubscribe record so a reconnect does not
+                    // request it again.
+                    let rtbar_query: Option<String> = self.hmds.rtbar_subs.iter()
+                        .find(|(_, rid, _, _)| *rid == req_id)
+                        .map(|(qid, ..)| qid.clone());
                     self.hmds.rtbar_subs.retain(|(_, rid, _, _)| *rid != req_id);
+                    self.hmds.rtbar_resub.retain(|r| r.req_id != req_id);
+                    if let Some(qid) = rtbar_query {
+                        self.hmds.send_historical_cancel(&qid, &mut self.hmds_conn, &mut self.hb);
+                    }
                     self.hmds.forming_bars.retain(|f| f.req_id != req_id);
                     // A keep-up-to-date request rides the five-second stream,
                     // and its routing and half-built bar are held apart from
@@ -982,7 +1008,7 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::FetchMatchingSymbols { req_id, pattern } => {
-                    self.ccp.send_matching_symbols_request(req_id, &pattern, &mut self.ccp_conn, &mut self.hb);
+                    self.ccp.send_matching_symbols_request(req_id, &pattern, &mut self.ccp_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::FetchCalendarMetaData { req_id } => {
                     self.secdef.send_calendar_meta_data_request(
@@ -1046,17 +1072,17 @@ impl HotLoop {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
-                        self.hmds.send_fundamental_data_request(req_id, con_id, &report_type, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_fundamental_data_request(req_id, con_id, &report_type, &self.shared, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::CancelFundamentalData { req_id } => {
                     self.hmds.send_fundamental_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
                 }
-                ControlCommand::FetchHistogramData { req_id, con_id, use_rth, period } => {
+                ControlCommand::FetchHistogramData { req_id, con_id, sec_type, exchange, use_rth, period } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
-                        self.hmds.send_histogram_request(req_id, con_id, use_rth, &period, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_histogram_request(req_id, con_id, &sec_type, &exchange, use_rth, &period, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::CancelHistogramData { req_id } => {
@@ -1064,12 +1090,12 @@ impl HotLoop {
                         self.hmds.pending_histogram.remove(pos);
                     }
                 }
-                ControlCommand::FetchHistoricalTicks { contract, req_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth, .. } => {
+                ControlCommand::FetchHistoricalTicks { contract, req_id, end_date_time, number_of_ticks, what_to_show, use_rth, include_expired, .. } => {
                     let ContractRef { con_id, sec_type, exchange, .. } = contract;
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
-                        self.hmds.send_historical_ticks_request(req_id, con_id, &sec_type, &exchange, &start_date_time, &end_date_time, number_of_ticks, &what_to_show, use_rth, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_historical_ticks_request(req_id, con_id, &sec_type, &exchange, &end_date_time, number_of_ticks, &what_to_show, use_rth, include_expired, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::SubscribeRealTimeBar { contract, req_id, what_to_show, use_rth, .. } => {
@@ -1128,6 +1154,12 @@ impl HotLoop {
                     );
                 }
                 ControlCommand::UnsubscribeDepth { req_id } => {
+                    // Includes a subscription still awaiting the exchange
+                    // list, which would otherwise be sent once it arrives.
+                    self.depth_awaiting_venues.retain(|held| !matches!(
+                        held,
+                        ControlCommand::SubscribeDepth { req_id: held_id, .. } if *held_id == req_id
+                    ));
                     self.farm.send_depth_unsubscribe(
                         req_id,
                         &mut self.farm_conn,
@@ -1140,6 +1172,9 @@ impl HotLoop {
                 ControlCommand::SubscribePnl { req_id, account } => {
                     self.ccp.send_pnl_subscribe(req_id, &account, &mut self.ccp_conn, &mut self.hb);
                 }
+                ControlCommand::RefreshAccount { account } => {
+                    self.ccp.send_account_refresh(&account, &mut self.ccp_conn, &mut self.hb);
+                }
                 ControlCommand::AdvisorConfig { command, partition, document } => {
                     self.ccp.send_advisor_config(
                         command, &partition, document.as_deref(),
@@ -1147,7 +1182,14 @@ impl HotLoop {
                     );
                 }
                 ControlCommand::CancelPnl { req_id } => {
-                    let _ = req_id; // Server auto-cancels on disconnect; no explicit cancel message needed
+                    // No withdrawal message for this subscription has been
+                    // observed on the wire, so none is sent. Updates continue
+                    // until the session ends. Logged so the caller learns this
+                    // from the log rather than from continuing updates.
+                    log::warn!(
+                        "P&L subscription {req_id} was asked to stop; this client sends no \
+                         withdrawal for one, so the venue goes on reporting it",
+                    );
                 }
                 ControlCommand::FetchNewsProviders { .. }
                 | ControlCommand::FetchSmartComponents { .. }
@@ -1173,6 +1215,15 @@ impl HotLoop {
                     self.force_ccp_disconnect();
                 }
                 ControlCommand::Shutdown => {
+                    // The account subscription this loop opened is closed with
+                    // it. Left open, each loop holds one for the life of the
+                    // connection, and the venue stops answering new ones.
+                    let account = self.account_id.clone();
+                    if !account.is_empty() {
+                        self.ccp.send_account_unsubscribe(
+                            &account, &mut self.ccp_conn, &mut self.hb,
+                        );
+                    }
                     // Unsubscribe all active market data before stopping
                     let instruments: Vec<InstrumentId> = self.farm.instrument_md_reqs
                         .iter().map(|(id, _)| *id).collect();
@@ -1195,11 +1246,16 @@ impl HotLoop {
                     }
                     // Unsubscribe all news subscriptions before stopping
                     let news_instruments: Vec<InstrumentId> = self.ccp.news_subscriptions
-                        .iter().map(|(id, _, _)| *id).collect();
+                        .iter().map(|(id, ..)| *id).collect();
                     for instrument in news_instruments {
                         self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb);
                     }
                     self.running = false;
+                    // Records the reason alongside the flag. The flag alone
+                    // does not distinguish a venue-initiated drop from a
+                    // caller-requested stop.
+                    self.shared.reference
+                        .set_session_over(retry::DisconnectReason::ByDesign.as_str());
                     self.shared.set_connection_lost();
                     emit(&self.event_tx, Event::Stopped);
                 }
@@ -1210,14 +1266,85 @@ impl HotLoop {
         if sender_dropped && self.running {
             log::warn!("Control channel disconnected — shutting down hot loop");
             self.running = false;
+            self.shared.reference
+                .set_session_over(retry::DisconnectReason::ByDesign.as_str());
             self.shared.set_connection_lost();
             emit(&self.event_tx, Event::Stopped);
         }
     }
 
+    /// Security type (tag 167) and exchange (tag 207) for a contract the
+    /// caller identified by contract id alone.
+    ///
+    /// The server routes a subscription by these two tags. Absent both, the
+    /// encoder defaults to a smart-routed stock, which misroutes a future,
+    /// option or currency pair. Falls back to the cached contract definition
+    /// where one has been fetched; empty otherwise.
+    fn described_as(&self, con_id: i64, sec_type: &str, exchange: &str) -> (String, String) {
+        if !sec_type.is_empty() && !exchange.is_empty() {
+            return (sec_type.to_string(), exchange.to_string());
+        }
+        let known = self.shared.reference.get_contract(con_id);
+        let fill = |stated: &str, from_venue: Option<&String>| {
+            if stated.is_empty() {
+                from_venue.cloned().unwrap_or_default()
+            } else {
+                stated.to_string()
+            }
+        };
+        (
+            fill(sec_type, known.as_ref().map(|c| &c.sec_type)),
+            fill(exchange, known.as_ref().map(|c| &c.exchange)),
+        )
+    }
+
     fn check_heartbeats(&mut self) {
         let now = Instant::now();
         let ts = chrono_free_timestamp();
+
+        // Liveness is measured as elapsed silence, which is only valid across
+        // a window in which this process was running.
+        //
+        // The gap between two checks is read first: one longer than the
+        // connection's own cadence indicates a stall here rather than silence
+        // at the venue. After a stall the silence baselines are reset and
+        // liveness is suspended, because a resumed process first drains a
+        // backlog.
+        let since_check = now.duration_since(self.hb.last_liveness_check).as_secs();
+        self.hb.last_liveness_check = now;
+        if since_check > LIVENESS_STALL_SECS {
+            log::info!(
+                "liveness suspects a long stall — {since_check}s between checks, which is this \
+                 process not looking rather than the venue not speaking; \
+                 measuring silence from now",
+            );
+            self.hb.last_ccp_recv = now;
+            self.hb.last_farm_recv = now;
+            self.hb.last_hmds_recv = now;
+            // Applies to the security-definition connection as well.
+            self.hb.last_secdef_recv = now;
+            self.hb.stalled_at = Some(now);
+        }
+        // The round that ends the cooldown is still skipped: what a resumed
+        // process reads first is a backlog, and judging on it is the mistake
+        // the cooldown exists to avoid. Clearing here and skipping once more
+        // costs one pass and leaves the next one measuring a settled link.
+        let recovering = match self.hb.stalled_at {
+            Some(at) if now.duration_since(at).as_secs() < LIVENESS_STALL_COOLDOWN_SECS => true,
+            Some(_) => {
+                self.hb.stalled_at = None;
+                true
+            }
+            None => false,
+        };
+        // Nothing is sent while recovering either, heartbeats included. A
+        // process that stopped running long enough to be noticed has a
+        // connection the venue has very likely closed already, and the reply to
+        // that is a reconnect rather than a heartbeat onto a socket that is
+        // gone. If the venue closes it meanwhile, the reconnect is what answers.
+        if recovering {
+            return;
+        }
 
         // --- Auth heartbeat (skip if already disconnected) ---
         if !self.ccp.disconnected
@@ -1233,8 +1360,7 @@ impl HotLoop {
                 self.hb.last_ccp_sent = now;
             }
 
-            let warmed_up = now.duration_since(self.hb.ccp_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
-            if warmed_up && since_recv > self.hb.ccp_test_after() {
+            if since_recv > self.hb.ccp_test_after() {
                 if since_recv > self.hb.ccp_dead_after() {
                     log::error!("CCP liveness timeout ({since_recv}s silent) — connection lost");
                     self.ccp.handle_disconnect(&mut self.context, &self.shared, &self.event_tx);
@@ -1270,8 +1396,7 @@ impl HotLoop {
             }
 
             let stated = conn.heartbeat_secs;
-            let warmed_up = now.duration_since(self.hb.farm_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
-            if warmed_up && since_recv > HeartbeatState::farm_test_after(stated) {
+            if since_recv > HeartbeatState::farm_test_after(stated) {
                 if since_recv > HeartbeatState::farm_dead_after(stated) {
                     log::error!("Farm liveness timeout ({since_recv}s silent) — connection lost");
                     self.farm.handle_disconnect(&mut self.context, &self.event_tx);
@@ -1306,11 +1431,10 @@ impl HotLoop {
             }
 
             let stated = conn.heartbeat_secs;
-            let warmed_up = now.duration_since(self.hb.hmds_up_since).as_secs() >= LIVENESS_WARMUP_SECS;
-            if warmed_up && since_recv > HeartbeatState::farm_test_after(stated) {
+            if since_recv > HeartbeatState::farm_test_after(stated) {
                 if since_recv > HeartbeatState::farm_dead_after(stated) {
                     log::error!("HMDS liveness timeout ({since_recv}s silent) — connection lost");
-                    self.hmds.disconnect(&mut self.hmds_conn);
+                    self.hmds.disconnect(&mut self.hmds_conn, &self.shared);
                 } else if self.hb.pending_hmds_test.is_none() {
                     let test_id = self.hb.next_test_id();
                     let _ = conn.send_fix(&[
@@ -1320,6 +1444,45 @@ impl HotLoop {
                     ]);
                     self.hb.pending_hmds_test = Some((test_id, now));
                     self.hb.last_hmds_sent = now;
+                }
+            }
+        }
+
+        // --- Calendar heartbeat ---
+        //
+        // Both timestamps drive the liveness check. Unwritten, a socket that
+        // goes half open here is never probed, never declared dead, and never
+        // rebuilt, and the calendar stops answering on a connection that still
+        // reads as healthy. Probed on the same terms as the other three.
+        if let Some(conn) = self.secdef_conn.as_mut() {
+            let since_sent = now.duration_since(self.hb.last_secdef_sent).as_secs();
+            let since_recv = now.duration_since(self.hb.last_secdef_recv).as_secs();
+
+            if since_sent >= half_of(conn.heartbeat_secs.unwrap_or(FARM_HEARTBEAT_SECS)) {
+                let _ = conn.send_fix(&[
+                    (fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT),
+                    (fix::TAG_SENDING_TIME, &ts),
+                ]);
+                self.hb.last_secdef_sent = now;
+            }
+
+            let stated = conn.heartbeat_secs;
+            if since_recv > HeartbeatState::farm_test_after(stated) {
+                if since_recv > HeartbeatState::farm_dead_after(stated) {
+                    log::error!(
+                        "Security-definition liveness timeout ({since_recv}s silent) — connection lost",
+                    );
+                    self.hb.pending_secdef_test = None;
+                    self.secdef.give_up_silent(&mut self.secdef_conn, &self.shared);
+                } else if self.hb.pending_secdef_test.is_none() {
+                    let test_id = self.hb.next_test_id();
+                    let _ = conn.send_fix(&[
+                        (fix::TAG_MSG_TYPE, fix::MSG_TEST_REQUEST),
+                        (fix::TAG_SENDING_TIME, &ts),
+                        (fix::TAG_TEST_REQ_ID, &test_id),
+                    ]);
+                    self.hb.pending_secdef_test = Some((test_id, now));
+                    self.hb.last_secdef_sent = now;
                 }
             }
         }
@@ -1417,7 +1580,7 @@ impl HotLoop {
             }
             auth.host = landed;
         }
-        self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.context.market);
+        self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.context.market, &self.shared);
     }
 
     /// Give up any transport a write has abandoned.
@@ -1438,7 +1601,7 @@ impl HotLoop {
             && self.hmds_conn.as_ref().is_some_and(|c| c.write_failed())
         {
             log::error!("HMDS transport can no longer be written to — giving it up");
-            self.hmds.disconnect(&mut self.hmds_conn);
+            self.hmds.disconnect(&mut self.hmds_conn, &self.shared);
         }
         // The calendar's connection, on the same terms as the other three. Its
         // read path gives it up when the socket goes, but a write that fails
@@ -1625,7 +1788,6 @@ impl HotLoop {
                 self.budget.record_connected(Instant::now());
                 self.announce_reconnected();
                 self.farm_next_attempt_at = None;
-                self.hb.farm_up_since = Instant::now();
                 self.pending_farm_reconnect = None;
             }
             Ok(Err(e)) => {
@@ -1721,14 +1883,8 @@ impl HotLoop {
                 self.ccp_reconnect_attempt = 0;
                 self.clear_halt_if_it_was_not_settled();
                 self.budget.record_connected(Instant::now());
-                // The request for these goes out on this socket even though
-                // the bars come back on the historical one, so an HMDS that
-                // recovered first could not send them and left them recorded
-                // but silent.
-                self.resubscribe_keep_up_to_date();
                 self.announce_reconnected();
                 self.ccp_next_attempt_at = None;
-                self.hb.ccp_up_since = Instant::now();
                 self.pending_ccp_reconnect = None;
             }
             Ok(Err(e)) => {
@@ -1865,6 +2021,7 @@ impl HotLoop {
                 );
                 self.secdef_conn = Some(conn);
                 self.hb.last_secdef_recv = Instant::now();
+                self.hb.pending_secdef_test = None;
                 self.hb.last_secdef_sent = Instant::now();
                 self.secdef_reconnect_attempt = 0;
                 self.secdef_next_attempt_at = None;
@@ -1887,40 +2044,6 @@ impl HotLoop {
         }
     }
 
-    /// Ask again for the keepUpToDate streams the dead HMDS socket was
-    /// carrying. The request goes out on CCP and the bars arrive on HMDS, so
-    /// only this side owns both and only this side can put them back.
-    fn resubscribe_keep_up_to_date(&mut self) {
-        if self.hmds.kut_resub.is_empty() { return; }
-        // The request goes out on the auth socket and the bars come back on
-        // the historical one, so both have to be up. Whichever recovers second
-        // is the one that sends, and the other's call does nothing — asking
-        // twice would leave two streams upstream for one subscription.
-        if self.ccp_conn.is_none() || self.ccp.disconnected
-            || self.hmds_conn.is_none() || self.hmds.disconnected
-        {
-            log::info!(
-                "{} keepUpToDate stream(s) wait for both transports before being asked for again",
-                self.hmds.kut_resub.len(),
-            );
-            return;
-        }
-        let wanted: Vec<_> = self.hmds.kut_resub.clone();
-        let mut back = 0;
-        for k in &wanted {
-            self.hmds.pending_historical.retain(|(_, rid, _)| *rid != k.req_id);
-            if self.hmds.send_historical_request_via_ccp(
-                k.req_id, k.con_id, &k.end_date_time, &k.duration, &k.bar_size,
-                &k.what_to_show, k.use_rth, &k.symbol, &k.sec_type, &k.exchange,
-                &mut self.ccp_conn, &mut self.hb, &self.ccp.ccp_sign_key,
-                &self.ccp.ccp_sign_iv, &self.shared,
-            ) {
-                back += 1;
-            }
-        }
-        log::info!("HMDS reconnected, re-requested {}/{} keepUpToDate streams", back, wanted.len());
-    }
-
     /// Poll for a completed HMDS reconnect. Non-blocking.
     fn poll_hmds_reconnect(&mut self) {
         let rx = match self.pending_hmds_reconnect.as_ref() {
@@ -1937,14 +2060,12 @@ impl HotLoop {
                 // Leaving it pending suppressed the next one — the liveness
                 // check only sends a TestRequest when none is outstanding — so
                 // a fresh connection went silent-to-dead without ever being
-                // probed. The warm-up starts here too, or the new session is
-                // already past it.
+                // probed. What silence is measured from restarts with it, or
+                // the new connection is judged on the old one's.
                 self.hb.pending_hmds_test = None;
-                self.hb.hmds_up_since = Instant::now();
                 self.hmds_reconnect_attempt = 0;
                 self.hmds_next_attempt_at = None;
                 self.pending_hmds_reconnect = None;
-                self.resubscribe_keep_up_to_date();
             }
             Ok(Err(e)) => {
                 log::warn!(
@@ -2019,7 +2140,7 @@ impl HotLoop {
             crate::types::Side::Buy => fill.qty,
             crate::types::Side::Sell | crate::types::Side::ShortSell => -fill.qty,
         };
-        self.context.update_position(fill.instrument, delta as f64);
+        self.context.update_position(fill.instrument, qty_to_f64(delta));
         self.shared.orders.push_fill(*fill);
         self.shared.portfolio.set_position(fill.instrument, self.context.position(fill.instrument));
         emit(&self.event_tx, Event::Fill(*fill));
@@ -2127,7 +2248,7 @@ impl EventSink {
 ///
 /// Dropping is right; dropping silently is not, because a program that acted on
 /// every fill it saw cannot tell that from every fill there was. A full channel
-/// is counted on the session and reported by `Events::lost`. A closed one is
+/// is counted on the session and reported by `events_lost`. A closed one is
 /// not: nobody is behind, the reader has gone.
 #[inline]
 pub(crate) fn emit(event_tx: &Option<EventSink>, event: Event) {
@@ -2249,7 +2370,7 @@ pub(crate) fn format_price(price: Price) -> StackStr {
 
 /// Parse a FIX tag value as a Price (fixed-point). Returns 0 if absent,
 /// unparseable, or non-finite. Rust's f64 parser accepts "nan"/"inf", but on
-/// the wire those are not-available sentinels, not values: the gateway's own
+/// the wire those are not-available sentinels, not values: the venue's
 /// field parser maps nan/unparseable to unset. Without the finite
 /// filter, "nan" saturated to 0 and "inf" to i64::MAX.
 pub(crate) fn parse_price_tag(val: Option<&String>) -> Price {
@@ -2257,6 +2378,21 @@ pub(crate) fn parse_price_tag(val: Option<&String>) -> Price {
         .filter(|f| f.is_finite())
         .map(|f| (f * PRICE_SCALE as f64) as Price)
         .unwrap_or(0)
+}
+
+/// Parse a FIX quantity tag into the `QTY_SCALE` fixed-point form `Qty`
+/// holds. Returns `None` where the tag is absent, unparseable, or non-finite,
+/// so a caller can tell "the venue said nothing" from "the venue said zero" —
+/// `38=0` on a cancel and an absent 38 mean different things.
+///
+/// Quantities arrive as decimals: a fractional order fills in fractions, and
+/// `32=0.5` parsed as an integer is a fill of nothing. Rounded rather than
+/// truncated, because a tenth is not exact in binary and truncation takes
+/// `0.3` to one hundred-millionth under three tenths.
+pub(crate) fn parse_qty_tag(val: Option<&String>) -> Option<Qty> {
+    val.and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|f| f.is_finite())
+        .map(|f| (f * QTY_SCALE as f64).round() as Qty)
 }
 
 /// Decode a wire TIF byte to the API TIF string. Exact inverse of
@@ -2295,6 +2431,12 @@ pub(crate) fn format_qty(qty: Qty) -> StackStr {
     let whole = qty / QTY_SCALE;
     let frac = (qty % QTY_SCALE).unsigned_abs();
     let mut s = StackStr::new();
+    // A magnitude below one unit has a whole part of zero, and zero carries no
+    // sign. Without this a negative fraction writes as its own magnitude,
+    // naming the opposite side of the same trade.
+    if qty < 0 && whole == 0 {
+        s.push(b'-');
+    }
     s.write_i64(whole);
     if frac != 0 {
         s.push(b'.');
@@ -2420,7 +2562,7 @@ mod tests {
         assert_eq!(hb.ccp_send_every(), 3, "half of what the venue asked for");
 
         // Half, because answering on the deadline leaves no room for one
-        // heartbeat to be late. The counterpart sends at half for the same
+        // heartbeat to be late. Half the interval is sent for the same
         // reason.
         hb.set_ccp_interval(30);
         assert_eq!(hb.ccp_send_every(), 15);
@@ -2552,13 +2694,86 @@ mod tests {
     /// A reconnected transport must not inherit the dead session's outstanding
     /// probe. The liveness check only sends a TestRequest when none is pending,
     /// so a stale one suppressed every probe on the new connection and it went
-    /// from silent to declared dead without being asked anything. The warm-up
-    /// has to restart with it, or the new session is already past it.
+    /// from silent to declared dead without being asked anything. What silence
+    /// A caller who names a contract by its id alone states no security type
+    /// and no exchange, and the encoder describes every such contract as a
+    /// smart-routed stock. That is right for a stock and wrong for a future,
+    /// an option or a currency pair, which the venue answers with a partial
+    /// acknowledgement.
+    #[test]
+    fn a_subscription_by_id_alone_is_described_as_the_venue_describes_it() {
+        let shared = Arc::new(SharedState::new());
+        shared.reference.cache_contract(893091670, crate::types::model::Contract {
+            con_id: 893091670,
+            symbol: "MES".into(),
+            sec_type: "FUT".into(),
+            exchange: "CME".into(),
+            ..Default::default()
+        });
+        let hl = HotLoop::new(shared, None, None);
+
+        assert_eq!(
+            hl.described_as(893091670, "", ""),
+            ("FUT".to_string(), "CME".to_string()),
+            "a bare id is described by the definition the venue gave",
+        );
+        // What the caller states stands.
+        assert_eq!(
+            hl.described_as(893091670, "STK", "SMART"),
+            ("STK".to_string(), "SMART".to_string()),
+        );
+        // A contract nothing has looked up carries no description; the
+        // encoder answers for it.
+        assert_eq!(hl.described_as(1, "", ""), (String::new(), String::new()));
+    }
+
+    /// The calendar's connection is watched like the other three.
+    ///
+    /// Its send and receive timestamps drive the same liveness check: a socket
+    /// that goes half open is probed, declared dead, given up and rebuilt.
+    /// Without them a half-open calendar socket stays in service and the
+    /// calendar stops answering on a connection that still reads as healthy.
+    #[test]
+    fn a_calendar_connection_that_stopped_answering_is_given_up() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared, None, None);
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        hl.secdef_conn = Some(conn);
+
+        // Silent for longer than anything on this wire waits.
+        hl.hb.last_secdef_recv = Instant::now() - Duration::from_secs(600);
+        hl.hb.last_secdef_sent = Instant::now();
+        hl.check_heartbeats();
+
+        assert!(hl.secdef_conn.is_none(), "the connection that stopped answering was put down");
+    }
+
+    /// A calendar connection that has only gone quiet is asked whether it is
+    /// still there before it is given up.
+    #[test]
+    fn a_quiet_calendar_connection_is_asked_before_it_is_given_up() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared, None, None);
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        hl.secdef_conn = Some(conn);
+
+        let quiet = HeartbeatState::farm_test_after(None) + 1;
+        assert!(quiet < HeartbeatState::farm_dead_after(None), "quiet, not dead");
+        hl.hb.last_secdef_recv = Instant::now() - Duration::from_secs(quiet);
+        hl.hb.last_secdef_sent = Instant::now();
+        hl.check_heartbeats();
+
+        assert!(hl.secdef_conn.is_some(), "quiet is not dead");
+        assert!(hl.hb.pending_secdef_test.is_some(), "and it was asked");
+    }
+
+    /// is measured from restarts with it, or the new connection is judged on
+    /// the old one's.
     #[test]
     fn an_hmds_reconnect_does_not_inherit_the_dead_session_probe() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.hb.pending_hmds_test = Some(("t-1".to_string(), Instant::now()));
-        hl.hb.hmds_up_since = Instant::now() - Duration::from_secs(600);
+        hl.hb.last_hmds_recv = Instant::now() - Duration::from_secs(600);
         hl.hmds.disconnected = true;
 
         // A reconnect that has just succeeded.
@@ -2578,8 +2793,8 @@ mod tests {
             "the dead session's probe is dropped, or it suppresses every probe on the new one",
         );
         assert!(
-            hl.hb.hmds_up_since.elapsed() < Duration::from_secs(LIVENESS_WARMUP_SECS),
-            "and the new session starts inside its warm-up",
+            hl.hb.last_hmds_recv.elapsed() < Duration::from_secs(2),
+            "and silence is measured from the reconnect, not from before it",
         );
     }
 
@@ -2592,6 +2807,7 @@ mod tests {
     fn an_hmds_disconnect_lets_its_reconnect_run() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            account_id: String::new(),
             trading_port: None,
             hmds_port: None,
             secdef_port: None,
@@ -2679,6 +2895,44 @@ mod tests {
             !hl.hmds.forming_bars.iter().any(|f| f.req_id == req_id),
             "and so does the bar it was part way through",
         );
+    }
+
+    /// The five-second stream a keep-up-to-date request rides is a query of
+    /// its own. Only the batch query was withdrawn, so the venue went on
+    /// sending bars this session discarded without a word, and the record the
+    /// reconnect rebuilds from still named the cancelled stream.
+    #[test]
+    fn cancelling_a_kept_up_to_date_request_withdraws_its_stream_from_the_venue() {
+        use std::io::Read;
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let req_id = 7u32;
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        hl.hmds_conn = Some(conn);
+
+        hl.hmds.keep_up_to_date_reqs.insert(req_id);
+        hl.hmds.rtbar_subs.push(("rt_4".to_string(), req_id, Some(99), 0.01));
+        hl.hmds.rtbar_resub.push(crate::engine::hot_loop::hmds::RtBarRequest {
+            req_id,
+            con_id: 756733,
+            sec_type: "STK".into(),
+            exchange: "SMART".into(),
+            what_to_show: "TRADES".into(),
+            use_rth: true,
+        });
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(crate::types::ControlCommand::CancelHistorical { req_id }).unwrap();
+        hl.poll_control_commands();
+
+        assert!(
+            !hl.hmds.rtbar_resub.iter().any(|r| r.req_id == req_id),
+            "a reconnect does not ask for a stream the caller cancelled",
+        );
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let sent = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(sent.contains("ticker:rt_4"), "the venue was told to stop: {sent}");
     }
 
     /// A subscription still waiting to be told which contract it is for.
@@ -2883,6 +3137,7 @@ mod tests {
     fn hmds_keeps_retrying_through_an_outage_longer_than_the_ladder() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            account_id: String::new(),
             trading_port: None,
             hmds_port: None,
             secdef_port: None,
@@ -3006,6 +3261,27 @@ mod tests {
         assert_eq!(parse_price_tag(Some(&s("-1.5"))), (-1.5 * PRICE_SCALE as f64) as Price);
     }
 
+    /// Absent and zero are different answers: `38=0` on a cancel states a
+    /// quantity, an absent 38 states none, and a caller that cannot tell them
+    /// apart falls back where it should not.
+    #[test]
+    fn parse_qty_tag_separates_absent_from_zero_and_holds_fractions() {
+        let s = |v: &str| v.to_string();
+        assert_eq!(parse_qty_tag(None), None, "absent is not a quantity");
+        assert_eq!(parse_qty_tag(Some(&s("0"))), Some(0), "zero is");
+        assert_eq!(parse_qty_tag(Some(&s("nan"))), None);
+        assert_eq!(parse_qty_tag(Some(&s("inf"))), None);
+        assert_eq!(parse_qty_tag(Some(&s("n/a"))), None);
+        assert_eq!(parse_qty_tag(Some(&s("100"))), Some(100 * QTY_SCALE));
+        assert_eq!(parse_qty_tag(Some(&s(" 5 "))), Some(5 * QTY_SCALE), "padding is trimmed");
+        assert_eq!(parse_qty_tag(Some(&s("0.5"))), Some(QTY_SCALE / 2));
+        assert_eq!(parse_qty_tag(Some(&s("-1.5"))), Some(-3 * QTY_SCALE / 2), "a bust is signed");
+        // Rounded, not truncated: a tenth is not exact in binary, and
+        // truncation puts three tenths one hundred-millionth low.
+        assert_eq!(parse_qty_tag(Some(&s("0.3"))), Some(3 * QTY_SCALE / 10));
+        assert_eq!(parse_qty_tag(Some(&s("0.00000001"))), Some(1), "the finest the scale holds");
+    }
+
     #[test]
     fn inject_tick_emits_events() {
         let shared = Arc::new(SharedState::new());
@@ -3052,11 +3328,11 @@ mod tests {
             order_id: 1001,
             side: Side::Buy,
             price: 150_00000000,
-            qty: 100,
+            qty: 100 * QTY_SCALE,
             remaining: 0,
             commission: 1_00000000,
             timestamp_ns: 0,
-            cum_qty: 100, avg_price: 150_00000000,
+            cum_qty: 100 * QTY_SCALE, avg_price: 150_00000000,
         };
         engine.inject_fill(&fill);
         assert_eq!(engine.context_mut().position(0), 100.0);
@@ -3271,13 +3547,14 @@ mod tests {
         expect(50, 62_000, 82_001); // ladder index capped
     }
 
-    // The liveness ladder must sit inside the server's own thresholds
-    // (test at 15s, dead at 35s, warm-up 60s). Ordering is a `const _` assert.
+    // Liveness ladder: heartbeat at 10s, test request at 15s, declare dead at
+    // 35s, suspend for 60s after a stall. Ordering is a `const _` assert.
     #[test]
     fn liveness_thresholds_ordered() {
         assert_eq!(LIVENESS_TEST_SECS, 15);
         assert_eq!(LIVENESS_DEAD_SECS, 35);
-        assert_eq!(LIVENESS_WARMUP_SECS, 60);
+        assert_eq!(LIVENESS_STALL_SECS, 10);
+        assert_eq!(LIVENESS_STALL_COOLDOWN_SECS, 60);
     }
 
     #[test]
@@ -3364,7 +3641,7 @@ mod tests {
         let id = hl.context.market.register(4002);
         hl.context.market.register_server_tag(910_002, id);
         hl.farm.instrument_md_reqs.push((id, vec![8]));
-        hl.ccp.news_subscriptions.push((id, 55, "BRFG".to_string()));
+        hl.ccp.news_subscriptions.push((id, 55, "BRFG".to_string(), 756733));
 
         tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
         hl.poll_once();
@@ -3374,6 +3651,40 @@ mod tests {
             "news routes through this map, so its tag outlives the L1 request",
         );
     }
+}
+
+#[cfg(test)]
+mod deferred_depth_tests {
+    use super::*;
+
+    /// A book on no particular venue waits for the venue list.
+    ///
+    /// A withdrawal that arrives before the list has nothing to withdraw, so
+    /// the subscription must be recorded as cancelled rather than left to
+    /// publish when the list lands, which would put a live book in front of a
+    /// caller who believes it cancelled.
+    #[test]
+    fn a_book_withdrawn_while_it_waits_for_the_venue_list_never_goes_out() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.depth_awaiting_venues.push(ControlCommand::SubscribeDepth {
+            req_id: 9,
+            num_rows: 5,
+            is_smart_depth: true,
+            filters: Default::default(),
+            contract: crate::types::ContractRef { con_id: 756733, ..Default::default() },
+        });
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.control_rx = Some(rx);
+        tx.send(ControlCommand::UnsubscribeDepth { req_id: 9 }).unwrap();
+
+        hl.poll_control_commands();
+
+        assert!(
+            hl.depth_awaiting_venues.is_empty(),
+            "the held request goes with the withdrawal",
+        );
+    }
+
 }
 
 #[cfg(test)]
@@ -3392,6 +3703,10 @@ mod qty_formatting_tests {
             (QTY_SCALE / 4, "0.25"),
             (100 * QTY_SCALE, "100"),
             (-3 * QTY_SCALE / 2, "-1.5"),
+            // Below one unit the whole part is zero, and a zero carries no
+            // sign of its own.
+            (-QTY_SCALE / 2, "-0.5"),
+            (-1, "-0.00000001"),
             (1, "0.00000001"),
         ] {
             let out = format_qty(held);
@@ -3420,6 +3735,7 @@ mod calendar_farm_reconnect_tests {
     fn a_calendar_connection_that_went_is_scheduled_to_come_back() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            account_id: String::new(),
             trading_port: None,
             hmds_port: None,
             secdef_port: None,
@@ -3459,6 +3775,7 @@ mod calendar_farm_reconnect_tests {
     fn a_session_without_that_farm_does_not_try() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            account_id: String::new(),
             trading_port: None,
             hmds_port: None,
             secdef_port: None,

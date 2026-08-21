@@ -50,6 +50,27 @@ class AccountValue:
 
 
 @dataclass
+class CompletedOrder:
+    """An order the venue has finished with, as it stated it."""
+
+    contract: Any = None
+    order: Any = None
+    orderState: Any = None
+
+
+@dataclass
+class ScanData:
+    """One row of a scan, named as the widely used wrapper names it."""
+
+    rank: int = 0
+    contractDetails: Any = None
+    distance: str = ""
+    benchmark: str = ""
+    projection: str = ""
+    legsStr: str = ""
+
+
+@dataclass
 class OrderStatus:
     orderId: int = 0
     status: str = ""
@@ -118,10 +139,16 @@ class LiveState(EWrapper):
         super().__init__()
         self._lock = threading.RLock()
         self._positions: dict[tuple[str, int], Position] = {}
-        self._portfolio: dict[int, PortfolioItem] = {}
+        self._portfolio: dict[tuple[str, int], PortfolioItem] = {}
         self._account_values: dict[tuple[str, str, str], AccountValue] = {}
+        self._summary: dict[int, list[AccountValue]] = {}
+        self._summary_done: set[int] = set()
+        self._account_done: set[str] = set()
         self._trades: dict[int, Trade] = {}
         self._fills: list[Fill] = []
+        self._completed: list[CompletedOrder] = []
+        self._completed_done = False
+        self._fill_ids: set[str] = set()
         self._accounts: list[str] = []
         self._tickers: dict[int, Ticker] = {}
         self._pnl: dict[int, tuple] = {}
@@ -132,20 +159,36 @@ class LiveState(EWrapper):
         self._bars: dict[int, list] = {}
         self._pending: set[int] = set()
         self._fields = None
+        self._updates = 0
+        self._scanner_done: set[int] = set()
         self.errors: list[tuple[int, int, str, str]] = []
+
+    def updates(self) -> int:
+        """How much has arrived, counted rather than described.
+
+        A caller waiting for the session to say something compares this before
+        and after. Nothing else about the number means anything; what matters
+        is that it moves only when the venue has spoken, so a wait that got
+        nothing can say so instead of always reporting success.
+        """
+        with self._lock:
+            return self._updates
 
     # -- what the venue tells us -----------------------------------------
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
         with self._lock:
+            self._updates += 1
             self.errors.append((reqId, errorCode, errorString, advancedOrderRejectJson))
 
     def managedAccounts(self, accountsList):
         with self._lock:
+            self._updates += 1
             self._accounts = [a for a in accountsList.split(",") if a]
 
     def position(self, account, contract, position, avgCost):
         with self._lock:
+            self._updates += 1
             key = (account, getattr(contract, "conId", 0))
             if position == 0:
                 self._positions.pop(key, None)
@@ -157,30 +200,119 @@ class LiveState(EWrapper):
         averageCost, unrealizedPNL, realizedPNL, accountName,
     ):
         with self._lock:
-            self._portfolio[getattr(contract, "conId", 0)] = PortfolioItem(
+            self._updates += 1
+            # Keyed by the account as well as the contract, as the positions
+            # above are. Under the contract alone, an advisor holding the same
+            # instrument in two accounts saw one entry: whichever arrived last,
+            # standing for both.
+            key = (accountName, getattr(contract, "conId", 0))
+            # A holding closed out is stated as a position of zero, which is
+            # the venue saying it is gone. Kept, the portfolio showed an
+            # instrument the account no longer held, for as long as the session
+            # ran. The position callback beside this one already evicts.
+            if position == 0:
+                self._portfolio.pop(key, None)
+                return
+            self._portfolio[key] = PortfolioItem(
                 contract, position, marketPrice, marketValue,
                 averageCost, unrealizedPNL, realizedPNL, accountName,
             )
 
+    def accountDownloadEnd(self, accountName):
+        """The venue has stated every figure it is going to for this account.
+
+        Recorded rather than dropped: the figures arrive one at a time, so a
+        reader that stops at the first has one field of an account, and this is
+        the only thing that says the rest have landed.
+        """
+        with self._lock:
+            self._updates += 1
+            self._account_done.add(accountName)
+
+    def account_download_finished(self) -> bool:
+        with self._lock:
+            return bool(self._account_done)
+
+    def accountSummary(self, reqId, account, tag, value, currency):
+        """The answer to a summary request, which is not the running account
+        feed and was reaching neither this class nor the caller."""
+        with self._lock:
+            self._updates += 1
+            self._summary.setdefault(reqId, []).append(
+                AccountValue(account, tag, value, currency)
+            )
+
+    def accountSummaryEnd(self, reqId):
+        with self._lock:
+            self._updates += 1
+            self._summary_done.add(reqId)
+
+    def account_summary_finished(self, req_id) -> bool:
+        with self._lock:
+            return req_id in self._summary_done
+
+    def take_account_summary(self, req_id) -> list[AccountValue]:
+        with self._lock:
+            return list(self._summary.get(req_id, []))
+
+    def forget_account_summary(self, req_id):
+        """Drop a finished summary, so asking again is answered by the new one."""
+        with self._lock:
+            self._summary.pop(req_id, None)
+            self._summary_done.discard(req_id)
+
     def updateAccountValue(self, key, val, currency, accountName):
         with self._lock:
+            self._updates += 1
             self._account_values[(accountName, key, currency)] = AccountValue(
                 accountName, key, val, currency
             )
 
     def openOrder(self, orderId, contract, order, orderState):
         with self._lock:
+            self._updates += 1
             trade = self._trades.setdefault(orderId, Trade())
             trade.contract = contract
             trade.order = order
             trade.orderState = orderState
             trade.orderStatus.orderId = orderId
 
+    def completedOrder(self, contract, order, orderState):
+        """An order the venue has finished with.
+
+        It arrives on a callback of its own and fell into the inherited no-op,
+        so `reqCompletedOrders` handed back the session's ordinary trades
+        instead and delivery read exactly like silence.
+        """
+        with self._lock:
+            self._updates += 1
+            self._completed.append(CompletedOrder(contract, order, orderState))
+
+    def completedOrdersEnd(self):
+        with self._lock:
+            self._updates += 1
+            self._completed_done = True
+
+    def completed_orders_finished(self) -> bool:
+        with self._lock:
+            return self._completed_done
+
+    def snapshot_completed(self) -> list[CompletedOrder]:
+        with self._lock:
+            return list(self._completed)
+
+    def forget_completed(self):
+        """Drop a finished batch, so asking again is answered by the new one."""
+        with self._lock:
+            self._completed.clear()
+            self._completed_done = False
+
     def orderStatus(
         self, orderId, status, filled, remaining, avgFillPrice, permId,
         parentId, lastFillPrice, clientId, whyHeld, mktCapPrice=0.0,
     ):
         with self._lock:
+            self._updates += 1
             trade = self._trades.setdefault(orderId, Trade())
             before = trade.orderStatus.status
             trade.orderStatus = OrderStatus(
@@ -191,8 +323,23 @@ class LiveState(EWrapper):
                 trade.log.append(status)
 
     def execDetails(self, reqId, contract, execution):
+        """Record a fill once, however many times the venue names it.
+
+        A fill arrives live and again in the answer to ``reqExecutions``, and
+        both carry the venue's execution id. Appended each time, one fill
+        counted twice against the order: a caller adding up ``Trade.fills`` saw
+        twice the quantity it held, and asking for its executions a second time
+        doubled them again. An execution with no id is kept as it comes, since
+        there is nothing to recognise it by.
+        """
         with self._lock:
+            self._updates += 1
+            exec_id = getattr(execution, "execId", "")
+            if exec_id and exec_id in self._fill_ids:
+                return
             fill = Fill(contract, execution, None, getattr(execution, "time", ""))
+            if exec_id:
+                self._fill_ids.add(exec_id)
             self._fills.append(fill)
             order_id = getattr(execution, "orderId", None)
             if order_id is not None and order_id in self._trades:
@@ -209,6 +356,7 @@ class LiveState(EWrapper):
         if exec_id is None:
             return
         with self._lock:
+            self._updates += 1
             for fill in reversed(self._fills):
                 if getattr(fill.execution, "execId", None) == exec_id:
                     fill.commissionReport = report
@@ -231,31 +379,69 @@ class LiveState(EWrapper):
         with self._lock:
             return self._trades.get(order_id)
 
+    def forget_trade(self, order_id) -> None:
+        """Drop a record for an order that was never placed.
+
+        A preview travels the order path and is answered on the order
+        callbacks, so it leaves a trade behind like any other. Kept, it reads
+        as an order working at the venue.
+        """
+        with self._lock:
+            self._trades.pop(order_id, None)
+
     def pnl(self, reqId, dailyPnL, unrealizedPnL, realizedPnL):
         with self._lock:
+            self._updates += 1
             self._pnl[reqId] = (dailyPnL, unrealizedPnL, realizedPnL)
 
     def pnlSingle(self, reqId, pos, dailyPnL, unrealizedPnL, realizedPnL, value):
         with self._lock:
+            self._updates += 1
             self._pnl_single[reqId] = (pos, dailyPnL, unrealizedPnL, realizedPnL, value)
 
     def scannerData(self, reqId, rank, contractDetails, distance, benchmark, projection, legsStr):
+        """A scan row, whole. The venue states six things about it and only the
+        rank and the contract were kept, so the distance from the benchmark,
+        the benchmark itself, the projection and a combination's legs arrived
+        and were dropped with nothing to say they had."""
         with self._lock:
-            self._scanner.setdefault(reqId, []).append((rank, contractDetails))
+            self._updates += 1
+            self._scanner.setdefault(reqId, []).append(
+                ScanData(rank, contractDetails, distance, benchmark, projection, legsStr)
+            )
 
     def scannerDataEnd(self, reqId):
-        pass
+        """The venue has named every row it is going to.
+
+        Recorded rather than ignored: the rows arrive one at a time, so a
+        reader that stops at the first has a scan of one, and there is nothing
+        else that says whether more are coming."""
+        with self._lock:
+            self._updates += 1
+            self._scanner_done.add(reqId)
+
+    def scanner_finished(self, req_id) -> bool:
+        with self._lock:
+            return req_id in self._scanner_done
 
     def updateNewsBulletin(self, msgId, msgType, newsMessage, originExch):
         with self._lock:
+            self._updates += 1
             self._bulletins.append((msgId, msgType, newsMessage, originExch))
 
     def tickNews(self, tickerId, timeStamp, providerCode, articleId, headline, extraData):
         with self._lock:
-            self._news_ticks.append((tickerId, timeStamp, providerCode, articleId, headline))
+            self._updates += 1
+            # Six fields, as the venue states them. The last carries the
+            # sentiment and relevance scores a caller filters on, and it was
+            # dropped on the way in.
+            self._news_ticks.append(
+                (tickerId, timeStamp, providerCode, articleId, headline, extraData)
+            )
 
     def realtimeBar(self, reqId, time, open_, high, low, close, volume, wap, count):
         with self._lock:
+            self._updates += 1
             self._bars.setdefault(reqId, []).append(
                 (time, open_, high, low, close, volume, wap, count)
             )
@@ -271,6 +457,12 @@ class LiveState(EWrapper):
     def take_scanner(self, req_id):
         with self._lock:
             return list(self._scanner.get(req_id, []))
+
+    def forget_scanner(self, req_id):
+        """Drop a finished scan, so asking again is answered by the new one."""
+        with self._lock:
+            self._scanner.pop(req_id, None)
+            self._scanner_done.discard(req_id)
 
     def snapshot_bulletins(self) -> list:
         with self._lock:
@@ -298,11 +490,17 @@ class LiveState(EWrapper):
             self._fields = _tick_fields()
         pair = self._fields.get(tick_type)
         if pair is None:
-            # A tick this does not carry is not an error and is not recorded as
-            # one. It reaches a caller through the callback either way.
+            # A tick with no field of its own here has nowhere to be kept, but
+            # it is still the venue speaking. Returning without counting it
+            # made `waitOnUpdate` time out on a contract that was ticking
+            # steadily, because every one of its ticks was one this class has
+            # no field for. Subclass `tickPrice`/`tickSize` to reach the rest.
+            with self._lock:
+                self._updates += 1
             return
         name, prev_name = pair
         with self._lock:
+            self._updates += 1
             t = self._ticker(req_id)
             if prev_name is not None:
                 setattr(t, prev_name, getattr(t, name))
@@ -310,19 +508,30 @@ class LiveState(EWrapper):
             self._pending.add(req_id)
 
     def tickPrice(self, reqId, tickType, price, attrib=None):
-        # The venue states "there is no such price" as a negative one. Kept as
-        # a price, it read as a contract quoted at minus one, and a caller
-        # waiting for a quote to arrive was answered by its absence.
-        self._apply(reqId, tickType, None if price is not None and price < 0 else price)
+        # -1 exactly is the venue's "no such price". Every other negative
+        # value is a real quote: a spread at minus thirty-five cents, a future
+        # trading below zero, a tick index that sits on both sides of it.
+        self._apply(reqId, tickType, None if price == -1 else price)
 
     def tickSize(self, reqId, tickType, size):
         self._apply(reqId, tickType, size)
+
+    def tickGeneric(self, reqId, tickType, value):
+        """A tick that is neither a price nor a size, the halt among them.
+
+        ``Ticker`` has carried a ``halted`` field and the tick map has carried
+        the tick type all along, and nothing routed to either: the venue said
+        trading had stopped and the quote went on showing the last prices
+        before it, with nothing to say they were no longer live.
+        """
+        self._apply(reqId, tickType, value)
 
     def tickString(self, reqId, tickType, value):
         from .ibx import TickTypeEnum as T
 
         if tickType == T.LAST_TIMESTAMP:
             with self._lock:
+                self._updates += 1
                 self._ticker(reqId).time = value
                 self._pending.add(reqId)
 

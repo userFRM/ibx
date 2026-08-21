@@ -36,7 +36,7 @@ pub struct AuthResult {
     /// `stoken_type`
     /// field expected by the SSO `Authenticate-TWS` body.
     pub token_type: String,
-    /// The venue's own id for this session.
+    /// Session id assigned by the venue.
     pub session_id: String,
     /// Every capability it granted.
     pub features: Vec<String>,
@@ -291,6 +291,7 @@ pub fn recv_msg<R: Read>(stream: &mut R) -> io::Result<RecvMsg> {
                 version,
                 msg_type,
                 fields,
+                raw: payload,
             });
         }
 
@@ -314,7 +315,7 @@ pub fn recv_msg<R: Read>(stream: &mut R) -> io::Result<RecvMsg> {
 /// Classified received message.
 #[derive(Debug)]
 pub enum RecvMsg {
-    /// One of the venue's own name-service messages.
+    /// A name-service (NS) message.
     Ns {
         /// Which version of that message this is.
         version: u32,
@@ -322,6 +323,9 @@ pub enum RecvMsg {
         msg_type: u32,
         /// Its fields, in the order they arrived.
         fields: Vec<String>,
+        /// The payload it was parsed from, kept so a reader that consumed a
+        /// message meant for somebody else can hand it on rather than drop it.
+        raw: Vec<u8>,
     },
     /// One of its binary session messages.
     Xyz {
@@ -624,7 +628,16 @@ fn extract_xyz(msg: &[u8]) -> &[u8] {
 pub enum IbKeyOutcome {
     /// Server bypassed the second-factor gate (no second factor configured for
     /// this account, or the server short-circuited to PASSED on its own).
-    Skipped,
+    Skipped {
+        /// A message the gate read that belongs to what follows it, or `None`
+        /// when the gate ended on its own answer.
+        ///
+        /// The server can move straight on to the connect response instead of
+        /// finishing the gate. Read here and dropped, that message never
+        /// reached the loop waiting for it, which then waited out its deadline
+        /// for something already delivered.
+        unread: Option<Vec<u8>>,
+    },
     /// User approved on their device.
     Approved {
         /// URL the IBKey app posts to when the user approves; useful for
@@ -831,7 +844,7 @@ impl GateReader {
 
         if ns::is_ns_text(&payload)
             && let Some((version, msg_type, fields)) = ns::ns_parse(&payload) {
-                return Ok(Some(RecvMsg::Ns { version, msg_type, fields }));
+                return Ok(Some(RecvMsg::Ns { version, msg_type, fields, raw: payload }));
             }
         if payload.len() >= 16
             && let Some((msg_id, sub_id, state, fields)) = xyz::xyz_parse_response(&payload) {
@@ -1045,6 +1058,14 @@ pub fn do_security_code_2fa<S: Read + Write>(
             }
             // Identifiers only. The derived `Debug` prints every field, and an
             // echoed frame can carry the code itself.
+            // As in the sibling gate: the server has moved on, and this is
+            // the only reader that will ever see this message.
+            RecvMsg::Ns { msg_type, raw, .. }
+                if msg_type == NS_CONNECT_RESPONSE || msg_type == NS_FIX_START =>
+            {
+                log::info!("security-code gate: skipped, server sent ns type={msg_type}");
+                return Ok(IbKeyOutcome::Skipped { unread: Some(raw) });
+            }
             RecvMsg::Ns { msg_type, .. } => log::debug!("security-code gate: ns type={msg_type}"),
             RecvMsg::Xyz { msg_id, state, .. } => {
                 log::debug!("security-code gate: xyz id={msg_id} state={state}")
@@ -1068,11 +1089,9 @@ pub fn do_security_code_2fa<S: Read + Write>(
 /// 6. Any other `XYZ_MSG_SWCR_TOKEN` state → `PermissionDenied` error: the
 ///    server refused in a shape this gate doesn't model
 ///
-/// If the server jumps straight to a non-XYZ NS message (e.g. CONNECT_RESPONSE),
-/// returns `Skipped` and logs the path — the unread NS message is then handled
-/// by the post-auth loop. There is no `unread`, so this branch is reached only
-/// where the very first reply is XYZ AUTH_FINISH PASSED with no preceding
-/// state=2.
+/// If the server jumps straight to the connect response or the FIX start,
+/// returns `Skipped` carrying that message: the gate is over, and the loop
+/// that waits for it cannot ask the socket for it twice.
 pub fn do_ib_key_2fa<S: Read + Write>(
     stream: &mut S,
     token_sub_type: &str,
@@ -1247,7 +1266,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                     if approval_url.is_empty() && session_id.is_empty()
                         && soft_token_hex.is_empty()
                     {
-                        return Ok(IbKeyOutcome::Skipped);
+                        return Ok(IbKeyOutcome::Skipped { unread: None });
                     }
                     return Ok(IbKeyOutcome::Approved {
                         approval_url, session_id, soft_token_hex,
@@ -1281,6 +1300,16 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                     io::ErrorKind::PermissionDenied,
                     format!("2FA gate: unexpected SWCR_TOKEN state {state}"),
                 ));
+            }
+            // The server has moved past the gate. Handed back rather than
+            // logged and dropped: the loop that waits for these cannot ask for
+            // one again, and waited out its deadline for a message this had
+            // already taken off the socket.
+            RecvMsg::Ns { msg_type, raw, .. }
+                if msg_type == NS_CONNECT_RESPONSE || msg_type == NS_FIX_START =>
+            {
+                log::info!("2FA gate: skipped, server sent ns type={msg_type}");
+                return Ok(IbKeyOutcome::Skipped { unread: Some(raw) });
             }
             // Anything else is informational; keep looping. Identifiers only —
             // the derived `Debug` prints every field, and an echoed frame can

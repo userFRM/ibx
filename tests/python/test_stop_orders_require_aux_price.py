@@ -31,6 +31,26 @@ def make_spy():
     return c
 
 
+def _assert_processed(wrapper, oid, what):
+    """The venue took the order, or said why it did not.
+
+    `Inactive` is also how a malformed order surfaces, so accepting it alone as
+    proof of valid encoding is a check that cannot fail: an order rejected for
+    its own fields passes exactly like one parked for want of a position. Where
+    that is the outcome, the venue's reason has to be there beside it.
+    """
+    statuses = [e[2] for e in wrapper._get_events("order_status") if e[1] == oid]
+    if any(s in ("Submitted", "PreSubmitted") for s in statuses):
+        return statuses
+    reasons = [(e[2], e[3]) for e in wrapper._get_events("error") if e[1] == oid]
+    assert "Inactive" in statuses, f"{what} not processed by server, got: {statuses}"
+    assert reasons, (
+        f"{what} came back Inactive with no reason beside it, which is what a "
+        f"rejected order and a parked one look like alike: statuses={statuses}"
+    )
+    return statuses
+
+
 class Wrapper(EWrapper):
     def __init__(self):
         super().__init__()
@@ -300,10 +320,7 @@ class TestStopOrderLive:
         client.place_order(oid, make_spy(), order)
         assert wrapper.got_order_status.wait(timeout=30), "No order_status for TRAIL order"
 
-        # Inactive = server processed order (valid format) but rejected on business logic (no position)
-        statuses = [e[2] for e in wrapper._get_events("order_status") if e[1] == oid]
-        assert any(s in ("Submitted", "PreSubmitted", "Inactive") for s in statuses), \
-            f"TRAIL order not processed by server, got: {statuses}"
+        statuses = _assert_processed(wrapper, oid, "TRAIL order")
 
         if any(s in ("Submitted", "PreSubmitted") for s in statuses):
             client.cancel_order(oid, "")
@@ -328,9 +345,7 @@ class TestStopOrderLive:
         client.place_order(oid, make_spy(), order)
         assert wrapper.got_order_status.wait(timeout=30), "No order_status for TRAIL (amount) order"
 
-        statuses = [e[2] for e in wrapper._get_events("order_status") if e[1] == oid]
-        assert any(s in ("Submitted", "PreSubmitted", "Inactive") for s in statuses), \
-            f"TRAIL (amount) order not processed by server, got: {statuses}"
+        statuses = _assert_processed(wrapper, oid, "TRAIL (amount) order")
 
         if any(s in ("Submitted", "PreSubmitted") for s in statuses):
             client.cancel_order(oid, "")

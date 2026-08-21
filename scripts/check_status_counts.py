@@ -38,6 +38,17 @@ PHASE = re.compile(r"Phase \d+[a-z]?\b")
 
 def _run(args: list[str]) -> str:
     done = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
+    if done.returncode != 0:
+        # A run that failed produces no count, and the patterns below then
+        # match nothing and read as zero. That is the shape of this whole
+        # checker's own complaint: a suite that cannot be collected — the
+        # extension not built, the build broken — was published as a suite
+        # with no tests in it, and the disagreement named the wrong cause.
+        raise SystemExit(
+            f"`{' '.join(args)}` failed, so what it names cannot be counted:\n"
+            f"{(done.stderr or done.stdout).strip()[-400:]}\n"
+            "A count nobody can take is not a count that disagrees."
+        )
     return done.stdout
 
 
@@ -78,7 +89,7 @@ def counted() -> dict[str, int]:
     rust = _cargo_count(["--tests", "--features", "python"])
 
     python = _python()
-    py = _run([python, "-m", "pytest", "tests/python", "--collect-only", "-q"])
+    py = _run([python, "-m", "pytest", "tests/python", "--collect-only", "-q", "--color=no"])
     collected = re.search(r"^(\d+) tests collected", py, re.M)
     python_all = int(collected.group(1)) if collected else 0
 
@@ -88,7 +99,7 @@ def counted() -> dict[str, int]:
     live_files = [p for p in sorted((ROOT / "tests" / "python").glob("*.py"))
                   if "IB_USERNAME" in p.read_text()]
     live = _run([python, "-m", "pytest", *[str(p) for p in live_files],
-                 "--collect-only", "-q"])
+                 "--collect-only", "-q", "--color=no"])
     live_hit = re.search(r"^(\d+) tests collected", live, re.M)
     python_live = int(live_hit.group(1)) if live_hit else 0
 

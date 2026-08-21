@@ -12,7 +12,7 @@ pub(super) fn phase_heartbeat_keepalive(conns: Conns) -> Conns {
     let (hot_loop, control_tx) = HotLoop::with_connections(
         shared, Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     // What this phase is for is the auth transport surviving a quiet stretch
@@ -33,8 +33,12 @@ pub(super) fn phase_heartbeat_keepalive(conns: Conns) -> Conns {
     let elapsed = start.elapsed();
     let mut conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    // Alive answers WouldBlock, which is `Ok`; a closed socket answers `Err`.
-    let ccp_alive = conns.ccp.try_recv().is_ok();
+    // Asked rather than inferred. One read that hands back bytes is not a live
+    // connection: a venue closing one says goodbye before it sends the close,
+    // so the phase read the goodbye, called the socket healthy, and proved
+    // nothing about the heartbeat it is named for. This drains what is queued
+    // and then requires the venue to answer a test request.
+    let ccp_alive = ccp_still_carrying(&mut conns.ccp);
     if announced && ccp_alive {
         println!("  (a loss was announced for the other transport, which this does not test)");
     }
@@ -75,8 +79,12 @@ pub(super) fn phase_farm_heartbeat_keepalive(conns: Conns) -> Conns {
     let elapsed = start.elapsed();
     let mut conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    // Alive answers WouldBlock, which is `Ok`; a closed socket answers `Err`.
-    let farm_alive = conns.farm.try_recv().is_ok();
+    // As above, the socket is read out rather than sampled once: the bytes
+    // that arrive before a close arrive first, and one read of them reported a
+    // farm that had already gone as one the heartbeat had kept. The farm is
+    // not asked a test request the way the auth connection is — nothing here
+    // has seen it answer one — so this is what can be shown and no more.
+    let farm_alive = drained_without_closing(&mut conns.farm);
     if auth_dropped {
         println!("  (the auth connection dropped during this phase, which is the other transport)");
     }
@@ -100,12 +108,11 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
     // gateway's — reporting a broken timeout when the timeout was fine and
     // the arithmetic here was not.
     //
-    // Nothing has been received since the connection was made, so the silence
-    // is already past the dead threshold when the warm-up ends: detection
-    // lands at the warm-up boundary, and the report follows one reconnect
+    // Nothing has been received since the connection was made, so detection
+    // lands on the dead threshold itself, and the report follows one reconnect
     // attempt later.
-    use ibx::engine::hot_loop::{LIVENESS_DEAD_SECS, LIVENESS_WARMUP_SECS};
-    let detect_at = Duration::from_secs(LIVENESS_WARMUP_SECS.max(LIVENESS_DEAD_SECS));
+    use ibx::engine::hot_loop::LIVENESS_DEAD_SECS;
+    let detect_at = Duration::from_secs(LIVENESS_DEAD_SECS);
     let report_by = detect_at + Duration::from_secs(25);
     let budget = report_by + Duration::from_secs(15);
 
@@ -114,7 +121,13 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
     let addr = listener.local_addr().unwrap();
     let client = std::net::TcpStream::connect(addr).expect("connect to localhost");
-    let _server = listener.accept().expect("accept dead socket").0;
+    let mut server = listener.accept().expect("accept dead socket").0;
+    // The far end of the dead socket, read to see whether the engine let go of
+    // it. A deadline, so a socket still held reads as nothing rather than
+    // blocking here for the rest of the phase.
+    server
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("a deadline on the dead socket");
     let dead_ccp = Connection::new_raw(client).expect("wrap dead socket as Connection");
     let real_ccp = conns.ccp;
 
@@ -142,7 +155,26 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
     // alarmed by it. Told or repaired, both are the engine working; only
     // sitting on a dead connection saying nothing is a fault, and that is what
     // this asserts against.
-    let noticed = disconnect_count > 0 || shared.take_connection_lost() || elapsed >= detect_at;
+    // Whether the engine let go of the dead connection. It replaces the
+    // connection when it rebuilds one, and the socket underneath closes with
+    // it, so the far end reading end-of-file is the engine having noticed.
+    // Reading the clock instead asserted nothing: the loop above runs to its
+    // budget, which is past the threshold by construction, so "it has been
+    // long enough" was true whatever the engine did.
+    let released = {
+        use std::io::Read;
+        let mut byte = [0u8; 1];
+        loop {
+            match server.read(&mut byte) {
+                Ok(0) => break true,
+                // A heartbeat still going onto the socket: the engine has not
+                // let go of it yet.
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    };
+    let noticed = disconnect_count > 0 || shared.take_connection_lost() || released;
     assert!(noticed,
         "a connection silent for {:.1}s was neither reported nor repaired, and a caller \
          had no way to learn it was dead",
@@ -159,8 +191,10 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
         elapsed.as_secs_f64(), detect_at.as_secs_f64());
     if disconnect_count > 0 {
         println!("  the loss was reported to the caller");
-    } else {
+    } else if released {
         println!("  the connection was rebuilt under the caller, so nothing was reported");
+    } else {
+        println!("  the loss was recorded on the session");
     }
     println!("  Loop survived timeout (graceful shutdown succeeded)");
     println!("  PASS\n");

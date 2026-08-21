@@ -58,13 +58,15 @@ pub fn xyz_parse_response(payload: &[u8]) -> Option<(u32, u32, u32, Vec<String>)
             u32::from_be_bytes([payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]])
                 as usize;
         offset += 4;
-        if slen > 0 && offset + slen <= payload.len() {
-            fields.push(
-                String::from_utf8_lossy(&payload[offset..offset + slen]).to_string(),
-            );
-        } else {
-            fields.push(String::new());
+        // A length running past the end of the payload is a frame that did not
+        // arrive whole, not a field with nothing in it. Read as an empty
+        // string, a cut authentication frame parsed and every field after it
+        // was invented — a per-session approval URL came back blank and the
+        // handshake carried on as though the venue had sent one.
+        if offset + slen > payload.len() {
+            return None;
         }
+        fields.push(String::from_utf8_lossy(&payload[offset..offset + slen]).to_string());
         offset += slen;
         // Pad to 4-byte alignment
         let remainder = slen % 4;
@@ -523,9 +525,11 @@ mod tests {
         assert!(xyz_parse_response(&[0u8; 1]).is_none());
     }
 
+    /// A length running past the end of the payload is a frame that did not
+    /// arrive whole. Read as an empty field, a cut authentication frame parses
+    /// and every field after it is invented.
     #[test]
     fn parse_response_truncated_field() {
-        // Header says string length = 10, but only 5 data bytes follow
         let mut data = Vec::new();
         data.extend_from_slice(&23u32.to_be_bytes()); // version
         data.extend_from_slice(&50u32.to_be_bytes()); // msg_id
@@ -533,11 +537,22 @@ mod tests {
         data.extend_from_slice(&0u32.to_be_bytes()); // state
         data.extend_from_slice(&10u32.to_be_bytes()); // slen = 10
         data.extend_from_slice(b"ABCDE"); // only 5 bytes available
-        let (msg_id, _, _, fields) = xyz_parse_response(&data).unwrap();
+        assert!(xyz_parse_response(&data).is_none());
+    }
+
+    /// A stated length of zero is a field the venue left empty, which is not
+    /// the same thing and still parses.
+    #[test]
+    fn parse_response_empty_field() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&23u32.to_be_bytes());
+        data.extend_from_slice(&50u32.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes()); // slen = 0
+        let (msg_id, _, _, fields) = xyz_parse_response(&data).expect("an empty field parses");
         assert_eq!(msg_id, 50);
-        // slen > 0 but offset + slen > payload.len(), so branch pushes empty string
-        assert_eq!(fields.len(), 1);
-        assert_eq!(fields[0], "");
+        assert_eq!(fields, vec![""]);
     }
 
     #[test]

@@ -222,6 +222,17 @@ class TestMarketDataAndDepth:
         time.sleep(3)
         tick_count_after = len(self.wrapper.ticks_price)
 
+        # Both halves of the behaviour this test is named after, neither of
+        # which was ever looked at: the counts were worked out and dropped, so
+        # cancelling one subscription and killing both passed.
+        assert not self.wrapper.depth_after_cancel, \
+            "book updates still arriving after the book was cancelled"
+        if tick_count_after == tick_count_before:
+            pytest.skip("no prints in three seconds — nothing to tell a live "
+                        "quote from a cancelled one")
+        assert tick_count_after > tick_count_before, \
+            "the quote stopped when only the book was cancelled"
+
         # Cancel tob
         self.client.cancel_mkt_data(1)
         self.wrapper._tob_cancelled = True

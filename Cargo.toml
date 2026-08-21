@@ -161,6 +161,11 @@ path = "src/bin/capture_status.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "capture_account"
+path = "src/bin/capture_account.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "capture_ticks"
 path = "src/bin/capture_ticks.rs"
 required-features = ["dev-tools"]

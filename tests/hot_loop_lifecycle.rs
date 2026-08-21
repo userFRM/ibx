@@ -30,11 +30,11 @@ fn full_lifecycle() {
         order_id: 1,
         side: Side::Buy,
         price: 150 * PRICE_SCALE,
-        qty: 100,
+        qty: 100 * QTY_SCALE,
         remaining: 0,
         commission: 0,
         timestamp_ns: 0,
-        cum_qty: 100, avg_price: 150 * PRICE_SCALE,
+        cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     };
     engine.inject_fill(&fill);
 

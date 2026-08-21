@@ -129,6 +129,15 @@ impl AsyncClient {
         self.inner.bulletins()
     }
 
+    /// What the venue has said about requests since this was last asked.
+    ///
+    /// Nothing waits on these, so unread they read as nothing having happened:
+    /// a stream that never prints looks like a quiet market. Reading them
+    /// clears them.
+    pub fn notices(&self) -> Vec<super::Notice> {
+        self.inner.notices()
+    }
+
     /// Every five-second bar this session has been sent.
     pub fn live_bars(&self) -> Vec<super::LiveBar> {
         self.inner.live_bars()
@@ -171,8 +180,15 @@ impl AsyncClient {
     }
 
     /// End the session and stop reading it.
-    pub fn disconnect(&self) {
-        self.inner.disconnect();
+    ///
+    /// Awaited, because it waits: ending a session sends a logout and then
+    /// joins the reading threads. Run inline, that join holds a runtime thread
+    /// for as long as the engine takes to stop.
+    pub async fn disconnect(&self) {
+        let client = self.inner.clone();
+        // A panic in the shutdown is not something a call that returns nothing
+        // can report, and the session is ending either way.
+        let _ = tokio::task::spawn_blocking(move || client.disconnect()).await;
     }
 
     /// Every trade printed on a contract, as it prints.
@@ -345,10 +361,16 @@ mod tests {
         // What the blocking session reaches, not only what it names: it
         // dereferences to the client, so a question answered there is answered
         // on it. This surface has no such fall-through on purpose — a blocking
-        // call reached by accident from a runtime is the bug the surface
-        // exists to prevent — so it names everything, and this is what holds
-        // the two to the same set.
-        let mut theirs = names(&there, "impl Client {");
+        // call reached by accident from a runtime is the bug the surface exists
+        // to prevent — so anything it offers, it names.
+        //
+        // That makes the two sets different sizes and the parity two separate
+        // statements: nothing here is unreachable there, and nothing the
+        // blocking session names is missing here. The raw protocol calls the
+        // client carries are reached through `blocking()`, so they are not in
+        // the second set.
+        let session_names = names(&there, "impl Client {");
+        let mut theirs = session_names.clone();
         for entry in std::fs::read_dir(root.parent().expect("api").join("client")).expect("the client") {
             let path = entry.expect("a readable entry").path();
             if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "tests.rs") {
@@ -361,10 +383,21 @@ mod tests {
                 );
             }
         }
-        let missing: Vec<_> = mine.difference(&theirs).collect();
-        assert!(missing.is_empty(), "asked on this session and reachable on neither: {missing:?}");
-        let theirs: BTreeSet<String> = theirs.intersection(&mine).cloned().collect();
         assert!(mine.len() >= 15, "the reader found the methods: {mine:?}");
-        assert_eq!(mine, theirs, "asked on one session and not the other");
+        assert!(session_names.len() >= 15, "and the blocking session's: {session_names:?}");
+
+        let unreachable: Vec<_> = mine.difference(&theirs).collect();
+        assert!(
+            unreachable.is_empty(),
+            "asked on this session and reachable on neither: {unreachable:?}",
+        );
+        // The second direction. Comparing the first set with itself narrowed
+        // to the second cannot fail, and would pass a question dropped from
+        // this surface or added only to the blocking one.
+        let absent: Vec<_> = session_names.difference(&mine).collect();
+        assert!(
+            absent.is_empty(),
+            "named on the blocking session and not on this one: {absent:?}",
+        );
     }
 }

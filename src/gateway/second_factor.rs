@@ -52,7 +52,10 @@ pub(super) fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &B
     // State 4: Receive result
     let recv4 = session::recv_msg(stream)?;
     let result = match recv4 {
-        session::RecvMsg::Xyz { fields, .. } => {
+        // The state is checked as well as the shape. Taken from any XYZ
+        // frame, an unrelated message ending in the right word reads as the
+        // answer to this challenge.
+        session::RecvMsg::Xyz { state: 4, fields, .. } => {
             fields.iter().rev().find(|s| !s.is_empty()).cloned().unwrap_or_default()
         }
         _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "CCP SOFT_TOKEN: expected XYZ state 4")),
@@ -160,8 +163,9 @@ pub(super) fn parse_auth_start_token(auth_start: &str) -> (String, Option<String
 pub(super) fn run_second_factor(
     tls: &mut native_tls::TlsStream<TcpStream>,
     sf: SecondFactor<'_>,
-) -> io::Result<Option<BigUint>> {
+) -> io::Result<SecondFactorOutcome> {
     let mut soft_token: Option<BigUint> = None;
+    let mut unread: Option<Vec<u8>> = None;
     // An advertised type this client cannot perform is worth saying out
     // loud: sending 775 at it gets the socket closed before any challenge,
     // and skipping the gate leaves the server waiting until the connect
@@ -196,7 +200,9 @@ pub(super) fn run_second_factor(
             tls, deadline, sf.code_provider,
         );
         let restore = tls.get_ref().set_read_timeout(None);
-        gate?;
+        if let session::IbKeyOutcome::Skipped { unread: carried } = gate? {
+            unread = carried;
+        }
         restore?;
         log::info!("security-code gate: passed")
     } else if route == SecondFactorRoute::Unsupported {
@@ -254,8 +260,9 @@ pub(super) fn run_second_factor(
         );
         tls.get_ref().set_read_timeout(None)?;
         match gate? {
-            session::IbKeyOutcome::Skipped => {
+            session::IbKeyOutcome::Skipped { unread: carried } => {
                 log::info!("2FA gate: skipped (no second factor)");
+                unread = carried;
             }
             session::IbKeyOutcome::Approved { approval_url, session_id, soft_token_hex } => {
                 log::info!(
@@ -274,7 +281,17 @@ pub(super) fn run_second_factor(
             }
         }
     }
-    Ok(soft_token)
+    Ok(SecondFactorOutcome { soft_token, unread })
+}
+
+/// What the second factor left behind: the token a farm logon hashes, and any
+/// message the gate read that belongs to what follows it.
+pub(super) struct SecondFactorOutcome {
+    /// SOFT session token, where the gate issued one.
+    pub soft_token: Option<BigUint>,
+    /// A message already taken off the socket for the post-auth loop, which
+    /// cannot ask for it again.
+    pub unread: Option<Vec<u8>>,
 }
 
 /// An absent token type routes to the IBKey gate rather than skipping the
@@ -308,5 +325,45 @@ pub(super) fn second_factor_route(paper: bool, token_type: &str) -> SecondFactor
         SecondFactorRoute::SecurityCode
     } else {
         SecondFactorRoute::Unsupported
+    }
+}
+
+/// Read the frame that finishes authentication, and refuse anything else.
+///
+/// AUTH_FINISH is XYZ message 771 in state 3 or 5, with a body of exactly
+/// `PASSED`. Any other state, message id or body is a refusal, including a
+/// state-3 frame carrying other text.
+///
+/// A receive error is also a refusal: the farm logons that follow authenticate
+/// with the session key, so anything short of `PASSED` must not reach them. An
+/// NS message here means authentication is already past, so it is returned as
+/// `Skipped` rather than refused.
+pub(super) fn expect_auth_finish<S: Read>(stream: &mut S, whose: &str) -> io::Result<()> {
+    use crate::protocol::xyz::XYZ_MSG_TOKEN_AUTH;
+
+    match session::recv_msg(stream) {
+        Ok(session::RecvMsg::Xyz { msg_id, state, fields, .. }) => {
+            let passed = fields.iter().any(|f| f == "PASSED");
+            if msg_id == XYZ_MSG_TOKEN_AUTH && matches!(state, 3 | 5) && passed {
+                log::info!("{whose} AUTH_FINISH: state={state} PASSED");
+                Ok(())
+            } else {
+                let stated = fields.iter().rev().find(|s| !s.is_empty()).map(String::as_str).unwrap_or("");
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "{whose}: authentication was not finished — message {msg_id} state {state}                          stating {stated:?}",
+                    ),
+                ))
+            }
+        }
+        Ok(session::RecvMsg::Ns { msg_type, .. }) => {
+            log::info!("{whose} post-auth NS type={msg_type}");
+            Ok(())
+        }
+        Err(e) => Err(io::Error::new(
+            e.kind(),
+            format!("{whose}: nothing said the authentication finished: {e}"),
+        )),
     }
 }

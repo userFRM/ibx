@@ -223,7 +223,7 @@ fn fill_dedup_duplicate_exec_id_no_double_position() {
 
     engine.context_mut().insert_order(ibx::types::Order {
         order_id: 70, instrument: 0, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 100, filled: 0,
+        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE * QTY_SCALE, filled: 0,
         status: OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -250,7 +250,7 @@ fn fill_dedup_different_exec_ids_both_count() {
 
     engine.context_mut().insert_order(ibx::types::Order {
         order_id: 71, instrument: 0, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 200, filled: 0,
+        price: 150 * PRICE_SCALE, qty: 200 * QTY_SCALE * QTY_SCALE, filled: 0,
         status: OrderStatus::Submitted,
         ord_type: b'2', tif: b'0', stop_price: 0,
     });
@@ -395,6 +395,7 @@ fn empty_scanner_results() {
         con_ids: vec![],
         entries: vec![],
         scan_time: "2026-03-13".into(),
+        error_text: String::new(),
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -429,9 +430,9 @@ fn process_msgs_multiple_rapid_calls_no_duplicates() {
     let (client, _rx, shared) = test_client();
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 1, side: Side::Buy,
-        price: PRICE_SCALE, qty: 1, remaining: 0,
+        price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
         commission: 0, timestamp_ns: 0,
-        cum_qty: 1, avg_price: PRICE_SCALE,
+        cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
     });
 
     let mut w = RecordingWrapper::default();
@@ -557,9 +558,9 @@ fn concurrent_disconnect_during_process_msgs() {
     for i in 0..100 {
         shared.orders.push_fill(Fill {
             instrument: 0, order_id: i, side: Side::Buy,
-            price: PRICE_SCALE, qty: 1, remaining: 0,
+            price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
             commission: 0, timestamp_ns: 0,
-            cum_qty: 1, avg_price: PRICE_SCALE,
+            cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
         });
     }
 
@@ -631,9 +632,9 @@ fn concurrent_place_order_and_process_msgs() {
         for i in 0..50 {
             shared_a.orders.push_fill(Fill {
                 instrument: 0, order_id: i, side: Side::Buy,
-                price: PRICE_SCALE, qty: 1, remaining: 0,
+                price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
                 commission: 0, timestamp_ns: 0,
-                cum_qty: 1, avg_price: PRICE_SCALE,
+                cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
             });
             let mut w = RecordingWrapper::default();
             client_a.process_msgs(&mut w);
@@ -701,7 +702,7 @@ fn concurrent_account_read_write() {
 fn order_buffer_push_drain_cycle() {
     let mut buf = OrderBuffer::new();
     for i in 0..64 {
-        buf.push(OrderRequest::SubmitEx { order_id: i, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() });
+        buf.push(OrderRequest::SubmitEx { order_id: i, instrument: 0, side: Side::Buy, qty: QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() });
     }
     let drained: Vec<_> = buf.drain().collect();
     assert_eq!(drained.len(), 64);
@@ -714,7 +715,7 @@ fn order_buffer_multiple_drain_cycles() {
     let mut buf = OrderBuffer::new();
     for cycle in 0..5 {
         for i in 0..10 {
-            buf.push(OrderRequest::SubmitEx { order_id: cycle * 10 + i, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() });
+            buf.push(OrderRequest::SubmitEx { order_id: cycle * 10 + i, instrument: 0, side: Side::Buy, qty: QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() });
         }
         let drained: Vec<_> = buf.drain().collect();
         assert_eq!(drained.len(), 10);
@@ -732,7 +733,7 @@ fn shared_state_all_drains_empty_after_first_call() {
     // Push one item to each queue
     ss.orders.push_fill(Fill { instrument: 0, order_id: 1, side: Side::Buy,
         cum_qty: 0, avg_price: 0,
-        price: PRICE_SCALE, qty: 1, remaining: 0, commission: 0, timestamp_ns: 0 });
+        price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0, commission: 0, timestamp_ns: 0 });
     ss.orders.push_order_update(OrderUpdate { order_id: 1, instrument: 0,
         status: OrderStatus::Filled, filled_qty: 1.0, remaining_qty: 0.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0 });
     ss.orders.push_cancel_reject(CancelReject { order_id: 1, instrument: 0,
@@ -771,9 +772,9 @@ fn concurrent_drain_fills_no_duplicates() {
     for i in 0..100 {
         shared.orders.push_fill(Fill {
             instrument: 0, order_id: i, side: Side::Buy,
-            price: PRICE_SCALE, qty: 1, remaining: 0,
+            price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
             commission: 0, timestamp_ns: 0,
-            cum_qty: 1, avg_price: PRICE_SCALE,
+            cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
         });
     }
 

@@ -32,7 +32,7 @@ pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error
 
 #### `connect_with_events`
 
-Connect to IB and start the engine with an event channel attached. A second, optional delivery path for a program that would rather own a queue than be called back. It is bounded, and an event arriving at a full one is discarded rather than made to wait — a session that stalled on a slow reader would stop carrying market data. Read [`events_lost`](EClient::events_lost) to learn whether that happened. One reader, and it is told what it drains and nothing else. For a program that wants more than one thing told about a message, or wants none of it dropped, hand a handler to [`Client`](crate::Client) instead: a handler is called with the message rather than sent a copy of it, so there is no queue to fill and no reader to be the only one. This is a second, optional delivery path that runs alongside [`process_msgs()`](EClient::process_msgs) — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks.
+Connect to IB and start the engine with an event channel attached. A second, optional delivery path for a program that would rather own a queue than be called back. It is bounded, and an event arriving at a full one is discarded rather than made to wait — a session that stalled on a slow reader would stop carrying market data. Read [`events_lost`](EClient::events_lost) to learn whether that happened. One reader, and it is told what it drains and nothing else. For a program that wants none of it dropped, drive [`process_msgs`](EClient::process_msgs) with a [`Wrapper`](crate::api::wrapper::Wrapper) instead: its callbacks are called with the message rather than sent a copy of it, so there is no queue to fill and nothing to fall out of one. This is a second, optional delivery path that runs alongside `process_msgs` — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks.
 
 ```rust
 pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>>
@@ -254,7 +254,7 @@ pub fn token_type(&self) -> &str
 
 #### `req_positions`
 
-Request positions. Waits for server-pushed account data before delivering, then calls position_end.
+Request positions. Waits for the account data the venue pushes as a session opens, then delivers what it holds and calls `position_end`. The wait is bounded, and an account that says nothing within it delivers nothing — which reads the same as an account holding nothing. Said in the log rather than left to be inferred, because the two are not the same answer.
 
 ```rust
 pub fn req_positions(&self, wrapper: &mut impl Wrapper)
@@ -268,10 +268,10 @@ pub fn req_positions(&self, wrapper: &mut impl Wrapper)
 
 #### `req_pnl`
 
-Subscribe to account PnL updates. `account` and `model_code` are taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
+Subscribe to account PnL updates. The venue is asked, under `account` or under the one this session opened with where none is named. What comes back is what each holding was worth at midnight and what it has realised since, and the figures reported on `pnl` are worked out from those against the prices the session is being told. Without the subscription none of that arrives, and the figures reduce to the unrealised part with nothing realised on any position. `model_code` is taken and not applied: there is no model portfolio to name here.
 
 ```rust
-pub fn req_pnl(&self, req_id: i64, _account: &str, _model_code: &str)
+pub fn req_pnl(&self, req_id: i64, account: &str, _model_code: &str)
 ```
 
 | Parameter | Type | Description |
@@ -284,7 +284,7 @@ pub fn req_pnl(&self, req_id: i64, _account: &str, _model_code: &str)
 
 #### `cancel_pnl`
 
-Cancel PnL subscription.
+Cancel PnL subscription. Nothing withdraws one on this wire, and the engine says so: what stops is the reporting, not the venue.
 
 ```rust
 pub fn cancel_pnl(&self, req_id: i64)
@@ -298,7 +298,7 @@ pub fn cancel_pnl(&self, req_id: i64)
 
 #### `req_pnl_single`
 
-Subscribe to single-position PnL updates. `account` and `model_code` are taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
+Subscribe to single-position PnL updates. `account` and `model_code` are taken and not applied, as on [`req_pnl`](EClient::req_pnl): the figures are for the account this session opened under.
 
 ```rust
 pub fn req_pnl_single(&self, req_id: i64, _account: &str, _model_code: &str, con_id: i64)
@@ -359,7 +359,7 @@ pub fn cancel_account_summary(&self, req_id: i64)
 
 #### `req_account_updates`
 
-Subscribe to account updates. `acct_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
+Subscribe to account updates. `acct_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name. Subscribing also asks the venue to state the figures now. It restates them on its own schedule otherwise, which is unhurried: a session that has just opened waits tens of seconds for its first set, and a caller that subscribed and then read the account got nothing.
 
 ```rust
 pub fn req_account_updates(&self, subscribe: bool, _acct_code: &str)
@@ -374,7 +374,7 @@ pub fn req_account_updates(&self, subscribe: bool, _acct_code: &str)
 
 #### `cancel_positions`
 
-Cancel positions subscription.
+Cancel positions subscription. Nothing is withdrawn from the venue: it pushes what the account holds as the session opens and keeps it current whether or not anyone is listening. What stops is the reporting — a holding that moves after this is no longer delivered on `position`.
 
 ```rust
 pub fn cancel_positions(&self)
@@ -398,7 +398,7 @@ pub fn req_managed_accts(&self, wrapper: &mut impl Wrapper)
 
 #### `req_account_updates_multi`
 
-Request account updates for multiple accounts/models. Account values for one account or model, answered on `account_update_multi`. The reference client answers this request on its own callbacks, not on the ones `req_account_updates` uses, and a caller written against it implements those and hears nothing otherwise. `ledger_and_nlv` is taken and not applied. The account figures arrive as the venue states them, and it states the ledger and the net liquidation among them without being asked.
+Request account updates for multiple accounts/models. Account values for one account or model, answered on `account_update_multi`. The reference client answers this request on its own callbacks, not on the ones `req_account_updates` uses, and a caller written against it implements those and hears nothing otherwise. `ledger_and_nlv` is taken and not applied. The account figures arrive as the venue states them, and it states the ledger and the net liquidation among them without being asked. The figures are the ones the venue states for the account this session opened under, and they are labelled with that account. A login holding several is answered for that one; naming another here does not fetch the other's figures, and is said in the log rather than answered with this account's under the other's name.
 
 ```rust
 pub fn req_account_updates_multi( &self, req_id: i64, account: &str, model_code: &str, _ledger_and_nlv: bool, wrapper: &mut impl Wrapper, )
@@ -447,10 +447,8 @@ pub fn req_positions_multi( &self, req_id: i64, account: &str, model_code: &str,
 
 #### `cancel_positions_multi`
 
-Cancel multi-account positions.
-
 ```rust
-pub fn cancel_positions_multi(&self, _req_id: i64)
+pub fn cancel_positions_multi(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |
@@ -571,7 +569,7 @@ pub fn algorithms_for(&self, sec_type: &str) -> Vec<String>
 
 #### `place_order`
 
-Place an order. An order names its contract by the venue's own id. A caller who states a description instead of an id — which every example written against the reference client does — has it resolved here, once the order itself is known to be one the venue would take: an order that names no contract is one the venue has nothing to match, and answers with nothing at all. Resolving it costs a request and an answer the first time, so this call does not return until the venue has named the contract — up to the answer timeout. Once per description: the answer is kept, and later orders on the same contract are sent without asking again. The reference client never waits here, because a gateway resolved the contract before the order reached it; this client is the gateway, so the work happens somewhere, and today it happens on the caller's thread. A caller placing orders from inside a callback stalls its own dispatch loop for that time. Pass a contract carrying `con_id` — from `qualify_contract`, or from any contract-details answer — and nothing is resolved and nothing waits.
+Place an order. An order names its contract by the venue's id. A caller who states a description instead of an id — which every example written against the reference client does — has it resolved here, once the order itself is known to be one the venue would take: an order that names no contract is one the venue has nothing to match, and answers with nothing at all. Resolving it costs a request and an answer the first time, so this call does not return until the venue has named the contract — up to the answer timeout. Once per description: the answer is kept, and later orders on the same contract are sent without asking again. The reference client never waits here, because a gateway resolved the contract before the order reached it; this client is the gateway, so the work happens somewhere, and today it happens on the caller's thread. A caller placing orders from inside a callback stalls its own dispatch loop for that time. Pass a contract carrying `con_id` — from `qualify_contract`, or from any contract-details answer — and nothing is resolved and nothing waits.
 
 ```rust
 pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), Refusal>
@@ -589,7 +587,7 @@ pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> 
 
 #### `exercise_options`
 
-Exercise or lapse a long option position. `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `override_` is taken for signature compatibility and is not sent: it is a validation bypass the venue's own front end applies before it builds the order, so there is no tag for it on the wire.
+Exercise or lapse a long option position. `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `override_` is taken for signature compatibility and is not sent: it is a validation bypass the venue's front end applies before it builds the order, so there is no tag for it on the wire.
 
 ```rust
 pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_action: i32, exercise_quantity: i32, account: &str, override_: bool, ) -> Result<(), Refusal>
@@ -610,7 +608,7 @@ pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_actio
 
 #### `cancel_order`
 
-Cancel an order. `manual_order_cancel_time` is taken and not applied. A cancel names five fields on this wire and no time among them, as the counterpart's own cancel does.
+Cancel an order. `manual_order_cancel_time` is taken and not applied. A cancel names five fields on this wire and no time among them, as the protocol's cancel does.
 
 ```rust
 pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal>
@@ -681,7 +679,7 @@ pub fn next_order_id(&self) -> i64
 
 #### `req_open_orders`
 
-Request open orders for this client.
+Request open orders for this client. Answers with every order working on the account, as [`req_all_open_orders`](EClient::req_all_open_orders) does. The protocol carries no client number on an order, so this session cannot tell which orders it placed; reporting fewer would omit working orders.
 
 ```rust
 pub fn req_open_orders(&self, wrapper: &mut impl Wrapper)
@@ -724,7 +722,7 @@ pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper)
 
 #### `req_auto_open_orders`
 
-Automatically bind future orders to this client. Bind orders entered elsewhere to this client. Nothing goes to the venue: the counterpart answers this itself, setting a property of its own and refusing it for any client but the one those orders bind to. What that property gates does not arise here — this session is told about every order on the account, whether it placed them or not — and this surface names no client, so there is nothing to refuse and nothing left to do. `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
+Automatically bind future orders to this client. Bind orders entered elsewhere to this client. Nothing goes to the venue; this is answered locally, setting a property of its own and refusing it for any client but the one those orders bind to. What that property gates does not arise here — this session is told about every order on the account, whether it placed them or not — and this surface names no client, so there is nothing to refuse and nothing left to do. `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
 
 ```rust
 pub fn req_auto_open_orders(&self, _b_auto_bind: bool)
@@ -754,7 +752,7 @@ pub fn req_executions(&self, req_id: i64, filter: &ExecutionFilter, wrapper: &mu
 
 #### `parse_algo_params`
 
-Parse algo strategy and TagValue params into internal AlgoParams. A key the caller never set defaults the way IB's own algos do (0.0, false, or the documented default enum value). A key the caller *did* set — even to an empty string — is refused if it does not parse, rather than taking that same default: `riskAversion="Aggresive"` would otherwise submit a Neutral algo with no error, and `maxPctVol=""` would submit 0.0.
+Parse algo strategy and TagValue params into internal AlgoParams. A key the caller never set defaults the way IB's own algos do (0.0, false, or the documented default enum value). A key the caller *did* set — even to an empty string — is refused if it does not parse, rather than taking that same default: `riskAversion="Aggresive"` would otherwise submit a Neutral algo with no error, and `maxPctVol=""` would submit 0.0. A strategy modelled here is re-encoded from the fields it names rather than forwarded as the caller wrote it, so a key it does not name would go no further. Said rather than dropped: the caller had set it for a reason and the order that reached the venue would not have carried it.
 
 ```rust
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal>
@@ -773,7 +771,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 
 #### `req_mkt_data`
 
-Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) have no emission path, and `tick_generic` never fires — the venue asks for those under numbers of its own rather than the ones this list uses, and this client does not know the mapping. Delayed and frozen data are requested, contrary to what this said: name the type on [`req_market_data_type`](EClient::req_market_data_type) and every subscription after it carries the mode, or state it per request with [`req_mkt_data_ex`](EClient::req_mkt_data_ex). The table there gives the wire shape of each.
+Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) are not requested — the venue asks for those under numbers of its own rather than the ones this list uses, and this client does not know the mapping. Naming one is warned about rather than quietly dropped. `tick_generic` does fire, for the halt the venue states on its own tick: tick 49, 0 while a contract is trading and 1 once it has stopped. Delayed and frozen data are requested, contrary to what this said: name the type on [`req_market_data_type`](EClient::req_market_data_type) and every subscription after it carries the mode, or state it per request with [`req_mkt_data_ex`](EClient::req_mkt_data_ex). The table there gives the wire shape of each.
 
 ```rust
 pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, ) -> Result<(), Refusal>
@@ -793,10 +791,10 @@ pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list:
 
 #### `req_mkt_data_ex`
 
-Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`. `regulatory_snapshot` is taken and not applied. A regulatory snapshot is a separate, chargeable request this protocol does not carry, so asking for one here would be answered with an ordinary subscription and a charge nobody agreed to.
+Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`. `regulatory_snapshot` is refused rather than dropped. It names a separate, chargeable one-shot request, and this protocol carries no field for one: taken and ignored, a caller who asked for a single NBBO snapshot the venue charges for and stands behind reads an ordinary subscription instead, which is neither, with nothing to say so. Its default is false, so an ordinary call is unaffected.
 
 ```rust
-pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, _regulatory_snapshot: bool, mode_9887: i32, ) -> Result<(), Refusal>
+pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, mode_9887: i32, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -830,7 +828,7 @@ pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_tick_by_tick_data`
 
-Subscribe to every trade or every quote change on a contract. The feed rides the historical farm, registered there under the name `TickByTick` beside the five-second bars. No separate service is involved. A missing entitlement arrives as the venue's own refusal rather than as silence. `number_of_ticks` and `ignore_size` are refused rather than dropped. This protocol's subscription states the contract and the kind of stream and nothing else: there is no field for a prelude of past ticks, and none for suppressing size-only changes. A caller that set either and was answered anyway would be reading a stream it did not ask for, with nothing to say so. Their defaults — no prelude, sizes included — are what the venue does, so an ordinary call is unaffected.
+Subscribe to every trade or every quote change on a contract. The feed rides the historical farm, registered there under the name `TickByTick` beside the five-second bars. No separate service is involved. A missing entitlement arrives as the venue's refusal rather than as silence. `number_of_ticks` and `ignore_size` are refused rather than dropped. This protocol's subscription states the contract and the kind of stream and nothing else: there is no field for a prelude of past ticks, and none for suppressing size-only changes. A caller that set either and was answered anyway would be reading a stream it did not ask for, with nothing to say so. Their defaults — no prelude, sizes included — are what the venue does, so an ordinary call is unaffected.
 
 ```rust
 pub fn req_tick_by_tick_data( &self, req_id: i64, contract: &Contract, tick_type: &str, number_of_ticks: i32, ignore_size: bool, ) -> Result<(), Refusal>
@@ -866,7 +864,7 @@ pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_mkt_depth`
 
-Subscribe to market depth (L2 order book).
+Subscribe to market depth (L2 order book). A contract that names no venue and no security type is sent as it stands. The engine reads an unnamed venue as the smart destination and checks a named security type against the venue's routing table. Substituting a stock here asks for a future's book as a stock's, which the venue refuses as a book it does not serve.
 
 ```rust
 pub fn req_mkt_depth( &self, req_id: i64, contract: &Contract, num_rows: i32, is_smart_depth: bool, ) -> Result<(), Refusal>
@@ -937,7 +935,7 @@ pub fn cancel_real_time_bars(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_ping`
 
-Set market data type preference (1=live, 2=frozen, 3=delayed, 4=delayed-frozen). Request an auth-connection round-trip time sample: sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. The result lands asynchronously — poll `last_rtt()` after a moment. No-op while a probe is already in flight or the connection is down.
+Request an auth-connection round-trip time sample: sends a lightweight liveness probe with no side effects on subscriptions, contract caches, or pacing budgets. The result lands asynchronously — poll `last_rtt()` after a moment. No-op while a probe is already in flight or the connection is down.
 
 ```rust
 pub fn req_ping(&self) -> Result<(), Refusal>
@@ -961,7 +959,7 @@ pub fn last_rtt(&self) -> Option<std::time::Duration>
 
 #### `req_market_data_type`
 
-NOT supported end to end: the requested type is stored locally but never sent to the gateway, so subscriptions always deliver realtime data and delayed tick variants never arrive. Requesting a non-realtime type logs a warning, and the `market_data_type` callback reports the DELIVERED type (realtime) rather than echoing the request.
+Which feed the subscriptions after this one ask for: 1 live, 2 frozen, 3 delayed, 4 delayed and frozen. Sent with each subscription, in the field this protocol carries it in, and the `market_data_type` callback reports the type the subscription was made under. To state it for one request rather than for the ones that follow, [`req_mkt_data_ex`](EClient::req_mkt_data_ex) takes it. A number naming no type leaves subscriptions realtime, and says so.
 
 ```rust
 pub fn req_market_data_type(&self, market_data_type: i32)
@@ -1129,7 +1127,7 @@ pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Ref
 
 #### `req_wsh_meta_data`
 
-Ask what event types the corporate-events calendar carries. Has to be asked before events can be: the counterpart holds the answer and will not build an event request without it.
+Ask what event types the corporate-events calendar carries. Must be asked before events can be requested: an event request cannot be built until the event types are known.
 
 ```rust
 pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), Refusal>
@@ -1245,10 +1243,10 @@ pub fn req_market_rule(&self, market_rule_id: i32, wrapper: &mut impl crate::api
 
 #### `req_news_bulletins`
 
-Subscribe to news bulletins. `all_msgs` is taken and not applied. The subscription carries no field asking for the bulletins that came before it, so what arrives is what is published from here on.
+Subscribe to news bulletins. `all_msgs` asks for the day's bulletins as well as the ones still to come. The subscription carries no field asking the venue for them, but the venue has been broadcasting them at this session since it opened and they are still queued, so a caller asking for every message of the day is answered from those. Asking only for what follows drops them, which is what stopped a subscription from opening with bulletins published before anyone asked for any.
 
 ```rust
-pub fn req_news_bulletins(&self, _all_msgs: bool)
+pub fn req_news_bulletins(&self, all_msgs: bool)
 ```
 
 | Parameter | Type | Description |
@@ -1318,7 +1316,7 @@ pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_historical_news`
 
-Request historical news headlines.
+Request historical news headlines. `start_time` and `end_time` are refused rather than taken and dropped: the query this client sends carries no time bounds, and `max_results` is what limits the answer.
 
 ```rust
 pub fn req_historical_news( &self, req_id: i64, con_id: i64, provider_codes: &str, start_time: &str, end_time: &str, max_results: u32, ) -> Result<(), Refusal>
@@ -1357,7 +1355,7 @@ pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &st
 
 #### `req_fundamental_data`
 
-Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary).
+Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary). The contract is named by its venue id and nothing else of it is carried, so pass one that has an id: from [`qualify_contract`](EClient::qualify_contract), or from any contract-details answer. A description is refused rather than sent as a request about contract zero.
 
 ```rust
 pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), Refusal>
@@ -1391,7 +1389,7 @@ pub fn cancel_fundamental_data(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_histogram_data`
 
-Request price histogram data.
+Request price histogram data. Named by its venue id, as [`req_fundamental_data`](EClient::req_fundamental_data) is.
 
 ```rust
 pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool, period: &str) -> Result<(), Refusal>
@@ -1426,7 +1424,7 @@ pub fn cancel_histogram_data(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_historical_ticks`
 
-Request historical tick data.
+Request historical tick data. Bounded at its end: the query counts back from `end_date_time`, and a request naming only a start is refused rather than answered with the ticks on the wrong side of it. Both empty asks for the most recent.
 
 ```rust
 pub fn req_historical_ticks( &self, req_id: i64, contract: &Contract, start_date_time: &str, end_date_time: &str, number_of_ticks: i32, what_to_show: &str, use_rth: bool, ) -> Result<(), Refusal>
@@ -1500,7 +1498,7 @@ pub fn req_news_providers(&self, wrapper: &mut impl Wrapper)
 
 #### `req_current_time`
 
-The venue's own clock, as `reqCurrentTime` reports it. Every message the venue sends is stamped with the time it sent it, and the last one is held. A caller asking for the server's time is asking how far apart the two clocks are, which this machine's own clock cannot answer. Where no message has been stamped yet — before the session is up — there is nothing to report but the local clock.
+The venue's clock, as `reqCurrentTime` reports it. Every message the venue sends is stamped with the time it sent it, and the last one is held. A caller asking for the server's time is asking how far apart the two clocks are, which this machine's own clock cannot answer. Where no message has been stamped yet — before the session is up — there is nothing to report but the local clock.
 
 ```rust
 pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
@@ -1547,7 +1545,7 @@ pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal>
 
 #### `calculate_implied_volatility`
 
-Not served. Reports why on the error callback. What volatility a price implies, under the venue's own model. This protocol carries no request for it — the counterpart works it out in its own process — so it is worked out here, anchored to what the venue last said its own model made of this contract. Where it has said nothing, nothing is answered: a number from a rate nobody stated would be this library's invention.
+What volatility a price implies, under the venue's model. This protocol carries no request for it, so the value is computed here, anchored to the venue's last stated model output for this contract. Where the venue has stated no model, nothing is answered rather than a number derived from an unstated rate.
 
 ```rust
 pub fn calculate_implied_volatility( &self, req_id: i64, contract: &super::Contract, option_price: f64, under_price: f64, )
@@ -1581,10 +1579,10 @@ pub fn calculate_option_price( &self, req_id: i64, contract: &super::Contract, v
 
 #### `cancel_calculate_implied_volatility`
 
-Nothing was started, so there is nothing to stop.
+Withdraw a question that was waiting on the venue to state a model. A question answered from a model already stated started nothing and stops nothing. One that opened a watch to get an answer withdraws it here, so a caller that changes its mind is not left watching a contract it no longer asks about.
 
 ```rust
-pub fn cancel_calculate_implied_volatility(&self, _req_id: i64)
+pub fn cancel_calculate_implied_volatility(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |
@@ -1595,10 +1593,10 @@ pub fn cancel_calculate_implied_volatility(&self, _req_id: i64)
 
 #### `cancel_calculate_option_price`
 
-Nothing was started, so there is nothing to stop.
+As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
 
 ```rust
-pub fn cancel_calculate_option_price(&self, _req_id: i64)
+pub fn cancel_calculate_option_price(&self, req_id: i64)
 ```
 
 | Parameter | Type | Description |
@@ -1698,7 +1696,7 @@ pub fn req_family_codes(&self, wrapper: &mut impl Wrapper)
 
 #### `set_server_log_level`
 
-Set server log level.
+Set server log level. Taken and not applied. The session holds no log level of its own and this protocol carries no message asking the venue to change one, so what a caller states here is written to this client's log and nothing else. This client's own logging is set where the process sets it, through `IBX_LOG_LEVEL` or `RUST_LOG`.
 
 ```rust
 pub fn set_server_log_level(&self, log_level: i32)
@@ -1774,7 +1772,7 @@ What the venue said about a request, under the number it says it with. Codes fro
 
 #### `current_time`
 
-The venue's own clock, in seconds since the epoch.
+The venue's clock, in seconds since the epoch.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -2373,7 +2371,7 @@ Historical trades, in batches, until `done`.
 
 #### `tick_option_computation`
 
-The venue's own model for an option: the volatility its price implies, the greeks, and what the model says the option and its underlying are worth.
+The venue's model for an option: the volatility its price implies, the greeks, and what the model says the option and its underlying are worth.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

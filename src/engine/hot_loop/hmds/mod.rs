@@ -36,7 +36,7 @@ pub(crate) struct TbtSubscription {
     /// a contract can carry several streams and the contract alone does not
     /// say which one a record came from.
     pub(crate) caller_req_id: i64,
-    /// The venue's own number for it, stated on every frame.
+    /// The venue's number for it, stated on every frame.
     pub(crate) venue_id: u64,
     /// The increment its prices move in.
     pub(crate) min_tick: i64,
@@ -66,17 +66,15 @@ pub(crate) struct HmdsState {
     pub(crate) pending_articles: Vec<(String, u32)>,
     pub(crate) pending_fundamental: Vec<(String, u32)>,
     pub(crate) pending_histogram: Vec<(String, u32)>,
-    pub(crate) pending_schedule: Vec<(String, u32)>,
+    /// (query name, caller's request id, end date the request stated). The
+    /// response carries no end date, so the requested one is reported back.
+    pub(crate) pending_schedule: Vec<(String, u32, String)>,
     pub(crate) pending_ticks: Vec<(String, u32, String)>,
     pub(crate) rtbar_subs: Vec<(String, u32, Option<u32>, f64)>,
     /// req_ids that should keep streaming after initial batch (keepUpToDate=True).
     pub(crate) keep_up_to_date_reqs: std::collections::HashSet<u32>,
     /// The bars still forming, one per request keeping its bars up to date.
     pub(crate) forming_bars: Vec<FormingBar>,
-    /// The keepUpToDate streams, kept so a reconnect can ask for them again.
-    /// The request goes out on CCP and the bars come back on HMDS, so losing
-    /// the HMDS socket ends the stream even though nothing cancelled it.
-    pub(crate) kut_resub: Vec<KutRequest>,
     /// The live five-second bar streams, in the shape their request needs to
     /// go out again. `rtbar_subs` holds the routing for the session that is
     /// running and cannot rebuild a request, so a reconnect had nothing to
@@ -205,21 +203,6 @@ pub(crate) struct RtBarRequest {
     pub use_rth: bool,
 }
 
-/// A live keepUpToDate stream, in the shape its request needs to go out again.
-#[derive(Clone)]
-pub(crate) struct KutRequest {
-    pub req_id: u32,
-    pub con_id: i64,
-    pub end_date_time: String,
-    pub duration: String,
-    pub bar_size: String,
-    pub what_to_show: String,
-    pub use_rth: bool,
-    pub symbol: String,
-    pub sec_type: String,
-    pub exchange: String,
-}
-
 impl HmdsState {
     pub(crate) fn new() -> Self {
         Self {
@@ -241,7 +224,6 @@ impl HmdsState {
             rtbar_subs: Vec::new(),
             keep_up_to_date_reqs: std::collections::HashSet::new(),
             forming_bars: Vec::new(),
-            kut_resub: Vec::new(),
             rtbar_resub: Vec::new(),
             cold_scanner_results: Vec::new(),
         }
@@ -254,9 +236,41 @@ impl HmdsState {
     /// while a connection is present — so the transport was stuck for the life
     /// of the process, on both the liveness timeout and the ordinary
     /// receive-error path.
-    pub(crate) fn disconnect(&mut self, hmds_conn: &mut Option<Connection>) {
+    ///
+    /// Unanswered one-shot requests are failed here. Streaming subscriptions
+    /// are restored on reconnect; one-shot requests are not, and only
+    /// historical bars carry a timeout, so the rest would never complete.
+    pub(crate) fn disconnect(&mut self, hmds_conn: &mut Option<Connection>, shared: &SharedState) {
         self.disconnected = true;
         *hmds_conn = None;
+        self.fail_pending("the historical connection went away before the venue answered", shared);
+    }
+
+    /// Report every unanswered one-shot request as failed, and forget it.
+    fn fail_pending(&mut self, why: &str, shared: &SharedState) {
+        let mut stranded: Vec<(u32, bool)> = Vec::new();
+        // Bars are failed on the data channel as well as the error channel;
+        // a caller blocked on the series needs the empty completion. Other
+        // request kinds use the error channel alone.
+        stranded.extend(self.pending_historical.drain(..).map(|(_, rid, _)| (rid, true)));
+        stranded.extend(self.pending_head_ts.drain(..).map(|(_, rid)| (rid, false)));
+        stranded.extend(self.pending_scanner.drain(..).map(|(_, rid)| (rid, false)));
+        stranded.extend(self.pending_news.drain(..).map(|(_, rid)| (rid, false)));
+        stranded.extend(self.pending_articles.drain(..).map(|(_, rid)| (rid, false)));
+        stranded.extend(self.pending_fundamental.drain(..).map(|(_, rid)| (rid, false)));
+        stranded.extend(self.pending_histogram.drain(..).map(|(_, rid)| (rid, false)));
+        stranded.extend(self.pending_schedule.drain(..).map(|(_, rid, _)| (rid, false)));
+        stranded.extend(self.pending_ticks.drain(..).map(|(_, rid, _)| (rid, false)));
+        if stranded.is_empty() {
+            return;
+        }
+        log::warn!(
+            "{} historical request(s) were still unanswered when the connection went: {why}",
+            stranded.len(),
+        );
+        for (req_id, from_historical) in stranded {
+            super::push_hmds_error(shared, req_id, why.to_string(), from_historical);
+        }
     }
 
     /// Take over a fresh socket and put the streams back on it.
@@ -276,7 +290,7 @@ impl HmdsState {
 
         // The ids belong to the session that died; each subscription is sent
         // again and takes a new one.
-        let stale: Vec<_> = self.tbt_subscriptions.drain(..).collect();
+        let stale = std::mem::take(&mut self.tbt_subscriptions);
         let wanted = stale.len();
         for dead in stale {
             let (instrument, tbt_type) = (dead.instrument, dead.kind);
@@ -335,7 +349,7 @@ impl HmdsState {
                     Ok(0) => {}
                     Err(e) => {
                         log::error!("HMDS connection lost: {e}");
-                        self.disconnect(hmds_conn);
+                        self.disconnect(hmds_conn, shared);
                         return;
                     }
                     Ok(n) => {
@@ -523,7 +537,12 @@ impl HmdsState {
                         }
                     }
                     else if let Some(resp) = crate::control::historical::parse_head_timestamp_response(xml_tag) {
-                        if let Some(pos) = self.pending_head_ts.iter().position(|_| true) {
+                        // Matched on the query name, which the response
+                        // echoes. Two head-timestamp requests can be in flight
+                        // at once.
+                        if let Some(pos) = self.pending_head_ts.iter()
+                            .position(|(qid, _)| answers(xml_tag, qid))
+                        {
                             let (_, req_id) = self.pending_head_ts.remove(pos);
                             let for_event = clone_for_event(event_tx, &resp);
                             shared.reference.push_head_timestamp(req_id, resp);
@@ -533,22 +552,43 @@ impl HmdsState {
                         }
                     }
                     else if let Some(entries) = crate::control::histogram::parse_histogram_response(xml_tag) {
-                        if let Some(pos) = self.pending_histogram.iter().position(|_| true) {
+                        // Matched on the query name, as tick and schedule
+                        // responses are.
+                        if let Some(pos) = self.pending_histogram
+                            .iter()
+                            .position(|(qid, _)| answers(xml_tag, qid))
+                        {
                             let (_, req_id) = self.pending_histogram.remove(pos);
                             shared.reference.push_histogram_data(req_id, entries);
                         }
                     }
                     else if xml_tag.contains("<ResultSetTick>") {
-                        if let Some(pos) = self.pending_ticks.iter().position(|(qid, _, _)| xml_tag.contains(qid.as_str())) {
-                            let (_, req_id, what_to_show) = self.pending_ticks.remove(pos);
-                            if let Some((_, data, done)) = crate::control::historical::parse_tick_response(xml_tag, &what_to_show) {
-                                shared.reference.push_historical_ticks(req_id, data, what_to_show, done);
+                        if let Some(pos) = self.pending_ticks.iter().position(|(qid, _, _)| answers(xml_tag, qid)) {
+                            let (_, req_id, what_to_show) = self.pending_ticks[pos].clone();
+                            match crate::control::historical::parse_tick_response(xml_tag, &what_to_show) {
+                                // A tick response may arrive in segments,
+                                // each stating whether it is the last. The
+                                // route is held until a segment states it is.
+                                Some((_, data, done)) => {
+                                    if done {
+                                        self.pending_ticks.remove(pos);
+                                    }
+                                    shared.reference.push_historical_ticks(req_id, data, what_to_show, done);
+                                }
+                                None => log::warn!(
+                                    "HMDS tick segment for req_id={req_id} did not read; \
+                                     waiting for the rest of the answer",
+                                ),
                             }
                         }
                     }
                     else if let Some(resp) = crate::control::historical::parse_schedule_response(xml_tag) {
-                        if let Some(pos) = self.pending_schedule.iter().position(|(qid, _)| *qid == resp.query_id) {
-                            let (_, req_id) = self.pending_schedule.remove(pos);
+                        if let Some(pos) = self.pending_schedule.iter().position(|(qid, _, _)| *qid == resp.query_id) {
+                            let (_, req_id, asked_to) = self.pending_schedule.remove(pos);
+                            // The response carries a start but no end, so
+                            // the end reported is the one the request stated.
+                            let mut resp = resp;
+                            resp.end_date_time = asked_to;
                             shared.reference.push_historical_schedule(req_id, resp);
                         }
                     }
@@ -563,7 +603,7 @@ impl HmdsState {
                         let ticker_id: u32 = ticker_id_str.parse().unwrap_or(0);
                         let mut matched = false;
                         for sub in &mut self.rtbar_subs {
-                            if xml_tag.contains(&sub.0) {
+                            if answers(xml_tag, &sub.0) {
                                 sub.2 = Some(ticker_id);
                                 sub.3 = min_tick;
                                 log::info!("HMDS rtbar ticker_id={} min_tick={} for req_id={}", ticker_id, min_tick, sub.1);
@@ -574,7 +614,7 @@ impl HmdsState {
                         if !matched {
                             // Check keepUpToDate historical queries
                             for (qid, req_id, _) in &self.pending_historical {
-                                if xml_tag.contains(qid.as_str()) && self.keep_up_to_date_reqs.contains(req_id) {
+                                if answers(xml_tag, qid) && self.keep_up_to_date_reqs.contains(req_id) {
                                     // Store as rtbar subscription so 35=G bars get
                                     // dispatched
                                     self.rtbar_subs.push((qid.clone(), *req_id, Some(ticker_id), min_tick));
@@ -612,7 +652,6 @@ impl HmdsState {
                                 // two id spaces are not shared, so matching on
                                 // the number alone tore down a live bar stream
                                 // that nothing had rejected.
-                                self.kut_resub.retain(|k| k.req_id != req_id);
                                 released_req_id = Some(req_id);
                                 from_historical = true;
                             } else if let Some(pos) = self.rtbar_subs.iter().position(|(q, _, _, _)| q == qid) {
@@ -633,8 +672,8 @@ impl HmdsState {
                             } else if let Some(pos) = self.pending_ticks.iter().position(|(q, _, _)| q == qid) {
                                 let (_, req_id, _) = self.pending_ticks.remove(pos);
                                 released_req_id = Some(req_id);
-                            } else if let Some(pos) = self.pending_schedule.iter().position(|(q, _)| q == qid) {
-                                let (_, req_id) = self.pending_schedule.remove(pos);
+                            } else if let Some(pos) = self.pending_schedule.iter().position(|(q, _, _)| q == qid) {
+                                let (_, req_id, _) = self.pending_schedule.remove(pos);
                                 released_req_id = Some(req_id);
                             } else if let Some(pos) = self.pending_scanner.iter().position(|(q, _)| q == qid) {
                                 let (_, req_id) = self.pending_scanner.remove(pos);
@@ -700,10 +739,17 @@ impl HmdsState {
                             }
                         }
                         "10005" => {
-                            if let Some(xml) = parsed.get(&6118)
+                            let payload = parsed.get(&6118);
+                            if payload.is_none() {
+                                log::warn!("scan response carried no payload (msg_len={})", msg.len());
+                            }
+                            if let Some(xml) = payload
                                 && let Some(result) = crate::control::scanner::parse_scanner_response(xml)
-                                    && let Some((_, req_id)) = self.pending_scanner.first() {
-                                        let req_id = *req_id;
+                                        .or_else(|| {
+                                            log::warn!("scan response payload did not parse ({} bytes)", xml.len());
+                                            None
+                                        })
+                                    && let Some(req_id) = self.scanner_answered(xml) {
                                         // ScanResponse only carries con_ids; contract
                                         // metadata must be
                                         // resolved via 35=c on CCP. Park results with
@@ -725,14 +771,38 @@ impl HmdsState {
                             if let Some(xml) = parsed.get(&6118) {
                                 let is_article = xml.contains("article_file");
                                 if is_article {
-                                    if let Some(pos) = self.pending_articles.iter().position(|_| true) {
+                                    if let Some(pos) = self.pending_articles.iter()
+                                        .position(|(qid, _)| answers(xml, qid))
+                                        .or_else(|| (!self.pending_articles.is_empty()).then_some(0))
+                                    {
                                         let (_, req_id) = self.pending_articles.remove(pos);
-                                        if let Some(raw) = &raw_bytes
-                                            && let Some((atype, text)) = crate::control::news::parse_article_payload(raw) {
-                                                shared.reference.push_news_article(req_id, atype, text);
+                                        match raw_bytes.as_deref()
+                                            .and_then(crate::control::news::parse_article_payload)
+                                        {
+                                            Some((atype, text)) => {
+                                                shared.reference.push_news_article(req_id, atype, text)
                                             }
+                                            // The response consumes the
+                                            // pending request whether or not
+                                            // the payload reads, so an
+                                            // unreadable one is reported.
+                                            None => super::push_hmds_error(
+                                                shared,
+                                                req_id,
+                                                "the news article reply carried no readable article"
+                                                    .to_string(),
+                                                false,
+                                            ),
+                                        }
                                     }
-                                } else if let Some(pos) = self.pending_news.iter().position(|_| true) {
+                                // Matched on the id the response names, as a
+                                // bar response is. Falls back to the oldest
+                                // pending request only when the response names
+                                // none.
+                                } else if let Some(pos) = self.pending_news.iter()
+                                    .position(|(qid, _)| answers(xml, qid))
+                                    .or_else(|| (!self.pending_news.is_empty()).then_some(0))
+                                {
                                     let (_, req_id) = self.pending_news.remove(pos);
                                     if let Some(raw) = &raw_bytes {
                                         let (headlines, has_more) = crate::control::news::parse_news_payload(raw);
@@ -745,15 +815,29 @@ impl HmdsState {
                         }
                         "10012" => {
                             if let Some(xml) = parsed.get(&6118) {
-                                let data = if let Some(raw) = parsed.get(&96) {
-                                    crate::control::fundamental::decompress_fundamental_data(raw.as_bytes())
-                                        .unwrap_or_else(|| raw.clone())
+                                // Tag 96 carries gzip bytes, framed by the
+                                // length on tag 95. Read from the raw frame:
+                                // the parsed field map is UTF-8 lossy, which
+                                // replaces every invalid byte and breaks
+                                // decompression.
+                                let data = if let Some(raw) = extract_raw_tag(msg, 96) {
+                                    crate::control::fundamental::decompress_fundamental_data(&raw)
+                                        .unwrap_or_else(|| String::from_utf8_lossy(&raw).into_owned())
                                 } else {
                                     xml.clone()
                                 };
-                                if let Some(pos) = self.pending_fundamental.iter().position(|_| true) {
-                                    let (_, req_id) = self.pending_fundamental.remove(pos);
+                                // Oldest first. Every fundamentals query goes
+                                // out under the single name its cancel also
+                                // uses, so two in flight are indistinguishable
+                                // on the wire.
+                                if !self.pending_fundamental.is_empty() {
+                                    let (_, req_id) = self.pending_fundamental.remove(0);
                                     shared.reference.push_fundamental_data(req_id, data);
+                                } else {
+                                    shared.market.note_unread_wire(
+                                        "historical",
+                                        "fundamentals reply with nothing pending".to_string(),
+                                    );
                                 }
                             }
                         }
@@ -762,9 +846,15 @@ impl HmdsState {
                             // pushed once per contract per session on the first
                             // historical request (any bar size). Not a bar frame and
                             // not a completion sentinel — bar completion rides
-                            // <eoq>true> in the ResultSetBar. Recognized and skipped.
+                            // <eoq>true> in the ResultSetBar. Nothing here
+                            // reads this subtype; it is recorded as unread.
+                            shared.market.note_unread_wire("historical", "6040=10022".to_string());
                         }
-                        _ => {}
+                        // An unread subtype is recorded, as an unknown
+                        // message type is.
+                        other => shared
+                            .market
+                            .note_unread_wire("historical", format!("6040={other}")),
                     }
                 }
             }
@@ -850,8 +940,8 @@ impl HmdsState {
             return;
         };
 
-        for record in &frame.records {
-            match record {
+        for stamped in &frame.records {
+            match &stamped.record {
                 TbtRecord::Trade(t) => {
                     if !belongs_on(kind_asked_for, t.unreported) {
                         continue;
@@ -865,7 +955,7 @@ impl HmdsState {
                         // hundred-millionths for a crypto — and is then held in
                         // the form every reader divides by.
                         size: scaled_size(t.size, size_tick),
-                        timestamp: frame.timestamp,
+                        timestamp: stamped.seconds,
                         exchange: t.exchange.clone(),
                         conditions: t.conditions.clone(),
                         past_limit: t.past_limit,
@@ -882,7 +972,7 @@ impl HmdsState {
                         ask: (q.ask as i64).saturating_mul(mts),
                         bid_size: scaled_size(q.bid_size, size_tick),
                         ask_size: scaled_size(q.ask_size, size_tick),
-                        timestamp: frame.timestamp,
+                        timestamp: stamped.seconds,
                         bid_past_low: q.bid_past_low,
                         ask_past_high: q.ask_past_high,
                     };
@@ -890,8 +980,11 @@ impl HmdsState {
                     emit(event_tx, Event::TbtQuote(quote));
                 }
                 // A midpoint has no place on either of the two shapes a caller
-                // reads, so it is not invented into one.
-                TbtRecord::MidPoint { .. } => {}
+                // reads, so no record is synthesised. Recorded as unread:
+                // nothing here subscribes to this stream.
+                TbtRecord::MidPoint { .. } => shared
+                    .market
+                    .note_unread_wire("tbt-frame", "MidPoint record".to_string()),
             }
         }
     }
@@ -995,7 +1088,7 @@ impl HmdsState {
             caller_req_id,
             venue_id: 0,
             // A move means nothing without the increment it is counted in.
-            // The acknowledgement states the venue's own; this stands until it
+            // The acknowledgement states the venue's; this stands until it
             // arrives.
             min_tick: min_tick_scaled,
             size_tick: 0.0,
@@ -1055,6 +1148,7 @@ impl HmdsState {
         what_to_show: &str,
         use_rth: bool,
         keep_up_to_date: bool,
+        include_expired: bool,
         symbol: &str,
         sec_type: &str,
         exchange: &str,
@@ -1107,6 +1201,7 @@ impl HmdsState {
             bar_size: bs,
             use_rth,
             keep_up_to_date,
+            include_expired,
         };
 
         let xml = crate::control::historical::build_query_xml(&req);
@@ -1130,127 +1225,7 @@ impl HmdsState {
         self.pending_historical.push((query_id, req_id, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
     }
 
-    /// Send keepUpToDate historical request via CCP (FIXCOMP compressed).
-    /// Responses arrive on HMDS, not CCP (cross-connection routing).
-    pub(crate) fn send_historical_request_via_ccp(
-        &mut self,
-        req_id: u32,
-        con_id: i64,
-        end_date_time: &str,
-        duration: &str,
-        bar_size: &str,
-        what_to_show: &str,
-        use_rth: bool,
-        symbol: &str,
-        sec_type: &str,
-        exchange: &str,
-        ccp_conn: &mut Option<Connection>,
-        hb: &mut HeartbeatState,
-        sign_key: &[u8],
-        sign_iv: &std::sync::Mutex<Vec<u8>>,
-        shared: &SharedState,
-    ) -> bool {
-        // Reuse the same request builder but with keep_up_to_date=true
-        let duration = crate::control::historical::normalize_duration(duration);
-        let end_date_time = if end_date_time.is_empty() {
-            crate::protocol::datetime::chrono_free_timestamp().to_string()
-        } else {
-            end_date_time.to_string()
-        };
-        let qid = self.next_hmds_query_id;
-        self.next_hmds_query_id += 1;
-
-        // Same shared table as the batch path — the second, five-entry copy
-        // silently downgraded "1 min" (and 16 other sizes) to Min5 on this
-        // path only. Unsupported streaming sizes reject loudly.
-        let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
-            Ok(dt) => dt,
-            Err(e) => {
-                log::error!("keepUpToDate req_id={req_id}: {e}");
-                super::push_hmds_error(shared, req_id, e, true);
-                return false;
-            }
-        };
-        let bs = match crate::control::historical::BarSize::from_api_str(bar_size) {
-            Ok(bs) if bs.supports_keep_up_to_date() => bs,
-            Ok(_) => {
-                let e = format!(
-                    "bar_size '{bar_size}' is not supported with keep_up_to_date=true: \
-                     supported sizes are 1 secs, 5 secs, 5 mins, 1 hour, 1 day",
-                );
-                log::error!("keepUpToDate req_id={req_id}: {e}");
-                super::push_hmds_error(shared, req_id, e, true);
-                return false;
-            }
-            Err(e) => {
-                log::error!("keepUpToDate req_id={req_id}: {e}");
-                super::push_hmds_error(shared, req_id, e, true);
-                return false;
-            }
-        };
-
-        let query_id = format!("hist_{qid}");
-        let req = crate::control::historical::HistoricalRequest {
-            query_id: query_id.clone(),
-            con_id: con_id as u32,
-            symbol: symbol.to_string(),
-            sec_type: hist_sec_type(sec_type),
-            exchange: hist_exchange(exchange),
-            data_type,
-            end_time: end_date_time,
-            duration: duration.to_string(),
-            bar_size: bs,
-            use_rth,
-            keep_up_to_date: true,
-        };
-
-        let xml = crate::control::historical::build_query_xml(&req);
-        if let Some(conn) = ccp_conn.as_mut() {
-            let ts = chrono_free_timestamp();
-            // FIXCOMP compress + selective HMAC 8349 signing
-            let raw = fix::fix_build(&[
-                (fix::TAG_MSG_TYPE, "W"),
-                (fix::TAG_SENDING_TIME, &ts),
-                (6118, &xml),
-            ], 0);
-            let compressed = fixcomp::fixcomp_build(&raw);
-            // Held across the send: the next IV is derived from this frame, so
-            // committing it for a frame the transport refuses or fails to put
-            // on the wire desynchronises the chain the peer verifies against,
-            // and the next authentic frame no longer matches.
-            let mut iv_guard = sign_iv.lock().unwrap();
-            let (to_send, next_iv) = if !sign_key.is_empty() {
-                let (signed, new_iv) = fix::fix_sign(&compressed, sign_key, &iv_guard);
-                (signed, Some(new_iv))
-            } else {
-                (compressed, None)
-            };
-            if let Err(e) = conn.send_raw(&to_send) {
-                // Reported as sent regardless, and the waiter registered below
-                // is exempt from the idle sweep because a keep-up-to-date
-                // request is a subscription rather than a single answer — so a
-                // refused send left a request nothing would ever answer and
-                // nothing would ever expire.
-                log::warn!("keepUpToDate req_id={req_id} not sent: {e}");
-                super::push_hmds_error(shared, req_id, e.to_string(), true);
-                return false;
-            }
-            if let Some(iv) = next_iv {
-                *iv_guard = iv;
-            }
-            hb.last_ccp_sent = Instant::now();
-        } else {
-            // Reported the same way a failed send is: the caller is waiting on a
-            // callback, and a request that never went out has no answer coming.
-            let e = "no CCP transport".to_string();
-            log::warn!("keepUpToDate req_id={req_id} not sent: {e}");
-            super::push_hmds_error(shared, req_id, e, true);
-            return false;
-        }
-        self.pending_historical.push((query_id, req_id, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
-        true
-    }
-
+    /// Tell the venue to stop serving a query.
     pub(crate) fn send_historical_cancel(&mut self, query_id: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         if let Some(conn) = hmds_conn.as_mut() {
             let xml = format!(
@@ -1282,16 +1257,34 @@ impl HmdsState {
                 return;
             }
         };
+        // Security type and exchange come from the cached contract
+        // definition. A fixed CS/SMART describes a future or currency pair as
+        // a US stock, and the request is answered for that instrument.
+        //
+        // Left empty where no definition is cached. The server reads these
+        // fields, so an invented description returns another instrument.
+        let Some(described) = shared.reference.get_contract(con_id).filter(|c| {
+            !c.sec_type.is_empty() && !c.exchange.is_empty()
+        }) else {
+            let told = format!(
+                "contract {con_id} has no definition here yet, and a head timestamp \
+                 states the contract's own type and venue"
+            );
+            log::warn!("{told}");
+            super::push_hmds_error(shared, req_id, told, false);
+            return;
+        };
         let req = crate::control::historical::HeadTimestampRequest {
             con_id: con_id as u32,
-            sec_type: "CS",
-            exchange: "SMART",
+            sec_type: described.sec_type.clone(),
+            exchange: described.exchange.clone(),
             data_type,
             use_rth,
         };
         let xml = crate::control::historical::build_head_timestamp_xml(&req);
-        let query_id = format!("hts_{}", self.next_hmds_query_id);
-        self.next_hmds_query_id += 1;
+        // The id the query goes out under, so the response can be matched to
+        // the caller. A locally generated id never reaches the wire.
+        let query_id = crate::control::historical::head_timestamp_query_id(&req);
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
@@ -1342,6 +1335,36 @@ impl HmdsState {
             log::info!("Sent scanner subscribe: req_id={req_id} scan_code={scan_code}");
         }
         self.pending_scanner.push((scan_id, req_id));
+    }
+
+    /// Which scan a response answers.
+    ///
+    /// Every scan response arrives under the same message id, so that id
+    /// cannot identify the scan. The payload carries the scan name this client
+    /// supplied on subscribe, which does.
+    ///
+    /// A response naming a scan this client is not running is delivered to the
+    /// oldest pending request.
+    fn scanner_answered(&self, xml: &str) -> Option<u32> {
+        let Some(named) = crate::control::xml::tag(xml, "id") else {
+            log::warn!(
+                "scan response names no scan — {} pending, so there is nothing \
+                 that says whose rows these are",
+                self.pending_scanner.len(),
+            );
+            return None;
+        };
+        let found = self
+            .pending_scanner
+            .iter()
+            .find(|(scan_id, _)| scan_id == named)
+            .map(|(_, req_id)| *req_id);
+        if found.is_none() {
+            // A scan this session is not running: already withdrawn, or
+            // belonging to another session on this login.
+            log::warn!("scan response names {named}, which is not a scan this session is running");
+        }
+        found
     }
 
     pub(crate) fn send_scanner_cancel(&mut self, scan_id: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
@@ -1408,17 +1431,41 @@ impl HmdsState {
         self.pending_articles.push((query_id, req_id));
     }
 
-    pub(crate) fn send_fundamental_data_request(&mut self, req_id: u32, con_id: u32, report_type: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_fundamental_data_request(&mut self, req_id: u32, con_id: u32, report_type: &str, shared: &SharedState, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let rt = match report_type {
             "ReportSnapshot" | "snapshot" => crate::control::fundamental::ReportType::Snapshot,
             "ReportFinSummary" | "finsum" => crate::control::fundamental::ReportType::FinancialSummary,
             "ReportsFinStatements" | "finstat" => crate::control::fundamental::ReportType::FinancialStatements,
-            _ => crate::control::fundamental::ReportType::Snapshot,
+            other => {
+                // Refused rather than substituted; an unsupported report
+                // type is not silently answered with a snapshot.
+                let told = format!(
+                    "report type {other:?} is not one this client carries: it is                      ReportSnapshot, ReportFinSummary or ReportsFinStatements"
+                );
+                log::warn!("{told}");
+                super::push_hmds_error(shared, req_id, told, false);
+                return;
+            }
+        };
+        // As with the head timestamp: the contract's own description, not a US
+        // stock's.
+        // As with the head timestamp: the cached contract description, empty
+        // where none is cached.
+        let Some(described) = shared.reference.get_contract(con_id as i64).filter(|c| {
+            !c.sec_type.is_empty() && !c.currency.is_empty()
+        }) else {
+            let told = format!(
+                "contract {con_id} has no definition here yet, and a fundamentals \
+                 request states the contract's own type and currency"
+            );
+            log::warn!("{told}");
+            super::push_hmds_error(shared, req_id, told, false);
+            return;
         };
         let req = crate::control::fundamental::FundamentalRequest {
             con_id,
-            sec_type: "STK",
-            currency: "USD",
+            sec_type: described.sec_type.clone(),
+            currency: described.currency.clone(),
             report_type: rt,
         };
         let xml = crate::control::fundamental::build_fundamental_request_xml(&req);
@@ -1470,16 +1517,22 @@ impl HmdsState {
         log::info!("Sent fundamental data cancel: req_id={req_id}");
     }
 
-    pub(crate) fn send_histogram_request(&mut self, req_id: u32, con_id: u32, use_rth: bool, period: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_histogram_request(&mut self, req_id: u32, con_id: u32, sec_type: &str, exchange: &str, use_rth: bool, period: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let req = crate::control::histogram::HistogramRequest {
+            // Its own query name, so two histograms in flight are told apart
+            // by the id each goes out under.
+            query_id: format!("hg_{}", self.next_hmds_query_id),
             con_id,
+            sec_type: hist_sec_type(sec_type),
+            exchange: hist_exchange(exchange),
             use_rth,
             period: period.to_string(),
             end_time: chrono_free_timestamp().to_string(),
         };
-        let xml = crate::control::histogram::build_histogram_request_xml(&req);
-        let query_id = format!("hg_{}", self.next_hmds_query_id);
         self.next_hmds_query_id += 1;
+        let xml = crate::control::histogram::build_histogram_request_xml(&req);
+        // As with the head timestamp: the id the response will name.
+        let query_id = crate::control::histogram::histogram_query_id(&req);
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
@@ -1493,13 +1546,14 @@ impl HmdsState {
         self.pending_histogram.push((query_id, req_id));
     }
 
-    pub(crate) fn send_historical_ticks_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, start_date_time: &str, end_date_time: &str, number_of_ticks: u32, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn send_historical_ticks_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, end_date_time: &str, number_of_ticks: u32, what_to_show: &str, use_rth: bool, include_expired: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
         let query_id = format!("tk_{qid}");
         let xml = crate::control::historical::build_tick_query_xml(
-            &query_id, con_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth,
-            &hist_sec_type(sec_type), &hist_exchange(exchange),
+            &query_id, con_id, end_date_time, number_of_ticks, what_to_show, use_rth,
+            &hist_sec_type(sec_type), &hist_exchange(exchange), include_expired,
         );
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
@@ -1565,7 +1619,7 @@ impl HmdsState {
             hb.last_hmds_sent = Instant::now();
             log::info!("Sent schedule request: req_id={req_id} con_id={con_id}");
         }
-        self.pending_schedule.push((query_id, req_id));
+        self.pending_schedule.push((query_id, req_id, end_date_time));
     }
 
     /// Fail historical queries whose idle deadline has passed.
@@ -1676,3 +1730,27 @@ fn scaled_size(counted: u64, size_tick: f64) -> i64 {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether a response answers the query named by `qid`.
+///
+/// Read from the name the response states rather than searched for in the
+/// payload. Searching matched any query whose name was a prefix of another:
+/// with `tk_1` and `tk_12` both in flight, the answer to `tk_12` contains
+/// `tk_1`, so it went to whichever of the two was waiting first and the other
+/// was never answered at all.
+///
+/// The stated name is not always the bare one. A news reply carries what the
+/// query asked for after it, separated from it — `news_2-headlines;;...` —
+/// so a name the reply continues past is still that query's, unless what
+/// follows reads as more of the name. `tk_1` and `tk_12` differ by a digit,
+/// which is why a digit is not a separator.
+fn answers(xml: &str, qid: &str) -> bool {
+    let Some(stated) = crate::control::xml::tag(xml, "id") else {
+        return false;
+    };
+    match stated.strip_prefix(qid) {
+        Some("") => true,
+        Some(rest) => !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'),
+        None => false,
+    }
+}

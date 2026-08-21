@@ -351,10 +351,15 @@ def test_req_sec_def_opt_params_signature():
     client.req_sec_def_opt_params(1, "AAPL", "", "STK", 265598)
 
 
-def test_req_sec_def_opt_params_defaults():
-    """Req_sec_def_opt_params works with minimal args."""
+def test_req_sec_def_opt_params_needs_every_argument():
+    """The reference client requires all five, so an omission is an error here
+    too. Defaulted, a caller who left the underlying's type off was answered
+    about the chains of a stock by that name."""
+    import pytest
+
     client = EClient(EWrapper())
-    client.req_sec_def_opt_params(1, "AAPL")
+    with pytest.raises(TypeError):
+        client.req_sec_def_opt_params(1, "AAPL")
 
 
 # ═══════════════════════════════════════
@@ -373,10 +378,24 @@ def test_req_matching_symbols_not_connected():
 # req_current_time
 # ═══════════════════════════════════════
 
+def test_req_current_time_before_connecting_is_reported():
+    """There is no venue clock before there is a venue.
+
+    This used to hand back the local clock, which is a plausible answer to a
+    question nobody could have answered, and the caller asks it precisely to
+    find out how far the two clocks are apart.
+    """
+    probe = NotConnectedProbe()
+    client = EClient(probe)
+    client.req_current_time()
+    assert probe.not_connected, "the call reports rather than answering"
+
+
 def test_req_current_time_fires_callback():
     """Req_current_time dispatches current_time callback with unix timestamp."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect("DU0000000")
     client.req_current_time()
     assert len(w.events) == 1
     assert w.events[0][0] == "current_time"
@@ -390,6 +409,7 @@ def test_req_current_time_reasonable_value():
     """Req_current_time returns a time close to now."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect("DU0000000")
     before = int(time.time())
     client.req_current_time()
     after = int(time.time())
@@ -401,6 +421,7 @@ def test_req_current_time_multiple_calls():
     """Multiple req_current_time calls each fire the callback."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect("DU0000000")
     client.req_current_time()
     client.req_current_time()
     client.req_current_time()

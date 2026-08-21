@@ -13,7 +13,7 @@ use super::*;
 pub struct SecDefFilters {
     /// Where the contract is listed.
     pub primary_exchange: String,
-    /// The venue's own name for the contract.
+    /// The venue's name for the contract.
     pub local_symbol: String,
     /// An option's expiry or a future's month.
     pub last_trade_date_or_contract_month: String,
@@ -28,7 +28,7 @@ pub struct SecDefFilters {
     /// Identifier lookup (e.g. ISIN): raw identifier and its type. When set, the
     /// lookup rides the identifier instead of the symbol.
     pub sec_id: String,
-    /// Which identifier `sec_id` is: ISIN or CUSIP.
+    /// Which identifier `sec_id` is: ISIN, CUSIP or FIGI.
     pub sec_id_type: String,
 }
 
@@ -45,7 +45,7 @@ pub struct SecDefFilters {
 /// currency pair.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ContractRef {
-    /// The venue's own number for it, or `0` where the caller named it by
+    /// The venue's number for it, or `0` where the caller named it by
     /// description and the lookup has not answered yet.
     pub con_id: i64,
     /// Its ticker.
@@ -159,6 +159,17 @@ pub enum ControlCommand {
         /// The engine's own slot for the contract.
         instrument: InstrumentId,
     },
+    /// Ask the venue to state the account's figures now.
+    ///
+    /// The session is subscribed to these at logon and the venue restates them
+    /// on its own schedule, which is unhurried: a session that has just opened
+    /// waits tens of seconds for its first set. This asks for them, which is
+    /// what a caller subscribing to account updates expects to have happened
+    /// by the time the call returns.
+    RefreshAccount {
+        /// Which account.
+        account: String,
+    },
     /// Subscribe to whole-account P&L via CCP (6040=142).
     SubscribePnl {
         /// The caller's number for the request.
@@ -225,6 +236,9 @@ pub enum ControlCommand {
         use_rth: bool,
         /// Whether the venue keeps sending once the window is answered.
         keep_up_to_date: bool,
+        /// Whether a contract that has already expired is in scope, as the
+        /// caller's contract states it.
+        include_expired: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
         filters: SecDefFilters,
@@ -334,7 +348,7 @@ pub enum ControlCommand {
         req_id: u32,
         /// The venue's id for the contract.
         con_id: u32,
-        /// Which news providers to ask, separated by the venue's own
+        /// Which news providers to ask, separated by the venue's
         /// separator.
         provider_codes: String,
         /// When the algorithm should begin.
@@ -373,6 +387,10 @@ pub enum ControlCommand {
         req_id: u32,
         /// The venue's id for the contract.
         con_id: u32,
+        /// What kind of contract it is, as the query has to describe it.
+        sec_type: String,
+        /// Where it is routed, likewise.
+        exchange: String,
         /// Whether to count only regular trading hours.
         use_rth: bool,
         /// Over what window.
@@ -399,6 +417,9 @@ pub enum ControlCommand {
         what_to_show: String,
         /// Whether to count only regular trading hours.
         use_rth: bool,
+        /// Whether a contract that has already expired is in scope, as the
+        /// caller's contract states it.
+        include_expired: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
         filters: SecDefFilters,

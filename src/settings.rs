@@ -15,9 +15,12 @@
 //! states wins over the environment, which wins over the default, so a program
 //! configured the old way keeps working.
 //!
-//! Logging is the exception, and is named as one: a process has one logger, so
-//! `log_level`, `log_dir` and `log_queue` are process-scoped and read when
-//! logging starts.
+//! Logging is the exception, and is named as one: a process has one logger, and
+//! whoever installs it holds what flushes it, so `log_level`, `log_dir` and
+//! `log_queue` are not settled per session. Logging reads them from the
+//! environment when it starts, under the names each field gives below, and a
+//! value stated on the client is the name of the setting rather than a way to
+//! set it.
 
 /// A setting stated on the client, or left to the environment.
 ///
@@ -47,11 +50,12 @@ pub struct GatewaySettings {
     pub port: Option<u16>,
     /// How long it waited to be admitted, in milliseconds.
     pub registration_timeout_ms: Option<u64>,
-    /// How much it wrote down.
+    /// How much it wrote down. Logging reads this from `IBX_LOG_LEVEL`.
     pub log_level: Option<String>,
-    /// Where it wrote it.
+    /// Where it wrote it. Logging reads this from `IBX_LOG_DIR`.
     pub log_dir: Option<String>,
-    /// Whether it buffered what it wrote.
+    /// Whether it buffered what it wrote. Logging reads this from
+    /// `IBX_LOG_QUEUE`.
     pub log_queue: Option<bool>,
 
     // ── What the gateway did with what it received ──
@@ -80,7 +84,7 @@ pub enum ExecutionReportScope {
 pub const UNAVAILABLE: &[(&str, &str)] = &[
     ("ApiMsgsPerSlice", "nothing here paces outgoing messages; the gateway ships with pacing off"),
     ("ApiTimeSliceMillis", "nothing here paces outgoing messages; the gateway ships with pacing off"),
-    ("TimestampZone", "a timestamp is delivered as the venue states it, in the venue's own terms"),
+    ("TimestampZone", "a timestamp is delivered as the venue states it, in the venue's terms"),
     ("LocalServerPort", "no local socket to listen on; this client is the client"),
     ("LocalApiPort", "no local socket to listen on; this client is the client"),
     ("TrustedIPs", "nothing connects to this client, so nothing needs trusting"),
@@ -156,7 +160,20 @@ impl GatewaySettings {
             // refuses a locale that is not a canonical one.
             encoded: stated(self.encoded.as_ref(), "IBX_ENCODED").unwrap_or_else(|| {
                 match stated(self.locale.as_ref(), "IBX_LOCALE") {
-                    Some(locale) => format!("17.0.10.0.101/W/{locale}/G"),
+                    // The identity this client announces, with the locale
+                    // segment replaced. Composing it a second time here makes a
+                    // session that states a locale announce a stale runtime and
+                    // platform while one that states none announces the current
+                    // pair.
+                    Some(locale) => match crate::config::IB_ENCODED.split('/')
+                        .collect::<Vec<_>>()
+                        .as_slice()
+                    {
+                        [runtime, platform, _, distribution] => {
+                            format!("{runtime}/{platform}/{locale}/{distribution}")
+                        }
+                        _ => crate::config::IB_ENCODED.to_string(),
+                    },
                     None => crate::config::IB_ENCODED.to_string(),
                 }
             }),
@@ -173,16 +190,33 @@ impl GatewaySettings {
                 })
                 .map_or(std::time::Duration::from_secs(5), std::time::Duration::from_millis),
             execution_reports: self.execution_reports.unwrap_or_else(|| {
-                match std::env::var("IBX_EXECUTION_REPORTS").as_deref() {
-                    Ok("today") => ExecutionReportScope::Today,
+                // However it is spelled, and said out loud when it is spelled
+                // as neither. Matched against lowercase alone, `Today` fell to
+                // the default and the session asked the venue for every
+                // execution it still holds, which is the opposite of what was
+                // stated and a heavier request on every session that opens.
+                match std::env::var("IBX_EXECUTION_REPORTS") {
+                    Ok(stated) if stated.eq_ignore_ascii_case("today") => {
+                        ExecutionReportScope::Today
+                    }
+                    Ok(stated)
+                        if !stated.is_empty() && !stated.eq_ignore_ascii_case("all") =>
+                    {
+                        log::warn!(
+                            "IBX_EXECUTION_REPORTS names neither today nor all: {stated}. \
+                             This session asks for every execution the venue holds",
+                        );
+                        ExecutionReportScope::All
+                    }
                     _ => ExecutionReportScope::All,
                 }
             }),
             island_for_nasdaq: self.island_for_nasdaq.unwrap_or_else(|| {
-                !matches!(
-                    std::env::var("IBX_ISLAND_FOR_NASDAQ").as_deref(),
-                    Ok("0") | Ok("false") | Ok("no")
-                )
+                // As above: `False` turned the setting on, because only the
+                // lowercase spelling counted as off.
+                !std::env::var("IBX_ISLAND_FOR_NASDAQ").is_ok_and(|stated| {
+                    ["0", "false", "no"].iter().any(|off| stated.eq_ignore_ascii_case(off))
+                })
             }),
         }
     }
@@ -232,7 +266,14 @@ mod tests {
         unsafe { std::env::set_var("IBX_LOCALE", "fr_FR") };
         let from_environment = GatewaySettings::default().resolve();
         assert_eq!(from_environment.locale, "fr_FR");
-        assert_eq!(from_environment.encoded, "17.0.10.0.101/W/fr_FR/G");
+        // The identity this client announces with its locale set into it, read
+        // from that identity rather than written out again: the two spellings
+        // drifted apart the moment either changed.
+        assert_eq!(
+            from_environment.encoded,
+            crate::config::IB_ENCODED.replace(crate::config::IB_LOCALE, "fr_FR"),
+        );
+        assert_ne!(from_environment.encoded, crate::config::IB_ENCODED);
 
         let stated = GatewaySettings {
             locale: Some("ja_JP".to_string()),
@@ -246,7 +287,38 @@ mod tests {
         assert_eq!(neither.timezone, "UTC");
         assert_eq!(neither.build, crate::config::IB_BUILD);
         assert_eq!(neither.port, crate::config::MISC_PORT);
-        assert!(neither.island_for_nasdaq, "the counterpart's own default");
+        assert!(neither.island_for_nasdaq, "the documented default");
+
+        // However it is spelled. Compared against the lowercase spelling
+        // alone, `Today` resolves to every execution the venue holds and
+        // `False` leaves the older exchange spelling on, each the opposite of
+        // what is written. Checked here rather than in a test of its own,
+        // because these are the process's own variables and a second test
+        // setting them races this one reading them.
+        for spelling in ["today", "Today", "TODAY"] {
+            unsafe { std::env::set_var("IBX_EXECUTION_REPORTS", spelling) };
+            assert_eq!(
+                GatewaySettings::default().resolve().execution_reports,
+                ExecutionReportScope::Today,
+                "{spelling} asked for every execution the venue holds",
+            );
+        }
+        unsafe { std::env::set_var("IBX_EXECUTION_REPORTS", "yesterday") };
+        assert_eq!(
+            GatewaySettings::default().resolve().execution_reports,
+            ExecutionReportScope::All,
+            "a value naming neither keeps the default",
+        );
+        unsafe { std::env::remove_var("IBX_EXECUTION_REPORTS") };
+
+        for spelling in ["false", "False", "NO", "0"] {
+            unsafe { std::env::set_var("IBX_ISLAND_FOR_NASDAQ", spelling) };
+            assert!(
+                !GatewaySettings::default().resolve().island_for_nasdaq,
+                "{spelling} left the older spelling on",
+            );
+        }
+        unsafe { std::env::remove_var("IBX_ISLAND_FOR_NASDAQ") };
     }
 
     /// Every field of the stated form reaches the resolved one. A field added

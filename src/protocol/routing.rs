@@ -23,8 +23,8 @@ use std::collections::{BTreeSet, HashMap};
 
 /// What the venue calls a book, richest first.
 ///
-/// A market listing more than one is offering the better of them, and this is
-/// the order the counterpart asks in.
+/// A market listing more than one is offering the better of them; this is the
+/// order to ask in.
 const BOOK_ENDPOINTS: [&str; 4] = ["AggDeep", "Deep2", "DeepX", "Deep"];
 
 /// One market, and where to ask about it.
@@ -32,7 +32,7 @@ const BOOK_ENDPOINTS: [&str; 4] = ["AggDeep", "Deep2", "DeepX", "Deep"];
 pub struct Route {
     /// The exchange this row is for, as the venue names it.
     pub exchange: String,
-    /// The security type, in the venue's own spelling.
+    /// The security type, in the venue's spelling.
     pub sec_type: String,
     /// What can be asked for here: `Top`, `Deep`, `Frz`, `AggDeep` and the
     /// rest, or `*` for every endpoint.
@@ -74,10 +74,20 @@ impl RoutingTable {
     /// carries the frame's own trailer behind it, and a row this client cannot
     /// read is one row rather than a reason to discard the table.
     pub fn parse(body: &str) -> Self {
-        let rows = body
+        let rows: Vec<Route> = body
             .split(';')
             .filter_map(Self::parse_row)
             .collect();
+        // A row this cannot read is a market the session will not know it may
+        // route to, and it reads afterwards exactly like a market the venue
+        // does not serve. Said out loud so the two can be told apart.
+        let offered = body.split(';').filter(|r| !r.trim().is_empty()).count();
+        if offered > rows.len() {
+            log::warn!(
+                "the routing table names {offered} rows and {} could be read;                  the markets in the rest will read as unserved",
+                rows.len(),
+            );
+        }
         Self { rows }
     }
 
@@ -96,7 +106,7 @@ impl RoutingTable {
             exchange: f[0].to_string(),
             sec_type: f[1].to_string(),
             endpoints: f[2].split('|').map(|e| e.to_string()).collect(),
-            // Skipped rather than defaulted: -1 is the venue's own value for
+            // Skipped rather than defaulted: -1 is the venue's value for
             // a market's own book, so a row whose book cannot be read would
             // otherwise be reported as naming one.
             book: f[3].parse().ok()?,
@@ -141,7 +151,7 @@ impl RoutingTable {
     /// The same, for a contract known to be in a sub-market the venue names.
     ///
     /// Only a caller that knows which one can ask this; the qualifier is the
-    /// venue's own name for it.
+    /// venue's name for it.
     pub fn find_within(
         &self, exchange: &str, sec_type: &str, endpoint: &str, qualifier: &str,
     ) -> Option<&Route> {
@@ -166,9 +176,8 @@ impl RoutingTable {
     ///
     /// Where a market serves more than one, the richest is taken first: an
     /// aggregated book, then the second-generation one, then the exchange's
-    /// own, then the plain one. That is the order the counterpart offers a
-    /// contract, and it asks in that order for the same reason — a market
-    /// listing both `Deep2` and `Deep` is offering the better of the two.
+    /// own, then the plain one. A market listing both `Deep2` and `Deep` is
+    /// offering the better of the two.
     pub fn book_endpoint(&self, exchange: &str, sec_type: &str) -> Option<&str> {
         const RICHEST_FIRST: [&str; 4] = BOOK_ENDPOINTS;
         let served = |name: &str| {
@@ -298,9 +307,9 @@ mod tests {
         assert_eq!(others.book_endpoint("IBEFP", "COMB"), Some("Deep2"));
         assert_eq!(others.book_endpoint("SEHK", "OPT"), Some("DeepX"));
 
-        // A market offering more than one is offering the better of them, and
-        // the order is the counterpart's rather than the order the row happens
-        // to list.
+        // A market offering more than one is offering the better of them.
+        // Selection follows the richest-first order, not the order the row
+        // happens to list.
         let several = RoutingTable::parse("X,STK,Deep|Deep2,-1,*,h.example,4000,f");
         assert_eq!(several.book_endpoint("X", "STK"), Some("Deep2"));
 

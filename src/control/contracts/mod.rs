@@ -250,7 +250,13 @@ impl SecurityType {
             "FUT" => Self::Future,
             "CASH" => Self::Forex,
             "IND" => Self::Index,
-            "BOND" => Self::Bond,
+            // Both spellings are read. Tag 167 carries each type's own name,
+            // with one exception: a stock is written CS. BOND is therefore
+            // what is sent and taken. CORP is the standard FIX spelling and
+            // arrives on a bond definition, so it is understood rather than
+            // read as an unknown type, which leaves the definition with no
+            // security type at all.
+            "CORP" | "BOND" => Self::Bond,
             "WAR" => Self::Warrant,
             "FOP" => Self::FutureOption,
             "CFD" => Self::Cfd,
@@ -286,7 +292,7 @@ pub enum OptionRight {
 /// Full contract definition.
 #[derive(Debug, Clone)]
 pub struct ContractDefinition {
-    /// The venue's own id for this contract.
+    /// Contract id assigned by the venue.
     pub con_id: u32,
     /// Its ticker.
     pub symbol: String,
@@ -298,7 +304,7 @@ pub struct ContractDefinition {
     pub primary_exchange: String,
     /// What it is priced in.
     pub currency: String,
-    /// The venue's own name for it.
+    /// The venue's name for it.
     pub local_symbol: String,
     /// Which class within its chain.
     pub trading_class: String,
@@ -415,7 +421,7 @@ pub struct ContractDefinition {
     pub subcategory: String,
     /// Where the issuer is.
     pub country: String,
-    /// The venue's own name for its market.
+    /// The venue's name for its market.
     pub market_name: String,
     /// Its ISIN.
     pub isin: String,
@@ -479,7 +485,11 @@ impl Default for ContractDefinition {
         Self {
             con_id: 0,
             symbol: String::new(),
-            sec_type: SecurityType::Stock,
+            // Not a stock until the venue says so. Defaulting to one reports
+            // a definition that carries no security type as a stock, and an
+            // order built from it names a stock the venue does not hold.
+            // `Other` states nothing, which is what is known.
+            sec_type: SecurityType::Other,
             exchange: String::new(),
             primary_exchange: String::new(),
             currency: String::new(),
@@ -773,13 +783,18 @@ fn named_tag(name: &str) -> Option<u32> {
 ///
 /// The point of asking a venue for a contract is to be told about it, and a
 /// field that arrives and is dropped is a fact about the contract nobody can
-///  This names them so the gap is measurable rather than suspected.
+/// reach. This names them so the gap is measurable rather than suspected.
+///
+/// The envelope's own tags are not among them: they are on every message the
+/// venue sends and say nothing about the contract. Counting them overstates
+/// the gap by ten and names the sequence number and the message type as
+/// dropped contract data.
 pub fn unread_definition_tags(data: &[u8]) -> Vec<u32> {
     let read = tags_read_from_a_definition();
     let mut unread: Vec<u32> = fix::fix_parse(data)
         .keys()
         .copied()
-        .filter(|t| !read.contains(t))
+        .filter(|t| !read.contains(t) && !is_session_field(*t))
         .collect();
     unread.sort_unstable();
     unread.dedup();
@@ -831,7 +846,7 @@ pub fn parse_secdef_response(
     // The name a US stock on Nasdaq is handed back under. Set here, where the
     // definition is read, so every path that hands one to a caller carries it
     // rather than each remembering to. What goes back out routes under the
-    // venue's own name regardless: `exchange_to_fix` translates it.
+    // venue's name regardless: `exchange_to_fix` translates it.
     let sec_type = def.sec_type.to_api_str();
     def.exchange = delivered_exchange(&def.exchange, sec_type, &def.currency, island_for_nasdaq);
     def.primary_exchange =
@@ -1476,7 +1491,7 @@ pub const TAG_MATCH_DERIVATIVE_TYPES: u32 = 6070;
 /// A single matching symbol result.
 #[derive(Debug, Clone)]
 pub struct SymbolMatch {
-    /// The venue's own id for this contract.
+    /// Contract id assigned by the venue.
     pub con_id: u32,
     /// Its ticker.
     pub symbol: String,
@@ -1486,7 +1501,7 @@ pub struct SymbolMatch {
     pub currency: String,
     /// Where it is listed.
     pub primary_exchange: String,
-    /// The venue's own description.
+    /// The venue's description.
     pub description: String,
     /// Which kinds of derivative it lists on it.
     pub derivative_types: Vec<String>,
@@ -1529,7 +1544,9 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
                 current = Some(SymbolMatch {
                     con_id: 0,
                     symbol: val.clone(),
-                    sec_type: SecurityType::Stock,
+                    // As above: a match the venue stated no type for is not a
+                    // stock, it is a match with no type stated.
+                    sec_type: SecurityType::Other,
                     currency: String::new(),
                     primary_exchange: String::new(),
                     description: String::new(),
@@ -1719,10 +1736,9 @@ fn push_unique(out: &mut Vec<String>, entry: &str) {
 
 /// The name a US stock trading on Nasdaq is handed back under.
 ///
-/// The counterpart hands it back under the older spelling, and a program
-/// written against it compares against that spelling. It does so when the
-/// venue has turned the translation on for the session — which it does — and
-/// when its own setting says to, which is its default.
+/// The reference API hands it back under the older spelling, and a program
+/// written against that compares against it. The translation applies when the
+/// venue has enabled it for the session, which is the default.
 ///
 /// Only US stocks: the older name means nothing for a future, and nothing
 /// outside the United States trades under it.
@@ -1848,7 +1864,10 @@ impl From<&SymbolMatch> for crate::types::model::ContractDescription {
         Self {
             con_id: m.con_id as i64,
             symbol: m.symbol.clone(),
-            sec_type: m.sec_type.to_fix().to_string(),
+            // The user-visible spelling, which is what every other callback
+            // hands back and what a request path takes: a stock reached this
+            // one as CS, the wire name for it, which no request accepts.
+            sec_type: m.sec_type.to_api_str().to_string(),
             currency: m.currency.clone(),
             primary_exchange: m.primary_exchange.clone(),
             derivative_sec_types: m.derivative_types.clone(),

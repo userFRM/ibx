@@ -95,6 +95,14 @@ def test_both_clients_refuse_the_same_arguments():
     that is not the one they asked for, and nothing says so."""
     rust = _refused("src/api/client")
     python = _refused("src/python/compat/client")
+    # Two empty sets are equal, and both surfaces spelling the refusal
+    # differently — or one of them dropping it — leaves two empty sets. The
+    # sentence this reads for is the one both surfaces write, so finding none is
+    # this test having stopped reading rather than there being none to find.
+    assert rust and python, (
+        "neither surface was found refusing anything, so the sentence this "
+        "reads for has changed and this test is no longer reading it"
+    )
     assert rust == python, (
         "an argument is refused by one client and accepted by the other: "
         f"rust only={sorted(rust - python)} python only={sorted(python - rust)}"
@@ -110,7 +118,13 @@ def test_both_clients_refuse_the_same_arguments():
 #: price per leg. Closing it needs a class for a leg price, which this surface
 #: does not have, and a way back from what the engine keeps to the condition
 #: classes, which have only the way in.
-_FILLED_BY_THE_CALLER = {"conditions", "order_combo_legs", "order_misc_options"}
+#: The two the forward conversion reads through the interpreter rather than
+#: copying, and which the reverse has nothing to build from: the venue's report
+#: of an order names its legs without saying what each was struck at, and the
+#: miscellaneous options are the caller's own strings, which no report echoes.
+#: `conditions` is not among them — the engine reads those back off the wire and
+#: the reverse conversion builds them into the classes a caller states them in.
+_FILLED_BY_THE_CALLER = {"order_combo_legs", "order_misc_options"}
 
 
 def _to_api_body() -> str:
@@ -151,7 +165,7 @@ def test_every_order_field_comes_back_from_the_engine():
     conversion above, and it went wrong the same way.
     """
     source = (ROOT / "src/python/compat/class_orders.rs").read_text()
-    at = source.index("pub(crate) fn from_api(a: &crate::types::model::Order, under: i32)")
+    at = source.index("pub(crate) fn from_api(\n        py: Python")
     body = source[at:source.index("\n    }\n", at)]
     assert ".." not in body.split("Self {", 1)[1], (
         "the conversion back ends in a struct-update fallback, so a field "

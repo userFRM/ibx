@@ -34,7 +34,7 @@ impl EClient {
 
     // ── Server Time ──
 
-    /// The venue's own clock, as `reqCurrentTime` reports it.
+    /// The venue's clock, as `reqCurrentTime` reports it.
     ///
     /// Every message the venue sends is stamped with the time it sent it, and
     /// the last one is held. A caller asking for the server's time is asking
@@ -104,14 +104,12 @@ impl EClient {
     // the call and is told why it cannot be served, rather than finding
     // nothing at all.
 
-    /// Not served. Reports why on the error callback.
-    /// What volatility a price implies, under the venue's own model.
+    /// What volatility a price implies, under the venue's model.
     ///
-    /// This protocol carries no request for it — the counterpart works it out
-    /// in its own process — so it is worked out here, anchored to what the
-    /// venue last said its own model made of this contract. Where it has said
-    /// nothing, nothing is answered: a number from a rate nobody stated would
-    /// be this library's invention.
+    /// This protocol carries no request for it, so the value is computed
+    /// here, anchored to the venue's last stated model output for this
+    /// contract. Where the venue has stated no model, nothing is answered rather
+    /// than a number derived from an unstated rate.
     pub fn calculate_implied_volatility(
         &self, req_id: i64, contract: &super::Contract,
         option_price: f64, under_price: f64,
@@ -127,9 +125,17 @@ impl EClient {
                     implied_vol: volatility,
                     opt_price: option_price,
                     und_price: under_price,
-                    ..Default::default()
+                    ..unstated()
                 },
             ),
+            // The venue states a model for a contract that is watched. Asking
+            // about one nobody is watching opens the watch and answers when
+            // the model arrives, which is what the caller asked for — rather
+            // than refusing the question for having been asked first.
+            Err(why) if self.watch_for_option_model(req_id, contract, true,
+                                                    option_price, under_price) => {
+                let _ = why;
+            }
             Err(why) => self.report_reason(req_id, &why),
         }
     }
@@ -148,14 +154,92 @@ impl EClient {
                     implied_vol: volatility,
                     opt_price: price,
                     und_price: under_price,
-                    ..Default::default()
+                    ..unstated()
                 },
             ),
+            // As above: the watch is opened and the answer follows.
+            Err(why) if self.watch_for_option_model(req_id, contract, false,
+                                                    volatility, under_price) => {
+                let _ = why;
+            }
             Err(why) => self.report_reason(req_id, &why),
         }
     }
 
-    /// The contract's terms and the venue's own model for it, or why neither
+    /// Answer a kept implied-volatility question, if the venue has stated a
+    /// model by now. Answers whether it did.
+    pub(crate) fn solve_and_push_volatility(
+        &self, req_id: i64, calc: &super::PendingOptionCalc,
+    ) -> bool {
+        let (opt, und) = (calc.option_price, calc.under_price);
+        match self.solve_option(&calc.contract, |terms, model| {
+            crate::control::option_model::implied_volatility(terms, model, opt, und)
+        }) {
+            Ok(volatility) => {
+                self.shared.market.push_option_computation(crate::types::OptionComputation {
+                    answers: Some(req_id),
+                    implied_vol: volatility,
+                    opt_price: opt,
+                    und_price: und,
+                    ..unstated()
+                });
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Answer a kept option-price question, if the venue has stated a model by
+    /// now. Answers whether it did.
+    pub(crate) fn solve_and_push_price(
+        &self, req_id: i64, calc: &super::PendingOptionCalc,
+    ) -> bool {
+        let (vol, und) = (calc.option_price, calc.under_price);
+        match self.solve_option(&calc.contract, |terms, model| {
+            crate::control::option_model::option_price(terms, model, vol, und)
+        }) {
+            Ok(price) => {
+                self.shared.market.push_option_computation(crate::types::OptionComputation {
+                    answers: Some(req_id),
+                    implied_vol: vol,
+                    opt_price: price,
+                    und_price: und,
+                    ..unstated()
+                });
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Watch a contract so the venue states a model for it, and keep the
+    /// question until it does.
+    ///
+    /// Answers whether the question was kept, which is only false where the
+    /// watch could not be opened at all.
+    fn watch_for_option_model(
+        &self, req_id: i64, contract: &super::Contract,
+        wants_volatility: bool, option_price: f64, under_price: f64,
+    ) -> bool {
+        // Knowing the contract is not watching it, and only a watched
+        // contract has a model stated for it. Already watching, the question
+        // is kept as it stands and the model is waited for.
+        let watched = self.core.cached_instrument(contract.con_id).is_some_and(|instrument| {
+            self.core.instrument_to_req.lock().unwrap().contains_key(&instrument)
+        });
+        if !watched && self.req_mkt_data(req_id, contract, "", false, false).is_err() {
+            return false;
+        }
+        self.pending_option_calcs.lock().unwrap().insert(req_id, super::PendingOptionCalc {
+            contract: contract.clone(),
+            wants_volatility,
+            option_price,
+            under_price,
+        });
+        true
+    }
+
+    /// The contract's terms and the venue's model for it, or why neither
     /// question can be answered.
     fn solve_option(
         &self,
@@ -168,11 +252,27 @@ impl EClient {
         self.core.solve_option(&self.shared, contract, solve)
     }
 
-    /// Nothing was started, so there is nothing to stop.
-    pub fn cancel_calculate_implied_volatility(&self, _req_id: i64) {}
+    /// Withdraw a question that was waiting on the venue to state a model.
+    ///
+    /// A question answered from a model already stated started nothing and
+    /// stops nothing. One that opened a watch to get an answer withdraws it
+    /// here, so a caller that changes its mind is not left watching a
+    /// contract it no longer asks about.
+    pub fn cancel_calculate_implied_volatility(&self, req_id: i64) {
+        self.forget_option_calc(req_id);
+    }
 
-    /// Nothing was started, so there is nothing to stop.
-    pub fn cancel_calculate_option_price(&self, _req_id: i64) {}
+    /// As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
+    pub fn cancel_calculate_option_price(&self, req_id: i64) {
+        self.forget_option_calc(req_id);
+    }
+
+    /// Drop a kept question and the watch it opened.
+    fn forget_option_calc(&self, req_id: i64) {
+        if self.pending_option_calcs.lock().unwrap().remove(&req_id).is_some() {
+            let _ = self.cancel_mkt_data(req_id);
+        }
+    }
 
     // ── Display Groups ──
 
@@ -227,6 +327,12 @@ impl EClient {
     // ── Server Log Level ──
 
     /// Set server log level. Matches `setServerLogLevel` in C++.
+    ///
+    /// Taken and not applied. The session holds no log level of its own and this
+    /// protocol carries no message asking the venue to change one, so what a
+    /// caller states here is written to this client's log and nothing else.
+    /// This client's own logging is set where the process sets it, through
+    /// `IBX_LOG_LEVEL` or `RUST_LOG`.
     pub fn set_server_log_level(&self, log_level: i32) {
         let level = match log_level {
             1 => "error",
@@ -252,20 +358,40 @@ impl EClient {
     /// waiting on a callback that will never come cannot tell that apart from
     /// a slow gateway, so it is told on the channel a venue uses to say it
     /// will not act on a request.
-    fn report_reason(&self, req_id: i64, reason: &Refusal) {
+    pub(crate) fn report_reason(&self, req_id: i64, reason: &Refusal) {
         self.shared.reference.push_historical_error(
             req_id.max(0) as u32, reason.code, reason.message.clone(),
         );
     }
 }
 
+/// A computation with nothing worked out yet.
+///
+/// Fields these two calls do not compute carry the unset sentinel, `f64::MAX`,
+/// which is the reference client's mark for a field that was not sent. Zero is a
+/// valid greek and cannot stand for one.
+fn unstated() -> crate::types::OptionComputation {
+    crate::types::OptionComputation {
+        delta: f64::MAX,
+        gamma: f64::MAX,
+        vega: f64::MAX,
+        theta: f64::MAX,
+        pv_dividend: f64::MAX,
+        ..Default::default()
+    }
+}
+
 /// The word the venue names an advisor's configuration partition by, from the
 /// number the reference client names it by.
 fn advisor_partition(fa_data_type: i32) -> Option<&'static str> {
+    // The order the venue reads them in. Rotated by one here, every
+    // advisor request asked for a different partition than the caller named:
+    // a request for groups returned aliases, and one for aliases returned
+    // nothing the caller could use.
     match fa_data_type {
-        1 => Some("Aliases"),
-        2 => Some("Group"),
-        3 => Some("Profile"),
+        1 => Some("Group"),
+        2 => Some("Profile"),
+        3 => Some("Aliases"),
         _ => None,
     }
 }
@@ -280,11 +406,15 @@ mod advisor_partition_tests {
     /// The reference client names a partition by a number and the venue names
     /// it by a word. Both clients here send the word, and a number that
     /// stands for nothing is refused rather than sent as an empty partition.
+    ///
+    /// The order the venue reads: one names the group, two the
+    /// profile, three the aliases. Rotated by one, every advisor request asked
+    /// for a partition the caller had not named, and this test agreed with it.
     #[test]
     fn each_number_names_the_partition_the_venue_knows() {
-        assert_eq!(advisor_partition(1), Some("Aliases"));
-        assert_eq!(advisor_partition(2), Some("Group"));
-        assert_eq!(advisor_partition(3), Some("Profile"));
+        assert_eq!(advisor_partition(1), Some("Group"));
+        assert_eq!(advisor_partition(2), Some("Profile"));
+        assert_eq!(advisor_partition(3), Some("Aliases"));
     }
 
     #[test]

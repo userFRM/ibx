@@ -79,7 +79,7 @@ pub struct OrderUpdate {
     /// What the order has paid on average so far, as the report states it.
     /// Zero when nothing has filled.
     pub avg_price: Price,
-    /// The venue's own id for it, stable across sessions.
+    /// Order id assigned by the venue, stable across sessions.
     pub perm_id: i64,
     /// The order it is a child of, where the venue states one.
     pub parent_id: i64,
@@ -128,6 +128,11 @@ pub const ORD_PEG_BENCH: u8 = 8;
 /// than restating a guess as an instruction.
 pub const TIF_UNSTATED: u8 = 0;
 
+/// FIX "LT" — Limit if Touched
+pub const ORD_LIT: u8 = 10;
+/// FIX "TSL" — Trailing Stop Limit
+pub const ORD_TRAIL_LIMIT: u8 = 11;
+
 /// Not a real OrdType — marker for what-if orders
 pub const ORD_WHAT_IF: u8 = 9;
 
@@ -146,6 +151,8 @@ pub fn ord_type_fix_str(t: u8) -> &'static str {
         // for one had an order the venue read as another type.
         ORD_PEG_MKT | ORD_PEG_MID => "P",
         ORD_PEG_BENCH => "PB",
+        ORD_LIT => "LT",
+        ORD_TRAIL_LIMIT => "TSL",
         b'1' => "1", b'2' => "2", b'3' => "3", b'4' => "4", b'5' => "5",
         b'B' => "B", b'E' => "E", b'J' => "J", b'K' => "K",
         b'P' => "P", b'R' => "R", b'U' => "U",
@@ -217,13 +224,18 @@ pub enum AdjustedOrderType {
 }
 
 impl AdjustedOrderType {
-    /// The code the wire carries this as.
+    /// The code the wire carries this as, on tag 6261.
+    ///
+    /// Tag 6261 carries the order type's own registry code, not the tag-40
+    /// number a caller sees. Three and four are that code for a stop and a
+    /// stop limit, but a trailing stop's is `T` and a trailing stop limit's is
+    /// `TSL`. Neither `7` nor `8` is a valid code on this tag.
     pub fn fix_code(&self) -> &'static str {
         match self {
             Self::Stop => "3",
             Self::StopLimit => "4",
-            Self::Trail => "7",
-            Self::TrailLimit => "8",
+            Self::Trail => "T",
+            Self::TrailLimit => "TSL",
         }
     }
 }
@@ -240,9 +252,12 @@ pub struct Order {
     /// The price, scaled by `PRICE_SCALE`.
     pub price: Price,
     /// How much, scaled by `QTY_SCALE`.
-    pub qty: u32,
-    /// How much has filled.
-    pub filled: u32,
+    pub qty: Qty,
+    /// How much has filled, scaled by `QTY_SCALE`. Same unit as `qty`: a
+    /// fill arrives as a decimal and the two are compared against each other,
+    /// so holding one in whole shares and the other in fractions reconciles
+    /// a fractional order against the wrong total.
+    pub filled: Qty,
     /// Where it stands.
     pub status: OrderStatus,
     /// FIX tag 40 OrdType: b'1'=MKT, b'2'=LMT, b'3'=STP, b'4'=STPLMT, b'P'=TRAIL, etc.
@@ -257,7 +272,7 @@ pub struct Order {
 
 impl Order {
     /// Create a new tracked order with FIX type metadata.
-    pub fn new(order_id: OrderId, instrument: InstrumentId, side: Side, qty: u32, price: Price, ord_type: u8, tif: u8, stop_price: Price) -> Self {
+    pub fn new(order_id: OrderId, instrument: InstrumentId, side: Side, qty: Qty, price: Price, ord_type: u8, tif: u8, stop_price: Price) -> Self {
         Self { order_id, instrument, side, price, qty, filled: 0, status: OrderStatus::PendingSubmit, ord_type, tif, stop_price }
     }
 }
@@ -330,8 +345,13 @@ pub struct OrderAttrs {
     pub sweep_to_fill: bool,
     /// All or none (FIX tag 18=G ExecInst). Fill entire qty or nothing.
     pub all_or_none: bool,
-    /// Implied volatility for a volatility order, as a decimal (0.25 = 25%),
-    /// on tag 9816. Zero means the caller set none.
+    /// Implied volatility for a volatility order, on tag 9816, as the number
+    /// of percent: 25 is a quarter, not 0.25. Zero means the caller set none.
+    ///
+    /// Tag 9816 carries the percentage, and the value is written as it
+    /// stands. The reference API also takes a percentage, so a caller's value
+    /// passes straight through. Held as a decimal instead, the order would go
+    /// out at a hundredth of the volatility asked for.
     pub volatility: f64,
     /// Let the venue better the price where it can, on tag 6557.
     pub seek_price_improvement: bool,
@@ -350,7 +370,11 @@ pub struct OrderAttrs {
     /// Whether the client asked for this order or the account holder did, on
     /// tags 6488 and 1028 — which is a regulatory statement, not a preference.
     pub solicited: bool,
-    /// Whether a person entered it rather than a program.
+    /// Whether a person entered it rather than a program, on tag 1028.
+    ///
+    /// `i32::MAX` when the caller stated nothing, which is the one value the
+    /// tag is left off for. Tag 1028 carries a character: `Y` for one, `N` for
+    /// zero. Any other value reads as unstated, so a numeral is discarded.
     pub manual_order_indicator: i32,
     /// Route to the best bid or offer where the order is marketable, on tag 8265.
     pub route_marketable_to_bbo: bool,
@@ -498,13 +522,21 @@ pub struct OrderAttrs {
     /// Fixed-point Price value (e.g., $1000 = 1000 * PRICE_SCALE).
     pub cash_qty: Price,
     /// Conditions that must be met before the order activates (IB tag 6136+).
+    ///
+    /// Kept for an order this session placed, so reading one back returns the
+    /// conditions it was placed with. An order this session did not place
+    /// arrives without them: the tags are written on the way out and nothing
+    /// reads them on the way in, and whether the venue states them on a report
+    /// at all is not established here. They repeat per condition, so a reader
+    /// for them needs the same grouping a position frame does rather than a
+    /// flat parse.
     pub conditions: Vec<OrderCondition>,
     /// Cancel order if conditions are no longer met (IB tag 6128). Default false.
     pub conditions_cancel_order: bool,
     /// Evaluate conditions outside regular trading hours (IB tag 6151). Default false.
     pub conditions_ignore_rth: bool,
     /// OCA cancellation semantics (IB tag 6209), 1..=4. 0 = not set, which
-    /// emits the gateway default 3 (ReduceOnFillNonBlock). Only emitted when
+    /// emits the protocol default 3 (ReduceOnFillNonBlock). Only emitted when
     /// an OCA group is present.
     pub oca_type: u8,
     /// Exercise or lapse the option this order names (tag 6809): 1 exercises,
@@ -545,7 +577,7 @@ impl Default for OrderAttrs {
             active_stop_time: String::new(),
             post_only: false,
             solicited: false,
-            manual_order_indicator: 0,
+            manual_order_indicator: i32::MAX,
             route_marketable_to_bbo: false,
             imbalance_only: false,
             allow_pre_open: false,
@@ -610,7 +642,7 @@ impl Default for OrderAttrs {
 
 /// A condition that must be met before an order activates.
 /// IB evaluates conditions server-side; order stays PreSubmitted until triggered.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum OrderCondition {
     /// Trigger when an instrument's price crosses a threshold.
     Price {
@@ -851,7 +883,7 @@ pub enum OrderKind {
     /// Pegged to a benchmark contract's price.
     ///
     /// `ref_exchange` is where the reference contract is quoted, by name. The
-    /// field it travels in refuses a number, and the gateway will not accept
+    /// field it travels in refuses a number, and the venue will not accept
     /// the order without it or without the units field the encoder supplies.
     PegBench {
         /// The price, scaled by `PRICE_SCALE`.
@@ -893,7 +925,7 @@ pub enum OrderKind {
     },
     /// A market order that becomes a limit if it cannot fill at the touch.
     Mtl,
-    /// A market order with the venue's own protection against a bad print.
+    /// A market order with venue-side protection against a bad print.
     MktPrt,
     /// A stop with that same protection.
     StpPrt {
@@ -963,7 +995,7 @@ pub enum OrderKind {
         /// percent value scaled (1.00% = PRICE_SCALE). 0 = not set.
         adjusted_trailing_amount: Price,
         /// Unit of `adjusted_trailing_amount` on the wire (tag 6269): 0 = amount,
-        /// 100 = percent. Other values are rejected by the gateway.
+        /// 100 = percent. Other values are rejected.
         adjustable_trailing_unit: i32,
     },
     /// Adaptive limit. Tags: 18=e (adaptive wrapper), 847=Adaptive,
@@ -987,6 +1019,12 @@ pub enum OrderKind {
     WhatIf {
         /// Fill at this price or better, scaled by `PRICE_SCALE`.
         price: Price,
+        /// The price the previewed type triggers at, scaled by `PRICE_SCALE`,
+        /// where it has one. A preview is encoded as the order type it
+        /// previews: the limit price rides tag 44 and the trigger tag 99, so
+        /// one price cannot state both. A stop states only `aux`; a stop limit
+        /// states both.
+        aux: Price,
         /// What kind of order is being previewed.
         ord_type: u8,
     },
@@ -1103,7 +1141,7 @@ pub enum OrderRequest {
         /// Whether it buys or sells.
         side: Side,
         /// How much, scaled by `QTY_SCALE`.
-        qty: u32,
+        qty: Qty,
         /// Where the parent enters.
         entry_price: Price,
         /// Where the profit-taking child sits.
@@ -1122,7 +1160,7 @@ pub enum OrderRequest {
         /// Whether it buys or sells.
         side: Side,
         /// How much, scaled by `QTY_SCALE`.
-        qty: u32,
+        qty: Qty,
         /// What kind of order this is, and the prices that kind needs.
         kind: OrderKind,
         /// How long the order lives, as the wire carries it.
@@ -1141,20 +1179,6 @@ pub enum OrderRequest {
     /// What-If order: sends a limit order with tag 6091=1 for margin/commission
     /// preview.
     /// The order is NOT placed — response comes back as 35=8 with margin fields.
-    /// Fractional shares limit order. Qty is fixed-point, `QTY_SCALE`, and
-    /// goes out on tag 38 as a decimal string.
-    SubmitLimitFractional {
-        /// The caller's number for the order.
-        order_id: OrderId,
-        /// The engine's own slot for the contract.
-        instrument: InstrumentId,
-        /// Whether it buys or sells.
-        side: Side,
-        /// How much, scaled by `QTY_SCALE`.
-        qty: Qty, // QTY_SCALE fixed-point
-        /// The price, scaled by `PRICE_SCALE`.
-        price: Price,
-    },
     /// Withdraw one order.
     Cancel {
         /// The caller's number for the order.
@@ -1169,7 +1193,7 @@ pub enum OrderRequest {
     ///
     /// Carries what the replace message states rather than restating the
     /// tracked original, so a caller changing the order type, the time-in-force
-    /// or the trigger has the change reach the gateway.
+    /// or the trigger has the change reach the venue.
     /// A zero `tif` states none and leaves the resting value in force.
     Modify {
         /// The caller's number for the order.
@@ -1177,14 +1201,14 @@ pub enum OrderRequest {
         /// The price, scaled by `PRICE_SCALE`.
         price: Price,
         /// How much, scaled by `QTY_SCALE`.
-        qty: u32,
+        qty: Qty,
         /// Outside-RTH flag from the order the caller resubmitted. The replace
         /// asserts tag 6433 from this rather than from the tracked record,
         /// which has no field for it.
         outside_rth: bool,
         /// Order type and time-in-force the replacement carries, as
-        /// `Order::ord_type` and `Order::tif`. A replace that restated neither
-        /// left the gateway to infer them, and it inferred a plain limit.
+        /// `Order::ord_type` and `Order::tif`. A replace restating neither
+        /// leaves both to be inferred, and the inference is a plain limit.
         ord_type: u8,
         /// How long the order lives, as the wire carries it.
         tif: u8,
@@ -1202,7 +1226,6 @@ impl OrderRequest {
             Self::Cancel { order_id } => *order_id,
             Self::CancelAll { .. } => 0,
             Self::Modify { order_id, .. } => *order_id,
-            | Self::SubmitLimitFractional { order_id, .. }
             | Self::SubmitEx { order_id, .. } => *order_id,
             Self::SubmitBracket { parent_id, .. } => *parent_id,
         }
@@ -1230,7 +1253,6 @@ impl OrderRequest {
         match self {
             Self::Cancel { .. } | Self::Modify { .. } => None,
             Self::CancelAll { instrument }
-            | Self::SubmitLimitFractional { instrument, .. }
             | Self::SubmitEx { instrument, .. }
             | Self::SubmitBracket { instrument, .. } => Some(*instrument),
         }
@@ -1242,15 +1264,19 @@ impl OrderRequest {
     /// subscription seen yet) leaves prices unchanged. Percent-based fields
     /// (trailing percent) and non-price fields (quantities, cash amounts)
     /// are not touched.
-    pub fn snap_prices(&mut self, tick: i64) {
+    pub fn snap_prices(&mut self, tick: i64) -> bool {
         if tick <= 0 {
-            return;
+            return false;
         }
-        let s = |p: &mut Price| *p = snap_to_tick(*p, tick);
+        let mut moved = false;
+        let mut s = |p: &mut Price| {
+            let snapped = snap_to_tick(*p, tick);
+            moved |= snapped != *p;
+            *p = snapped;
+        };
         match self {
             Self::Cancel { .. } | Self::CancelAll { .. } => {}
             Self::Modify { price, stop_price, .. } => { s(price); s(stop_price); }
-            Self::SubmitLimitFractional { price, .. } => s(price),
             Self::SubmitBracket { entry_price, take_profit, stop_loss, .. } => {
                 s(entry_price); s(take_profit); s(stop_loss);
             }
@@ -1263,8 +1289,8 @@ impl OrderRequest {
                     price, pegged_change_amount, ref_change_amount, starting_price, ..
                 } => { s(price); s(pegged_change_amount); s(ref_change_amount); s(starting_price); }
                 OrderKind::Adaptive { price, .. }
-                | OrderKind::Algo { price, .. }
-                | OrderKind::WhatIf { price, .. } => s(price),
+                | OrderKind::Algo { price, .. } => s(price),
+                OrderKind::WhatIf { price, aux, .. } => { s(price); s(aux); }
                 OrderKind::AdjustableStop {
                     stop_price, trigger_price, adjusted_stop_price, adjusted_stop_limit_price,
                     adjusted_trailing_amount, adjustable_trailing_unit, ..
@@ -1287,6 +1313,7 @@ impl OrderRequest {
                 | OrderKind::Rel { offset } => s(offset),
             },
         }
+        moved
     }
 }
 
@@ -1353,8 +1380,8 @@ pub struct CompletedOrder {
     pub instrument: InstrumentId,
     /// What it finished as.
     pub status: OrderStatus,
-    /// How much filled.
-    pub filled_qty: i64,
+    /// How much filled, scaled by `QTY_SCALE`.
+    pub filled_qty: Qty,
     /// When, in nanoseconds since the epoch.
     pub timestamp_ns: u64,
 }

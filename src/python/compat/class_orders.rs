@@ -560,7 +560,7 @@ impl Default for Order {
             delta_neutral_short_sale_slot: 0,
             designated_location: String::new(),
             discretionary_up_to_limit_price: false,
-            dont_use_auto_price_for_hedge: true,
+            dont_use_auto_price_for_hedge: false,
             duration: i32::MAX,
             exempt_code: -1,
             ext_operator: String::new(),
@@ -780,6 +780,11 @@ impl Order {
     fn set_algo_id_alias(&mut self, v: String) { self.algo_id = v; }
     #[getter(algoParams)]
     fn get_algo_params_alias(&self) -> Vec<TagValue> { self.algo_params.clone() }
+    // Writable as well as readable. Readable only, parameters set under the
+    // reference client's name for them do not reach the order, and it goes out
+    // on the venue's default settings for that algo.
+    #[setter(algoParams)]
+    fn set_algo_params_alias(&mut self, v: Vec<TagValue>) { self.algo_params = v; }
     #[getter(algoStrategy)]
     fn get_algo_strategy_alias(&self) -> String { self.algo_strategy.clone() }
     #[setter(algoStrategy)]
@@ -1048,10 +1053,21 @@ impl Order {
     fn get_opt_out_smart_routing_alias(&self) -> bool { self.opt_out_smart_routing }
     #[setter(optOutSmartRouting)]
     fn set_opt_out_smart_routing_alias(&mut self, v: bool) { self.opt_out_smart_routing = v; }
+    // What the order holds, rather than an empty list whatever it holds: read
+    // by the name the reference client uses, a combination priced per leg
+    // reported no legs at all, and the same for the miscellaneous options.
     #[getter(orderComboLegs)]
-    fn get_order_combo_legs_alias(&self) -> Vec<Py<PyAny>> { Vec::new() }
+    fn get_order_combo_legs_alias(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
+        self.order_combo_legs.iter().map(|l| l.clone_ref(py)).collect()
+    }
+    #[setter(orderComboLegs)]
+    fn set_order_combo_legs_alias(&mut self, v: Vec<Py<PyAny>>) { self.order_combo_legs = v; }
     #[getter(orderMiscOptions)]
-    fn get_order_misc_options_alias(&self) -> Vec<Py<PyAny>> { Vec::new() }
+    fn get_order_misc_options_alias(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
+        self.order_misc_options.iter().map(|o| o.clone_ref(py)).collect()
+    }
+    #[setter(orderMiscOptions)]
+    fn set_order_misc_options_alias(&mut self, v: Vec<Py<PyAny>>) { self.order_misc_options = v; }
     #[getter(orderRef)]
     fn get_order_ref_alias(&self) -> String { self.order_ref.clone() }
     #[setter(orderRef)]
@@ -1206,6 +1222,10 @@ impl Order {
     fn set_sl_order_type_alias(&mut self, v: String) { self.sl_order_type = v; }
     #[getter(smartComboRoutingParams)]
     fn get_smart_combo_routing_params_alias(&self) -> Vec<TagValue> { self.smart_combo_routing_params.clone() }
+    #[setter(smartComboRoutingParams)]
+    fn set_smart_combo_routing_params_alias(&mut self, v: Vec<TagValue>) {
+        self.smart_combo_routing_params = v;
+    }
     #[getter(softDollarTier)]
     fn get_soft_dollar_tier(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let tier = SoftDollarTierPy {
@@ -1214,6 +1234,24 @@ impl Order {
             display_name: self.soft_dollar_tier_display_name.clone(),
         };
         Ok(Py::new(py, tier)?.into_any())
+    }
+    /// The three strings the tier is, taken from whatever states them.
+    ///
+    /// The tier is one object on the reference client and three fields here.
+    /// Readable only, an order directing its commission to a tier reaches the
+    /// venue with none, which is half a soft-dollar arrangement.
+    #[setter(softDollarTier)]
+    fn set_soft_dollar_tier(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
+        let text = |names: [&str; 2]| -> String {
+            names
+                .iter()
+                .find_map(|n| v.getattr(*n).ok().and_then(|a| a.extract::<String>().ok()))
+                .unwrap_or_default()
+        };
+        self.soft_dollar_tier_name = text(["name", "name"]);
+        self.soft_dollar_tier_val = text(["val", "value"]);
+        self.soft_dollar_tier_display_name = text(["displayName", "display_name"]);
+        Ok(())
     }
     #[getter(startingPrice)]
     fn get_starting_price_alias(&self) -> f64 { self.starting_price }
@@ -1357,20 +1395,27 @@ impl Order {
     /// no fallback, so one added to either side fails to compile rather than
     /// quietly defaulting.
     ///
-    /// The three that hold Python objects are the exception, and they come
-    /// back empty: the engine holds what they meant, not the objects they were
-    /// read from, and there is nothing here to build one out of — the leg
-    /// prices have no class on this surface at all, and the conditions have
-    /// classes with no way back from what the engine keeps. So an order read
-    /// back and placed again is placed without its conditions and without a
-    /// price per leg. Hold the order that was placed, or state them again.
-    /// `under` is the number this session connected under. The reference
-    /// client keys a trade by it with the order id, so an order reported under
-    /// a client that did not place it is a second trade the caller never sees
-    /// updated — and the engine order carries whatever the caller set, which is
-    /// nothing at all on an order they did not place.
-    pub(crate) fn from_api(a: &crate::types::model::Order, under: i32) -> Self {
-        Self {
+    /// The fields holding Python objects are built back from what the engine
+    /// keeps. The conditions are: each kind the venue carries has a class on
+    /// this surface with the same fields, so an order read back states what it
+    /// is waiting for and can be placed again as it stood.
+    ///
+    /// The price per leg of a combination is not, because nothing reads one
+    /// back: the venue's report of an order names its legs without saying what
+    /// each was struck at, so the engine holds none to carry. An order read
+    /// back and placed again is priced as a whole. Hold the order that was
+    /// placed to state them again.
+    /// `under` is the client id this session connected with, and stands in only
+    /// where the venue named no client. The reference client keys a trade by
+    /// client id together with order id, so an order placed elsewhere keeps the
+    /// client id it was placed under. Restating it as this session's collides
+    /// with whatever this session holds under the same order id.
+    pub(crate) fn from_api(
+        py: Python<'_>,
+        a: &crate::types::model::Order,
+        under: i32,
+    ) -> PyResult<Self> {
+        Ok(Self {
             order_id: a.order_id,
             action: a.action.clone(),
             total_quantity: a.total_quantity,
@@ -1407,7 +1452,11 @@ impl Order {
             trigger_price: a.trigger_price,
             adjusted_stop_price: a.adjusted_stop_price,
             adjusted_stop_limit_price: a.adjusted_stop_limit_price,
-            conditions: Vec::new(),
+            conditions: a
+                .conditions
+                .iter()
+                .map(|held| super::class_conditions::condition_from_internal(py, held))
+                .collect::<PyResult<Vec<_>>>()?,
             conditions_ignore_rth: a.conditions_ignore_rth,
             conditions_cancel_order: a.conditions_cancel_order,
             account: a.account.clone(),
@@ -1427,7 +1476,7 @@ impl Order {
             bond_accrued_interest: a.bond_accrued_interest.clone(),
             clearing_account: a.clearing_account.clone(),
             clearing_intent: a.clearing_intent.clone(),
-            client_id: under,
+            client_id: if a.client_id != 0 { a.client_id } else { under },
             compete_against_best_offset: a.compete_against_best_offset,
             continuous_update: a.continuous_update,
             customer_account: a.customer_account.clone(),
@@ -1539,7 +1588,7 @@ impl Order {
             volatility: a.volatility,
             volatility_type: a.volatility_type,
             what_if_type: a.what_if_type,
-        }
+        })
     }
 
     /// Convert to Rust API Order.
@@ -1899,4 +1948,12 @@ impl SoftDollarTierPy {
     #[new]
     #[pyo3(signature = ())]
     fn new() -> Self { Self::default() }
+
+    // The reference client runs the words together. Without this, a tier built
+    // the way that client builds one carried its name and its value and lost
+    // what it is called.
+    #[getter(displayName)]
+    fn get_display_name_alias(&self) -> String { self.display_name.clone() }
+    #[setter(displayName)]
+    fn set_display_name_alias(&mut self, v: String) { self.display_name = v; }
 }

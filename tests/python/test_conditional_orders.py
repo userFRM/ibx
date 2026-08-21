@@ -170,7 +170,12 @@ class TestConditionalOrder:
         time.sleep(3)
 
     def test_conditional_sell_triggers_immediately(self):
-        """Place conditional SELL IWM when SPY < current-1. Should trigger on last price."""
+        """Place conditional SELL IWM when SPY is under current+1, which it is.
+
+        The condition is already true, so the order activates on arrival. The
+        docstring said current-1, which is a condition that would never be met
+        and the opposite of what the code below sends.
+        """
         spy_price = self._get_price(5003, make_contract(SPY_CON_ID, "SPY"))
         iwm_price = self._get_price(5004, make_contract(IWM_CON_ID, "IWM"))
         if not spy_price or not iwm_price:
@@ -196,7 +201,11 @@ class TestConditionalOrder:
         order.outside_rth = True
         order.conditions = [cond]
         order.conditions_ignore_rth = True
-        order.conditions_cancel_order = True
+        # False: this asks the venue to activate the order when the condition
+        # is met. True asks it to withdraw the order instead, which is the
+        # opposite of what this test is named after, and the assertion below
+        # was written so that either outcome passed.
+        order.conditions_cancel_order = False
 
         self.client.place_order(oid, make_contract(IWM_CON_ID, "IWM"), order)
 
@@ -205,11 +214,14 @@ class TestConditionalOrder:
         status_names = [s[0] for s in statuses]
         print(f"  Conditional SELL statuses: {status_names}")
 
-        # Should activate (PreSubmitted->Submitted or even Filled if LMT crosses)
-        # If condition triggers, order becomes active
-        if statuses:
-            # It should have progressed past initial state
-            assert len(status_names) > 0
+        # The condition is already true, so the order is live. `if statuses:`
+        # around an assertion that a non-empty list is non-empty could not
+        # fail: silence, a refusal and a withdrawal all passed.
+        assert status_names, "the conditional order was never acknowledged"
+        assert status_names[-1] in ("PreSubmitted", "Submitted", "Filled"), (
+            f"a condition that is already met must leave the order live, "
+            f"got {status_names}"
+        )
 
         # Cancel if still open
         self.client.cancel_order(oid, "")

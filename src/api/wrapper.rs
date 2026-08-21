@@ -33,7 +33,7 @@ pub trait Wrapper {
     /// validation, 200 for a contract description that matches nothing, 504
     /// for a call made with no session.
     fn error(&mut self, req_id: i64, error_code: i64, error_string: &str, advanced_order_reject_json: &str) {}
-    /// The venue's own clock, in seconds since the epoch.
+    /// The venue's clock, in seconds since the epoch.
     fn current_time(&mut self, time: i64) {}
 
     // ── Market Data ──
@@ -232,7 +232,7 @@ pub trait Wrapper {
 
     // ── Option Computations / Definitions ──
 
-    /// The venue's own model for an option: the volatility its price
+    /// The venue's model for an option: the volatility its price
     /// implies, the greeks, and what the model says the option and its
     /// underlying are worth.
     fn tick_option_computation(

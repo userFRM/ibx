@@ -158,6 +158,11 @@ fn ccp_reconnect_with_cached_credentials() {
     let full_auth_ms = t0.elapsed().as_millis();
 
     let auth = ReconnectAuth {
+        // The account this session opened under. A reconnect names it in every
+        // message of the opening it states, so a test that leaves it empty
+        // rebuilds a connection the venue reports nothing on — which is the
+        // thing this test exists to catch.
+        account_id: gw.account_id.clone(),
         trading_port: gw.trading_port,
         hmds_port: gw.hmds_port,
         secdef_port: gw.secdef_port,
@@ -195,16 +200,41 @@ fn ccp_reconnect_with_cached_credentials() {
     let result = reconnect_ccp(&auth);
     let reconnect_ms = t1.elapsed().as_millis();
 
-    match result {
-        Ok(conn) => {
-            println!("CCP reconnect: {}ms (SOFT_TOKEN) | seq={}", reconnect_ms, conn.seq);
-            println!("PASS: CCP reconnect with cached K works, {:.1}x speedup",
-                full_auth_ms as f64 / reconnect_ms.max(1) as f64);
-        }
-        Err(e) => {
-            println!("CCP reconnect failed after {reconnect_ms}ms: {e}");
-            println!("INFO: Server requires full SRP for CCP — auto-reconnect not possible without password");
-            // This is an expected outcome — don't fail the test, just report
+    // Required, not reported. Reconnecting on the cached session is how every
+    // dropped connection in this client is repaired, so a failure here is that
+    // repair not working — and a run that prints it and passes says the
+    // opposite of what it found.
+    let mut conn = result.unwrap_or_else(|e| {
+        panic!("CCP reconnect on the cached session failed after {reconnect_ms}ms: {e}")
+    });
+    println!("CCP reconnect: {}ms (SOFT_TOKEN) | seq={}", reconnect_ms, conn.seq);
+
+    // And the venue speaks on it. A connection that opens and reports nothing
+    // is the failure the opening sequence exists to prevent: it logs on, takes
+    // orders and acknowledges them, and never says what became of them.
+    let answer_by = Instant::now() + Duration::from_secs(20);
+    let mut frames = 0usize;
+    while Instant::now() < answer_by {
+        match conn.try_recv() {
+            Ok(0) => panic!("the rebuilt connection was closed by the venue"),
+            Ok(_) => {
+                frames += conn.extract_frames().len();
+                if frames > 0 {
+                    break;
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => panic!("reading the rebuilt connection failed: {e}"),
         }
     }
+    assert!(
+        frames > 0,
+        "the connection was rebuilt and the venue said nothing on it — which is \
+         what a reconnect that skips the opening sequence looks like",
+    );
+
+    println!("PASS: CCP reconnect with cached K works, {:.1}x speedup, {frames} frame(s) answered",
+        full_auth_ms as f64 / reconnect_ms.max(1) as f64);
 }

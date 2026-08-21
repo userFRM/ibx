@@ -14,7 +14,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
         shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -37,7 +37,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
                 tick_count += 1;
                 if phase == 0 && tick_count >= 5 {
                     buy_order_id = next_order_id();
-                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: buy_order_id, instrument, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: buy_order_id, instrument, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     buy_sent_at = Some(Instant::now());
                     phase = 1;
                 }
@@ -47,7 +47,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
                     buy_price = fill.price;
                     buy_rtt_us = buy_sent_at.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
                     sell_order_id = next_order_id() + 1;
-                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_order_id, instrument: fill.instrument, side: Side::Sell, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_order_id, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     sell_sent_at = Some(Instant::now());
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
@@ -119,15 +119,18 @@ pub(super) fn phase_limit_order(conns: Conns) -> Conns {
 
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
-    let submitted = true;
     let mut order_acked = false;
     let mut cancel_sent = false;
     let mut order_cancelled = false;
@@ -139,6 +142,13 @@ pub(super) fn phase_limit_order(conns: Conns) -> Conns {
 
     while Instant::now() < deadline {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            // This order's own reports. The session is told about every order
+            // on the account, so another one acknowledged this one on its
+            // behalf and the round-trip figures below timed a report that
+            // belonged to something else.
+            if update.order_id != order_id {
+                continue;
+            }
             match update.status {
                 OrderStatus::Submitted | OrderStatus::PreSubmitted => {
                     if !order_acked {
@@ -166,6 +176,13 @@ pub(super) fn phase_limit_order(conns: Conns) -> Conns {
     }
     let _ = submit_time; // suppress unused warning
 
+    // Withdrawn unless terminal. An unanswered order is a skip below, and the
+    // limit sent with it would rest at the venue until the close.
+    if !(order_cancelled || rejected_order.is_some()) {
+        let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }));
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
@@ -173,7 +190,8 @@ pub(super) fn phase_limit_order(conns: Conns) -> Conns {
         return conns;
     }
 
-    assert!(submitted, "Order was never submitted");
+    // The two assertions below are the claim: the venue answered, and it withdrew
+    // the order.
     if skip_unacked_if_closed(order_acked) { return conns; }
     assert!(order_acked, "Order was never acknowledged");
     assert!(order_cancelled, "Order was never cancelled");
@@ -188,7 +206,7 @@ pub(super) fn phase_limit_order(conns: Conns) -> Conns {
 pub(super) fn phase_stop_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 8: Stop Order Submit + Cancel (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -205,10 +223,14 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -219,7 +241,7 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
     let mut rejected_order: Option<u64> = None;
     // The replacement is addressed by the original id: the wire ClOrdID is
     // `orderId.version`, so every report for a replaced order maps back to
-    // `order_id`. A distinct id here only books a local record the gateway will
+    // `order_id`. A distinct id here only books a local record the venue will
     // never mention, and the cancel that follows would address nothing. The
     // client passes the same id for exactly this reason.
 
@@ -233,7 +255,7 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
                     } else if !order_acked {
                         order_acked = true;
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                            order_id, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -265,7 +287,7 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
 pub(super) fn phase_outside_rth(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 10: Outside RTH Limit Order (GTC+OutsideRTH, SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
         false)
 }
 
@@ -274,7 +296,7 @@ pub(super) fn phase_outside_rth(conns: Conns) -> Conns {
 pub(super) fn phase_stop_limit_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 15: Stop Limit Order Submit + Cancel (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::StopLimit { price: 998_00_000_000, stop_price: 999_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::StopLimit { price: 998_00_000_000, stop_price: 999_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -291,10 +313,14 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let buy_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: buy_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: buy_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -313,7 +339,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
                     buy_price = fill.price;
                     buy_comm = fill.commission;
                     let sid = next_order_id() + 1;
-                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: fill.instrument, side: Side::Sell, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
                     sell_price = fill.price;
@@ -350,7 +376,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     // this suite the session belongs to the harness, not the engine. So the
     // order is still waiting, correctly, and no fill can arrive. That is the
     // connection, not the market.
-    if shared.take_connection_lost() {
+    if super::common::lost_unasked(&shared) {
         super::common::note_lost_session("an order left waiting when the session went away");
         println!("  SKIP: the trading connection was lost, so the order is still waiting to be sent\n");
         return conns;
@@ -390,10 +416,14 @@ pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Sell, qty: 1, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -405,7 +435,7 @@ pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
     while Instant::now() < deadline {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
             match update.status {
-                // A resting stop is held by the gateway rather than worked,
+                // A resting stop is held by the venue rather than worked,
                 // and it acknowledges that as PreSubmitted: captured live,
                 // this order goes PreSubmitted -> PendingCancel -> Cancelled
                 // and never reports Submitted at all. The rest of the suite
@@ -450,15 +480,19 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
     // The replacement is addressed by the original id: the wire ClOrdID is
     // `orderId.version`, so every report for a replaced order maps back to
-    // `order_id`. A distinct id here only books a local record the gateway will
+    // `order_id`. A distinct id here only books a local record the venue will
     // never mention, and the cancel that follows would address nothing. The
     // client passes the same id for exactly this reason.
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -478,7 +512,7 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
                     } else if !order_acked {
                         order_acked = true;
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                            order_id, price: 1_00_000_000, qty: 2, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            order_id, price: 1_00_000_000, qty: 2 * ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -510,7 +544,7 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
 pub(super) fn phase_trailing_stop(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 19: Trailing Stop Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::TrailingStop { trail_stop_price: 0, trail_amt: 5_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::TrailingStop { trail_stop_price: 0, trail_amt: 5_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -519,7 +553,7 @@ pub(super) fn phase_trailing_stop(conns: Conns) -> Conns {
 pub(super) fn phase_trailing_stop_limit(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 20: Trailing Stop Limit Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::TrailingStopLimit { trail_stop_price: 0, lmt_offset: 1_00_000_000, trail_amt: 5_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::TrailingStopLimit { trail_stop_price: 0, lmt_offset: 1_00_000_000, trail_amt: 5_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -536,10 +570,14 @@ pub(super) fn phase_limit_ioc(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'3', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'3', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -580,9 +618,13 @@ pub(super) fn phase_limit_fok(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'4', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'4', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -629,7 +671,7 @@ pub(super) fn phase_limit_fok(conns: Conns) -> Conns {
 pub(super) fn phase_stop_gtc(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 23: Stop GTC Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Stop { stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
         false)
 }
 
@@ -638,7 +680,7 @@ pub(super) fn phase_stop_gtc(conns: Conns) -> Conns {
 pub(super) fn phase_stop_limit_gtc(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 24: Stop Limit GTC Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::StopLimit { price: 1_00_000_000, stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::StopLimit { price: 1_00_000_000, stop_price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } },
         false)
 }
 
@@ -647,7 +689,7 @@ pub(super) fn phase_stop_limit_gtc(conns: Conns) -> Conns {
 pub(super) fn phase_mit_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 25: Market if Touched Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Mit { stop_price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Mit { stop_price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -656,7 +698,7 @@ pub(super) fn phase_mit_order(conns: Conns) -> Conns {
 pub(super) fn phase_lit_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 26: Limit if Touched Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Lit { price: 2_00_000_000, stop_price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Lit { price: 2_00_000_000, stop_price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -665,7 +707,7 @@ pub(super) fn phase_lit_order(conns: Conns) -> Conns {
 pub(super) fn phase_moc_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 27: MOC Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Moc, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Moc, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -674,7 +716,7 @@ pub(super) fn phase_moc_order(conns: Conns) -> Conns {
 pub(super) fn phase_loc_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 28: LOC Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Loc { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Loc { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -691,15 +733,19 @@ pub(super) fn phase_bracket_order(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let parent_id = next_order_id();
     let tp_id = parent_id + 1;
     let sl_id = parent_id + 2;
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitBracket {
-        parent_id, tp_id, sl_id, instrument: inst_id, side: Side::Buy, qty: 1,
+        parent_id, tp_id, sl_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE,
         entry_price: 1_00_000_000, take_profit: 2_00_000_000, stop_loss: 50_000_000,
     })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -746,7 +792,7 @@ pub(super) fn phase_bracket_order(conns: Conns) -> Conns {
 pub(super) fn phase_adaptive_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 30: Adaptive Algo Limit Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
             kind: OrderKind::Adaptive { price: 1_00_000_000, priority: AdaptivePriority::Normal },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
@@ -757,7 +803,7 @@ pub(super) fn phase_adaptive_order(conns: Conns) -> Conns {
 pub(super) fn phase_rel_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 31: Relative Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Rel { offset: 1_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Rel { offset: 1_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -766,16 +812,21 @@ pub(super) fn phase_rel_order(conns: Conns) -> Conns {
 pub(super) fn phase_limit_opg(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 32: Limit OPG Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'2', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'2', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
         false)
 }
 
 // ─── Phase 33b: Instructions that must reach the wire ───
 
+/// The reference is read back from the venue's report by the helper, which
+/// checks it against what was stated here. Whether the venue took the other two
+/// is not answerable from this side: its report carries no counterpart for
+/// either, so nothing distinguishes an instruction it applied from one it
+/// ignored. They are checked where they can be, on the way out.
 pub(super) fn phase_carried_instructions_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 33b: Order Ref + Not Held + Open/Close (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
             kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
             attrs: OrderAttrs {
                 outside_rth: true,
@@ -799,7 +850,7 @@ pub(super) fn phase_carried_instructions_order(conns: Conns) -> Conns {
 pub(super) fn phase_iceberg_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 33: Iceberg Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 200, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { display_size: 100, outside_rth: true, ..OrderAttrs::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 200 * ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { display_size: 100, outside_rth: true, ..OrderAttrs::default() } },
         false)
 }
 
@@ -808,7 +859,7 @@ pub(super) fn phase_iceberg_order(conns: Conns) -> Conns {
 pub(super) fn phase_hidden_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 34: Hidden Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { hidden: true, outside_rth: true, ..OrderAttrs::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { hidden: true, outside_rth: true, ..OrderAttrs::default() } },
         false)
 }
 
@@ -817,7 +868,7 @@ pub(super) fn phase_hidden_order(conns: Conns) -> Conns {
 pub(super) fn phase_short_sell(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 35: Short Sell Limit Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::ShortSell, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::ShortSell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -826,7 +877,7 @@ pub(super) fn phase_short_sell(conns: Conns) -> Conns {
 pub(super) fn phase_trailing_stop_pct(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 36: Trailing Stop Percent Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::TrailPct { trail_stop_price: 0, trail_pct: 250 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::TrailPct { trail_stop_price: 0, trail_pct: 250 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -843,19 +894,23 @@ pub(super) fn phase_oca_group(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let oca = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
     let id1 = next_order_id();
     let id2 = id1 + 1;
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: id1, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
+        order_id: id1, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
         attrs: OrderAttrs { oca_group: oca, outside_rth: true, ..OrderAttrs::default() },
     })).unwrap();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: id2, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 2_00_000_000 }, tif: b'1',
+        order_id: id2, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 2_00_000_000 }, tif: b'1',
         attrs: OrderAttrs { oca_group: oca, outside_rth: true, ..OrderAttrs::default() },
     })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -905,7 +960,7 @@ pub(super) fn phase_oca_group(conns: Conns) -> Conns {
 pub(super) fn phase_mtl_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 38: Market to Limit Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Mtl, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Mtl, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -914,7 +969,7 @@ pub(super) fn phase_mtl_order(conns: Conns) -> Conns {
 pub(super) fn phase_mkt_prt_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 39: Market with Protection Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::MktPrt, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::MktPrt, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -923,7 +978,7 @@ pub(super) fn phase_mkt_prt_order(conns: Conns) -> Conns {
 pub(super) fn phase_stp_prt_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 40: Stop with Protection Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1, kind: OrderKind::StpPrt { stop_price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::StpPrt { stop_price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -932,7 +987,7 @@ pub(super) fn phase_stp_prt_order(conns: Conns) -> Conns {
 pub(super) fn phase_mid_price_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 41: Mid-Price Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::MidPrice { price_cap: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::MidPrice { price_cap: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
 
@@ -941,7 +996,7 @@ pub(super) fn phase_mid_price_order(conns: Conns) -> Conns {
 pub(super) fn phase_snap_mkt_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 42: Snap to Market Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapMkt { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::SnapMkt { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -950,7 +1005,7 @@ pub(super) fn phase_snap_mkt_order(conns: Conns) -> Conns {
 pub(super) fn phase_snap_mid_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 43: Snap to Midpoint Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapMid { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::SnapMid { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -959,7 +1014,7 @@ pub(super) fn phase_snap_mid_order(conns: Conns) -> Conns {
 pub(super) fn phase_snap_pri_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 44: Snap to Primary Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::SnapPri { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::SnapPri { offset: 0 }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -968,7 +1023,7 @@ pub(super) fn phase_snap_pri_order(conns: Conns) -> Conns {
 pub(super) fn phase_peg_mkt_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 45: Pegged to Market Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::PegMkt { offset: 0, price_cap: 1000 * ibx::types::PRICE_SCALE }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::PegMkt { offset: 0, price_cap: 1000 * ibx::types::PRICE_SCALE }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -977,7 +1032,7 @@ pub(super) fn phase_peg_mkt_order(conns: Conns) -> Conns {
 pub(super) fn phase_peg_mid_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 46: Pegged to Midpoint Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::PegMid { offset: 0, price_cap: 1000 * ibx::types::PRICE_SCALE }, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::PegMid { offset: 0, price_cap: 1000 * ibx::types::PRICE_SCALE }, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -986,7 +1041,7 @@ pub(super) fn phase_peg_mid_order(conns: Conns) -> Conns {
 pub(super) fn phase_discretionary_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 47: Discretionary Amount Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { discretionary_amt: 5_000_000, outside_rth: true, ..OrderAttrs::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { discretionary_amt: 5_000_000, outside_rth: true, ..OrderAttrs::default() } },
         false)
 }
 
@@ -995,7 +1050,7 @@ pub(super) fn phase_discretionary_order(conns: Conns) -> Conns {
 pub(super) fn phase_sweep_to_fill_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 48: Sweep to Fill Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { sweep_to_fill: true, outside_rth: true, ..OrderAttrs::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { sweep_to_fill: true, outside_rth: true, ..OrderAttrs::default() } },
         false)
 }
 
@@ -1004,7 +1059,7 @@ pub(super) fn phase_sweep_to_fill_order(conns: Conns) -> Conns {
 pub(super) fn phase_all_or_none_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 49: All or None Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { all_or_none: true, outside_rth: true, ..OrderAttrs::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { all_or_none: true, outside_rth: true, ..OrderAttrs::default() } },
         false)
 }
 
@@ -1013,7 +1068,7 @@ pub(super) fn phase_all_or_none_order(conns: Conns) -> Conns {
 pub(super) fn phase_trigger_method_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 50: Trigger Method Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { trigger_method: 2, outside_rth: true, ..OrderAttrs::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { trigger_method: 2, outside_rth: true, ..OrderAttrs::default() } },
         false)
 }
 
@@ -1022,7 +1077,7 @@ pub(super) fn phase_trigger_method_order(conns: Conns) -> Conns {
 pub(super) fn phase_price_condition_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 57: Price Condition Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
             attrs: OrderAttrs { outside_rth: true, conditions: vec![OrderCondition::Price { con_id: 756733, exchange: "BEST".into(), price: 1_00_000_000, is_more: false, trigger_method: 0 }], ..OrderAttrs::default() } },
         false)
 }
@@ -1038,7 +1093,7 @@ pub(super) fn phase_price_condition_order(conns: Conns) -> Conns {
 pub(super) fn phase_time_condition_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 58: Time Condition Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
             attrs: OrderAttrs { outside_rth: true, conditions: vec![OrderCondition::Time { time: "20271231-23:59:59".into(), is_more: true }], ..OrderAttrs::default() } },
         false)
 }
@@ -1048,7 +1103,7 @@ pub(super) fn phase_time_condition_order(conns: Conns) -> Conns {
 pub(super) fn phase_volume_condition_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 59: Volume Condition Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
             attrs: OrderAttrs { outside_rth: true, conditions: vec![OrderCondition::Volume { con_id: 756733, exchange: "BEST".into(), volume: 999_999_999, is_more: true }], ..OrderAttrs::default() } },
         false)
 }
@@ -1058,7 +1113,7 @@ pub(super) fn phase_volume_condition_order(conns: Conns) -> Conns {
 pub(super) fn phase_multi_condition_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 60: Multi-Condition Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
             attrs: OrderAttrs {
                 outside_rth: true,
                 conditions: vec![
@@ -1074,10 +1129,11 @@ pub(super) fn phase_multi_condition_order(conns: Conns) -> Conns {
 // ─── Phase 62: VWAP Algo ───
 
 pub(super) fn phase_vwap_order(conns: Conns) -> Conns {
+    let (start, end) = a_schedule_ahead();
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 62: VWAP Algo Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::Vwap { max_pct_vol: 0.1, no_take_liq: false, allow_past_end_time: true, start_time: "20260311-13:30:00".into(), end_time: "20260311-20:00:00".into() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::Vwap { max_pct_vol: 0.1, no_take_liq: false, allow_past_end_time: true, start_time: start, end_time: end } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1085,10 +1141,11 @@ pub(super) fn phase_vwap_order(conns: Conns) -> Conns {
 // ─── Phase 63: TWAP Algo ───
 
 pub(super) fn phase_twap_order(conns: Conns) -> Conns {
+    let (start, end) = a_schedule_ahead();
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 63: TWAP Algo Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::Twap { allow_past_end_time: true, start_time: "20260311-13:30:00".into(), end_time: "20260311-20:00:00".into() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::Twap { allow_past_end_time: true, start_time: start, end_time: end } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1096,10 +1153,11 @@ pub(super) fn phase_twap_order(conns: Conns) -> Conns {
 // ─── Phase 64: Arrival Price Algo ───
 
 pub(super) fn phase_arrival_px_order(conns: Conns) -> Conns {
+    let (start, end) = a_schedule_ahead();
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 64: Arrival Price Algo Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::ArrivalPx { max_pct_vol: 0.1, risk_aversion: RiskAversion::Neutral, allow_past_end_time: true, force_completion: false, start_time: "20260311-13:30:00".into(), end_time: "20260311-20:00:00".into() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::ArrivalPx { max_pct_vol: 0.1, risk_aversion: RiskAversion::Neutral, allow_past_end_time: true, force_completion: false, start_time: start, end_time: end } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1107,10 +1165,11 @@ pub(super) fn phase_arrival_px_order(conns: Conns) -> Conns {
 // ─── Phase 65: Close Price Algo ───
 
 pub(super) fn phase_close_px_order(conns: Conns) -> Conns {
+    let (start, _end) = a_schedule_ahead();
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 65: Close Price Algo Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::ClosePx { max_pct_vol: 0.1, risk_aversion: RiskAversion::Neutral, force_completion: false, start_time: "20260311-13:30:00".into() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::ClosePx { max_pct_vol: 0.1, risk_aversion: RiskAversion::Neutral, force_completion: false, start_time: start } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1118,6 +1177,7 @@ pub(super) fn phase_close_px_order(conns: Conns) -> Conns {
 // ─── Phase 66: Dark Ice Algo ───
 
 pub(super) fn phase_dark_ice_order(conns: Conns) -> Conns {
+    let (start, end) = a_schedule_ahead();
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 66: Dark Ice Algo Order (SPY)",
         // Two hundred showing one hundred. The venue refuses a display size
@@ -1126,8 +1186,8 @@ pub(super) fn phase_dark_ice_order(conns: Conns) -> Conns {
         // can read, so this asks in the round lot the iceberg phase beside it
         // is already accepted with. Asking for one share showing one was
         // refused every run, which tested the venue's rule and never the algo.
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 200,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::DarkIce { allow_past_end_time: true, display_size: 100, start_time: "20260311-13:30:00".into(), end_time: "20260311-20:00:00".into() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 200 * ibx::types::QTY_SCALE,
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::DarkIce { allow_past_end_time: true, display_size: 100, start_time: start, end_time: end } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1135,10 +1195,11 @@ pub(super) fn phase_dark_ice_order(conns: Conns) -> Conns {
 // ─── Phase 67: % of Volume Algo ───
 
 pub(super) fn phase_pct_vol_order(conns: Conns) -> Conns {
+    let (start, end) = a_schedule_ahead();
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 67: % of Volume Algo Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::PctVol { pct_vol: 0.1, no_take_liq: false, start_time: "20260311-13:30:00".into(), end_time: "20260311-20:00:00".into() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::PctVol { pct_vol: 0.1, no_take_liq: false, start_time: start, end_time: end } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1148,7 +1209,7 @@ pub(super) fn phase_pct_vol_order(conns: Conns) -> Conns {
 pub(super) fn phase_peg_bench_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 68: Pegged to Benchmark Order (SPY pegged to AAPL)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, tif: b'0', attrs: OrderAttrs::default(), kind: OrderKind::PegBench { price: 1_00_000_000, ref_con_id: 265598, is_peg_decrease: false, pegged_change_amount: 50_000_000, ref_change_amount: 50_000_000, starting_price: 1_00_000_000, stock_ref_price: 1_00_000_000, ref_exchange: "NASDAQ".into() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, tif: b'0', attrs: OrderAttrs::default(), kind: OrderKind::PegBench { price: 1_00_000_000, ref_con_id: 265598, is_peg_decrease: false, pegged_change_amount: 50_000_000, ref_change_amount: 50_000_000, starting_price: 1_00_000_000, stock_ref_price: 1_00_000_000, ref_exchange: "NASDAQ".into() } },
         false)
 }
 
@@ -1157,7 +1218,7 @@ pub(super) fn phase_peg_bench_order(conns: Conns) -> Conns {
 pub(super) fn phase_limit_auc_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 69: Limit Auction Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'8', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'8', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
         false)
 }
 
@@ -1166,7 +1227,7 @@ pub(super) fn phase_limit_auc_order(conns: Conns) -> Conns {
 pub(super) fn phase_mtl_auc_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 70: Market-to-Limit Auction Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Mtl, tif: b'8', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Mtl, tif: b'8', attrs: OrderAttrs { outside_rth: false, ..Default::default() } },
         false)
 }
 
@@ -1175,7 +1236,7 @@ pub(super) fn phase_mtl_auc_order(conns: Conns) -> Conns {
 pub(super) fn phase_box_top_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 71: Box Top Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 1, kind: OrderKind::Mtl, tif: b'0', attrs: OrderAttrs::default() },
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Mtl, tif: b'0', attrs: OrderAttrs::default() },
         true)
 }
 
@@ -1193,14 +1254,18 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id, instrument: inst_id, side: Side::Buy, qty: 100,
-        kind: OrderKind::WhatIf { price: 1_00_000_000, ord_type: b'2' },
+        order_id, instrument: inst_id, side: Side::Buy, qty: 100 * ibx::types::QTY_SCALE,
+        kind: OrderKind::WhatIf { price: 1_00_000_000, aux: 0, ord_type: b'2' },
         tif: b'0', attrs: OrderAttrs::default(),
     })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1282,14 +1347,18 @@ pub(super) fn phase_cash_qty_order(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id, instrument: inst_id, side: Side::Buy, qty: 100,
+        order_id, instrument: inst_id, side: Side::Buy, qty: 100 * ibx::types::QTY_SCALE,
         kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0',
         attrs: OrderAttrs { cash_qty: 1000 * PRICE_SCALE, ..OrderAttrs::default() },
     })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1341,12 +1410,18 @@ pub(super) fn phase_fractional_order(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitLimitFractional {
-        order_id, instrument: inst_id, side: Side::Buy, qty: QTY_SCALE / 2, price: 1_00_000_000,
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: QTY_SCALE / 2,
+        kind: ibx::types::OrderKind::Limit { price: 1_00_000_000 },
+        tif: b'0', attrs: Default::default(),
     })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1390,7 +1465,7 @@ pub(super) fn phase_fractional_order(conns: Conns) -> Conns {
 pub(super) fn phase_adjustable_stop_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 75: Adjustable Stop Order (SPY)",
-        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: 1,
+        OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Sell, qty: ibx::types::QTY_SCALE,
             kind: ibx::types::OrderKind::AdjustableStop {
                 stop_price: 1_00_000_000, trigger_price: 500_00_000_000,
                 adjusted_order_type: AdjustedOrderType::StopLimit,
@@ -1414,7 +1489,11 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1429,6 +1508,10 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
     let mut cancel_sent = false;
     let mut rejected_order: Option<u64> = None;
     let mut done = false;
+    // The one order that closes what the entry opened, kept so a later
+    // cancellation does not send a second and so its fill is the fill that
+    // ends the wait.
+    let mut flatten_id: Option<u64> = None;
 
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -1443,7 +1526,7 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
                     let sid = pid + 2;
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitBracket {
                         parent_id: pid, tp_id: tid, sl_id: sid,
-                        instrument: inst_id, side: Side::Buy, qty: 1,
+                        instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE,
                         entry_price: entry,
                         take_profit: entry + 100_00_000_000,
                         stop_loss: 1_000_000,
@@ -1455,7 +1538,10 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
             }
             Ok(Event::Fill(fill)) => {
                 if Some(fill.order_id) == parent_id { entry_filled = true; }
-                if cancel_sent && Some(fill.order_id) != parent_id { done = true; break; }
+                // The order that flattens the position, not merely some order
+                // that is not the parent: a child filling instead of cancelling
+                // ended the wait with the position still open.
+                if Some(fill.order_id) == flatten_id { done = true; break; }
             }
             Ok(Event::OrderUpdate(update)) => {
                 match update.status {
@@ -1470,9 +1556,14 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
                     }
                     OrderStatus::Cancelled => {
                         cancelled_count += 1;
-                        if cancelled_count >= 2 {
+                        // Once. Sent on every cancellation from the second
+                        // onwards, a third — the venue restating one, or this
+                        // order itself being withdrawn — sold another share the
+                        // account did not have.
+                        if cancelled_count >= 2 && flatten_id.is_none() {
                             let sid = next_order_id() + 10;
-                            control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: inst_id, side: Side::Sell, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                            flatten_id = Some(sid);
+                            control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                         }
                     }
                     OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
@@ -1482,8 +1573,6 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
             _ => {}
         }
     }
-    let _ = done;
-
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
@@ -1497,6 +1586,14 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
     }
     assert!(tp_active, "Take-profit child was never activated after entry fill");
     assert!(sl_active, "Stop-loss child was never activated after entry fill");
+    // The entry filled, so the account is long until the flattening sell fills.
+    // Discarded, this said nothing about whether the position was closed, and
+    // the phase passed with the share still held.
+    assert!(
+        done,
+        "the entry filled and the order flattening it did not: the account is still long \
+         the share this phase bought (flattening order {flatten_id:?})",
+    );
     println!("  PASS\n");
     conns
 }
@@ -1514,7 +1611,11 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let initial_rpnl = shared.portfolio.account().realized_pnl;
@@ -1533,7 +1634,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
                 tick_count += 1;
                 if phase == 0 && tick_count >= 5 {
                     let oid = next_order_id();
-                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 1;
                 }
                 if phase == 3 {
@@ -1549,7 +1650,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
                 if phase == 1 && fill.side == Side::Buy {
                     buy_filled = true;
                     let sid = next_order_id() + 1;
-                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: fill.instrument, side: Side::Sell, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
                     sell_filled = true;
@@ -1601,10 +1702,14 @@ pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
     // Register instrument and submit a real order so there's a known order in context
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     // Wait for order ack, then cancel it twice — second cancel should produce CancelReject
@@ -1672,15 +1777,19 @@ pub(super) fn phase_rapid_order_dedup(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Submit 5 limit orders rapidly at different prices
     let base_oid = next_order_id();
     let order_ids: Vec<u64> = (0..5).map(|i| base_oid + i * 1000).collect();
     for (i, &oid) in order_ids.iter().enumerate() {
         let price = (1 + i as i64) * 1_00_000_000; // $1, $2, $3, $4, $5
-        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
     }
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1749,16 +1858,20 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
     // The replacement is addressed by the original id: the wire ClOrdID is
     // `orderId.version`, so every report for a replaced order maps back to
-    // `order_id`. A distinct id here only books a local record the gateway will
+    // `order_id`. A distinct id here only books a local record the venue will
     // never mention, and the cancel that follows would address nothing. The
     // client passes the same id for exactly this reason.
     // Submit limit buy at $1, qty=1
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1779,7 +1892,7 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
                         order_acked = true;
                         // Modify BOTH price ($1→$2) and qty (1→3) in a single Modify
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                            order_id, price: 2_00_000_000, qty: 3, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            order_id, price: 2_00_000_000, qty: 3 * ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -1819,14 +1932,18 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
     // A replace restates the order the caller already holds, so a second one
     // names the same id as the first — which is what an ibapi caller does.
 
     // Submit limit buy at $1
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(90);
@@ -1842,14 +1959,14 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
                         0 => {
                             // Original order acked → modify to $2
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                             })).unwrap();
                             phase = 1;
                         }
                         1 => {
                             // First modify acked → modify again to $3
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id, price: 3_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                order_id, price: 3_00_000_000, qty: ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                             })).unwrap();
                             phase = 2;
                         }
@@ -1894,17 +2011,21 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
     // The replacement is addressed by the original id: the wire ClOrdID is
     // `orderId.version`, so every report for a replaced order maps back to
-    // `order_id`. A distinct id here only books a local record the gateway will
+    // `order_id`. A distinct id here only books a local record the venue will
     // never mention, and the cancel that follows would address nothing. The
     // client passes the same id for exactly this reason.
 
     // Submit limit buy at $1
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1922,9 +2043,8 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
                             order_acked = true;
                             // Send modify AND cancel back-to-back — no waiting
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                                order_id, price: 2_00_000_000, qty: 1, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
                             })).unwrap();
-                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                             race_sent = true;
                         }
@@ -1935,7 +2055,8 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
                 }
             }
             Ok(Event::CancelReject(_)) => {
-                // Expected: one of the cancels may be rejected
+                // The modify and the cancel race, so the venue may refuse
+                // either one of them.
             }
             _ => {}
         }
@@ -1968,15 +2089,19 @@ pub(super) fn phase_global_cancel(conns: Conns) -> Conns {
     );
     let inst_id = hot_loop.context_mut().register_instrument(756733);
     hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // A US stock routed smart. Registered by id alone it states no
+    // security type, and the venue answers an order carrying an empty
+    // tag 167 with "Unsupported type".
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     // Submit 3 limit orders at $1 (won't fill)
     let oid1 = next_order_id();
     let oid2 = oid1 + 1;
     let oid3 = oid1 + 2;
     for oid in [oid1, oid2, oid3] {
-        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: 1, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     }
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -2034,7 +2159,7 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
         shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
     );
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -2052,7 +2177,7 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
                 if phase == 0 && tick_count >= 5 {
                     buy_order_id = next_order_id();
                     instrument_id = instrument;
-                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: buy_order_id, instrument, side: Side::Buy, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: buy_order_id, instrument, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 1;
                 }
             }
@@ -2095,7 +2220,7 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
             }
             // Sell to flatten position
             let sell_oid = next_order_id() + 1;
-            control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_oid, instrument: instrument_id, side: Side::Sell, qty: 1, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+            control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_oid, instrument: instrument_id, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
             phase = 3;
             // Wait for sell fill
             let sell_deadline = Instant::now() + Duration::from_secs(15);

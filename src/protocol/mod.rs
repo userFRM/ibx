@@ -11,7 +11,7 @@
 //! that way. This module is the engine underneath it, exported because the
 //! binaries, benchmarks and integration tests in this repository reach it.
 
-/// The venue's own way of writing a date and a time.
+/// The date and time format the venue uses.
 pub mod datetime;
 /// What a subscription says on the wire.
 pub mod market_data;

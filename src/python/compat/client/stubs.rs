@@ -128,9 +128,14 @@ impl EClient {
     /// Ask for the notices the venue broadcasts to everyone. Answered on
     /// `update_news_bulletin`.
     ///
-    /// `all_msgs` is taken and not applied. The subscription carries no field
-    /// asking for the bulletins that came before it, so what arrives is what is
-    /// published from here on.
+    /// `all_msgs` is taken and not applied, and already honoured for everything
+    /// it can be. Nothing is sent to the venue: it broadcasts these unasked and
+    /// this only decides whether they are delivered, so every bulletin the
+    /// session has seen — including those from before this call — is handed
+    /// over here. What cannot be had is anything from before the session
+    /// existed, because there is no request to ask for it with. The last
+    /// [`NEWS_BULLETIN_LIMIT`](crate::bridge::NEWS_BULLETIN_LIMIT)
+    /// are kept for a caller who has not asked yet.
     #[pyo3(signature = (all_msgs=true))]
     fn req_news_bulletins(&self, all_msgs: bool) -> PyResult<()> {
         let _ = all_msgs;
@@ -156,7 +161,14 @@ impl EClient {
     // there is nothing to report but this machine's clock, and that is the
     // only case where it is used.
     /// Ask the venue for its own clock. Answered on `current_time`.
+    ///
+    /// Before a session exists there is no venue clock to report, so this is
+    /// answered the way the reference client answers every request made before
+    /// connecting: on `error`, under the number it reports that by. The local
+    /// clock is not a substitute, since the caller asks this to measure the
+    /// difference between the two.
     fn req_current_time(&self, py: Python<'_>) -> PyResult<()> {
+        let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
         let from_venue = self
             .shared
             .lock()
@@ -190,6 +202,13 @@ impl EClient {
     /// allocation profiles, its aliases. The venue names it by a word, so the
     /// number is turned into the word it stands for. A number that stands for
     /// nothing is refused rather than sent as an empty partition.
+    ///
+    /// The request reaches the venue; its answer is not read back yet, so
+    /// `receive_fa` does not fire. What the venue replies with lands among the
+    /// messages this client records as unread. Reading it needs an advisor
+    /// account to state the reply's shape, and inventing one would be a guess
+    /// about a frame nobody here has seen. Said here because a caller waiting
+    /// on a callback that cannot come has nothing else to tell them.
     fn request_fa(&self, py: Python<'_>, fa_data_type: i32) -> PyResult<()> {
         let Some(partition) = advisor_partition(fa_data_type) else {
             return self.report_refusal(py, -1, crate::error_codes::Refusal::validation(
@@ -207,6 +226,13 @@ impl EClient {
 
     #[pyo3(signature = (req_id, fa_data_type, cxml))]
     /// Replace a partition of the advisor's configuration with the one given.
+    ///
+    /// As with `request_fa`, the replacement reaches the venue and its answer
+    /// is not read back, so `replace_fa_end` does not fire.
+    ///
+    /// `req_id` is taken and not applied. The exchange carries no request
+    /// number on this wire, and the reference client numbers it only to match
+    /// the answer that is not read back here.
     fn replace_fa(&self, py: Python<'_>, req_id: i64, fa_data_type: i32, cxml: &str) -> PyResult<()> {
         let _ = req_id;
         let Some(partition) = advisor_partition(fa_data_type) else {
@@ -340,16 +366,23 @@ impl EClient {
 
     // ── Server Log Level ──
 
-    /// How much the venue should log about this session, 1 to 5.
+    /// How much to log about this session, 1 to 5.
+    ///
+    /// Recorded locally rather than sent: this wire carries no log-level
+    /// request. A level outside 1 to 5 is refused rather than reported back as
+    /// `warn`, which would tell a caller they had a level that does not
+    /// exist.
     #[pyo3(signature = (log_level=2))]
-    fn set_server_log_level(&self, log_level: i32) -> PyResult<()> {
+    fn set_server_log_level(&self, py: Python<'_>, log_level: i32) -> PyResult<()> {
         let level = match log_level {
             1 => "error",
             2 => "warn",
             3 => "info",
             4 => "debug",
             5 => "trace",
-            _ => "warn",
+            _ => return self.report_refusal(py, -1, crate::error_codes::Refusal::validation(
+                format!("set_server_log_level: {log_level} is not a log level; it is 1 to 5"),
+            )),
         };
         log::info!("set_server_log_level: {level} (level {log_level})");
         Ok(())
@@ -443,13 +476,11 @@ impl EClient {
     }
 }
 
-/// Solve an option against the venue's own published model and answer on
-/// `tick_option_computation`, as the counterpart does.
+/// Solve an option against the venue's published model.
 ///
-/// The counterpart computes both of these in its own process — the wire
-/// carries no such request — and reports the answer on the same callback the
-/// venue's own model arrives under. Refusing them instead left this surface
-/// answering a question the other one answers.
+/// The wire carries no request for either calculation, so both are solved
+/// locally. The answer is reported on `tick_option_computation`, the same
+/// callback tick type 13 arrives on.
 impl EClient {
     fn answer_option_model(
         &self,
@@ -473,8 +504,8 @@ impl EClient {
 
 /// Answer a request this client cannot serve the way the reference client
 /// does: on the error callback, returning normally.
-/// Answer a request the counterpart refuses, under the number it refuses it
-/// with rather than the general one.
+///
+/// Takes the code for the specific refusal rather than the general one.
 pub(crate) fn report_unserviceable_with(
     client: &EClient, req_id: i64, code: i32, reason: &str,
 ) {

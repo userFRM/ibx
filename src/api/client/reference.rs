@@ -9,6 +9,21 @@ use crate::client_core::ClientCore;
 /// What this client reports when a market rule has not been seen.
 const MARKET_RULE_NOT_KNOWN: i64 = 321;
 
+/// Narrow a contract id to the width the requests below carry it in.
+///
+/// These name a contract by its venue id and carry nothing else of it,
+/// so a description is not a contract they can ask about: sent as it stood, a
+/// A contract with no id names contract zero, and one with a negative id names
+/// the largest id there is. The venue answers both with silence, which reads
+/// as the venue holding nothing.
+fn wire_con_id(con_id: i64, what: &str) -> Result<u32, Refusal> {
+    u32::try_from(con_id).ok().filter(|id| *id > 0).ok_or_else(|| {
+        Refusal::validation(format!(
+            "{what} names its contract by its venue id, and {con_id} is not one:              qualify the contract first and pass what comes back",
+        ))
+    })
+}
+
 impl EClient {
     // ── Historical Data ──
 
@@ -20,11 +35,17 @@ impl EClient {
     ) -> Result<(), Refusal> {
         ClientCore::validate_historical_args(bar_size, what_to_show, keep_up_to_date)?;
         // How this request wants its bar times written. The venue states one
-        // form; the counterpart writes whichever the caller asked for.
+        // form; whichever the caller asked for is what is written.
         self.core.note_date_format(req_id, format_date);
+        let wire = wire_req_id(req_id)?;
+        // Whatever finished under this id before, this is a new request. The
+        // other surface said so and this one did not: the id stayed marked
+        // finished, so the bars answering the new request were delivered as
+        // updates continuing the old one and its end never fired.
+        self.core.historical_request_is_new(wire);
         self.send(ControlCommand::FetchHistorical {
             contract: contract.into(),
-            req_id: wire_req_id(req_id)?,
+            req_id: wire,
             end_date_time: end_date_time.into(),
             duration: duration.into(),
             bar_size: bar_size.into(),
@@ -32,12 +53,16 @@ impl EClient {
             what_to_show: what_to_show.into(),
             use_rth,
             keep_up_to_date,
+            include_expired: contract.include_expired,
         })
     }
 
     /// Cancel historical data. Matches `cancelHistoricalData` in C++.
     pub fn cancel_historical_data(&self, req_id: i64) -> Result<(), Refusal> {
-        self.send(ControlCommand::CancelHistorical { req_id: wire_req_id(req_id)? })
+        let wire = wire_req_id(req_id)?;
+        // A withdrawn stream leaves nothing running under this id.
+        self.core.historical_request_is_new(wire);
+        self.send(ControlCommand::CancelHistorical { req_id: wire })
     }
 
     /// Request head timestamp. Matches `reqHeadTimeStamp` in C++.
@@ -81,8 +106,8 @@ impl EClient {
 
     /// Ask what event types the corporate-events calendar carries.
     ///
-    /// Has to be asked before events can be: the counterpart holds the answer
-    /// and will not build an event request without it.
+    /// Must be asked before events can be requested: an event request cannot
+    /// be built until the event types are known.
     pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchCalendarMetaData { req_id: wire_req_id(req_id)? })
     }
@@ -169,10 +194,17 @@ impl EClient {
 
     /// Subscribe to news bulletins. Matches `reqNewsBulletins` in C++.
     ///
-    /// `all_msgs` is taken and not applied. The subscription carries no field
-    /// asking for the bulletins that came before it, so what arrives is what is
-    /// published from here on.
-    pub fn req_news_bulletins(&self, _all_msgs: bool) {
+    /// `all_msgs` asks for the day's bulletins as well as the ones still to
+    /// come. The subscription carries no field asking the venue for them, but
+    /// the venue has been broadcasting them at this session since it opened
+    /// and they are still queued, so a caller asking for every message of the
+    /// day is answered from those. Asking only for what follows drops them,
+    /// which is what stopped a subscription from opening with bulletins
+    /// published before anyone asked for any.
+    pub fn req_news_bulletins(&self, all_msgs: bool) {
+        if !all_msgs {
+            let _ = self.shared.market.drain_news_bulletins();
+        }
         self.core.subscribe_bulletins();
     }
 
@@ -214,13 +246,18 @@ impl EClient {
     // ── News ──
 
     /// Request historical news headlines. Matches `reqHistoricalNews` in C++.
+    ///
+    /// `start_time` and `end_time` are refused rather than taken and dropped:
+    /// the query this client sends carries no time bounds, and `max_results` is
+    /// what limits the answer.
     pub fn req_historical_news(
         &self, req_id: i64, con_id: i64, provider_codes: &str,
         start_time: &str, end_time: &str, max_results: u32,
     ) -> Result<(), Refusal> {
+        crate::control::news::validate_news_window(start_time, end_time)?;
         self.send(ControlCommand::FetchHistoricalNews {
             req_id: wire_req_id(req_id)?,
-            con_id: con_id as u32,
+            con_id: wire_con_id(con_id, "a request for headlines")?,
             provider_codes: provider_codes.into(),
             start_time: start_time.into(),
             end_time: end_time.into(),
@@ -242,10 +279,16 @@ impl EClient {
 
     /// Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary). Matches
     /// `reqFundamentalData` in C++.
+    ///
+    /// The contract is named by its venue id and nothing else of it is
+    /// carried, so pass one that has an id: from
+    /// [`qualify_contract`](EClient::qualify_contract), or from any
+    /// contract-details answer. A description is refused rather than sent as a
+    /// request about contract zero.
     pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchFundamentalData {
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id as u32,
+            con_id: wire_con_id(contract.con_id, "a request for a fundamental report")?,
             report_type: report_type.into(),
         })
     }
@@ -258,10 +301,15 @@ impl EClient {
     // ── Histogram ──
 
     /// Request price histogram data. Matches `reqHistogramData` in C++.
+    ///
+    /// Named by its venue id, as
+    /// [`req_fundamental_data`](EClient::req_fundamental_data) is.
     pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool, period: &str) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchHistogramData {
             req_id: wire_req_id(req_id)?,
-            con_id: contract.con_id as u32,
+            con_id: wire_con_id(contract.con_id, "a request for a histogram")?,
+            sec_type: contract.sec_type.clone(),
+            exchange: contract.exchange.clone(),
             use_rth,
             period: period.into(),
         })
@@ -275,6 +323,10 @@ impl EClient {
     // ── Historical Ticks ──
 
     /// Request historical tick data. Matches `reqHistoricalTicks` in C++.
+    ///
+    /// Bounded at its end: the query counts back from `end_date_time`, and a
+    /// request naming only a start is refused rather than answered with the
+    /// ticks on the wrong side of it. Both empty asks for the most recent.
     pub fn req_historical_ticks(
         &self, req_id: i64, contract: &Contract,
         start_date_time: &str, end_date_time: &str,
@@ -282,15 +334,23 @@ impl EClient {
     ) -> Result<(), Refusal> {
         // Refused here rather than turned into trades on the way out.
         crate::control::historical::tick_data_type(what_to_show)?;
+        // A count below zero is not a count. Cast unchecked it became a
+        // request for four billion ticks, which the venue answers by refusing
+        // a request the caller never made.
+        let number_of_ticks = u32::try_from(number_of_ticks).map_err(|_| {
+            Refusal::validation(format!("number_of_ticks {number_of_ticks} is negative"))
+        })?;
+        crate::control::historical::validate_tick_window(start_date_time, end_date_time)?;
         self.send(ControlCommand::FetchHistoricalTicks {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,
             start_date_time: start_date_time.into(),
             end_date_time: end_date_time.into(),
             filters: contract.lookup_filters(),
-            number_of_ticks: number_of_ticks as u32,
+            number_of_ticks,
             what_to_show: what_to_show.into(),
             use_rth,
+            include_expired: contract.include_expired,
         })
     }
 

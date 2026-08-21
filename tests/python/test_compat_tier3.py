@@ -273,12 +273,14 @@ class UserInfoCapture(EWrapper):
 
 
 def test_req_user_info_fires_callback():
+    """As above, for how the venue brands this login."""
     w = UserInfoCapture()
     c = EClient(w)
     c._test_connect()
+    c._test_note_reference_data(3, "NYSE", "N", "Research", "0.5", "brand-1")
     c.req_user_info(7)
     assert w.req_id == 7
-    assert w.white_branding_id == ""  # Empty on paper
+    assert w.white_branding_id == "brand-1"
 
 
 def test_req_user_info_signature():

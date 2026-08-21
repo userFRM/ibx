@@ -32,7 +32,13 @@ impl EClient {
         mkt_data_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = mkt_data_options;
-        self.req_mkt_data_ex(py, req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, 0)
+        // The mode set by `req_market_data_type`, which names the type once for
+        // every subscription that follows. Passing zero here subscribes at
+        // realtime regardless, which answers nothing on an account without the
+        // realtime entitlement. `req_mkt_data_ex` states the mode per
+        // request.
+        let mode = self.core.subscription_mode();
+        self.req_mkt_data_ex(py, req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, mode)
     }
 
     /// Like `req_mkt_data`, but encodes the market-data mode per request
@@ -41,10 +47,12 @@ impl EClient {
     /// picks whichever feed has data. The frozen one keeps thinly-traded names
     /// streaming after hours when the realtime feed is silent.
     ///
-    /// `regulatory_snapshot` is taken and not applied. A regulatory snapshot is
-    /// a separate, chargeable request this protocol does not carry, so asking
-    /// for one here would be answered with an ordinary subscription and a
-    /// charge nobody agreed to.
+    /// `regulatory_snapshot` is refused rather than dropped. It names a
+    /// separate, chargeable one-shot request this protocol does not carry, so
+    /// taking it and subscribing anyway answers a different request than the
+    /// one asked for: the caller reads a stream where they asked for a single
+    /// NBBO snapshot, and nothing says so. Reported through `error`, where a
+    /// request this client will not send belongs.
     #[pyo3(signature = (req_id, contract, generic_tick_list="", snapshot=false, regulatory_snapshot=false, mode_9887=0))]
     fn req_mkt_data_ex(
         &self,
@@ -58,6 +66,12 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
 
+        if regulatory_snapshot {
+            return self.report_refusal(py, req_id, Refusal::validation(
+                "regulatory_snapshot is not carried by this protocol: it names a                  separate, chargeable one-shot request, and answering it with an                  ordinary subscription would be a different request than the one                  asked for. Ask for the free snapshot with snapshot=True",
+            ));
+        }
+
         // A contract's news is asked for by the venue's id for the contract,
         // and the caller may have stated a description instead. Resolved only
         // when news is what was asked for: a quote on a description is asked
@@ -67,10 +81,9 @@ impl EClient {
         let contract = if wants_news && contract.con_id == 0 && !contract.symbol.is_empty() {
             match self.qualify_contract_stated(py, contract) {
                 Ok(found) => { named = found; &named }
-                // Under the code that caused it. Called a missing definition
-                // whatever went wrong, a session that ended mid-lookup reads
-                // as a contract that does not exist, and a caller that
-                // branches on the code retries the description for ever.
+                // Reported under the code for the cause. A session that ends
+                // mid-lookup is not code 200, which names a contract the venue
+                // does not hold and invites a retry.
                 Err(why) => return self.report_refusal(py, req_id, why),
             }
         } else {
@@ -114,20 +127,24 @@ impl EClient {
             ..Default::default()
         });
 
-        let _ = regulatory_snapshot;
-
         Ok(())
     }
 
     /// Cancel market data.
     pub fn cancel_mkt_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let (instrument, needs_news_unsub) = self.core.unregister_mkt_data(req_id);
+        let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
+        if instrument.is_none() && stop_news.is_none() {
+            return Ok(());
+        }
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        // Asked separately, because the quotes stay up for another caller
+        // while the headlines this one asked for stop. Withdrawn only
+        // alongside the quotes, they carried on with nobody listening.
+        if let Some(instrument) = stop_news {
+            let _ = Self::send_control(py, &tx, ControlCommand::UnsubscribeNews { instrument });
+        }
         if let Some(instrument) = instrument {
-            let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
             Self::send_control(py, &tx, ControlCommand::Unsubscribe { instrument })?;
-            if needs_news_unsub {
-                let _ = Self::send_control(py, &tx, ControlCommand::UnsubscribeNews { instrument });
-            }
         }
         Ok(())
     }
@@ -135,6 +152,8 @@ impl EClient {
     /// Request tick-by-tick data.
     ///
     /// `number_of_ticks` and `ignore_size` are refused rather than dropped.
+    /// Settled: the request states sixteen tags and neither of these is among
+    /// them.
     /// The subscription states the contract and the kind of stream and nothing
     /// else: there is no field for a prelude of past ticks, and none for
     /// suppressing size-only changes. A caller that set either and was answered
@@ -177,7 +196,7 @@ impl EClient {
             Err(why) => return self.report_refusal(py, req_id, Refusal::validation(why)),
         };
 
-        // A stream is asked for by the venue's own id for the contract. Sent
+        // A stream is asked for by venue contract id. Sent
         // with none, the venue answers "Unknown contract" against a query this
         // client had not told anyone about, and the caller waited on a stream
         // that was refused before it began.
@@ -185,10 +204,9 @@ impl EClient {
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
             match self.qualify_contract_stated(py, contract) {
                 Ok(found) => { named = found; &named }
-                // Under the code that caused it. Called a missing definition
-                // whatever went wrong, a session that ended mid-lookup reads
-                // as a contract that does not exist, and a caller that
-                // branches on the code retries the description for ever.
+                // Reported under the code for the cause. A session that ends
+                // mid-lookup is not code 200, which names a contract the venue
+                // does not hold and invites a retry.
                 Err(why) => return self.report_refusal(py, req_id, why),
             }
         } else {
@@ -211,6 +229,13 @@ impl EClient {
         )) {
             return self.report_refusal(py, req_id, why);
         }
+        // The kind this request asked for, kept so the callback can state it.
+        // The record does not carry it, and every print was labelled as an
+        // exchange print whichever stream it came from.
+        if let TbtType::AllLast | TbtType::Last = tbt_type {
+            let kind = if matches!(tbt_type, TbtType::AllLast) { 2 } else { 1 };
+            self.tbt_kind.lock().unwrap().insert(req_id, kind);
+        }
 
         let _ = (number_of_ticks, ignore_size);
         Ok(())
@@ -223,6 +248,7 @@ impl EClient {
         // Removed before the send, not across it: the send is bounded and runs
         // detached from Python, so a guard spanning it blocks another thread
         // cancelling a different subscription.
+        self.tbt_kind.lock().unwrap().remove(&req_id);
         let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
         if let Some(instrument) = instrument {
             let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
@@ -253,12 +279,14 @@ impl EClient {
         Ok(shared.last_ccp_rtt().map(|d| d.as_secs_f64() * 1_000.0))
     }
 
-    /// NOT supported end to end: the requested type (1=live,
-    /// 2=frozen, 3=delayed, 4=delayed-frozen) is stored locally but never
-    /// sent to the gateway, so subscriptions always deliver realtime data
-    /// and delayed tick variants never arrive. Requesting a non-realtime
-    /// type logs a warning, and the `market_data_type` callback reports the
-    /// DELIVERED type (realtime) rather than echoing the request.
+    /// Name the kind of data every subscription after this one asks for:
+    /// 1 live, 2 frozen, 3 delayed, 4 delayed-frozen.
+    ///
+    /// The type is carried on each subscription that follows, and the
+    /// `market_data_type` callback reports the type that subscription was
+    /// made under. A type this client does not know is logged and leaves
+    /// subscriptions live. `req_mkt_data_ex` states the type per request,
+    /// which allows two feeds on one contract at once.
     fn req_market_data_type(&self, market_data_type: i32) -> PyResult<()> {
         self.core.set_market_data_type(market_data_type);
         Ok(())
@@ -280,11 +308,13 @@ impl EClient {
         mkt_depth_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = mkt_depth_options;
-        let exchange = if contract.exchange.is_empty() { "SMART".to_string() } else { contract.exchange.clone() };
-        let sec_type = if contract.sec_type.is_empty() { "STK".to_string() } else { contract.sec_type.clone() };
+        // As the caller stated it. The reference client sends a book request's
+        // secType and exchange straight off the contract, so a contract naming
+        // only an id was subscribed here to a US stock on SMART: a book for an
+        // instrument nobody asked about, under their own request id.
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::SubscribeDepth {
-            contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange, sec_type, currency: contract.currency.clone(), ..Default::default() },
+            contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange: contract.exchange.clone(), sec_type: contract.sec_type.clone(), currency: contract.currency.clone(), ..Default::default() },
             req_id: wire_req_id(req_id)?,
             num_rows,
             is_smart_depth,
@@ -324,6 +354,9 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = (bar_size, real_time_bars_options);
+        if let Err(why) = crate::control::historical::BarDataType::from_api_str(what_to_show) {
+            return self.report_refusal(py, req_id, why.into());
+        }
         Self::send_control(py, &tx, ControlCommand::SubscribeRealTimeBar {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,

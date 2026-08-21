@@ -1,10 +1,8 @@
-//! Check this client's option arithmetic against the venue's own.
+//! Check this client's option arithmetic against the venue's.
 //!
-//! The venue states what its model made of a contract: the volatility it used,
-//! the price that came out, the underlying it used and the dividends it took
-//! off. Given those, this client should be able to produce the venue's own
-//! price from the venue's own volatility — and if it cannot, its answer to a
-//! caller's question is worth nothing either.
+//! The venue reports the volatility its model used, the price that came out,
+//! the underlying and the dividends taken off. Given those inputs, this
+//! client's model must reproduce the reported price.
 //!
 //! Reads only. It places nothing.
 
@@ -95,9 +93,9 @@ fn main() {
     match option_price(terms, model, stated.implied_vol, stated.und_price) {
         Some(ours) => {
             let off = (ours - stated.opt_price).abs();
-            println!("  this client says: price={ours:.4}  ({off:.4} from the venue's own)");
+            println!("  this client says: price={ours:.4}  ({off:.4} from the venue's)");
         }
-        None => println!("  this client could not price it from the venue's own numbers"),
+        None => println!("  this client could not price it from the venue's numbers"),
     }
     // What the solve has to work with, when it cannot work.
     if let Some(rate) = ibx::control::option_model::carry_that_matches_the_venue(terms, model) {
@@ -116,14 +114,14 @@ fn main() {
     match implied_volatility(terms, model, stated.opt_price, stated.und_price) {
         Some(ours) => {
             let off = (ours - stated.implied_vol).abs();
-            println!("  this client says: vol={ours:.6}  ({off:.6} from the venue's own)");
+            println!("  this client says: vol={ours:.6}  ({off:.6} from the venue's)");
         }
-        None => println!("  this client could not solve it from the venue's own numbers"),
+        None => println!("  this client could not solve it from the venue's numbers"),
     }
 
-    // The one number an option model needs that no tick states. The
-    // counterpart's own option tools ask the venue for it as a series, so ask
-    // for it the same way and see whether it answers.
+    // The one number an option model needs that no tick states. It is served
+    // as a historical series rather than on a tick, so it is asked for that
+    // way.
     #[derive(Default)]
     struct Heard { bars: Vec<(String, f64)>, said: Vec<String> }
     impl ibx::api::wrapper::Wrapper for Heard {
@@ -224,7 +222,7 @@ fn main() {
                 client.process_msgs(&mut heard);
                 std::thread::sleep(Duration::from_millis(200));
             }
-            println!("\n  the venue's own rate series:");
+            println!("\n  the venue's rate series:");
             for (when, rate) in heard.bars.iter().take(5) {
                 println!("    {when}  {rate}");
             }

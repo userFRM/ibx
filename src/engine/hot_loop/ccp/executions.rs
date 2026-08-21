@@ -12,6 +12,8 @@ use crate::types::{
 };
 
 use super::{HeartbeatState, emit, parse_price_tag, decode_tif, EventSink};
+use crate::engine::hot_loop::parse_qty_tag;
+use crate::types::qty_to_f64;
 
 /// Synthetic ibapi error code for a parked (39=I) order's reason, delivered
 /// through `Wrapper::error` since ibapi has no callback dedicated to an order
@@ -19,6 +21,15 @@ use super::{HeartbeatState, emit, parse_price_tag, decode_tif, EventSink};
 /// than the reject code (201) — an Inactive order is not rejected, it can
 /// still reactivate.
 const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
+
+/// IB error code 201: the venue refused the order. Distinct from the generic
+/// order-message code above, so a caller can classify a refusal apart from a
+/// message about an order that is still live.
+const ORDER_REJECTED_ERROR_CODE: i32 = 201;
+
+/// Whether the venue manages the order's price (tag 8339). Independent of the
+/// algo strategy on tag 847.
+const TAG_USE_PRICE_MGMT_ALGO: u32 = 8339;
 
 /// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a
 /// stable i64 permId.
@@ -36,7 +47,7 @@ pub(crate) fn untracked_fill_target(
     parsed: &std::collections::HashMap<u32, String>,
 ) -> Option<(InstrumentId, Side)> {
     // A replayed execution restates history rather than reporting something
-    // new. On a fresh process the gateway resends prior fills with 97=Y and
+    // new. On a fresh process the venue resends prior fills with 97=Y and
     // their original ExecIDs, for orders no session tracks; booking those
     // would build a position out of the past on top of the one the position
     // feed already reports. Within a process the ExecID window catches the
@@ -112,7 +123,7 @@ pub(crate) fn uncertain_update(
                 order_id: order.order_id,
                 instrument: order.instrument,
                 status: crate::types::OrderStatus::Uncertain,
-                filled_qty: order.filled as f64,
+                filled_qty: qty_to_f64(order.filled),
                 // A fractional order deliberately tracks `qty` as zero — the
                 // decimal it was submitted with lives only in the enriched
                 // record. Both quantity fields are floating point end to
@@ -120,9 +131,9 @@ pub(crate) fn uncertain_update(
                 // as f64 — so the fraction itself survives exactly here
                 // rather than being rounded to a whole unit.
                 remaining_qty: {
-                    let outstanding = |total: f64| (total - order.filled as f64).max(0.0);
+                    let outstanding = |total: f64| (total - qty_to_f64(order.filled)).max(0.0);
                     if order.qty > 0 {
-                        outstanding(order.qty as f64)
+                        outstanding(qty_to_f64(order.qty))
                     } else if let Some(c) = cached.as_ref() {
                         outstanding(c.order.total_quantity)
                     } else {
@@ -240,8 +251,7 @@ fn take_what_if(
                     min_commission: parse_price_tag(parsed.get(&6379)),
                     max_commission: parse_price_tag(parsed.get(&6380)),
                     commission_currency: parsed.get(&6381).cloned().unwrap_or_default(),
-                    // The venue's own warning, which rides its own tag and
-                    // not the order's text.
+                    // Tag 6361 carries the warning, not the order's text.
                     warning_text: parsed.get(&6361).cloned().unwrap_or_default(),
                 };
                 log::info!("WhatIf response: clord={} initMargin={:.2}->{:.2} commission={:.2}",
@@ -258,9 +268,9 @@ fn take_what_if(
 
 /// What a report says the order's state now is.
 ///
-/// The wire's own status is not always the one the counterpart reports: 39=0
-/// is New on the wire and PreSubmitted until an exchange has acknowledged the
-/// order, which shows up on the same report as a destination and an exec
+/// The tag 39 code is not always the status a caller is given: 39=0 is New on
+/// the wire and PreSubmitted until an exchange has acknowledged the order,
+/// which shows up on the same report as a destination and an exec
 /// reference. Reading the wire value straight through told a caller an order
 /// was working while it was still being routed.
 fn status_of(
@@ -270,9 +280,9 @@ fn status_of(
 ) -> crate::types::OrderStatus {
     match ord_status {
         "0" => {
-            // 39=0 is New on the wire, but the gateway reports PreSubmitted
-            // until the order is actually routed to and acknowledged by an
-            // exchange (for example a limit order resting pre-market). Routing
+            // 39=0 is New on the wire and reports as PreSubmitted until the
+            // order is routed to and acknowledged by an exchange (for example a
+            // limit order resting pre-market). Routing
             // shows up on the same exec report as a non-empty ExDestination
             // (tag 100) plus an exec ref (tag 198) other than "NONE"; before
             // routing both are absent/"NONE". Captured in.
@@ -327,17 +337,22 @@ impl CcpState {
         clord_id: u64,
         dedup_key: &str,
         is_resend: bool,
+        // Whether the report undoes or restates an execution rather than
+        // repeating one. Only those may take the order's cumulative quantity
+        // down; a replay restates an earlier moment and must not.
+        restates_history: bool,
         last_px: f64,
         last_shares: i64,
-        report_cum_qty: i64,
+        // Tag 14 as the report states it, or `None` where it is absent. Absent
+        // is not 0: `14=0` is a bust of everything the order held.
+        report_cum_qty: Option<i64>,
         commission: f64,
         leaves_qty: i64,
         order_cum_qty: i64,
         order_avg_px: f64,
         context: &mut Context,
         shared: &SharedState,
-        event_tx: &Option<EventSink>,
-    ) {
+    ) -> Option<Fill> {
         // A fill can arrive for an order this session does not track: one
         // that raced its own cancel-ack out of the book, one placed from
         // another client, or one left from an earlier session. The report
@@ -346,7 +361,7 @@ impl CcpState {
         // order has nothing filled yet, so the arithmetic below reconciles
         // against zero.
         let target = match context.order(clord_id).copied() {
-            Some(order) => Some((order.instrument, order.side, order.filled as i64)),
+            Some(order) => Some((order.instrument, order.side, order.filled)),
             None => untracked_fill_target(context, parsed).map(|(i, s)| (i, s, 0i64)),
         };
         if let Some((instrument, side, already_filled)) = target {
@@ -358,13 +373,17 @@ impl CcpState {
                 // handler before its order does is not spent on a delivery
                 // that had nothing to book against.
                 self.record_exec_id(dedup_key);
-                if report_cum_qty <= 0 {
+                let Some(report_cum_qty) = report_cum_qty.filter(|c| *c >= 0) else {
                     // Nothing to reconcile against. Booking the increment
                     // would double what the recovery record already seeded.
                     log::debug!("Resent execution for order {clord_id} carries no CumQty — not booked");
-                    0
-                } else {
-                    let delta = (report_cum_qty - already_filled).max(0);
+                    return None;
+                };
+                {
+                    // Signed. A bust restates tag 14 downwards, and the
+                    // difference is what the account no longer holds.
+                    let delta = report_cum_qty - already_filled;
+                    let delta = if restates_history { delta } else { delta.max(0) };
                     if delta != last_shares && delta > 0 {
                         // The report's own increment is not what this client
                         // is missing, so the fill that follows carries a
@@ -388,8 +407,8 @@ impl CcpState {
             } else {
                 last_shares
             };
-            if booked > 0 {
-                context.update_order_filled(clord_id, booked as u32);
+            if booked != 0 {
+                context.adjust_order_filled(clord_id, booked);
                 let fill = Fill {
                     instrument,
                     order_id: clord_id,
@@ -406,9 +425,7 @@ impl CcpState {
                     Side::Buy => booked,
                     Side::Sell | Side::ShortSell => -booked,
                 };
-                context.update_position(instrument, delta as f64);
-                // notify_fill inlined
-                shared.orders.push_fill(fill);
+                context.update_position(instrument, qty_to_f64(delta));
                 shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
                 // The holding the caller reads is keyed by contract, and
                 // the broker restates that feed on its own schedule — never
@@ -424,15 +441,19 @@ impl CcpState {
                     .or_else(|| context.market.con_id(instrument));
                 if let Some(con_id) = filled_con_id {
                     shared.portfolio.apply_fill(
-                        con_id, delta as f64, (last_px * PRICE_SCALE as f64) as Price,
+                        con_id, qty_to_f64(delta), (last_px * PRICE_SCALE as f64) as Price,
                     );
                 }
-                emit(event_tx, Event::Fill(fill));
+                // Returned rather than announced here. A caller told about a
+                // fill reads the order it belongs to, and that record is written
+                // further along this same report.
+                return Some(fill);
             }
         }
+        None
     }
 
-    /// Take an order this session never saw from the venue's own account of it.
+    /// Build an order this session never saw from the venue's account of it.
     ///
     /// At session start the venue replays what it holds as ordinary
     /// acknowledgements, and a fresh process has nothing to match them against.
@@ -473,7 +494,7 @@ impl CcpState {
                 None
             }
         };
-        let qty: u32 = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).map(|q| q as u32)
+        let qty = parse_qty_tag(parsed.get(&38))
             .unwrap_or_else(|| prior.map_or(0, |o| o.qty));
         let limit_price_i64: i64 = parsed.get(&44)
             .and_then(|s| s.parse::<f64>().ok())
@@ -522,9 +543,7 @@ impl CcpState {
                 // Without it a fresh process believes nothing has filled,
                 // and the replayed executions behind this record all look
                 // like new quantity.
-                filled: parsed.get(&14)
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|c| c as u32)
+                filled: parse_qty_tag(parsed.get(&14))
                     .unwrap_or_else(|| prior.map_or(0, |o| o.filled)),
                 // An order this session never saw is working by the fact of
                 // being in the push. One whose state was not known stays
@@ -565,11 +584,21 @@ impl CcpState {
                         Side::Buy => "BUY".to_string(),
                         _ => "SELL".to_string(),
                     },
-                    total_quantity: qty as f64,
+                    total_quantity: qty_to_f64(qty),
                     order_type: crate::types::ord_type_fix_str(ord_type_byte).to_string(),
                     lmt_price: limit_price_i64 as f64 / PRICE_SCALE as f64,
                     aux_price: stop_price_i64 as f64 / PRICE_SCALE as f64,
                     account: parsed.get(&1).cloned().unwrap_or_default(),
+                    // Tag 583, the OCA group. A recovered order without it
+                    // reads as standing alone, and resubmitting it drops the
+                    // cancellation the group exists for.
+                    oca_group: parsed.get(&583).cloned().unwrap_or_default(),
+                    // Tag 109, the client that placed the order, so an order
+                    // this session did not place is not filed under this one.
+                    client_id: parsed
+                        .get(&109)
+                        .and_then(|s| s.trim().parse().ok())
+                        .unwrap_or(0),
                     ..Default::default()
                 },
                 order_state: api::OrderState {
@@ -775,16 +804,15 @@ impl CcpState {
         // literal string "n/a" (parse fails), then a data frame with numbers.
         // Discriminate on parse-success, NOT positivity: a margin-reducing
         // preview (closing a position, cash-account sell) legitimately resolves
-        // to init_margin_after == 0, and the gateway sends that as a numeric "0"
+        // to init_margin_after == 0, and that arrives as a numeric "0"
         // which must be delivered. Guarding on `> 0.0` silently dropped those
         // and left the caller's pending what-if to time out.
         // The not-ready ack is not always emitted — close/reject previews send a
         // single data frame — so accept the first data frame with no assumption
         // that an ack precedes it. A frame is the real preview when ANY of the
         // six margin fields (6826/6827/6828 before, 6092/6093/6094 after)
-        // parses as a finite number, mirroring the gateway's own real-frame
-        // test: each field is "set" when it parses, unset on nan/unparseable,
-        // and the frame is real when any field is set. The
+        // parses as a finite number: each field is set when it parses, unset on
+        // nan or unparseable, and the frame is real when any field is set. The
         // ack carries "n/a" in all six, so it never matches. Captured
         // byte-level in.
         if parsed.get(&6091).map(|s| s.as_str()) == Some("1")
@@ -797,14 +825,26 @@ impl CcpState {
         let exec_type = parsed.get(&150).map(|s| s.as_str()).unwrap_or("");
         let exec_id = parsed.get(&17).map(|s| s.as_str()).unwrap_or("");
         let last_px = parsed.get(&31).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-        let last_shares = parsed.get(&32).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        // Tag 32, the quantity of this print, held fixed-point. A fractional
+        // order fills in fractions, so the decimal is carried rather than
+        // rounded: read as an integer, `32=0.5` is a fill of nothing and the
+        // position never moves.
+        let last_shares = match parsed.get(&32) {
+            None => 0,
+            Some(stated) => parse_qty_tag(Some(stated)).unwrap_or_else(|| {
+                log::error!(
+                    "order {clord_id} states an unreadable fill quantity {stated} — nothing is booked",
+                );
+                0
+            }),
+        };
         // Absent is not zero. Without 151 the caller was told nothing was left
         // on an order that was still working; the terminal falls back to the
         // order quantity less what has filled, and so does this.
-        let leaves_qty = parsed.get(&151).and_then(|s| s.parse::<i64>().ok()).unwrap_or_else(|| {
-            let ordered = parsed.get(&38).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-            let done = parsed.get(&14).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-            ((ordered - done).max(0.0)) as i64
+        let leaves_qty = parse_qty_tag(parsed.get(&151)).unwrap_or_else(|| {
+            let ordered = parse_qty_tag(parsed.get(&38)).unwrap_or(0);
+            let done = parse_qty_tag(parsed.get(&14)).unwrap_or(0);
+            (ordered - done).max(0)
         });
         // 14 CumQty and 6 AvgPx describe the order as a whole; 32 and 31
         // describe this print alone. The gateway sends all four on every
@@ -817,11 +857,10 @@ impl CcpState {
         // is not reconstructible that way, so it falls back to the print — and
         // a negative average is a real value for a spread, so only an absent
         // or unparseable tag falls back at all.
-        let order_cum_qty = parsed.get(&14).and_then(|s| s.parse::<f64>().ok())
-            .map(|q| q as i64)
+        let order_cum_qty = parse_qty_tag(parsed.get(&14))
             .filter(|q| *q > 0)
             .unwrap_or_else(|| {
-                context.order(clord_id).map_or(last_shares, |o| o.filled as i64 + last_shares)
+                context.order(clord_id).map_or(last_shares, |o| o.filled + last_shares)
             });
         let order_avg_px = parsed.get(&6)
             .and_then(|s| s.parse::<f64>().ok())
@@ -830,13 +869,12 @@ impl CcpState {
 
         if ord_status == "8" {
             // The venue says why it refused an order, and that was written to a
-            // log where no caller could read it. A caller then saw only that
-            // the order was not working, with nothing to act on, which is the
-            // one thing the venue's own client never does.
+            // log where no caller could read it, leaving the caller with the
+            // order not working and no reason to act on.
             let reason = stated_reason(parsed);
             log::warn!("ExecReport REJECTED: clord={clord_id} reason='{reason}'");
             if !reason.is_empty() {
-                shared.orders.push_order_inactive(clord_id, ORDER_INACTIVE_ERROR_CODE, reason);
+                shared.orders.push_order_inactive(clord_id, ORDER_REJECTED_ERROR_CODE, reason);
             }
         } else {
             log::info!("ExecReport: 39={} 150={} 11={} 58={} 103={}",
@@ -847,18 +885,20 @@ impl CcpState {
 
         let status = status_of(ord_status, clord_id, parsed);
 
-        // A replace is acknowledged as 39=5, and the gateway reaches it through
-        // 39=6 first: captured live, a modify runs PendingCancel then Replaced.
-        // The monotonic guard ranks PendingCancel above the working states, so
-        // that acknowledgement reads as a stale frame and is dropped, leaving a
-        // successfully modified order reported as stuck mid-cancel and never
-        // confirmed. It is a deliberate transition, which is what the forced
-        // path is for; the ranks are left alone because a partially filled
-        // order must still be able to reach PendingCancel.
+        // A replace is acknowledged as 39=5, reached through 39=6 first: a
+        // modify runs PendingCancel then Replaced. Confirmed live.
+        // A pending cancel does not outrank the working states, so the
+        // acknowledgement applies the ordinary way. An order already working
+        // when the modify is accepted changes no status, and the caller is still
+        // told the change was made.
+        //
+        // Applied under the guard, not forced past it: an acknowledgement
+        // arriving behind a fill must not move a finished order back to
+        // working.
         // A report can carry the reason it restates the order, and two of those
-        // reasons are refusals: the gateway answers a revision it would not make
-        // and a cancel it would not make on the same message it answers a
-        // successful one. Read as an acknowledgement, a refused revision left
+        // reasons are refusals: a revision the venue will not make and a cancel
+        // it will not make arrive on the same message shape as a successful one.
+        // Read as an acknowledgement, a refused revision left
         // the caller believing an order had been changed that had not been.
         let restatement_reason = parsed.get(&378).map(|s| s.as_str()).unwrap_or("");
         let revision_refused = matches!(restatement_reason, "102" | "103");
@@ -870,7 +910,7 @@ impl CcpState {
             // caller already watches, rather than only to a log.
             let reason = stated_reason(parsed);
             log::warn!(
-                "Order {clord_id}: the gateway refused the request (378={restatement_reason}) — \
+                "Order {clord_id}: the venue refused the request (378={restatement_reason}) — \
                  the order stands as it was: {reason}",
             );
             let told = if reason.is_empty() {
@@ -880,40 +920,48 @@ impl CcpState {
             };
             shared.orders.push_order_inactive(clord_id, ORDER_INACTIVE_ERROR_CODE, told);
         }
-        if is_replace_ack {
-            context.set_order_status_forced(clord_id, status);
-        }
-
-        // The guard's verdict doubles as the change flag: a stale
-        // frame the guard rejects must not surface as an order_status either.
-        // A refusal states no new status for the order — it says the request
-        // was not carried out, and the order goes on under the terms it already
-        // had. Any execution the report carries is still read below.
-        let status_changed = !revision_refused
-            && (is_replace_ack || context.update_order_status(clord_id, status));
-
         // The gateway marks a report that restates history: 97=Y is PossResend
         // and 43=Y is PossDupFlag. Neither was read anywhere, and the only
         // thing standing between a replayed execution and a second booking was
         // the ExecID window — which a fresh process does not have, because it
-        // has never seen the ID. At session start the gateway replays
+        // has never seen the ID. At session start the venue replays
         // recent executions, so a restart with open partially-filled orders
         // emitted a fill for something that happened before it started.
+        //
+        // Read before the status is applied, because it decides that too: a
+        // replay does not move an order back out of an in-flight cancel.
         let is_resend = ["Y", "y"].contains(&parsed.get(&97).map(|v| v.as_str()).unwrap_or(""))
             || ["Y", "y"].contains(&parsed.get(&43).map(|v| v.as_str()).unwrap_or(""));
+
+        // The guard's verdict doubles as the change flag: a frame it rejects
+        // surfaces no order_status. A refusal states no new status; the order
+        // stands on the terms it has. Any execution on the report is still read
+        // below.
+        let applied = context.update_order_status(clord_id, status, is_resend);
+        // An accepted modify is announced even where it changed no status: an
+        // order already working when the change lands stays working. Only where
+        // the order is in the state being announced, so a status the guard
+        // rejected is not reported over it.
+        let acknowledged_in_place = is_replace_ack
+            && context.order(clord_id).is_some_and(|o| o.status == status);
+        let status_changed = !revision_refused && (applied || acknowledged_in_place);
+
         // A report can also undo or restate an execution rather than announce a
         // new one: a busted trade and a corrected one both arrive as executions,
         // and adding their quantity booked a fill the account no longer has.
         // The cumulative figure is the truth on those, which is the same
         // arithmetic a replayed execution needs.
         let trans_type = parsed.get(&20).map(|s| s.as_str()).unwrap_or("");
-        let is_resend = is_resend || matches!(trans_type, "1" | "2");
+        // 20=1 is a cancelled execution and 20=2 a corrected one. Both restate
+        // what the account holds and may restate it downwards, which a replay
+        // never does.
+        let restates_history = matches!(trans_type, "1" | "2");
+        let is_resend = is_resend || restates_history;
 
         // CumQty — the order's cumulative filled quantity as of this report.
-        let report_cum_qty = parsed.get(&14)
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|c| c as i64)
-            .unwrap_or(0);
+        // Held in the same fixed-point unit as what the order has already
+        // booked, because a resend books the difference between the two.
+        let report_cum_qty = parse_qty_tag(parsed.get(&14));
 
         // Dedup key. An execution with no ExecID skipped the window entirely,
         // so a replayed copy booked a second time — and an absent tag 17 is the
@@ -932,19 +980,21 @@ impl CcpState {
                 parsed.get(&60).map(|s| s.as_str()).unwrap_or(""),
                 last_shares,
                 last_px,
-                report_cum_qty,
+                report_cum_qty.unwrap_or(0),
             )
         } else {
             exec_id.to_string()
         };
 
-        if matches!(exec_type, "F" | "1" | "2") && last_shares > 0 {
+        let filled = if matches!(exec_type, "F" | "1" | "2") && last_shares > 0 {
             self.book_fill(
-                parsed, clord_id, &dedup_key, is_resend, last_px,
+                parsed, clord_id, &dedup_key, is_resend, restates_history, last_px,
                 last_shares, report_cum_qty, commission, leaves_qty, order_cum_qty,
-                order_avg_px, context, shared, event_tx,
-            );
-        }
+                order_avg_px, context, shared,
+            )
+        } else {
+            None
+        };
 
         // A report that fills an order states its new status on the same
         // report, and suppressing the status because the fill was on it meant
@@ -953,6 +1003,10 @@ impl CcpState {
         // believing the order was still working. The two are different
         // questions — what traded, and where the order stands — and a report
         // that answers both is not a reason to drop one.
+        // Held until the caches below are written. A caller acting on the
+        // notification queries this session for the order it names, so the
+        // record must exist before the announcement.
+        let mut announce: Option<crate::types::OrderUpdate> = None;
         if status_changed
             && let Some(order) = context.order(clord_id).copied() {
                 let perm_id: i64 = parsed.get(&37).map(|s| perm_id_from_fix_order_id(s)).unwrap_or(0);
@@ -974,15 +1028,14 @@ impl CcpState {
                     order_id: clord_id,
                     instrument: order.instrument,
                     status,
-                    filled_qty: order.filled as f64,
-                    remaining_qty: leaves_qty as f64,
+                    filled_qty: qty_to_f64(order.filled),
+                    remaining_qty: qty_to_f64(leaves_qty),
                     avg_price: (order_avg_px * PRICE_SCALE as f64) as Price,
                     perm_id,
                     parent_id,
                     timestamp_ns: context.now_ns(),
                 };
-                shared.orders.push_order_update(update);
-                emit(event_tx, Event::OrderUpdate(update));
+                announce = Some(update);
 
                 // A parked (39=I) order carries its reason on the same tags
                 // 58/103 as a reject, but OrderState.completedStatus stays
@@ -1158,13 +1211,25 @@ impl CcpState {
                 _ => 3, // default
             };
             let algo_strategy = parsed.get(&847).cloned().unwrap_or_default();
-            let use_price_mgmt_algo: i32 = if algo_strategy == "Adaptive" { 1 } else { 0 };
+            // Tag 8339 is its own field, not derived from the algo strategy on
+            // tag 847.
+            let use_price_mgmt_algo = i32::from(
+                parsed.get(&TAG_USE_PRICE_MGMT_ALGO)
+                    .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+            );
             let trail_stop_price: f64 = parsed.get(&6117)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(f64::MAX);
 
             let order = api::Order {
                 order_id: clord_id as i64,
+                // What the venue says the order waits for. Read from the
+                // report rather than left empty, so an order read back and
+                // placed again waits for what it waited for the first time
+                // instead of going live at once.
+                conditions: decode_conditions(raw),
+                conditions_cancel_order: parsed.get(&6128).map(|v| v == "1").unwrap_or(false),
+                conditions_ignore_rth: parsed.get(&6151).map(|v| v == "1").unwrap_or(false),
                 action: if action.is_empty() { fb_action.to_string() } else { action.to_string() },
                 total_quantity: total_qty,
                 order_type: if order_type_str.is_empty() { fb_ord_type.to_string() } else { order_type_str.to_string() },
@@ -1193,6 +1258,12 @@ impl CcpState {
                 // every report and was read from none of them, so an order came
                 // back naming neither the reference the caller gave it, nor the
                 // client that placed it, nor how it allocates.
+                // The group that cancels together. The recovery record reads
+                // it and so must this one: an ordinary report that omits it
+                // replaces the cached row with one saying the order stands
+                // alone, and the order placed from that row carries none of
+                // the cancellation the group exists for.
+                oca_group: parsed.get(&583).cloned().unwrap_or_default(),
                 order_ref: parsed.get(&6010).cloned().unwrap_or_default(),
                 rule80a: parsed.get(&47).cloned().unwrap_or_default(),
                 good_till_date: parsed.get(&432).cloned().unwrap_or_default(),
@@ -1252,7 +1323,7 @@ impl CcpState {
                 side: if let Some(o) = context.order(clord_id) {
                     match o.side { Side::Buy => "BOT", Side::Sell | Side::ShortSell => "SLD" }.to_string()
                 } else { String::new() },
-                shares: last_shares as f64,
+                shares: qty_to_f64(last_shares),
                 price: last_px,
                 order_id: clord_id as i64,
                 // The execution record describes this report, so an absent
@@ -1306,8 +1377,8 @@ impl CcpState {
             }
 
             // A trade cancel (150=H) or trade correction (150=G) restates an
-            // execution the gateway has already reported, so it may legitimately
-            // return a completed order to a working quantity. Every other report
+            // execution already reported, so it may legitimately return a
+            // completed order to a working quantity. Every other report
             // that would do that is a replay.
             let info = RichOrderInfo { contract, order, order_state, last_exec };
             if matches!(exec_type, "G" | "H") {
@@ -1317,8 +1388,11 @@ impl CcpState {
                 // completed order back to open. The cache is what
                 // `req_open_orders` reads, so a caller polling between the two
                 // frames would see a finished order listed as working.
+                // Inactive is not terminal. The venue still holds such an
+                // order and it can return to working, so a cancel-all reaches
+                // one.
                 let already_terminal = shared.orders.get_order_info(clord_id).is_some_and(|prev| {
-                    matches!(prev.order_state.status.as_str(), "Filled" | "Cancelled" | "Inactive")
+                    matches!(prev.order_state.status.as_str(), "Filled" | "Cancelled")
                 });
                 if !already_terminal || matches!(
                     status,
@@ -1340,17 +1414,29 @@ impl CcpState {
             // order can finish before its acknowledgement has been handled, so
             // requiring a tracked record meant the fastest orders — the ones
             // that fill immediately — left no memory of having finished, and
-            // the working status the gateway echoes behind the fill had nothing
-            // to be refused by.
+            // the working status echoed behind the fill had nothing to be
+            // refused by.
             let tracked = context.order(clord_id).copied();
             shared.orders.push_completed_order(CompletedOrder {
                 order_id: clord_id,
                 instrument: tracked.map_or(0, |o| o.instrument),
                 status,
-                filled_qty: tracked.map_or(0, |o| o.filled as i64),
+                filled_qty: tracked.map_or(0, |o| o.filled),
                 timestamp_ns: context.now_ns(),
             });
             context.retire_order(clord_id);
+        }
+
+        // Announced after everything this report changed is written. A caller
+        // acts on a notification the moment it arrives, and each of those
+        // actions reads a record this report writes.
+        if let Some(fill) = filled {
+            shared.orders.push_fill(fill);
+            emit(event_tx, Event::Fill(fill));
+        }
+        if let Some(update) = announce {
+            shared.orders.push_order_update(update);
+            emit(event_tx, Event::OrderUpdate(update));
         }
     }
 
@@ -1361,8 +1447,8 @@ impl CcpState {
         shared: &SharedState,
         event_tx: &Option<EventSink>,
     ) {
-        // Match handle_exec_report's tag-11 parsing: strip the gateway's
-        // "C" prefix and any ".0/.1/.2" modify-chain suffix.
+        // Match handle_exec_report's tag-11 parsing: strip the "C" prefix and
+        // any ".0/.1/.2" modify-chain suffix.
         let orig_clord = parsed.get(&41).and_then(|s| {
             let stripped = s.strip_prefix('C').unwrap_or(s);
             let base = stripped.split('.').next().unwrap_or(stripped);
@@ -1375,7 +1461,7 @@ impl CcpState {
 
         let Some(oid) = orig_clord else { return };
 
-        // FIX CxlRejReason 1 = UnknownOrder: the gateway is stating that the
+        // FIX CxlRejReason 1 = UnknownOrder: the venue is stating that the
         // order does not exist on its side. Restoring it to working asserted
         // the opposite of the message being handled, and the engine's own view
         // governs subsequent cancels, modifies and reconnect bookkeeping — so a
@@ -1390,7 +1476,7 @@ impl CcpState {
         // Update local context only for an order tracked in this session.
         let instrument = if let Some(order) = context.order(oid).copied() {
             if unknown_order {
-                // Terminal and removed, which is what the gateway just said.
+                // Terminal and removed, which is what the reject states.
                 // Holding the record in a non-working status instead is not an
                 // option here: those are excluded from the open-order count
                 // that guards instrument reclamation, so the slot could be
@@ -1399,7 +1485,6 @@ impl CcpState {
                 //
                 // A fill that races the rejection is not lost with the order:
                 // the untracked-fill path books it and moves the position.
-                context.set_order_status_forced(oid, crate::types::OrderStatus::Cancelled);
                 context.retire_order(oid);
             } else {
                 let restore_status = if order.filled > 0 {
@@ -1429,6 +1514,16 @@ impl CcpState {
             shared.orders.remove_order_info(oid);
         }
 
+        // Tag 58 carries the venue's text. The structured reject has tags 434
+        // and 102 and no text, which cannot separate "the order does not exist"
+        // from "it is too late to cancel". Delivered on the channel a refused
+        // order's reason already uses.
+        if let Some(text) = parsed.get(&58).filter(|t| !t.is_empty()) {
+            shared.orders.push_order_inactive(
+                oid, ORDER_INACTIVE_ERROR_CODE, text.clone(),
+            );
+        }
+
         let reject = crate::types::CancelReject {
             order_id: oid,
             instrument,
@@ -1438,5 +1533,111 @@ impl CcpState {
         };
         shared.orders.push_cancel_reject(reject);
         emit(event_tx, Event::CancelReject(reject));
+    }
+}
+
+/// The conditions an order waits on, as the report states them.
+///
+/// Conditions arrive as one repeating group per condition, so they are read
+/// from the raw frame: a flat parse keeps only the last value of each tag.
+///
+/// A condition this cannot name is omitted and logged rather than guessed at.
+/// An order that reads back holding fewer conditions than it was placed with
+/// can be resubmitted as one that waits for nothing.
+pub(crate) fn decode_conditions(msg: &[u8]) -> Vec<crate::types::OrderCondition> {
+    crate::protocol::fix::fix_parse_repeating(msg, COND_TYPE)
+        .into_iter()
+        .filter_map(|c| {
+            let kind = c.get(&COND_TYPE).map(|s| s.trim().to_string()).unwrap_or_default();
+            let built = decode_condition(&c);
+            if built.is_none() {
+                // Dropped and logged: an order reading back with fewer
+                // conditions than it was placed with can be resubmitted as one
+                // that waits for nothing.
+                log::warn!("dropping an order condition of type {kind:?} — it did not read");
+            }
+            built
+        })
+        .collect()
+}
+
+/// A condition begins where it says what kind it is.
+const COND_TYPE: u32 = 6222;
+
+/// One condition, or nothing if the venue's fields for it did not read.
+fn decode_condition(c: &std::collections::HashMap<u32, String>) -> Option<crate::types::OrderCondition> {
+    use crate::types::OrderCondition;
+
+    const CON_ID: u32 = 6123;
+    const EXCHANGE: u32 = 6124;
+    const PRICE: u32 = 6125;
+    const OPERATOR: u32 = 6126;
+    const TIME: u32 = 6223;
+    const PERCENT: u32 = 6245;
+    const VOLUME: u32 = 6263;
+    const EXECUTION: u32 = 6246;
+
+    // Tag 6126 carries the comparison itself: `>=` or `<=`, and no others. A
+    // condition stating neither has no direction this can name, so it is omitted
+    // like any other unreadable field. Reading it as `<=` states a trigger the
+    // report did not, and inverts the condition on resubmission.
+    //
+    // Read lazily: an execution condition has no direction, so it is not
+    // refused for want of one.
+    let is_more = || match c.get(&OPERATOR).map(|op| op.trim()) {
+        Some(">=") => Some(true),
+        Some("<=") => Some(false),
+        other => {
+            log::warn!("order condition states operator {other:?}, which is neither >= nor <=");
+            None
+        }
+    };
+    let text = |tag: u32| c.get(&tag).map(|s| s.trim().to_string()).unwrap_or_default();
+    let number = |tag: u32| c.get(&tag).and_then(|s| s.trim().parse::<f64>().ok());
+    let con_id = c.get(&CON_ID).and_then(|s| s.trim().parse::<i64>().ok()).unwrap_or(0);
+
+    match c.get(&COND_TYPE).map(|s| s.trim()) {
+        Some("1") => Some(OrderCondition::Price {
+            con_id,
+            exchange: text(EXCHANGE),
+            price: (number(PRICE)? * PRICE_SCALE as f64) as Price,
+            is_more: is_more()?,
+            // Tag 6127 is written outbound and absent inbound, so the trigger
+            // method reads as the venue's rather than the caller's.
+            trigger_method: 0,
+        }),
+        Some("3") => Some(OrderCondition::Time { time: text(TIME), is_more: is_more()? }),
+        Some("4") => Some(OrderCondition::Margin {
+            percent: number(PERCENT)? as u32,
+            is_more: is_more()?,
+        }),
+        Some("5") => {
+            // Packed into one field as `symbol=..;exchange=..;securityType=..;`
+            let packed = text(EXECUTION);
+            let field = |name: &str| {
+                packed.split(';')
+                    .find_map(|p| p.strip_prefix(&format!("{name}=")))
+                    .unwrap_or("")
+                    .to_string()
+            };
+            Some(OrderCondition::Execution {
+                symbol: field("symbol"),
+                exchange: field("exchange"),
+                sec_type: field("securityType"),
+            })
+        }
+        Some("6") => Some(OrderCondition::Volume {
+            con_id,
+            exchange: text(EXCHANGE),
+            volume: number(VOLUME)? as i64,
+            is_more: is_more()?,
+        }),
+        Some("7") => Some(OrderCondition::PercentChange {
+            con_id,
+            exchange: text(EXCHANGE),
+            percent: number(PERCENT)?,
+            is_more: is_more()?,
+        }),
+        _ => None,
     }
 }

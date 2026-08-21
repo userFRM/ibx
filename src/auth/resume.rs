@@ -47,7 +47,7 @@ const SEAL_ROUNDS: u32 = if cfg!(test) { 1_000 } else { 600_000 };
 pub struct ResumableSession {
     /// The session token, big-endian, as `session_token_bytes` reports it.
     pub token: Vec<u8>,
-    /// The venue's own id for the session being resumed.
+    /// Session id assigned by the venue, for the session being resumed.
     pub server_session_id: String,
     /// What this machine identified itself as.
     pub hw_info: String,

@@ -84,6 +84,23 @@ fn main() {
             ..limit()
         }),
         ("discretion to the limit", Order { discretionary_up_to_limit_price: true, ..limit() }),
+        // Order types whose tag 40 value this client states from its own
+        // registry rather than from the caller's string. A type the venue does
+        // not recognise on 40 comes back as a refusal naming it, so a margin
+        // figure here is the venue accepting the encoding.
+        ("a limit-if-touched", Order {
+            order_type: "LIT".into(), lmt_price: 100.0, aux_price: 101.0, ..limit()
+        }),
+        ("a trailing stop limit", Order {
+            order_type: "TRAIL LIMIT".into(), lmt_price: 100.0, aux_price: 1.0,
+            trail_stop_price: 101.0, ..limit()
+        }),
+        ("a relative order", Order {
+            order_type: "REL".into(), lmt_price: 0.0, aux_price: 0.01, ..limit()
+        }),
+        ("a market-to-limit", Order {
+            order_type: "MTL".into(), lmt_price: 0.0, ..limit()
+        }),
         ("a settling firm", Order { settling_firm: "FIRM".into(), ..limit() }),
         ("a ladder", Order {
             scale_init_level_size: 10, scale_price_increment: 0.05, ..limit()

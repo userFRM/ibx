@@ -54,27 +54,32 @@ pub enum Recovery {
 impl DisconnectReason {
     /// Classify a failed attempt from what the transport reported.
     pub fn from_error(e: &io::Error) -> Self {
+        // The reason often survives only in the message the server sent, which
+        // is the one place a competing login or a session limit is named. Read
+        // first, and for every kind: a refused logon arrives as a permission
+        // error whatever reason the venue states, so classifying on the kind
+        // alone reads "too many sessions" as a wrong password and stops, where
+        // the account is busy and the next attempt is admitted.
+        let text = e.to_string().to_ascii_lowercase();
+        if text.contains("competing")
+            || text.contains("another user")
+            || text.contains("logged in from")
+        {
+            return Self::TakenOver;
+        }
+        if text.contains("not ready")
+            || text.contains("try again later")
+            || text.contains("too many sessions")
+        {
+            return Self::NotReady;
+        }
         match e.kind() {
-            // The logon was answered with a rejection. The credentials, the
+            // A rejection naming none of the above. The credentials, the
             // account or the entitlement is wrong, and the next attempt carries
             // exactly the same ones.
             io::ErrorKind::PermissionDenied => Self::AuthorizationFailed,
             io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => Self::NoResponse,
-            _ => {
-                // The reason often survives only in the message the server
-                // sent, which is the one place a competing login is named.
-                let text = e.to_string().to_ascii_lowercase();
-                if text.contains("competing")
-                    || text.contains("another user")
-                    || text.contains("logged in from")
-                {
-                    Self::TakenOver
-                } else if text.contains("not ready") || text.contains("try again later") {
-                    Self::NotReady
-                } else {
-                    Self::Transport
-                }
-            }
+            _ => Self::Transport,
         }
     }
 
@@ -86,7 +91,7 @@ impl DisconnectReason {
             // Never, not slowly. A session belongs to whoever connected last,
             // and taking it back is a decision only the person running both
             // ends can make: reconnecting into it takes it off them, and two
-            // clients doing that to each other never stop. The counterpart
+            // clients doing that to each other never stop. A fixed delay
             // treats this as one of the reasons it does not come back from,
             // and a program written against it is already built to be told the
             // session ended rather than to watch it flap.
@@ -179,6 +184,37 @@ mod tests {
         let reason = DisconnectReason::from_error(&e);
         assert_eq!(reason, DisconnectReason::Transport);
         assert_eq!(delay_for(reason, Duration::from_secs(7)), Duration::from_secs(7));
+    }
+
+    /// An account that is busy is not an account whose password is wrong.
+    ///
+    /// Every logon the venue refuses arrives as a permission error whatever
+    /// reason it states, so the reason is read before the kind. Reading the
+    /// kind first diagnoses a session limit as refused credentials and stops
+    /// recovery, where waiting recovers the session.
+    #[test]
+    fn a_session_limit_is_not_a_refused_password() {
+        let busy = io::Error::new(
+            io::ErrorKind::PermissionDenied, "FIX Logon rejected: Too many sessions",
+        );
+        assert_eq!(DisconnectReason::from_error(&busy), DisconnectReason::NotReady);
+        assert!(!DisconnectReason::from_error(&busy).is_terminal(), "the account clears");
+        assert_eq!(delay_for(DisconnectReason::from_error(&busy), Duration::from_secs(2)), SLOW_FLOOR);
+
+        // And a competing login arrives the same way, and is still not ours to
+        // take back.
+        let taken = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "FIX Logon rejected: another user logged in from 1.2.3.4",
+        );
+        assert_eq!(DisconnectReason::from_error(&taken), DisconnectReason::TakenOver);
+
+        // What is left under that kind is still a refusal to stop on.
+        let wrong = io::Error::new(
+            io::ErrorKind::PermissionDenied, "FIX Logon rejected: Invalid username or password",
+        );
+        assert_eq!(DisconnectReason::from_error(&wrong), DisconnectReason::AuthorizationFailed);
+        assert!(DisconnectReason::from_error(&wrong).is_terminal());
     }
 
     #[test]

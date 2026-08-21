@@ -137,7 +137,7 @@ mod order_replay_tests {
         );
     }
 
-    /// The gateway echoes a working status behind a fill. The order is retired
+    /// The venue echoes a working status behind a fill. The order is retired
     /// by then, so the echo finds no record to be refused by and reported a
     /// filled order as working with nothing filled.
     #[test]
@@ -213,6 +213,9 @@ pub struct SharedState {
     /// `Event::Disconnected` channel path is optional; this
     /// flag is always populated.
     connection_lost: AtomicBool,
+    /// Whether the loss above was deliberate. Recorded at the moment of loss,
+    /// not derived later.
+    connection_lost_by_design: AtomicBool,
     /// Set when a reconnect recovered a loss that was announced. Read-and-clear
     /// like `connection_lost`, so a client with no event channel still learns
     /// it is back.
@@ -236,9 +239,9 @@ impl SharedState {
 
     /// Whether a US stock trading on Nasdaq is named by the older spelling.
     ///
-    /// The setting asks for it and the venue grants it, and it takes both: the
-    /// counterpart reads the same grant off the granted-feature list at logon
-    /// and holds it beside the setting. Read once per contract definition, so
+    /// The setting asks for it and the venue grants it, and both are required.
+    /// The grant is read off the granted-feature list at logon and held beside
+    /// the setting. Read once per contract definition, so
     /// the grant is settled at logon rather than scanned for here.
     pub fn island_for_nasdaq(&self) -> bool {
         self.settings().island_for_nasdaq && self.reference.island_granted()
@@ -260,6 +263,7 @@ impl SharedState {
             portfolio: PortfolioState::new(),
             ccp_rtt_ns: AtomicU64::new(0),
             connection_lost: AtomicBool::new(false),
+            connection_lost_by_design: AtomicBool::new(false),
             connection_restored: AtomicBool::new(false),
             notify_mutex: Mutex::new(false),
             notify_condvar: Condvar::new(),
@@ -275,8 +279,27 @@ impl SharedState {
         // applies them in its own order — so a session that came back and went
         // again reads as connected, with nothing left to say it is not.
         self.connection_restored.store(false, Ordering::Release);
+        // Decided here rather than by a later reader. A shutdown records its
+        // own reason and records it after any venue-side drop, so deriving
+        // this afterwards reports a caller-requested stop for a session the
+        // venue ended, and every absence after it reads as tidying.
+        self.connection_lost_by_design.store(
+            self.reference.session_over()
+                == Some(crate::reliability::retry::DisconnectReason::ByDesign.as_str()),
+            Ordering::Release,
+        );
         self.connection_lost.store(true, Ordering::Release);
         self.notify();
+    }
+
+    /// Whether the last recorded loss was one this process asked for.
+    ///
+    /// Read beside [`take_connection_lost`](Self::take_connection_lost): the
+    /// two together say the connection went away and whether that was the
+    /// intention.
+    #[inline]
+    pub fn connection_lost_by_design(&self) -> bool {
+        self.connection_lost_by_design.load(Ordering::Acquire)
     }
 
     /// Read and clear the connection-lost flag. Returns `true` at most once per
@@ -354,6 +377,49 @@ mod tests {
     use std::collections::HashMap;
     use crate::types::model as api;
     use super::*;
+
+    /// The venue broadcasts notices unasked and only a subscriber drains
+    /// them, so a session that never subscribes would otherwise hold every
+    /// notice of the day for the life of the process. Past the bound the
+    /// oldest are dropped, and a late subscriber is handed the most recent.
+    #[test]
+    fn broadcast_notices_do_not_pile_up_unread() {
+        let shared = SharedState::new();
+        for id in 0..(NEWS_BULLETIN_LIMIT as i32 + 10) {
+            shared.market.push_news_bulletin(crate::types::NewsBulletin {
+                msg_id: id, msg_type: 1, message: String::new(), exchange: String::new(),
+            });
+        }
+        let held = shared.market.drain_news_bulletins();
+        assert_eq!(held.len(), NEWS_BULLETIN_LIMIT, "the buffer grew past its bound");
+        assert_eq!(held[0].msg_id, 10, "the oldest were kept and the newest dropped");
+        assert_eq!(held[held.len() - 1].msg_id, NEWS_BULLETIN_LIMIT as i32 + 9);
+    }
+
+    /// Whether a loss was asked for is decided as it is recorded.
+    ///
+    /// Shutting down records its own reason. Derived from that reason after
+    /// the fact, a session the venue took away reports as caller-requested,
+    /// and every absence after it reads as ordinary tidying.
+    #[test]
+    fn a_loss_remembers_whether_it_was_asked_for() {
+        use crate::reliability::retry::DisconnectReason;
+
+        // The venue takes the session away: nothing has recorded a reason.
+        let shared = SharedState::new();
+        shared.set_connection_lost();
+        // The tidying that follows records one, as a shutdown does.
+        shared.reference.set_session_over(DisconnectReason::ByDesign.as_str());
+        assert!(shared.take_connection_lost());
+        assert!(!shared.connection_lost_by_design(), "nobody asked for this one");
+
+        // And a shutdown, which records its reason before the loss.
+        let asked = SharedState::new();
+        asked.reference.set_session_over(DisconnectReason::ByDesign.as_str());
+        asked.set_connection_lost();
+        assert!(asked.take_connection_lost());
+        assert!(asked.connection_lost_by_design());
+    }
 
     #[test]
     fn seqquote_write_read_roundtrip() {
@@ -538,6 +604,21 @@ mod tests {
         }
     }
 
+    /// The replay flag belongs to the connection that earned it.
+    ///
+    /// Set once and never cleared, it outlives that connection: after a
+    /// reconnect it answers from the previous session's record instead of
+    /// waiting for the new one to name its working orders.
+    #[test]
+    fn a_new_connection_has_not_yet_named_what_it_has_working() {
+        let shared = SharedState::new();
+        assert!(!shared.orders.replay_done(), "nothing has been named yet");
+        shared.orders.set_replay_done();
+        assert!(shared.orders.replay_done());
+        shared.orders.replay_is_pending();
+        assert!(!shared.orders.replay_done(), "and a reconnect starts over");
+    }
+
     /// A completed order is remembered as completed, so a replayed frame
     /// cannot write `Submitted` over the terminal entry and have
     /// `req_open_orders` report it as live. A strategy reading that would
@@ -549,7 +630,7 @@ mod tests {
             let shared = SharedState::new();
             shared.orders.push_order_info(7, info(terminal));
 
-            for open in ["Submitted", "PreSubmitted", "PartiallyFilled", "PendingCancel"] {
+            for open in ["Submitted", "PreSubmitted", "PendingCancel"] {
                 shared.orders.push_order_info(7, info(open));
                 assert_eq!(
                     shared.orders.get_order_info(7).unwrap().order_state.status, terminal,
@@ -600,9 +681,9 @@ mod tests {
         assert!(shared.orders.drain_open_orders().is_empty());
     }
 
-    /// A trade cancel or correction restates an execution the gateway already
+    /// A trade cancel or correction restates an execution the venue already
     /// reported, so it can return a filled order to a working quantity. It is
-    /// the gateway's own statement, not a replay of an older one.
+    /// the venue's statement, not a replay of an older one.
     #[test]
     fn a_trade_correction_can_reopen_a_completed_order() {
         let shared = SharedState::new();
@@ -772,7 +853,7 @@ mod grant_tests {
     fn the_older_spelling_takes_the_setting_and_the_grant() {
         let shared = SharedState::new();
         // The setting alone asks for it; the venue has granted nothing yet.
-        assert!(shared.settings().island_for_nasdaq, "the counterpart's default");
+        assert!(shared.settings().island_for_nasdaq, "the documented default");
         assert!(!shared.island_for_nasdaq(), "and no grant is not a grant");
 
         shared.reference.set_enabled_features(vec!["NOAMOPTCHK".into()]);

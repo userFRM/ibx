@@ -54,3 +54,14 @@ def test_a_cutoff_after_the_execution_filters_it_out():
     c, w = _client_with_one_execution()
     c.req_executions(1, _Filter(time="20990101-00:00:00"))
     assert w.rows == 0, f"a future cutoff must replay nothing, got {w.rows}"
+
+
+def test_a_side_filter_states_the_order_action():
+    """A filter names the side the way an order does; a stored execution names
+    it the way the venue does. The two vocabularies must still meet."""
+    c, w = _client_with_one_execution()
+    c.req_executions(1, _Filter(side="BUY"))
+    assert w.rows == 1, f"a buy filter must replay the buy, got {w.rows}"
+    w.rows = 0
+    c.req_executions(2, _Filter(side="SELL"))
+    assert w.rows == 0, f"a sell filter must replay nothing, got {w.rows}"

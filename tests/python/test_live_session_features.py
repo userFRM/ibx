@@ -442,7 +442,12 @@ class TestSessionFeatures:
         order.lmt_price = 100.0  # far from market — won't fill
         order.tif = "DAY"
 
-        order_id = int(self.w.next_id // 1000)
+        # The id the venue handed out, as it handed it out. Divided by a
+        # thousand it named an order number the account had already used, and
+        # the venue answers that with a duplicate-id refusal or, worse, matches
+        # it to an order this test did not place.
+        order_id = int(self.w.next_id)
+        self.w.next_id += 1
         self.c.place_order(order_id, contract, order)
         time.sleep(3)
 

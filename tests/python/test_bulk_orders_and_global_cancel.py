@@ -164,7 +164,10 @@ class TestBulkOrdersGlobalCancel:
             self.client.place_order(oid, make_contract(con_id, symbol), order)
             placed_oids.append((oid, symbol, "LMT"))
 
-        # STP order on SPY (stop below market — won't trigger)
+        # STP order on SPY, resting where it will not trigger. A buy stop
+        # triggers on a rise, so one placed below the market is already through
+        # its trigger and buys at once: this said it would not trigger and
+        # bought five shares on a real account every time it ran.
         if "SPY" in prices:
             oid = self.wrapper.next_order_id
             self.wrapper.next_order_id += 1
@@ -172,7 +175,7 @@ class TestBulkOrdersGlobalCancel:
             order.action = "BUY"
             order.total_quantity = 5
             order.order_type = "STP"
-            order.aux_price = round(prices["SPY"] * 0.97, 2)
+            order.aux_price = round(prices["SPY"] * 1.03, 2)
             order.tif = "GTC"
             order.outside_rth = True
             self.client.place_order(oid, make_contract(SPY_CON_ID, "SPY"), order)
@@ -235,6 +238,18 @@ class TestBulkOrdersGlobalCancel:
         err_161 = [e for e in self.wrapper.errors if e[1] == 161]
         if err_161:
             print(f"  Error 161 (not cancellable): {len(err_161)} orders")
+
+        # Both of these were worked out and then dropped, so a global cancel
+        # that did nothing at all passed the test named after it and left every
+        # good-till-cancelled order working on a real account.
+        assert got_all, (
+            f"{cancellable} orders were cancellable and the cancels for them "
+            "never arrived"
+        )
+        assert remaining == 0, (
+            f"{remaining} order(s) still working after a global cancel: "
+            f"{self.wrapper.open_orders}"
+        )
 
         # If MKT filled, sell to flatten
         mkt_filled = any(

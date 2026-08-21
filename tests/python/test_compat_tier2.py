@@ -285,10 +285,19 @@ def test_req_managed_accts_fires_callback():
             calls.append(accounts_list)
     w = W()
     c = EClient(w)
+    c._test_connect("DU0000000")
     c.req_managed_accts()
     assert len(calls) == 1
-    # Account ID is empty for unconnected client
-    assert calls[0] == ""
+    assert calls[0] == "DU0000000"
+
+
+def test_req_managed_accts_before_connecting_is_reported():
+    """An empty list reads as a login holding no accounts, not as a question
+    asked before there was anything to ask."""
+    probe = NotConnectedProbe()
+    c = EClient(probe)
+    c.req_managed_accts()
+    assert probe.not_connected, "the call reports rather than answering"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -296,15 +305,25 @@ def test_req_managed_accts_fires_callback():
 # ═══════════════════════════════════════════════════════════
 
 def test_req_account_updates_multi_not_connected():
-    c, w = make_client()
-    with pytest.raises(Exception, match="Not connected"):
-        c.req_account_updates_multi(1, "DU12345", "")
+    """Reported, not raised.
+
+    Every other request made before connecting is answered on the error
+    callback and returns. These two raised, so a program written against the
+    reference client — which has no exception handling around a request,
+    because nothing it was written against raises there — took a different path
+    here than it takes there.
+    """
+    probe = NotConnectedProbe()
+    c = EClient(probe)
+    c.req_account_updates_multi(1, "DU12345", "")
+    assert probe.not_connected
 
 
 def test_req_account_updates_multi_with_ledger_not_connected():
-    c, w = make_client()
-    with pytest.raises(Exception, match="Not connected"):
-        c.req_account_updates_multi(1, "DU12345", "", True)
+    probe = NotConnectedProbe()
+    c = EClient(probe)
+    c.req_account_updates_multi(1, "DU12345", "", True)
+    assert probe.not_connected
 
 
 def test_cancel_account_updates_multi():
@@ -314,9 +333,11 @@ def test_cancel_account_updates_multi():
 
 
 def test_req_positions_multi_not_connected():
-    c, w = make_client()
-    with pytest.raises(Exception, match="Not connected"):
-        c.req_positions_multi(1, "DU12345", "")
+    """As above."""
+    probe = NotConnectedProbe()
+    c = EClient(probe)
+    c.req_positions_multi(1, "DU12345", "")
+    assert probe.not_connected
 
 
 def test_cancel_positions_multi():

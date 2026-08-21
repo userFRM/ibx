@@ -11,6 +11,8 @@ Run: pytest tests/python/test_option_greeks_stream.py -v -s
 
 import os, threading, time
 import pytest
+
+from conftest import next_option_expiry
 from ibx import EWrapper, EClient, Contract
 
 pytestmark = pytest.mark.skipif(
@@ -158,7 +160,7 @@ class TestOptionsGreeks:
         call.currency = "USD"
         call.right = "C"
         call.strike = strike
-        call.last_trade_date_or_contract_month = "20260424"
+        call.last_trade_date_or_contract_month = next_option_expiry()
         call.multiplier = "100"
 
         # Subscribe with greek tick types: 100=optVolume, 101=optOI, 104=histVol, 106=optIV
@@ -174,7 +176,7 @@ class TestOptionsGreeks:
         put.currency = "USD"
         put.right = "P"
         put.strike = strike
-        put.last_trade_date_or_contract_month = "20260424"
+        put.last_trade_date_or_contract_month = next_option_expiry()
         put.multiplier = "100"
 
         self.client.req_mkt_data(2002, put, "100,101,104,106", False)

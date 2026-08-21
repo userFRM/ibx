@@ -51,8 +51,8 @@ use super::client::{EClient, EClientConfig};
 
 mod state;
 pub use state::{
-    AccountValue, Bulletin, Fill, Holding, LiveBar, LiveState, NewsTick, OrderEvent, OrderStatus,
-    Pnl, Position, Tick, Trade,
+    AccountValue, Bulletin, Fill, Holding, LiveBar, LiveState, NewsTick, Notice, OrderEvent,
+    OrderStatus, Pnl, Position, Tick, Trade,
 };
 
 #[cfg(feature = "async")]
@@ -95,6 +95,15 @@ pub struct Client {
 /// holds instead of asking again, `place` hands back the order rather than a
 /// snapshot of it, and `cancel_order` does not ask for a timestamp nobody
 /// has. `shadowed_deliberately` holds them to it.
+///
+/// Reachable is not the same as kept. What this session keeps is what it reads
+/// on the callbacks it implements: orders, fills, positions, account values,
+/// quotes, five-second bars, headlines and bulletins. A request reached
+/// through here whose answer arrives on another callback, such as a book,
+/// tick-by-tick quotes or one position's profit, is sent and answered, and the
+/// answer is read by this session's own reader, which has nothing to do with
+/// it. For those, open the session as an [`EClient`] and drive
+/// [`process_msgs`](EClient::process_msgs) with a wrapper of your own.
 impl std::ops::Deref for Client {
     type Target = EClient;
 
@@ -120,6 +129,13 @@ impl Client {
         // asked. Both are subscriptions: they answer once and then keep
         // answering, so this is the only place they are asked for.
         session.client.req_account_updates(true, "");
+        // And the notices the venue broadcasts at the session, which it sends
+        // without being asked and this keeps only while something is
+        // subscribed. Without it `bulletins()` answers "none" for a session
+        // that was told several, which reads as a quiet day rather than as
+        // nobody having asked. Nothing goes to the venue: what this states is
+        // that the session keeps what it is already being sent.
+        session.client.req_news_bulletins(true);
 
         // Into a record of its own and merged after, not straight into the
         // session's. The reader takes the session's turn and then the state;
@@ -150,11 +166,29 @@ impl Client {
         let handle = thread::Builder::new()
             .name("ibx-reader".to_string())
             .spawn(move || {
-                while !stop.load(Ordering::Relaxed) && client.is_connected() {
+                while !stop.load(Ordering::Relaxed) {
                     {
                         let _turn = client.asking.lock().unwrap_or_else(|e| e.into_inner());
                         let mut kept = state.lock().unwrap_or_else(|e| e.into_inner());
                         client.process_msgs(&mut *kept);
+                    }
+                    // The engine rebuilds a connection that goes away, and
+                    // reading is what notices it back: `process_msgs` is where
+                    // a session marks itself connected again. Stopping at the
+                    // first loss leaves every reconnect unread and the session
+                    // stale for as long as it runs. The reader ends on the
+                    // session being over, not on it being interrupted.
+                    if client.shared_state().reference.session_over().is_some() {
+                        // The streams end with it, as they do on an explicit
+                        // disconnect. Without this, a session ending on a
+                        // refused logon, a takeover or exhausted recovery
+                        // leaves every `Ticks`, `LiveBars`, `News` and
+                        // `OrderEvents` holding a sender nothing will send on:
+                        // their iterators never finish, and a caller in
+                        // `recv()` blocks on a session
+                        // that was already over.
+                        state.lock().unwrap_or_else(|e| e.into_inner()).close_streams();
+                        break;
                     }
                     thread::sleep(BETWEEN_READS);
                 }
@@ -174,6 +208,11 @@ impl Client {
         if let Some(reader) = self.reader.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = reader.join();
         }
+        // The streams the session was feeding end with it. Left in place, the
+        // senders keep a caller iterating ticks or order events waiting in
+        // `recv()` for a session that has closed, which is the one thing an
+        // iterator that ends is there to tell them.
+        self.kept().close_streams();
     }
 
     /// Whether the session is carrying traffic.
@@ -248,6 +287,18 @@ impl Client {
         self.kept().bulletins()
     }
 
+    /// What the venue has said about requests since this was last asked.
+    ///
+    /// A call answers with what was asked for or a refusal, but the venue also
+    /// speaks about requests already made — a subscription it will not serve, a
+    /// contract it does not recognise. Nothing is waiting on those, so unread
+    /// they read as nothing having happened: a stream that never prints looks
+    /// like a quiet market, and an iterator that never ends looks like one
+    /// still to come. Reading them clears them.
+    pub fn notices(&self) -> Vec<Notice> {
+        self.kept().take_notices()
+    }
+
     /// Every five-second bar this session has been sent.
     ///
     /// Kept as well as streamed, so a caller who subscribed and then looked
@@ -275,30 +326,61 @@ impl Client {
 
     /// One quote each for several contracts, now.
     ///
-    /// Subscribes, waits for the venue to state a price, and withdraws. A
-    /// contract the venue says nothing about within `timeout` comes back
-    /// without a quote rather than being dropped, so what is returned lines up
-    /// with what was asked for.
+    /// Subscribes, waits for the venue to state a price, and withdraws — the
+    /// withdrawal happening however this returns, including on a subscription
+    /// that is refused partway through. A contract the venue says nothing about
+    /// within `timeout` comes back without a quote rather than being dropped, so
+    /// what is returned lines up with what was asked for.
     ///
     /// For a price that keeps arriving, [`watch`](Client::watch) it and read
     /// [`ticker`](Client::ticker).
     pub fn quotes(
         &self, contracts: &[Contract], timeout: Duration,
     ) -> Result<Vec<Option<crate::types::Quote>>, Refusal> {
-        let watching: Vec<i64> = contracts
-            .iter()
-            .map(|c| self.watch(c))
-            .collect::<Result<_, _>>()?;
+        // Every subscription is withdrawn on the way out, including an exit
+        // part way through the list. Collecting with `?` instead returns with
+        // the earlier subscriptions still running.
+        let mut watching: Vec<i64> = Vec::with_capacity(contracts.len());
+        let withdraw = |ids: &[i64]| {
+            for req_id in ids {
+                if let Err(e) = self.cancel_mkt_data(*req_id) {
+                    log::warn!("quote subscription {req_id} was not withdrawn: {e}");
+                }
+            }
+        };
+        for contract in contracts {
+            match self.watch(contract) {
+                Ok(req_id) => watching.push(req_id),
+                Err(e) => {
+                    withdraw(&watching);
+                    return Err(e);
+                }
+            }
+        }
         let deadline = Instant::now() + timeout;
+        // Any field the venue has stated counts as a quote. Requiring a
+        // positive bid times out on a contract quoted only by its last trade,
+        // on one priced at or below zero, and on one carrying only a size, a
+        // volume or the day's own prices.
+        let stated = |q: &crate::types::Quote| {
+            q.bid != 0 || q.ask != 0 || q.last != 0
+                || q.bid_size != 0 || q.ask_size != 0 || q.last_size != 0 || q.volume != 0
+                || q.open != 0 || q.high != 0 || q.low != 0 || q.close != 0
+        };
         while Instant::now() < deadline
-            && contracts.iter().any(|c| self.ticker(c).is_none_or(|q| q.bid <= 0))
+            && contracts.iter().any(|c| self.ticker(c).is_none_or(|q| !stated(&q)))
         {
             thread::sleep(BETWEEN_READS);
         }
-        let quoted = contracts.iter().map(|c| self.ticker(c)).collect();
-        for req_id in watching {
-            let _ = self.cancel_mkt_data(req_id);
-        }
+        // Without a quote, rather than with the empty one the subscription
+        // registered. Handed back as it stands, a contract the venue said
+        // nothing about came back quoted at zero, which is a price, and reads
+        // as a market at nothing rather than as no answer.
+        let quoted = contracts
+            .iter()
+            .map(|c| self.ticker(c).filter(stated))
+            .collect();
+        withdraw(&watching);
         Ok(quoted)
     }
 
@@ -478,8 +560,11 @@ impl Iterator for Ticks {
 impl Drop for Ticks {
     fn drop(&mut self) {
         // Dropping the stream is how a caller says they have finished, so the
-        // subscription goes with it rather than running on unread.
-        let _ = self.session.client.cancel_mkt_data(self.req_id);
+        // subscription goes with it rather than running on unread. The one this
+        // withdraws is the one it opened: tick-by-tick is its own subscription,
+        // and withdrawing ordinary market data instead withdraws nothing and
+        // leaves the venue printing every trade at a session nobody reads.
+        let _ = self.session.client.cancel_tick_by_tick_data(self.req_id);
     }
 }
 
@@ -553,7 +638,7 @@ impl PlacedOrder {
         self.session.trade(self.order_id)
     }
 
-    /// The venue's own word for where it stands, as of now.
+    /// Status as the venue reports it, as of now.
     pub fn status(&self) -> String {
         self.trade().map(|t| t.status.status).unwrap_or_default()
     }
@@ -595,7 +680,14 @@ impl Drop for Client {
     fn drop(&mut self) {
         // Only the last holder stops the session: cloning shares it, and a
         // clone going out of scope is not the caller finishing with it.
-        if Arc::strong_count(&self.client) == 1 {
+        //
+        // Counted on the reader's own handle, which is the one thing here that
+        // only a session holds. The client, the kept state and the stop flag
+        // are all shared with the reading thread, so counting any of those
+        // never reaches one while that thread is alive. Dropping the session
+        // would then stop nothing, and the thread, the engine and the
+        // connection would outlive every caller.
+        if Arc::strong_count(&self.reader) == 1 {
             self.stop.store(true, Ordering::Relaxed);
         }
     }
