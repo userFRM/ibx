@@ -306,6 +306,42 @@ fn recv_msg_ns_variant() {
     }
 }
 
+/// A message the venue states between the client's proof and the verdict is
+/// passed over, not taken for the verdict.
+///
+/// This refused a logon on the nightly session: the venue put an id of its own
+/// on the wire, the read took it for the answer, and the field it found there
+/// said `UNKNOWN`. An id this exchange does not use is now logged and read
+/// past, and the read goes on to the verdict.
+#[test]
+fn a_message_that_is_not_the_srp_verdict_is_read_past() {
+    let mut wire = Vec::new();
+    // Two of the venue's own, then the verdict.
+    wire.extend_from_slice(&xyz::xyz_wrap(&xyz::xyz_build_srp_v20(7, &[("N", "0")])));
+    wire.extend_from_slice(&xyz::xyz_wrap(&xyz::xyz_build_srp_v20(9, &[("N", "0")])));
+    wire.extend_from_slice(&xyz::xyz_wrap(&xyz::xyz_build_srp_v20(6, &[("N", "PASSED")])));
+
+    let mut cursor = io::Cursor::new(wire);
+    let fields = super::srp_result_fields(&mut cursor).expect("the verdict was not reached");
+    assert!(
+        fields.iter().any(|f| f == "PASSED"),
+        "read past the two and answered with something other than the verdict: {fields:?}",
+    );
+}
+
+/// And a venue that states no verdict at all ends the attempt rather than
+/// reading for ever.
+#[test]
+fn a_venue_that_never_states_a_verdict_ends_the_attempt() {
+    let mut wire = Vec::new();
+    for _ in 0..40 {
+        wire.extend_from_slice(&xyz::xyz_wrap(&xyz::xyz_build_srp_v20(7, &[("N", "0")])));
+    }
+    let mut cursor = io::Cursor::new(wire);
+    let why = super::srp_result_fields(&mut cursor).expect_err("read past every one of them");
+    assert_eq!(why.kind(), io::ErrorKind::InvalidData);
+}
+
 #[test]
 fn recv_msg_xyz_variant() {
     let msg = RecvMsg::Xyz {
