@@ -124,6 +124,15 @@ pub struct EClient {
     /// Without it a caller holding both subscriptions cannot tell the two
     /// streams apart.
     pub(crate) tbt_kind: Mutex<HashMap<i64, i32>>,
+    /// Option calculations asked for before the venue had stated a model for
+    /// the contract, kept until it does.
+    ///
+    /// The venue states a model only for a contract something is watching, so
+    /// a question about one nobody watches opens the watch and waits rather
+    /// than being refused for having been asked first. Answered on each
+    /// dispatch pass and dropped when the caller withdraws it.
+    pub(crate) pending_option_calcs:
+        Mutex<HashMap<i64, crate::api::client::PendingOptionCalc>>,
     /// The orders this session has seen the venue finish with, kept.
     ///
     /// The queue they arrive on empties as it is read and the venue does not
@@ -245,6 +254,7 @@ impl EClient {
             _test_event_tx: Mutex::new(None),
             _test_control_rx: Mutex::new(None),
             tbt_kind: Mutex::new(HashMap::new()),
+            pending_option_calcs: Mutex::new(HashMap::new()),
             completed: Mutex::new(Vec::new()),
             core: ClientCore::new(),
         }

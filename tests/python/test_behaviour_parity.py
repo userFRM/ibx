@@ -55,6 +55,24 @@ _REPORTS = (
 )
 
 
+#: How each surface's methods are found.
+#:
+#: Private helpers are included on both sides. Collecting only `pub fn` on the
+#: request surface left a public call that does its work in a private sibling
+#: tracing to nothing, so it read as silent while its opposite number, whose
+#: helper was visible, read as answering — a difference between the two
+#: patterns rather than between the two clients. Named once so the comparison
+#: and the check guarding it cannot come to read different sets.
+_RUST_METHODS = r"\n    (?:pub(?:\(crate\))? )?fn ([a-z_0-9]+)\("
+_PY_METHODS = r"\n    (?:pub |pub\(crate\) )?fn ([a-z_0-9]+)\("
+
+#: The request surface itself, which is what the two clients are compared on.
+#: The index above is wider so a call can be traced into the helpers it hands
+#: to; comparing over that index instead would pair private helpers, and a
+#: helper that exists on one side only is not a caller-visible difference.
+_RUST_SURFACE = r"\n    pub fn ([a-z_0-9]+)\("
+
+
 def _answers(name: str, methods: dict[str, str], through: tuple[str, ...] = ()) -> bool:
     """Whether a call that cannot be served lets the caller know.
 
@@ -76,15 +94,14 @@ def _answers(name: str, methods: dict[str, str], through: tuple[str, ...] = ()) 
 
 
 def test_a_call_that_cannot_be_served_answers_on_both_clients():
-    rust = _methods(r"\n    pub fn ([a-z_0-9]+)\(", "src/api/client/*.rs")
-    python = _methods(
-        r"\n    (?:pub |pub\(crate\) )?fn ([a-z_0-9]+)\(", "src/python/compat/client/*.rs"
-    )
+    rust = _methods(_RUST_METHODS, "src/api/client/*.rs")
+    python = _methods(_PY_METHODS, "src/python/compat/client/*.rs")
+    surface = _methods(_RUST_SURFACE, "src/api/client/*.rs")
 
     ignored = _ANSWERS_BY_RAISING | _ONE_SIDED_ON_THE_REQUEST_SURFACE
     differs = sorted(
         name
-        for name in set(rust) & set(python)
+        for name in set(surface) & set(python)
         if name not in ignored
         and _answers(name, rust) != _answers(name, python)
     )
@@ -101,11 +118,9 @@ def test_the_gate_can_still_tell_the_two_apart():
     most calls answering on each surface. Finding few means this file has
     stopped reading that surface, and every pair then matches as silent.
     """
-    rust = _methods(r"\n    pub fn ([a-z_0-9]+)\(", "src/api/client/*.rs")
-    python = _methods(
-        r"\n    (?:pub |pub\(crate\) )?fn ([a-z_0-9]+)\(", "src/python/compat/client/*.rs"
-    )
-    common = set(rust) & set(python)
+    rust = _methods(_RUST_METHODS, "src/api/client/*.rs")
+    python = _methods(_PY_METHODS, "src/python/compat/client/*.rs")
+    common = set(_methods(_RUST_SURFACE, "src/api/client/*.rs")) & set(python)
     assert len(common) > 50, f"the two surfaces stopped overlapping: {len(common)}"
     for surface, methods in (("request", rust), ("binding", python)):
         answering = sum(_answers(n, methods) for n in common)

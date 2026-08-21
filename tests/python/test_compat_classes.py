@@ -478,3 +478,61 @@ def test_solving_an_option_answers_rather_than_refusing():
     assert not w.errors, w.errors
     assert w.computed, "the price was answered, not refused"
     assert w.computed[0][0] == 77, "under the request that asked for it"
+
+
+def test_a_calculation_asked_before_the_model_waits_for_it():
+    """A question asked before the venue has stated a model is kept, not
+    refused, and answered when the model arrives.
+
+    The venue states a model only for a contract something watches, so asking
+    first is the ordinary order to ask in. The Rust surface kept the question
+    and this one refused it, which is the same divergence as above one step
+    earlier.
+    """
+    from ibx import EClient, EWrapper, Contract
+
+    class W(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.computed = []
+            self.errors = []
+
+        def tick_option_computation(self, req_id, tick_type, attrib, implied_vol,
+                                    delta, opt_price, pv_dividend, gamma, vega,
+                                    theta, und_price):
+            self.computed.append((req_id, implied_vol, opt_price))
+
+        def error(self, req_id, code, msg, advanced=""):
+            self.errors.append((code, msg))
+
+    w = W()
+    c = EClient(w)
+    c._test_connect("T")
+
+    option = Contract()
+    option.conId = 999002
+    option.secType = "OPT"
+    option.symbol = "SPY"
+    option.strike = 500.0
+    option.right = "C"
+    option.lastTradeDateOrContractMonth = "20270115"
+    # Watched, so the venue would state a model for it — but has not yet.
+    c._test_map_con_id(999002, 1)
+    c._test_map_instrument(88, 1)
+
+    # A price the model below does not carry, so the answer to this question
+    # cannot be mistaken for the model that answers it.
+    c.calculate_implied_volatility(88, option, 35.0, 505.0)
+    c._test_dispatch_once()
+    assert not w.errors, f"the question was refused rather than kept: {w.errors}"
+    assert not w.computed, "answered with no model stated to answer from"
+
+    c._test_push_option_model(1, 0.20, 30.0, 505.0)
+    c._test_dispatch_once()
+
+    assert not w.errors, w.errors
+    kept = [x for x in w.computed if x[0] == 88 and x[2] == 35.0]
+    assert kept, (
+        "the model arrived and the question that waited on it went unanswered: "
+        f"{w.computed}"
+    )

@@ -59,7 +59,7 @@ impl EClient {
     /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, contract, option_price, under_price, implied_vol_options=Vec::new()))]
     fn calculate_implied_volatility(
-        &self, req_id: i64, contract: &Contract, option_price: f64,
+        &self, py: Python<'_>, req_id: i64, contract: &Contract, option_price: f64,
         under_price: f64, implied_vol_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = implied_vol_options;
@@ -74,7 +74,15 @@ impl EClient {
             und_price: under_price,
             ..Default::default()
         }) {
-            report_reason(self, req_id, &why);
+            // The venue states a model for a contract that is watched. Asking
+            // about one nobody is watching opens the watch and answers when
+            // the model arrives, which is what the caller asked for — rather
+            // than refusing the question for having been asked first.
+            if !self.watch_for_option_model(
+                py, req_id, contract, true, option_price, under_price,
+            ) {
+                report_reason(self, req_id, &why);
+            }
         }
         Ok(())
     }
@@ -87,7 +95,7 @@ impl EClient {
     /// sent. The reference client's own list is empty on every ordinary call.
     #[pyo3(signature = (req_id, contract, volatility, under_price, opt_prc_options=Vec::new()))]
     fn calculate_option_price(
-        &self, req_id: i64, contract: &Contract, volatility: f64,
+        &self, py: Python<'_>, req_id: i64, contract: &Contract, volatility: f64,
         under_price: f64, opt_prc_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
         let _ = opt_prc_options;
@@ -102,23 +110,29 @@ impl EClient {
             und_price: under_price,
             ..Default::default()
         }) {
-            report_reason(self, req_id, &why);
+            // As above: the watch is opened and the answer follows.
+            if !self.watch_for_option_model(
+                py, req_id, contract, false, volatility, under_price,
+            ) {
+                report_reason(self, req_id, &why);
+            }
         }
         Ok(())
     }
 
-    // Nothing to withdraw: the calculation is answered in this call, so none
-    // is ever outstanding by the time a cancel could name it.
     /// Stop waiting on an implied-volatility request.
-    fn cancel_calculate_implied_volatility(&self, req_id: i64) -> PyResult<()> {
-        let _ = req_id;
+    ///
+    /// A question answered in the call it was asked in leaves nothing to
+    /// withdraw. One that opened a watch is holding a subscription the caller
+    /// never asked for by name, and this is what releases it.
+    fn cancel_calculate_implied_volatility(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        self.forget_option_calc(py, req_id);
         Ok(())
     }
 
-    // nothing to withdraw: as above.
-    /// Stop waiting on an option-price request.
-    fn cancel_calculate_option_price(&self, req_id: i64) -> PyResult<()> {
-        let _ = req_id;
+    /// As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
+    fn cancel_calculate_option_price(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        self.forget_option_calc(py, req_id);
         Ok(())
     }
 
@@ -482,6 +496,103 @@ impl EClient {
 /// locally. The answer is reported on `tick_option_computation`, the same
 /// callback tick type 13 arrives on.
 impl EClient {
+    /// Whether something is already watching the contract, which is what makes
+    /// the venue state a model for it.
+    fn watching_contract(&self, con_id: i64) -> bool {
+        self.core.cached_instrument(con_id).is_some_and(|instrument| {
+            self.core.instrument_to_req.lock().unwrap().contains_key(&instrument)
+        })
+    }
+
+    /// Open a watch on the contract and keep the question until the venue
+    /// states a model for it. Answers whether the question is now kept.
+    fn watch_for_option_model(
+        &self, py: Python<'_>, req_id: i64, contract: &Contract,
+        wants_volatility: bool, option_price: f64, under_price: f64,
+    ) -> bool {
+        let api = contract.to_api();
+        // A subscription this client opens rather than the caller. Refusals
+        // are reported by the subscribe itself and leave nothing watching,
+        // which is what is read back here rather than the call's own result:
+        // this surface answers a refusal on the error callback and returns
+        // normally, so the result alone does not say whether it took.
+        if !self.watching_contract(api.con_id) {
+            let opened = self.req_mkt_data(
+                py, req_id, contract, "", false, false, Vec::new(),
+            );
+            if opened.is_err() || !self.watching_contract(api.con_id) {
+                return false;
+            }
+        }
+        self.pending_option_calcs.lock().unwrap().insert(
+            req_id,
+            crate::api::client::PendingOptionCalc {
+                contract: api,
+                wants_volatility,
+                option_price,
+                under_price,
+            },
+        );
+        true
+    }
+
+    /// Drop a kept question and the watch it opened.
+    fn forget_option_calc(&self, py: Python<'_>, req_id: i64) {
+        if self.pending_option_calcs.lock().unwrap().remove(&req_id).is_some() {
+            let _ = self.cancel_mkt_data(py, req_id);
+        }
+    }
+
+    /// Answer the questions that were waiting on the venue to state a model,
+    /// and forget them.
+    ///
+    /// One the venue still cannot answer is kept: the watch is open, so the
+    /// model may yet arrive. It is dropped when the caller withdraws it.
+    pub(crate) fn answer_kept_option_calcs(&self) {
+        let kept: Vec<(i64, crate::api::client::PendingOptionCalc)> = self
+            .pending_option_calcs.lock().unwrap()
+            .iter().map(|(k, v)| (*k, v.clone())).collect();
+        for (req_id, calc) in kept {
+            if self.solve_and_push_kept(req_id, &calc) {
+                self.pending_option_calcs.lock().unwrap().remove(&req_id);
+            }
+        }
+    }
+
+    /// Answer one kept question, if the venue has stated a model by now.
+    /// Answers whether it did.
+    fn solve_and_push_kept(
+        &self, req_id: i64, calc: &crate::api::client::PendingOptionCalc,
+    ) -> bool {
+        let Ok(shared) = self.shared_state() else { return false };
+        let (given, und) = (calc.option_price, calc.under_price);
+        let wants_volatility = calc.wants_volatility;
+        let solved = self.core.solve_option(&shared, &calc.contract, |terms, model| {
+            if wants_volatility {
+                crate::control::option_model::implied_volatility(terms, model, given, und)
+            } else {
+                crate::control::option_model::option_price(terms, model, given, und)
+            }
+        });
+        match solved {
+            Ok(answer) => {
+                // The caller supplied one of the pair and asked for the other,
+                // so the answer takes the side they left open.
+                let (implied_vol, opt_price) =
+                    if wants_volatility { (answer, given) } else { (given, answer) };
+                shared.market.push_option_computation(crate::types::OptionComputation {
+                    answers: Some(req_id),
+                    implied_vol,
+                    opt_price,
+                    und_price: und,
+                    ..Default::default()
+                });
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     fn answer_option_model(
         &self,
         req_id: i64,

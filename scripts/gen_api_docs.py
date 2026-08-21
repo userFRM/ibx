@@ -1157,10 +1157,6 @@ def _status_icon(name: str, impl_set: set[str], stub_names: set[str]) -> str:
 
 # Methods that log warnings (stubs, not real implementations)
 STUB_METHODS = {
-    # The two calculations are answered in process, against the model the venue
-    # publishes for the contract. Their cancels have nothing to stop: the answer
-    # is delivered before one could be sent.
-    "cancel_calculate_implied_volatility", "cancel_calculate_option_price",
     "request_fa", "replace_fa",
     "req_wsh_meta_data", "req_wsh_event_data",
 }
@@ -1170,7 +1166,6 @@ STUB_CALLBACKS = {
     "bond_contract_details", "delta_neutral_validation",
     "order_bound",
     "wsh_meta_data", "wsh_event_data",
-    "order_bound",
 }
 
 

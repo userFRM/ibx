@@ -52,7 +52,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | P&L, per contract | Verified | Live session, valued from the venue's overnight marks against live quotes | Available |
 | P&L, account level subscription | Verified | Live session, reporting a daily figure for a held account rather than falling back to zero | Available |
 | Option exercise and lapse | Verified | Live session: one call exercised, filled at the strike, and the holding it delivered observed. A lapse before the last trading day is refused by the venue | Available |
-| Option analytics, implied volatility and greeks | Verified | Live session: the venue's model arrives on an option subscription. A volatility inverted from a caller's price cannot be served; this protocol carries no request for it | Available |
+| Option analytics, implied volatility and greeks | Verified | Live session: the venue computes the model and publishes it per option, on a subscription of its own, and the volatility and greeks a caller reads are the venue's. Solved here is only a hypothetical the caller supplies, against that model, since the protocol carries no request that carries one. Asked before the venue has published a model, the question waits on the subscription that asking opens | Available |
 | Wall Street Horizon event data | Implemented | The calendar states what it carries and answers a query with a well-formed result. The events are a separate subscription this account does not hold, so every query answers empty | Available |
 | Financial advisor allocation | Accepted, not served | The venue carries the request; exercising it needs an advisor account | W3 |
 | Tick by tick data | Verified | Trades and quotes both stream, as distinct subscriptions, each record carrying the request it belongs to. A crypto is acknowledged and produces nothing, which is the venue's silence | Available |
@@ -62,16 +62,17 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Measure | Count |
 | --- | --- |
 | Canonical calls | 77 |
-| Served, Rust | 69 |
-| Served, Python | 69 |
-| Accepted and not served, Rust | 8 |
-| Accepted and not served, Python | 8 |
+| Served, Rust | 73 |
+| Served, Python | 73 |
+| Accepted and not served, Rust | 4 |
+| Accepted and not served, Python | 4 |
 | Canonical callbacks | 81 |
 | Calls where the two surfaces differ | 0 |
 | Callbacks where the two surfaces differ | 0 |
 
-Counted from the source by `scripts/gen_api_docs.py`, which CI re-runs and
-compares. The two surfaces carry the same calls and the same callbacks: a
+Counted from the source by `scripts/gen_api_docs.py` and checked against this
+table by `scripts/check_status_counts.py`, both of which CI runs. A figure
+here that the source stops supporting fails the build rather than standing. The two surfaces carry the same calls and the same callbacks: a
 program written against either finds the same thing, and a call that cannot be
 served says so on both rather than being absent from one.
 
@@ -83,10 +84,6 @@ coverage matrix, which CI checks against the source.
 
 | Call | Rust | Python |
 | --- | :---: | :---: |
-| `calculate_implied_volatility` | - | STUB |
-| `cancel_calculate_implied_volatility` | - | STUB |
-| `calculate_option_price` | - | STUB |
-| `cancel_calculate_option_price` | - | STUB |
 | `request_fa` | STUB | STUB |
 | `replace_fa` | STUB | STUB |
 | `req_wsh_meta_data` | STUB | STUB |
@@ -137,7 +134,7 @@ Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when
 | --- | --- | --- | --- |
 | W1.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks | Met |
 | W1.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed | Met. An exercise of one call is filled at the strike and the holding it delivers appears. A lapse is refused before the contract's last trading day, which is the venue's rule and is reported as it states it |
-| W1.3 | Option analytics | Implied volatility and option price return values, or the reason they cannot be recorded | Met. This protocol carries no request that takes a caller-supplied option price or volatility for the venue to work back from, so neither can be served. Both calls are kept and report that, because a caller written against the reference client calls them |
+| W1.3 | Option analytics | Implied volatility and option price return values, or the reason they cannot be recorded | Met. The volatility and greeks themselves are the venue's: it computes the model and publishes it per option, and this client subscribes to it. What this protocol carries no request for is a hypothetical — an option price or a volatility the caller supplies for the venue to work back from — so that one inversion is solved here, against the venue's own model. Where it has published none, the question is kept on the subscription that asking opens and answered when the model arrives; where the contract has no model to be had, the call reports that rather than deriving a number from an unstated rate |
 
 ### W2 Asset class and instrumentation coverage
 
@@ -209,8 +206,6 @@ vanish.
 | Wire | What it carries | Why it is not implemented |
 | --- | --- | --- |
 | Out-of-band `AP`, `DO`, `DP` | Holdings the broker does not hold itself: held away, shown but not held, and one set it reports apart without saying why | Read. They carry the same fields in the same tags as the account's own holdings, and are kept apart from them |
-
-
 | `6040` 192, 278 | The venue's error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
 | `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
@@ -244,7 +239,7 @@ vanish.
 
 | Method | What it establishes |
 | --- | --- |
-| Unit tests, 1195 engine and client, 310 Python bindings | The call encodes and decodes as specified |
+| Unit tests, counted in the inventory below | The call encodes and decodes as specified |
 | Live session phases against a paper account | The venue accepts the request and returns what is expected |
 | A session held open under load | What only time finds: a connection that stops answering, a stream that stops arriving, a request id that answers once |
 | Malformed input to every wire parser | No frame, however cut or corrupted, takes the process down |
@@ -447,8 +442,8 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,792 | No |
-| Python | 466 | No |
+| Rust unit and integration | 1,793 | No |
+| Python | 467 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (136 phases) | 31 tests | Yes |
 
@@ -514,8 +509,9 @@ found on one. What differs is that fills are simulated, so what a paper session
 does not establish is a fill against real liquidity.
 
 `.github/workflows/session.yml` runs the paper compatibility suite, the Python
-suites that need a session, and `scripts/endurance.py`, after the New York
-close. It is dormant until `IB_USERNAME` and `IB_PASSWORD` are set as
+suites that need a session, and `scripts/endurance.py`, an hour into the New
+York session: the phases that need a market — a resting order, a book, a trade
+stream — skip outside one. It is dormant until `IB_USERNAME` and `IB_PASSWORD` are set as
 repository secrets: without them each job reports that it was not run, rather
 than passing on a session it never opened.
 

@@ -959,6 +959,28 @@ fn a_calculation_waits_for_the_model_rather_than_refusing() {
     );
 }
 
+/// The other direction of the same pair: a price asked for at a stated
+/// volatility waits on the model as an implied volatility does, and is
+/// withdrawn the same way.
+#[test]
+fn a_price_calculation_waits_and_is_withdrawn_the_same_way() {
+    let (client, _rx, _shared) = test_client();
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+
+    client.calculate_option_price(9, &spy(), 0.25, 600.0);
+    assert!(
+        client.pending_option_calcs.lock().unwrap().contains_key(&9),
+        "the question was not kept, so the model will arrive with nobody asking",
+    );
+
+    client.cancel_calculate_option_price(9);
+    assert!(
+        !client.pending_option_calcs.lock().unwrap().contains_key(&9),
+        "the question outlived the caller's interest in it",
+    );
+}
+
 /// The venue is asked for the headlines by contract and withdrawn by
 /// contract, so it is asked once. Asked once per caller, a second caller
 /// added a subscription the single withdrawal could not match, and it was

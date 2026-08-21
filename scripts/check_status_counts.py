@@ -203,6 +203,68 @@ def readme_says() -> tuple[int, int] | None:
     return (int(m.group(1).replace(",", "")), int(m.group(2).replace(",", "")))
 
 
+
+#: The generated coverage matrix, which `gen_api_docs.py` writes from the
+#: source. What the engineering notes publish is checked against it here.
+COVERAGE = ROOT / "docs" / "book" / "src" / "reference" / "coverage-data.md"
+
+
+def api_surface() -> dict[str, int]:
+    """The call and callback surface, counted off the generated matrix.
+
+    The notes state these as a table anyone can retype, and nothing read them
+    back: the served figure stood at 69 while the matrix listed 73, because a
+    call that stopped being a stub changed the matrix and not the sentence
+    about it.
+    """
+    text = COVERAGE.read_text()
+    section, rows = None, {"EClient": [], "EWrapper": []}
+    for line in text.splitlines():
+        if line.startswith("## EClient"):
+            section = "EClient"
+            continue
+        if line.startswith("## EWrapper"):
+            section = "EWrapper"
+            continue
+        if line.startswith("## "):
+            section = None
+            continue
+        if section and line.startswith("| ") and "`" in line:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) >= 4 and cells[1].startswith("`"):
+                rows[section].append(cells)
+
+    calls, backs = rows["EClient"], rows["EWrapper"]
+    # The surface columns sit after the category and the two names for a call,
+    # and after the category and the one name for a callback.
+    call_rust, call_py = (3, 4)
+    back_rust, back_py = (2, 3)
+    return {
+        "Canonical calls": len(calls),
+        "Served, Rust": sum(1 for c in calls if c[call_rust] == "Y"),
+        "Served, Python": sum(1 for c in calls if c[call_py] == "Y"),
+        "Accepted and not served, Rust": sum(1 for c in calls if c[call_rust] == "STUB"),
+        "Accepted and not served, Python": sum(1 for c in calls if c[call_py] == "STUB"),
+        "Canonical callbacks": len(backs),
+        "Calls where the two surfaces differ":
+            sum(1 for c in calls if c[call_rust] != c[call_py]),
+        "Callbacks where the two surfaces differ":
+            sum(1 for c in backs if c[back_rust] != c[back_py]),
+    }
+
+
+def api_surface_published() -> dict[str, int]:
+    """The same measures as the engineering notes state them."""
+    said = {}
+    for line in STATUS.read_text().splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 2 and cells[1].isdigit():
+            said[cells[0]] = int(cells[1])
+    return said
+
+
 def main() -> int:
     have, said = counted(), published()
     wrong = []
@@ -241,6 +303,19 @@ def main() -> int:
             wrong.append(f"{key}: docs/engineering-notes.md says {said[key]:,}, {n:,} exist")
         else:
             print(f"{key}: {n:,}")
+    surface, surface_said = api_surface(), api_surface_published()
+    for key, n in surface.items():
+        if key not in surface_said:
+            wrong.append(f"docs/engineering-notes.md publishes no {key!r}")
+        elif surface_said[key] != n:
+            wrong.append(
+                f"{key}: docs/engineering-notes.md says {surface_said[key]}, "
+                f"the generated matrix lists {n}"
+            )
+    if not any("surfaces differ" in w or "Served" in w or "Canonical" in w for w in wrong):
+        print(f"api surface: {surface['Served, Rust']} of "
+              f"{surface['Canonical calls']} calls served on both")
+
     if wrong:
         print("\nA published count is not what is there:")
         for w in wrong:

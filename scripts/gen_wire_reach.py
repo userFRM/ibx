@@ -57,10 +57,17 @@ def bodies() -> dict[str, str]:
         # carries — and one that happened to be named after a request was
         # counted as a second copy of it.
         text = text.split("\n#[cfg(test)]\n", 1)[0]
-        for m in re.finditer(r"\n    (?:pub\(crate\) )?fn ([a-z_0-9]+)\(", text):
+        # `pub` as well as `pub(crate)`: a request declared plainly public was
+        # invisible here, so a call delegating to one traced to nothing and
+        # read as silent — and the public call itself was never classified at
+        # all.
+        for m in re.finditer(r"\n    (?:pub(?:\(crate\))? )?fn ([a-z_0-9]+)\(", text):
             start = m.end()
             lead = leading_comment(text, m.start())
-            after = [text.find(s, start) for s in ("\n    fn ", "\n    pub(crate) fn ")]
+            after = [
+                text.find(s, start)
+                for s in ("\n    fn ", "\n    pub(crate) fn ", "\n    pub fn ")
+            ]
             after = [x for x in after if x > 0] + [len(text)]
             found[m.group(1)] = lead + text[start : min(after)]
     return found
