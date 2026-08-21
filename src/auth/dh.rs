@@ -18,15 +18,59 @@ pub struct SecureChannel {
     client_random: [u8; 32],
     private_key: BigUint,
     public_key: BigUint,
-    // Cipher state (set after key derivation)
-    key_block: Option<Vec<u8>>,
-    write_aes_key: Option<Vec<u8>>,
-    read_aes_key: Option<Vec<u8>>,
-    write_iv: Option<Vec<u8>>,
-    read_iv: Option<Vec<u8>>,
-    write_mac_key: Option<Vec<u8>>,
-    read_mac_key: Option<Vec<u8>>,
+    /// The cipher state, absent until the server hello derives it.
+    keys: Option<Keys>,
 }
+
+/// What the handshake derived, and the two initialisation vectors that move
+/// with the conversation.
+///
+/// One value rather than an option per piece. Every field here is written in
+/// the same place from the same block, so separate options would let the type
+/// hold a channel with a key for one direction and none for the other — a
+/// state no handshake produces, and one every method would still have to
+/// answer for.
+struct Keys {
+    /// The block the PRF produced. The AES and HMAC keys are fixed windows on
+    /// it, read from it rather than copied out of it.
+    block: Vec<u8>,
+    /// Advances to the last cipher block of each message this side encrypts.
+    write_iv: Vec<u8>,
+    /// Advances to the last cipher block of each message this side decrypts.
+    read_iv: Vec<u8>,
+}
+
+impl Keys {
+    /// Client to server, `block[0..16]`.
+    fn write_aes(&self) -> &[u8] {
+        &self.block[0..16]
+    }
+
+    /// Server to client, `block[16..32]`.
+    fn read_aes(&self) -> &[u8] {
+        &self.block[16..32]
+    }
+
+    /// The write IV as derived, before any message advanced it,
+    /// `block[32..48]`.
+    fn initial_write_iv(&self) -> &[u8] {
+        &self.block[32..48]
+    }
+
+    /// Client to server, `block[64..84]`.
+    fn write_mac(&self) -> &[u8] {
+        &self.block[64..84]
+    }
+
+    /// Server to client, `block[84..104]`.
+    fn read_mac(&self) -> &[u8] {
+        &self.block[84..104]
+    }
+}
+
+/// What a caller has done wrong if the cipher state is missing: the channel
+/// carries no keys until a server hello has been processed.
+const BEFORE_HELLO: &str = "the channel enciphers only after a server hello derived its keys";
 
 impl Default for SecureChannel {
     fn default() -> Self {
@@ -56,13 +100,7 @@ impl SecureChannel {
             client_random,
             private_key,
             public_key,
-            key_block: None,
-            write_aes_key: None,
-            read_aes_key: None,
-            write_iv: None,
-            read_iv: None,
-            write_mac_key: None,
-            read_mac_key: None,
+            keys: None,
         }
     }
 
@@ -186,13 +224,11 @@ impl SecureChannel {
         // [48:64]  = server→client IV
         // [64:84]  = client→server HMAC key
         // [84:104] = server→client HMAC key
-        self.write_aes_key = Some(key_block[0..16].to_vec());
-        self.read_aes_key = Some(key_block[16..32].to_vec());
-        self.write_iv = Some(key_block[32..48].to_vec());
-        self.read_iv = Some(key_block[48..64].to_vec());
-        self.write_mac_key = Some(key_block[64..84].to_vec());
-        self.read_mac_key = Some(key_block[84..104].to_vec());
-        self.key_block = Some(key_block);
+        self.keys = Some(Keys {
+            write_iv: key_block[32..48].to_vec(),
+            read_iv: key_block[48..64].to_vec(),
+            block: key_block,
+        });
         Ok(())
     }
 
@@ -201,19 +237,16 @@ impl SecureChannel {
     /// Wire layout: `aes_cbc(plaintext) || hmac_sha1(mac_key, iv || ciphertext)`.
     /// Both auth and farm channels share this HMAC formula.
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Vec<u8> {
-        let aes_key = self.write_aes_key.as_ref().unwrap();
-        let iv = self.write_iv.as_ref().unwrap();
-        let mac_key = self.write_mac_key.as_ref().unwrap();
+        let keys = self.keys.as_mut().expect(BEFORE_HELLO);
+        let ciphertext = aes_cbc_encrypt(keys.write_aes(), &keys.write_iv, plaintext);
 
-        let ciphertext = aes_cbc_encrypt(aes_key, iv, plaintext);
-
-        let mut mac_input = Vec::with_capacity(iv.len() + ciphertext.len());
-        mac_input.extend_from_slice(iv);
+        let mut mac_input = Vec::with_capacity(keys.write_iv.len() + ciphertext.len());
+        mac_input.extend_from_slice(&keys.write_iv);
         mac_input.extend_from_slice(&ciphertext);
-        let mac = hmac_sha1(mac_key, &mac_input);
+        let mac = hmac_sha1(keys.write_mac(), &mac_input);
 
         // CBC chaining: next message's IV = last 16 bytes of THIS ciphertext.
-        self.write_iv = Some(ciphertext[ciphertext.len() - 16..].to_vec());
+        keys.write_iv = ciphertext[ciphertext.len() - 16..].to_vec();
 
         let mut result = ciphertext;
         result.extend_from_slice(&mac);
@@ -228,40 +261,39 @@ impl SecureChannel {
         let ciphertext = &data[..data.len() - 20];
         let received_mac = &data[data.len() - 20..];
 
-        let iv = self.read_iv.as_ref().unwrap();
-        let mac_key = self.read_mac_key.as_ref().unwrap();
+        let keys = self.keys.as_mut().expect(BEFORE_HELLO);
 
-        let mut mac_input = Vec::with_capacity(iv.len() + ciphertext.len());
-        mac_input.extend_from_slice(iv);
+        let mut mac_input = Vec::with_capacity(keys.read_iv.len() + ciphertext.len());
+        mac_input.extend_from_slice(&keys.read_iv);
         mac_input.extend_from_slice(ciphertext);
-        let expected_mac = hmac_sha1(mac_key, &mac_input);
+        let expected_mac = hmac_sha1(keys.read_mac(), &mac_input);
 
         if received_mac != expected_mac {
             return Err("HMAC verification failed");
         }
 
-        let aes_key = self.read_aes_key.as_ref().unwrap();
-        let plaintext = aes_cbc_decrypt(aes_key, iv, ciphertext)?;
+        let plaintext = aes_cbc_decrypt(keys.read_aes(), &keys.read_iv, ciphertext)?;
 
         // CBC chaining: next message's IV = last 16 bytes of THIS ciphertext.
-        self.read_iv = Some(ciphertext[ciphertext.len() - 16..].to_vec());
+        keys.read_iv = ciphertext[ciphertext.len() - 16..].to_vec();
 
         Ok(plaintext)
     }
 
     /// Encrypt with initial IVs from key derivation (for logon).
     pub fn encrypt_fresh(&self, plaintext: &[u8]) -> Vec<u8> {
-        let kb = self.key_block.as_ref().unwrap();
-        let iv = &kb[32..48];
-        let aes_key = &kb[0..16];
-        let mac_key = &kb[64..84];
+        let keys = self.keys.as_ref().expect(BEFORE_HELLO);
+        // The IV as derived, deliberately: this is the logon message, which is
+        // enciphered under the initial vector rather than one a previous
+        // message advanced.
+        let iv = keys.initial_write_iv();
 
-        let ciphertext = aes_cbc_encrypt(aes_key, iv, plaintext);
+        let ciphertext = aes_cbc_encrypt(keys.write_aes(), iv, plaintext);
 
         let mut mac_input = Vec::with_capacity(iv.len() + ciphertext.len());
         mac_input.extend_from_slice(iv);
         mac_input.extend_from_slice(&ciphertext);
-        let mac = hmac_sha1(mac_key, &mac_input);
+        let mac = hmac_sha1(keys.write_mac(), &mac_input);
 
         let mut result = ciphertext;
         result.extend_from_slice(&mac);
@@ -270,17 +302,17 @@ impl SecureChannel {
 
     /// Access the raw key block.
     pub fn key_block(&self) -> Option<&[u8]> {
-        self.key_block.as_deref()
+        self.keys.as_ref().map(|k| k.block.as_slice())
     }
 
     /// Current write IV (updated after each encrypt call).
     pub fn write_iv(&self) -> Option<&[u8]> {
-        self.write_iv.as_deref()
+        self.keys.as_ref().map(|k| k.write_iv.as_slice())
     }
 
     /// Current read IV (updated after each decrypt call).
     pub fn read_iv(&self) -> Option<&[u8]> {
-        self.read_iv.as_deref()
+        self.keys.as_ref().map(|k| k.read_iv.as_slice())
     }
 }
 
@@ -288,30 +320,20 @@ impl SecureChannel {
 mod tests {
     use super::*;
 
+    /// A channel whose key material is all zeroes, so what a test observes is
+    /// the cipher and the chaining rather than the block behind them.
     fn make_test_channel() -> SecureChannel {
-        // Create a channel with deterministic keys for testing
-        let mut ch = SecureChannel {
+        let block = vec![0u8; 104];
+        SecureChannel {
             client_random: [0u8; 32],
             private_key: BigUint::from(0u32),
             public_key: BigUint::from(0u32),
-            key_block: None,
-            write_aes_key: Some(vec![0u8; 16]),
-            read_aes_key: Some(vec![0u8; 16]),
-            write_iv: Some(vec![0u8; 16]),
-            read_iv: Some(vec![0u8; 16]),
-            write_mac_key: Some(vec![0u8; 20]),
-            read_mac_key: Some(vec![0u8; 20]),
-        };
-        // Set key_block for encrypt_fresh
-        let mut kb = vec![0u8; 104];
-        kb[0..16].copy_from_slice(&[0u8; 16]); // write AES
-        kb[16..32].copy_from_slice(&[0u8; 16]); // read AES
-        kb[32..48].copy_from_slice(&[0u8; 16]); // write IV
-        kb[48..64].copy_from_slice(&[0u8; 16]); // read IV
-        kb[64..84].copy_from_slice(&[0u8; 20]); // write MAC
-        kb[84..104].copy_from_slice(&[0u8; 20]); // read MAC
-        ch.key_block = Some(kb);
-        ch
+            keys: Some(Keys {
+                write_iv: block[32..48].to_vec(),
+                read_iv: block[48..64].to_vec(),
+                block,
+            }),
+        }
     }
 
     #[test]
