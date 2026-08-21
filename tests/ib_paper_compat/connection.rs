@@ -589,6 +589,10 @@ pub(super) fn phase_farm_recovers_with_credentials(
     // transport was taken away too: an order that is acknowledged after all
     // this is one that went out on a connection the engine rebuilt itself.
     let mut order_acked = false;
+    // What the venue last said about it. Reporting only that the order was not
+    // accepted leaves a rejection on a venue rule looking identical to an order
+    // path this client failed to rebuild, and those want opposite fixes.
+    let mut last_status = None;
     if ticked {
         let oid = next_order_id();
         control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
@@ -601,6 +605,7 @@ pub(super) fn phase_farm_recovers_with_credentials(
             if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(250))
                 && u.order_id == oid
             {
+                last_status = Some(u.status);
                 order_acked = matches!(u.status,
                     OrderStatus::PreSubmitted | OrderStatus::Submitted | OrderStatus::Filled);
             }
@@ -608,7 +613,11 @@ pub(super) fn phase_farm_recovers_with_credentials(
         let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid }));
         std::thread::sleep(Duration::from_secs(2));
     }
-    println!("  order_accepted_after_recovery={order_acked}");
+    if order_acked {
+        println!("  order_accepted_after_recovery=true");
+    } else {
+        println!("  order_accepted_after_recovery=false, venue last said {last_status:?}");
+    }
 
     let restored = !shared.take_connection_lost();
     if ticked {
