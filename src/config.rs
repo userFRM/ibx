@@ -81,7 +81,7 @@ pub const TIMEOUT_SSL_AUTH: u64 = 20;
 pub const TIMEOUT_FARM_CONNECT: u64 = 8;
 
 /// Protocol version.
-pub const NS_VERSION: u32 = 50;
+pub const NS_VERSION: u32 = 51;
 /// The oldest name-service version this client speaks.
 pub const NS_VERSION_MIN: u32 = 38;
 
