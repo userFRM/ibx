@@ -222,7 +222,7 @@ pub struct EClient {
     /// one is waiting. Freed on the next read of the completed orders, which
     /// is when the fill has been delivered — so the deferral costs a pass and
     /// not the rest of the session.
-    pub(crate) deferred_evictions: Mutex<Vec<u64>>,
+    pub(crate) deferred_evictions: Mutex<std::collections::HashSet<u64>>,
     pub(crate) next_order_id: AtomicU64,
     /// Where the last id handed out is kept, and under which key.
     pub(crate) order_id_store: Option<(std::path::PathBuf, String)>,
@@ -449,7 +449,7 @@ impl EClient {
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
-            deferred_evictions: Mutex::new(Vec::new()),
+            deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             next_order_id: AtomicU64::new(start_id),
             order_id_store,
             asking: Mutex::new(()),
@@ -484,7 +484,7 @@ impl EClient {
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
-            deferred_evictions: Mutex::new(Vec::new()),
+            deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             next_order_id: AtomicU64::new(start_id),
             // Built from parts, so nothing is remembered anywhere.
             order_id_store: None,

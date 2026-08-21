@@ -402,7 +402,7 @@ impl EClient {
                 // all. Freed here, the report it belonged to arrived with no
                 // contract and no execution id — which is also the id its
                 // commission is reported under.
-                self.deferred_evictions.lock().unwrap().push(order.order_id);
+                self.deferred_evictions.lock().unwrap().insert(order.order_id);
             }
         }
         // Copied before anything is called back: a callback may ask for these

@@ -555,7 +555,7 @@ impl EClient {
                     // a record is finished with: a fill taken off the queue but
                     // not yet reported still needs it, and from here looks like
                     // no fill at all.
-                    self.deferred_evictions.lock().unwrap().push(co.order_id);
+                    self.deferred_evictions.lock().unwrap().insert(co.order_id);
                 }
             }
             // Copied before anything is called back: a callback may ask for
