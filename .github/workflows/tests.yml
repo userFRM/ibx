@@ -270,3 +270,21 @@ jobs:
         run: cargo doc --no-deps --lib
         env:
           RUSTDOCFLAGS: -D warnings
+
+  advisories:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # A client that carries an account's orders should not learn about a
+      # vulnerable dependency from somebody else. This fails on an advisory
+      # against something the crate builds, and not on a warning: the lock file
+      # also names the dev-dependencies of dependencies, which are never
+      # compiled here, and failing on those would train the job to be ignored.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Check the advisory database
+        run: cargo audit
