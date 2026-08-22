@@ -523,7 +523,19 @@ impl EClient {
             discarded: Default::default(),
             completed: Mutex::new(Vec::new()),
             tbt_kinds: Mutex::new(std::collections::HashMap::new()),
-            core: ClientCore::new(),
+            core: {
+                // A client assembled from parts carries no settings of its
+                // own, and the constructors that connect take this from
+                // theirs. Read the same way here, so a caller that states a
+                // registration timeout is answered however its client was
+                // built rather than only when the client connected for
+                // itself.
+                let core = ClientCore::new();
+                core.set_registration_timeout(
+                    crate::settings::GatewaySettings::default().resolve().registration_timeout,
+                );
+                core
+            },
             session_token_bytes: Vec::new(),
             session: Default::default(),
             token_type: String::new(),
