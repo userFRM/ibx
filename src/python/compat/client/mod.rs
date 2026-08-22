@@ -231,6 +231,7 @@ fn code_provider_from_py(cb: Py<PyAny>) -> CodeProvider {
 
 #[pymethods]
 impl EClient {
+
     #[new]
     #[pyo3(signature = (wrapper))]
     fn new(wrapper: Py<PyAny>) -> Self {
@@ -365,6 +366,12 @@ impl EClient {
             &username_for_session,
             paper,
         );
+
+        // Here rather than on the way in: a session can end without being
+        // closed, so this is reached with the last one's state still held, but
+        // until the connection above answered there was still a session in
+        // recovery whose routing this would have taken away from it.
+        self.forget_last_session();
 
         *self.account_id.lock().unwrap() = Some(gw.account_id.clone());
         *self.accounts.lock().unwrap() = gw.accounts.clone();
@@ -503,14 +510,7 @@ impl EClient {
         *self.shared.lock().unwrap() = None;
         *self.control_tx.lock().unwrap() = None;
         *self.event_rx.lock().unwrap() = None;
-        *self.account_id.lock().unwrap() = None;
-        self.accounts.lock().unwrap().clear();
-        // A question kept for a model the venue had not yet published belongs
-        // to the session that asked it. Left behind, the next session answers
-        // it under a request id nobody in that session ever used, or waits on
-        // a model for a contract it is not watching.
-        self.pending_option_calcs.lock().unwrap().clear();
-        self.core.reset();
+        self.forget_last_session();
         Ok(())
     }
 
@@ -673,6 +673,29 @@ fn is_base_noop(py: Python<'_>, f: &Py<PyAny>) -> bool {
 }
 
 impl EClient {
+    /// Drop everything the last session held.
+    ///
+    /// Called both where a session is closed and where the next one is opened,
+    /// because a session can end without being closed and what it held would
+    /// otherwise be answered under request ids the next session never gave
+    /// out: a model arriving for a contract nobody here watches, positions
+    /// nobody here asked for, another account's completed orders, an eviction
+    /// aimed at an order record this session now owns.
+    fn forget_last_session(&self) {
+        *self.account_id.lock().unwrap() = None;
+        self.accounts.lock().unwrap().clear();
+        self.positions_requested.store(false, Ordering::Release);
+        self.positions_multi_requested.lock().unwrap().clear();
+        self.deferred_evictions.lock().unwrap().clear();
+        self.tbt_kind.lock().unwrap().clear();
+        self.pending_option_calcs.lock().unwrap().clear();
+        self.completed.lock().unwrap().clear();
+        // Counted per session, so a caller reading it is told what this
+        // session lost rather than a total carried over from the last.
+        self.events_lost.store(0, Ordering::Relaxed);
+        self.core.reset();
+    }
+
     /// Tell the caller a request will not be sent, under the number the
     /// reference client reports that class of refusal under.
     ///
@@ -935,6 +958,31 @@ w = W()",
         (Py::new(py, client).unwrap(), rx, shared, w)
     }
 
+    /// The engine writes down why a session finished; the notice saying so
+    /// goes out on a channel that drops what it cannot hold. A loop ending
+    /// only on the notice waits for ever on a session that is already over.
+    #[test]
+    fn a_session_recorded_as_over_ends_the_loop_without_the_notice() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _w) = wired_client(py);
+            // Nothing is queued: this is the notice having been dropped.
+            shared.reference.set_session_over(
+                crate::reliability::retry::DisconnectReason::EngineStopped.as_str(),
+            );
+            let client = client.borrow(py);
+            client.dispatch_once(py, &shared).unwrap();
+            assert!(
+                client.session_ended.load(Ordering::Relaxed),
+                "run() would go on waiting on a session the engine has finished",
+            );
+            assert!(
+                !client.connected.load(Ordering::Relaxed),
+                "a finished session still reads as connected",
+            );
+        });
+    }
+
     /// The counter and the wire agree, so the refusal fires on a caller's own
     /// number and not on ordinary use. Seeded from a clock in milliseconds
     /// rather than seconds, every id this client numbered for itself would be
@@ -1033,7 +1081,6 @@ w = W()",
             );
         });
     }
-
 
     /// `reqPositions` subscribes to a real-time feed: a holding that moves
     /// after the call is reported as it moves. Answering only the set held

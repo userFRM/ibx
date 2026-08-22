@@ -95,6 +95,31 @@ impl EClient {
             self.connected.store(false, Ordering::Release);
             self.session_ended.store(true, Ordering::Release);
         }
+        // What the engine wrote down, rather than the notice it tried to send.
+        // The event channel is bounded and drops what it cannot hold, so a
+        // program far enough behind loses the one event that ends `run()` and
+        // then waits on a session that finished — while the reason for it has
+        // been recorded the whole time.
+        //
+        // Read against the session still held, not whichever one this pass
+        // began with: a handler answering the loss above by connecting again
+        // leaves a new session in place by the time this runs, and the
+        // finished one read here would otherwise end it before it had done
+        // anything at all.
+        let still_current = self
+            .shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, shared));
+        if still_current
+            && !self.session_ended.load(Ordering::Relaxed)
+            && shared.reference.session_over().is_some()
+        {
+            self.connected.store(false, Ordering::Release);
+            self.session_ended.store(true, Ordering::Release);
+            self.pending_option_calcs.lock().unwrap().clear();
+        }
         // 1102 rather than 1101: the reconnect re-establishes the
         // subscriptions itself, so the caller has nothing to re-request. A
         // client that stood down on 1100 and never saw this stayed down.

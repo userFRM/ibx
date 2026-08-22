@@ -540,6 +540,14 @@ impl HotLoop {
                 .or_else(|| payload.downcast_ref::<&'static str>().copied())
                 .unwrap_or("<non-string panic payload>");
             log::error!("Engine hot loop panicked, emitting Disconnected: {msg}");
+            // Recorded before anything is told of the loss, so a reader woken
+            // by it finds the reason already there. Written afterwards, a
+            // caller that wakes in between cannot tell this from a loss the
+            // engine is still working on, and waits on a recovery that has
+            // nothing left to run it.
+            shared
+                .reference
+                .set_session_over(retry::DisconnectReason::EngineStopped.as_str());
             shared.set_connection_lost();
             emit(&event_tx, Event::Disconnected);
         }

@@ -857,6 +857,12 @@ impl ClientCore {
         // asked. Kept across a reconnect — or a login as somebody else — the
         // next order goes out under an id this session was never given.
         self.named_by_description.lock().unwrap().clear();
+        // A group this session joined, and what it was told about it. Kept,
+        // the next session is called back about a group under a request id it
+        // never subscribed with.
+        self.display_groups.lock().unwrap().clear();
+        self.group_subscriptions.lock().unwrap().clear();
+        self.pending_group_events.lock().unwrap().clear();
     }
 
     // ── Registration helpers ──
