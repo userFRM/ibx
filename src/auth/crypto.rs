@@ -140,6 +140,30 @@ mod tests {
         assert_eq!(hmac_sha1(&key, data), expected);
     }
 
+    /// The published answer for AES-128-CBC, so this is checked against the
+    /// standard rather than against itself.
+    ///
+    /// A round trip cannot fail on a key and an initialisation vector that
+    /// were swapped, or on one that was never mixed in: encrypt and decrypt
+    /// make the same mistake and undo each other. The first block of NIST
+    /// SP 800-38A F.2.1 does not, because the answer was written down by
+    /// somebody else.
+    #[test]
+    fn aes_cbc_matches_the_published_vector() {
+        let key = hex::decode("2b7e151628aed2a6abf7158809cf4f3c").unwrap();
+        let iv = hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
+        let plaintext = hex::decode("6bc1bee22e409f96e93d7e117393172a").unwrap();
+        let ct = aes_cbc_encrypt(&key, &iv, &plaintext);
+        // A whole block of padding follows, because the input is exactly one
+        // block and PKCS#7 always adds some.
+        assert_eq!(
+            hex::encode(&ct[..16]),
+            "7649abac8119b246cee98e9b12e9197d",
+            "AES-128-CBC does not produce the published ciphertext",
+        );
+        assert_eq!(aes_cbc_decrypt(&key, &iv, &ct).unwrap(), plaintext);
+    }
+
     #[test]
     fn aes_cbc_roundtrip() {
         let key = [0u8; 16];
