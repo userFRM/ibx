@@ -157,7 +157,10 @@ impl EClient {
     /// The contract must carry the venue's id, which
     /// [`qualify`](EClient::qualify) supplies.
     pub fn watch(&self, contract: &Contract) -> Result<i64, Refusal> {
-        let req_id = super::ask::ask_id();
+        // Kept rather than released at the end of this call: the stream lives
+        // until the caller withdraws it, and until then the id is this
+        // client's own. `cancel_mkt_data` releases it.
+        let req_id = super::ask::ask_id().keep();
         self.req_mkt_data(req_id, contract, "", false, false)?;
         Ok(req_id)
     }

@@ -35,8 +35,45 @@ const ANSWER_TIMEOUT: Duration =
 /// an answer to theirs.
 static NEXT_ASK_ID: AtomicI64 = AtomicI64::new(crate::bridge::ReferenceState::ASK_ID_BASE as i64);
 
-pub(crate) fn ask_id() -> i64 {
-    NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed)
+/// An id this client asked a question under, held while the answer is
+/// outstanding.
+///
+/// Recorded where it is handed out rather than where it is waited on: the
+/// request goes out first, and an answer arriving before the wait began would
+/// otherwise be taken by a caller's own dispatch. Released on drop, so a
+/// question given up on — timed out, refused, or cut short by an early return
+/// — stops being held.
+pub(crate) struct AskId(i64);
+
+impl AskId {
+    /// The number the question went out under.
+    pub(crate) fn get(&self) -> i64 {
+        self.0
+    }
+
+    /// Take the number and stop releasing it on drop.
+    ///
+    /// For a subscription, which outlives the call that opened it: the id has
+    /// to keep being this client's own until the caller withdraws it, and
+    /// whoever withdraws it releases it with
+    /// [`forget_ours`](crate::bridge::forget_ours).
+    pub(crate) fn keep(self) -> i64 {
+        let id = self.0;
+        std::mem::forget(self);
+        id
+    }
+}
+
+impl Drop for AskId {
+    fn drop(&mut self) {
+        crate::bridge::forget_ours(self.0);
+    }
+}
+
+pub(crate) fn ask_id() -> AskId {
+    let id = NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed);
+    crate::bridge::note_ours(id);
+    AskId(id)
 }
 
 #[derive(Default)]
@@ -229,7 +266,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Bars { req_id, state: Arc::clone(&state) };
         self.req_historical_data(
@@ -284,7 +322,8 @@ impl EClient {
                 underlying.symbol,
             )));
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Chain { req_id, state: Arc::clone(&state) };
         self.req_sec_def_opt_params(
@@ -318,7 +357,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Head { req_id, state: Arc::clone(&state) };
         self.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1)?;
@@ -354,7 +394,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Matches { req_id, state: Arc::clone(&state) };
         self.req_matching_symbols(req_id, pattern)?;
@@ -399,7 +440,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Headlines { req_id, state: Arc::clone(&state) };
         // A count below zero is not a count: cast unchecked it asked for four
@@ -436,7 +478,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Histogram { req_id, state: Arc::clone(&state) };
         self.req_histogram_data(req_id, contract, use_rth, period)?;
@@ -467,7 +510,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Document { req_id, state: Arc::clone(&state) };
         self.req_fundamental_data(req_id, contract, report_type)?;
@@ -519,7 +563,8 @@ impl EClient {
                 }
             }
         }
-        let order_id = ask_id();
+        let asked_under = ask_id();
+        let order_id = asked_under.get();
         let asked = crate::types::model::Order { what_if: true, ..order.clone() };
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Preview { order_id, state: Arc::clone(&state) };
@@ -582,7 +627,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Values { req_id, state: Arc::clone(&state) };
         self.req_account_summary(req_id, "All", tags);
@@ -697,7 +743,8 @@ impl EClient {
     pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let answer = Arc::new(Mutex::new(Answer::default()));
         let mut collector = Collector { req_id, answer: Arc::clone(&answer) };
         self.req_contract_details(req_id, contract)?;
@@ -845,7 +892,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Rows { req_id, state: Arc::clone(&state) };
         self.req_scanner_subscription(req_id, instrument, location, scan_code, most, &[])?;
@@ -886,7 +934,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = When { req_id, state: Arc::clone(&state) };
         self.req_historical_schedule(req_id, contract, "", duration, true)?;
@@ -934,7 +983,8 @@ impl EClient {
                 }
             }
         }
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Json { req_id, state: Arc::clone(&state) };
         match con_id {
