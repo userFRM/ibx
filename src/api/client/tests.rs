@@ -5103,7 +5103,7 @@ mod answering_calls_receive_through_dispatch {
         // it hands the id out. Which ids those are is no longer read off their
         // magnitude, so a number alone establishes nothing.
         let ask_id = crate::bridge::ReferenceState::ASK_ID_BASE;
-        crate::bridge::note_ours(ask_id as i64);
+        shared.reference.note_ours(ask_id as i64);
         shared.reference.push_contract_details(
             ask_id,
             ContractDefinition { con_id: 756733, ..Default::default() },
@@ -5117,7 +5117,7 @@ mod answering_calls_receive_through_dispatch {
         assert_eq!(delivered.len(), 1, "a caller's own reply was withheld");
         assert_eq!(delivered[0].0, 7);
         assert_eq!(shared.reference.take_contract_details_for(ask_id).len(), 1);
-        crate::bridge::forget_ours(ask_id as i64);
+        shared.reference.forget_ours(ask_id as i64);
     }
 
     /// A caller may number a request anything at all, including inside the

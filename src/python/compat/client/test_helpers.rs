@@ -554,8 +554,8 @@ impl EClient {
     /// Run ONE iteration of the event dispatch loop.
     #[doc(hidden)]
     #[doc(hidden)]
-    fn _test_peek_ask_id(&self) -> i64 {
-        super::ask::peek_ask_id()
+    fn _test_peek_ask_id(&self) -> PyResult<i64> {
+        Ok(super::ask::peek_ask_id(&self.shared_state()?))
     }
 
     #[doc(hidden)]
