@@ -1062,7 +1062,7 @@ pub fn do_security_code_2fa<S: Read + Write>(
                         soft_token_hex: String::new(),
                     });
                 }
-                // Only echo a status we recognise. The reply's fields are
+                // Only a status this client recognises is echoed. The reply's fields are
                 // server-controlled and this one is adjacent to the slot the
                 // code was sent in — never interpolate it blind.
                 let reason = if status.eq_ignore_ascii_case("FAILED") { "FAILED" } else { "unrecognized status" };
@@ -1296,7 +1296,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 if result.eq_ignore_ascii_case("PASSED") {
                     log::info!("2FA gate: C/R code accepted (state=4 PASSED)");
                 } else {
-                    // Only echo a status we recognise. The reply's fields are
+                    // Only a status this client recognises is echoed. The reply's fields are
                     // server-controlled and this one is adjacent to the slot the
                     // code was sent in — never interpolate it blind.
                     let reason = if result.eq_ignore_ascii_case("FAILED") { "FAILED" } else { "unrecognized status" };
