@@ -1753,7 +1753,10 @@ impl HotLoop {
         };
         self.farm_reconnect_attempt += 1;
         let attempt = self.farm_reconnect_attempt;
-        log::info!("Farm auto-reconnect attempt {} starting (host={}, user={})", attempt, auth.host, auth.username);
+        log::info!(
+            "Farm auto-reconnect attempt {} starting (host={}, user={})",
+            attempt, auth.host, crate::logging::redacted(&auth.username)
+        );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()

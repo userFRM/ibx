@@ -108,6 +108,14 @@ pub fn remember(path: &Path, key: &str, id: u64) -> io::Result<()> {
         // moves forward — so nothing counting on from the clock is ever
         // written down, and two sessions starting in the same second are given
         // the same number for their first order.
+        //
+        // What replaces it is where counting resumed, which is the clock in
+        // seconds. That steps back over anything numbered above it, and the
+        // venue refuses an id it has already seen — but ids handed out here
+        // are seeded from that same clock and advance one at a time, so a mark
+        // this client set is always near it. A mark far above it was set by a
+        // caller numbering its own orders, and a caller doing that is
+        // numbering the next one too.
         Some(last) if *last >= WIDEST_A_REQUEST_CARRIES => kept.insert(key.to_string(), id),
         Some(last) if *last >= id => return Ok(()),
         _ => kept.insert(key.to_string(), id),

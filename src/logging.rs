@@ -83,6 +83,24 @@ pub struct LogGuard {
     _guard: WorkerGuard,
 }
 
+/// An account identifier as a log may carry it.
+///
+/// Enough to tell two logins apart in a log and no more. A session's records
+/// are read by whoever can read the run that produced them, and for a run in
+/// public continuous integration that is everybody; the name a session logs in
+/// under is not a secret but it is an account detail, and a line that prints
+/// one publishes it.
+pub fn redacted(identifier: &str) -> String {
+    match identifier.chars().count() {
+        0 => String::new(),
+        n if n <= 4 => "*".repeat(n),
+        n => {
+            let kept: String = identifier.chars().take(2).collect();
+            format!("{kept}{}", "*".repeat(n - 2))
+        }
+    }
+}
+
 /// Initialize the logging subsystem. Returns a [`LogGuard`] that **must** be
 /// held until process exit — dropping it flushes buffered records and joins the
 /// background writer thread.
