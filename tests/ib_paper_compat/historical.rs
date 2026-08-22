@@ -47,13 +47,13 @@ pub(super) fn open_farm(kind: ibx::gateway::Farm) -> std::io::Result<Connection>
 
 
 pub(super) fn phase_historical_data(mut conns: Conns) -> Conns {
-    println!("--- Phase 11: Historical Data Bars (SPY, 1 day of 5-min bars) ---");
+    phase!("--- Phase 11: Historical Data Bars (SPY, 1 day of 5-min bars) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
         Err(e) => {
-            println!("  SKIP: the historical farm could not be reached: {e}\n");
+            skipped!("  SKIP: the historical farm could not be reached: {e}\n");
             return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id };
         }
     };
@@ -118,12 +118,12 @@ pub(super) fn phase_historical_data(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_historical_daily_bars(mut conns: Conns) -> Conns {
-    println!("--- Phase 76: Historical Daily Bars (SPY, 5 days of 1-day bars) ---");
+    phase!("--- Phase 76: Historical Daily Bars (SPY, 5 days of 1-day bars) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     // Step 1: Create HotLoop with HMDS connection
@@ -183,12 +183,12 @@ pub(super) fn phase_historical_daily_bars(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_cancel_historical(mut conns: Conns) -> Conns {
-    println!("--- Phase 77: Cancel Historical Request (SPY) ---");
+    phase!("--- Phase 77: Cancel Historical Request (SPY) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -217,7 +217,7 @@ pub(super) fn phase_cancel_historical(mut conns: Conns) -> Conns {
 
     if !got_first_chunk {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        println!("  SKIP: No data received in 15s\n");
+        skipped!("  SKIP: No data received in 15s\n");
         return conns;
     }
 
@@ -250,13 +250,13 @@ pub(super) fn phase_cancel_historical(mut conns: Conns) -> Conns {
 /// error (code 162) + terminal historical_data sentinel rather than leaking the
 /// pending entry forever.
 pub(super) fn phase_query_error_surfaces(mut conns: Conns) -> Conns {
-    println!("--- Phase 186: HMDS QueryError surfaces (15 mins / 1 W rejection) ---");
+    phase!("--- Phase 186: HMDS QueryError surfaces (15 mins / 1 W rejection) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
         Err(e) => {
-            println!("  SKIP: the historical farm could not be reached: {e}\n");
+            skipped!("  SKIP: the historical farm could not be reached: {e}\n");
             return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id };
         }
     };
@@ -304,7 +304,7 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns) -> Conns {
         // has been lifted. That is an upstream policy change and not this
         // client's doing.
         None if bars_seen > 0 => {
-            println!(
+            skipped!(
                 "  SKIP: the combination was accepted and {bars_seen} bars came back — \
                  the rejection this phase relies on is gone\n"
             );
@@ -333,12 +333,12 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_head_timestamp(mut conns: Conns) -> Conns {
-    println!("--- Phase 79: Head Timestamp (SPY, TRADES) ---");
+    phase!("--- Phase 79: Head Timestamp (SPY, TRADES) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -377,12 +377,12 @@ pub(super) fn phase_head_timestamp(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_scanner_subscription(mut conns: Conns) -> Conns {
-    println!("--- Phase 82: Scanner Subscription (TOP_PERC_GAIN, STK.US.MAJOR) ---");
+    phase!("--- Phase 82: Scanner Subscription (TOP_PERC_GAIN, STK.US.MAJOR) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -419,7 +419,7 @@ pub(super) fn phase_scanner_subscription(mut conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if result.is_none() {
-        println!("  SKIP: No scanner results received\n");
+        skipped!("  SKIP: No scanner results received\n");
         return conns;
     }
     let r = result.unwrap();
@@ -434,12 +434,12 @@ pub(super) fn phase_scanner_subscription(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_fundamental_data(mut conns: Conns) -> Conns {
-    println!("--- Phase 83: Fundamental Data (AAPL, ReportSnapshot) ---");
+    phase!("--- Phase 83: Fundamental Data (AAPL, ReportSnapshot) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: HMDS reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: HMDS reconnect failed: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -472,7 +472,7 @@ pub(super) fn phase_fundamental_data(mut conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !got_data {
-        println!("  SKIP: No fundamental data received (may require subscription)\n");
+        skipped!("  SKIP: No fundamental data received (may require subscription)\n");
         return conns;
     }
     println!("  PASS\n");
@@ -494,12 +494,12 @@ pub(super) fn phase_fundamental_data(mut conns: Conns) -> Conns {
 ///   → real server → FIX response → hot_loop parses j.c codec + ZIP
 ///   → SharedState → drain_historical_news → verify headline values
 pub(super) fn phase_historical_news(mut conns: Conns) -> Conns {
-    println!("--- Phase 85: Historical News (AAPL, end-to-end) ---");
+    phase!("--- Phase 85: Historical News (AAPL, end-to-end) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     // Step 1: Create HotLoop with ALL real connections (farm + CCP + HMDS)
@@ -565,7 +565,7 @@ pub(super) fn phase_historical_news(mut conns: Conns) -> Conns {
     let bg_conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !got_news {
-        println!("  SKIP: No news response received (may require news subscription)\n");
+        skipped!("  SKIP: No news response received (may require news subscription)\n");
         return bg_conns;
     }
     println!("  PASS\n");
@@ -573,12 +573,12 @@ pub(super) fn phase_historical_news(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_historical_ticks(mut conns: Conns) -> Conns {
-    println!("--- Phase 88: Historical Ticks (SPY, TRADES) ---");
+    phase!("--- Phase 88: Historical Ticks (SPY, TRADES) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -656,12 +656,12 @@ pub(super) fn phase_historical_ticks(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_histogram_data(mut conns: Conns) -> Conns {
-    println!("--- Phase 89: Histogram Data (SPY, 1 week) ---");
+    phase!("--- Phase 89: Histogram Data (SPY, 1 week) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -710,12 +710,12 @@ pub(super) fn phase_histogram_data(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_historical_schedule(mut conns: Conns) -> Conns {
-    println!("--- Phase 90: Historical Schedule (SPY) ---");
+    phase!("--- Phase 90: Historical Schedule (SPY) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -768,12 +768,12 @@ pub(super) fn phase_historical_schedule(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_realtime_bars(mut conns: Conns) -> Conns {
-    println!("--- Phase 91: Real-Time Bars (SPY, 5-second) ---");
+    phase!("--- Phase 91: Real-Time Bars (SPY, 5-second) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -824,12 +824,12 @@ pub(super) fn phase_realtime_bars(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_news_article(mut conns: Conns) -> Conns {
-    println!("--- Phase 92: News Article Fetch (AAPL) ---");
+    phase!("--- Phase 92: News Article Fetch (AAPL) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -904,23 +904,23 @@ pub(super) fn phase_news_article(mut conns: Conns) -> Conns {
         if got_article {
             println!("  PASS\n");
         } else {
-            println!("  SKIP: Article body not received\n");
+            skipped!("  SKIP: Article body not received\n");
         }
         conns
     } else {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        println!("  SKIP: No news headlines to fetch article from\n");
+        skipped!("  SKIP: No news headlines to fetch article from\n");
         conns
     }
 }
 
 pub(super) fn phase_fundamental_data_channel(mut conns: Conns) -> Conns {
-    println!("--- Phase 93: Fundamental Data via HotLoop (AAPL) ---");
+    phase!("--- Phase 93: Fundamental Data via HotLoop (AAPL) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -956,18 +956,18 @@ pub(super) fn phase_fundamental_data_channel(mut conns: Conns) -> Conns {
     if got_data {
         println!("  PASS\n");
     } else {
-        println!("  SKIP: No fundamental data received (may require subscription)\n");
+        skipped!("  SKIP: No fundamental data received (may require subscription)\n");
     }
     conns
 }
 
 pub(super) fn phase_parallel_historical(mut conns: Conns) -> Conns {
-    println!("--- Phase 94: Parallel Historical Requests (SPY: 1d/5min, 5d/1day, 1w/1h) ---");
+    phase!("--- Phase 94: Parallel Historical Requests (SPY: 1d/5min, 5d/1day, 1w/1h) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1017,12 +1017,12 @@ pub(super) fn phase_parallel_historical(mut conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_scanner_params(mut conns: Conns) -> Conns {
-    println!("--- Phase 95: Scanner Parameters + HOT_BY_VOLUME Scan ---");
+    phase!("--- Phase 95: Scanner Parameters + HOT_BY_VOLUME Scan ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1076,19 +1076,19 @@ pub(super) fn phase_scanner_params(mut conns: Conns) -> Conns {
     if got_params {
         println!("  Scanner params: PASS");
     } else {
-        println!("  Scanner params: SKIP");
+        skipped!("  Scanner params: SKIP");
     }
     if got_scan {
         println!("  Scanner scan: PASS");
     } else {
-        println!("  Scanner scan: SKIP (may need market hours)");
+        skipped!("  Scanner scan: SKIP (may need market hours)");
     }
     println!();
     conns
 }
 
 pub(super) fn phase_historical_ohlc_validation(conns: Conns) -> Conns {
-    println!("--- Phase 103: Historical Bar OHLC Validation (SPY 1-hour bars) ---");
+    phase!("--- Phase 103: Historical Bar OHLC Validation (SPY 1-hour bars) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1180,12 +1180,12 @@ pub(super) fn phase_historical_ohlc_validation(conns: Conns) -> Conns {
 // ─── Phase 111: Large historical dataset — 1 year daily bars ───
 
 pub(super) fn phase_large_historical_dataset(mut conns: Conns) -> Conns {
-    println!("--- Phase 111: Large Historical Dataset (SPY, 1 year of daily bars) ---");
+    phase!("--- Phase 111: Large Historical Dataset (SPY, 1 year of daily bars) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1244,12 +1244,12 @@ pub(super) fn phase_large_historical_dataset(mut conns: Conns) -> Conns {
 // ─── Phase 112: DST boundary historical data ───
 
 pub(super) fn phase_dst_boundary_historical(mut conns: Conns) -> Conns {
-    println!("--- Phase 112: DST Boundary Historical Data (SPY, bars spanning March DST) ---");
+    phase!("--- Phase 112: DST Boundary Historical Data (SPY, bars spanning March DST) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); c }
-        Err(e) => { println!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
+        Err(e) => { skipped!("  SKIP: the historical farm could not be reached: {e}\n"); return Conns { farm: conns.farm, ccp: conns.ccp, hmds: None, account_id: conns.account_id }; }
     };
 
     let account_id = conns.account_id;
@@ -1313,13 +1313,13 @@ pub(super) fn phase_dst_boundary_historical(mut conns: Conns) -> Conns {
 // ─── Phase 127: Cancel Data Requests (historical, fundamental, histogram, head timestamp) ───
 
 pub(super) fn phase_cancel_data_requests(mut conns: Conns) -> Conns {
-    println!("--- Phase 127: Cancel Data Requests (4 cancel ControlCommands) ---");
+    phase!("--- Phase 127: Cancel Data Requests (4 cancel ControlCommands) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); Some(c) }
         Err(e) => {
-            println!("  SKIP: the historical farm could not be reached: {e}\n");
+            skipped!("  SKIP: the historical farm could not be reached: {e}\n");
             return conns;
         }
     };
@@ -1402,13 +1402,13 @@ pub(super) fn phase_cancel_data_requests(mut conns: Conns) -> Conns {
 // ─── Phase 130: Historical Data + Live Orders Coexistence ───
 
 pub(super) fn phase_historical_and_orders(mut conns: Conns) -> Conns {
-    println!("--- Phase 130: Historical Data + Live Orders Coexistence ---");
+    phase!("--- Phase 130: Historical Data + Live Orders Coexistence ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
         Ok(c) => { println!("  HMDS reconnected"); Some(c) }
         Err(e) => {
-            println!("  SKIP: the historical farm could not be reached: {e}\n");
+            skipped!("  SKIP: the historical farm could not be reached: {e}\n");
             return conns;
         }
     };
@@ -1492,7 +1492,7 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns) -> Conns {
     // At least some historical requests should complete even during order activity
     // (tolerance for server pacing — may not get all 5)
     if hist_responses.is_empty() {
-        println!("  SKIP: No historical responses — HMDS pacing limited\n");
+        skipped!("  SKIP: No historical responses — HMDS pacing limited\n");
     } else {
         println!("  PASS (order lifecycle + {} historical responses coexisted)\n", hist_responses.len());
     }

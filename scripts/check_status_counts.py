@@ -187,8 +187,8 @@ def capabilities() -> tuple[int, int]:
 def readme_says() -> tuple[int, int] | None:
     """What the matrix's own test row states, offline and session-only.
 
-    Both figures count tests as written, not as run: the second set is skipped
-    without credentials, so it is what would run against a session and not a
+    Both figures count tests as written, not as run: the second set lives in the
+    suites that open a session, so it is what would run against one and not a
     record of what has.
 
     The row is prose rather than a table of counts, so it is read back out of
@@ -196,7 +196,7 @@ def readme_says() -> tuple[int, int] | None:
     stale quietly — this one was two hundred tests out before anything checked
     it.
     """
-    m = re.search(r"\| ([\d,]+) offline, and ([\d,]+) more that only run against a broker session \|",
+    m = re.search(r"\| ([\d,]+) offline, and ([\d,]+) more that live in the suites run against a broker session \|",
                   MATRIX.read_text())
     if not m:
         return None

@@ -5,7 +5,7 @@ use std::net::TcpListener;
 use ibx::gateway::{Gateway, GatewayConfig};
 
 pub(super) fn phase_ccp_auth(gw: &Gateway, has_hmds: bool, connect_time: Duration) {
-    println!("--- Phase 1: CCP Auth + Farm Logon ---");
+    phase!("--- Phase 1: CCP Auth + Farm Logon ---");
 
     // Nobody else on the account.
     //
@@ -67,7 +67,7 @@ pub(super) fn phase_extra_farms(
     ccp: &mut Connection,
     routed: &ibx::protocol::routing::RoutingTable,
 ) {
-    println!("--- Phase 18: Additional Farm Connections ---");
+    phase!("--- Phase 18: Additional Farm Connections ---");
 
     // Every farm the venue named, asked for where it said each one is.
     //
@@ -168,7 +168,7 @@ pub(super) fn phase_extra_farms(
 }
 
 pub(super) fn phase_graceful_shutdown(conns: Conns) -> Conns {
-    println!("--- Phase 5: Graceful Shutdown ---");
+    phase!("--- Phase 5: Graceful Shutdown ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -216,7 +216,7 @@ pub(super) fn phase_graceful_shutdown(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &GatewayConfig) -> Conns {
-    println!("--- Phase 96: Connection Recovery (simulated farm drop) ---");
+    phase!("--- Phase 96: Connection Recovery (simulated farm drop) ---");
 
     // A dummy TCP listener stands in for the farm connection and can be closed
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind local listener");
@@ -300,7 +300,7 @@ pub(super) fn phase_connection_recovery(conns: Conns, _gw: &Gateway, config: &Ga
     if recovered {
         println!("  PASS\n");
     } else {
-        println!(
+        skipped!(
             "  SKIP: the engine did not rebuild the farm within the wait, so the recovery \
              this phase exists to demonstrate was not shown\n",
         );
@@ -315,7 +315,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
     // engine subscribes again and the ticks resume on transports that never
     // went away. A transport actually dropped and rebuilt is what Phase 96
     // covers.
-    println!("--- Phase 105: A second engine over the same transports subscribes again ---");
+    phase!("--- Phase 105: A second engine over the same transports subscribes again ---");
 
     // Step 1: subscribe to market data and confirm ticks arrive
     let account_id = conns.account_id;
@@ -377,7 +377,7 @@ pub(super) fn phase_reconnection_state_recovery(conns: Conns, _gw: &Gateway, _co
 }
 
 pub(super) fn phase_auth_wrong_password(config: &GatewayConfig) {
-    println!("--- Phase 118: Authentication Failure (wrong password) ---");
+    phase!("--- Phase 118: Authentication Failure (wrong password) ---");
 
     let bad_config = GatewayConfig {
         settings: Default::default(),
@@ -409,7 +409,7 @@ pub(super) fn phase_auth_wrong_password(config: &GatewayConfig) {
 // ─── Phase 131: RegisterInstrument via ControlCommand channel ───
 
 pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
-    println!("--- Phase 131: RegisterInstrument via ControlCommand Channel ---");
+    phase!("--- Phase 131: RegisterInstrument via ControlCommand Channel ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -456,7 +456,7 @@ pub(super) fn phase_register_instrument_channel(conns: Conns) -> Conns {
 // ─── Phase 132: UpdateParam Smoke Test ───
 
 pub(super) fn phase_update_param(conns: Conns) -> Conns {
-    println!("--- Phase 132: UpdateParam Smoke Test (no-op parameter) ---");
+    phase!("--- Phase 132: UpdateParam Smoke Test (no-op parameter) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -533,7 +533,7 @@ pub(super) fn phase_farm_recovers_with_credentials(
     conns: Conns,
     config: &GatewayConfig,
 ) -> (bool, bool, bool) {
-    println!("--- Phase 96b: Farm recovers on its own (real credentials) ---");
+    phase!("--- Phase 96b: Farm recovers on its own (real credentials) ---");
 
     let account_id = conns.account_id.clone();
     let shared = Arc::new(SharedState::new());

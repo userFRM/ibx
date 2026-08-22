@@ -7,7 +7,7 @@ use ibx::protocol::fixcomp;
 use ibx::protocol::connection::Frame;
 
 pub(super) fn phase_forex_order(conns: Conns) -> Conns {
-    println!("--- Phase 98: Forex Order Lifecycle (EUR.USD) ---");
+    phase!("--- Phase 98: Forex Order Lifecycle (EUR.USD) ---");
 
     // First, look up EUR.USD contract
     let now = ibx::protocol::datetime::chrono_free_timestamp();
@@ -102,7 +102,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Forex order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Forex order rejected — {}\n", reject_reason(&shared, id));
     } else {
         if skip_unacked_if_closed(order_acked) { return conns; }
         assert!(order_acked, "Forex order should be acknowledged");
@@ -113,7 +113,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_futures_order(conns: Conns) -> Conns {
-    println!("--- Phase 99: Futures Order (MES) ---");
+    phase!("--- Phase 99: Futures Order (MES) ---");
 
     // Look up MES (Micro E-mini S&P 500)
     let now = ibx::protocol::datetime::chrono_free_timestamp();
@@ -237,7 +237,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Futures order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Futures order rejected — {}\n", reject_reason(&shared, id));
     } else {
         if skip_unacked_if_closed(order_acked) { return conns; }
         assert!(order_acked, "Futures order should be acknowledged");
@@ -248,7 +248,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_options_order(conns: Conns) -> Conns {
-    println!("--- Phase 100: Options Contract Details + Order (SPY options) ---");
+    phase!("--- Phase 100: Options Contract Details + Order (SPY options) ---");
 
     // Look up SPY options
     let now = ibx::protocol::datetime::chrono_free_timestamp();
@@ -378,7 +378,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Option order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Option order rejected — {}\n", reject_reason(&shared, id));
     } else {
         if skip_unacked_if_closed(order_acked) { return conns; }
         assert!(order_acked, "Option order should be acknowledged");
@@ -389,7 +389,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
-    println!("--- Phase 101: Concurrent Orders in Flight (3 simultaneous limit orders) ---");
+    phase!("--- Phase 101: Concurrent Orders in Flight (3 simultaneous limit orders) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -452,7 +452,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: One or more orders rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: One or more orders rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
 
@@ -477,7 +477,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
 /// and whether the exchange answers by name has not been established, so it is
 /// not asserted either way here.
 pub(super) fn phase_global_venues(conns: Conns) -> Conns {
-    println!("--- Global venues (definition, currency and exchange outside the US) ---");
+    phase!("--- Global venues (definition, currency and exchange outside the US) ---");
 
     // Symbol, currency, and the exchange the listing belongs to.
     const VENUES: &[(&str, &str, &str)] = &[
@@ -620,7 +620,7 @@ pub(super) fn phase_global_venues(conns: Conns) -> Conns {
 /// foreign venue must carry a field this client does not send. The logon
 /// permission map answers the first and has not been read for this account.
 pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
-    println!("--- Non-dollar order (VOD, London, sterling) ---");
+    phase!("--- Non-dollar order (VOD, London, sterling) ---");
 
     let now = ibx::protocol::datetime::chrono_free_timestamp();
     let mut ccp = conns.ccp;
@@ -728,10 +728,10 @@ pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: the venue refused a sterling order — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: the venue refused a sterling order — {}\n", reject_reason(&shared, id));
     } else {
         if !order_acked && !london_is_trading() {
-            println!("  SKIP: London is not trading, so nothing works this order\n");
+            skipped!("  SKIP: London is not trading, so nothing works this order\n");
             return conns;
         }
         assert!(order_acked, "London is trading, so a sterling order should be acknowledged");

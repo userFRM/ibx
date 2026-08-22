@@ -443,10 +443,10 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,805 | No |
+| Rust unit and integration | 1,807 | No |
 | Python | 468 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (136 phases) | 31 tests | Yes |
+| Paper compatibility suite (136 phases) | 33 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure
