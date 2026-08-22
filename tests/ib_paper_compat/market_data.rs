@@ -553,8 +553,8 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
     conns
 }
 
-pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
-    let (symbol, sec_type, exchange) = tick_fallback();
+pub(super) fn phase_fallback_market_data(conns: Conns) -> Conns {
+    let (symbol, sec_type, exchange) = ALWAYS_QUOTING;
     println!("--- Phase 107: Fallback Market Data Ticks ({symbol} on {exchange} — session-independent) ---");
 
     // Look up the contract first
@@ -592,6 +592,11 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
                     && let Some(def) = contracts::parse_secdef_response(&msg, true)
+                        // The one that was asked for. Any definition with an
+                        // id passes for it otherwise, and a reply still in
+                        // flight from an earlier phase overwrites the answer
+                        // with a contract these phases never subscribe to.
+                        && def.symbol == ALWAYS_QUOTING.0
                         && def.con_id > 0 {
                             forex_con_id = Some(def.con_id as i64);
                         }
@@ -606,7 +611,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
         }
     };
     // Read by the two phases after this one.
-    let _ = FOREX_CON_ID.set(con_id);
+    let _ = FALLBACK_CON_ID.set(con_id);
 
     // Subscribe and verify ticks
     let account_id = conns.account_id;
@@ -624,30 +629,29 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
 
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: tick_fallback().0.into(),
+            contract: ContractRef { con_id, symbol: ALWAYS_QUOTING.0.into(),
                 // Named, not left to the default. A subscription with no
                 // exchange is asked for on BEST, and the venue refuses a
                 // crypto there: "BEST/CRYPTO/Top". The ticks still arrive and
                 // carry no prices, so the phase saw a stream and no quote.
-                exchange: tick_fallback().2.into(), sec_type: tick_fallback().1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+                exchange: ALWAYS_QUOTING.2.into(), sec_type: ALWAYS_QUOTING.1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut tick_count = 0u32;
-    let mut bid_seen = false;
-    let mut ask_seen = false;
+    // One tick carrying both sides at once, not a bid on one tick and an ask
+    // on another: a book that never had two sides together is not a quote,
+    // and the spread below is only a spread when it came from one.
+    let mut two_sided = false;
 
     while Instant::now() < deadline {
         if let Ok(Event::Tick(instrument)) = event_rx.recv_timeout(Duration::from_millis(100)) {
             tick_count += 1;
             let q = shared.market.quote(instrument);
-            if q.bid > 0 {
-                bid_seen = true;
-            }
-            if q.ask > 0 {
-                ask_seen = true;
+            if q.bid > 0 && q.ask > 0 {
+                two_sided = true;
             }
 
             if tick_count == 1 {
@@ -658,9 +662,10 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
                 );
             }
 
-            // Validate spread only after both bid and ask have been seen
-            // (early ticks may have one side at zero while the other updates)
-            if bid_seen && ask_seen && q.bid > 0 && q.ask > 0 {
+            // Only where this tick carried both sides. Early ticks arrive with
+            // one side still at zero, and comparing against that reads as a
+            // crossed market every time.
+            if q.bid > 0 && q.ask > 0 {
                 assert!(q.ask >= q.bid, "Crossed market: ask < bid");
             }
 
@@ -672,29 +677,31 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    if tick_count == 0 {
-        println!("  SKIP: No forex ticks (weekend or forex market closed)\n");
-    } else if !bid_seen || !ask_seen {
-        println!(
-            "  SKIP: {tick_count} ticks but bid_seen={bid_seen} ask_seen={ask_seen} (prices not yet populated)\n"
-        );
-    } else {
-        println!(
-            "  {tick_count} ticks received, bid_seen={bid_seen} ask_seen={ask_seen}"
-        );
-        println!("  PASS\n");
-    }
+    // Asserted after the session is reclaimed, so a phase that fails closes
+    // what it opened rather than leaving the account's one session held.
+    assert!(
+        tick_count > 0,
+        "{} on {} quotes every day, so no tick at all is this client failing to read one",
+        ALWAYS_QUOTING.0, ALWAYS_QUOTING.2
+    );
+    assert!(
+        two_sided,
+        "not one of {tick_count} ticks carried a price on both sides at once, \
+         so nothing here read a quote"
+    );
+    println!("  {tick_count} ticks received, a two-sided quote among them");
+    println!("  PASS\n");
     conns
 }
 
-pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
-    println!("--- Phase 108: Fallback Streaming Validation ({} — session-independent) ---", tick_fallback().0);
+pub(super) fn phase_fallback_streaming_validation(conns: Conns) -> Conns {
+    println!("--- Phase 108: Fallback Streaming Validation ({} — session-independent) ---", ALWAYS_QUOTING.0);
 
     // As the venue named it, in the phase before this one. Written in here, a
     // contract id that had changed or that this account sees differently read
     // as a subscription that produced nothing.
-    let Some(&con_id) = FOREX_CON_ID.get() else {
-        println!("  SKIP: the phase that asks the venue for {} did not name it\n", tick_fallback().0);
+    let Some(&con_id) = FALLBACK_CON_ID.get() else {
+        println!("  SKIP: the phase that asks the venue for {} did not name it\n", ALWAYS_QUOTING.0);
         return conns;
     };
 
@@ -713,18 +720,22 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
 
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: tick_fallback().0.into(),
+            contract: ContractRef { con_id, symbol: ALWAYS_QUOTING.0.into(),
                 // Named, not left to the default. A subscription with no
                 // exchange is asked for on BEST, and the venue refuses a
                 // crypto there: "BEST/CRYPTO/Top". The ticks still arrive and
                 // carry no prices, so the phase saw a stream and no quote.
-                exchange: tick_fallback().2.into(), sec_type: tick_fallback().1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+                exchange: ALWAYS_QUOTING.2.into(), sec_type: ALWAYS_QUOTING.1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut tick_count = 0u32;
+    // Counted apart from the ticks. A subscription the venue refused still
+    // delivers ticks that carry no price, and a spread read off those is a
+    // spread this phase never saw.
+    let mut quoted = 0u32;
     let mut spread_valid = true;
 
     while Instant::now() < deadline {
@@ -734,13 +745,15 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
             let bid = q.bid as f64 / PRICE_SCALE as f64;
             let ask = q.ask as f64 / PRICE_SCALE as f64;
 
-            if q.bid > 0 && q.ask > 0
-                && q.ask < q.bid {
+            if q.bid > 0 && q.ask > 0 {
+                quoted += 1;
+                if q.ask < q.bid {
                     spread_valid = false;
                     println!("  WARNING: Crossed spread bid={bid:.5} ask={ask:.5}");
                 }
+            }
 
-            if tick_count >= 15 {
+            if quoted >= 15 {
                 break;
             }
         }
@@ -748,28 +761,56 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    if tick_count == 0 {
-        println!("  SKIP: No forex ticks (weekend or forex market closed)\n");
-    } else {
-        assert!(spread_valid, "Spread should not be crossed");
-        println!("  {tick_count} ticks, spread_valid={spread_valid}");
-        println!("  PASS\n");
-    }
+    assert!(
+        quoted > 0,
+        "{tick_count} ticks arrived and not one carried a price on both sides, \
+         so the spread this phase validates was never read"
+    );
+    assert!(spread_valid, "Spread should not be crossed");
+    println!("  {quoted} quoted of {tick_count} ticks, spread_valid={spread_valid}");
+    println!("  PASS\n");
     conns
 }
 
-pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
-    println!("--- Phase 109: Fallback Reconnection Recovery ({} — session-independent) ---", tick_fallback().0);
+/// The first tick carrying a price on both sides, or nothing within `within`.
+///
+/// A subscription the venue refused still delivers ticks — trading status and
+/// the like — so a phase that stops at the first `Event::Tick` has shown the
+/// stream is alive and nothing at all about the quote it came for.
+fn quoted_tick(
+    rx: &std::sync::mpsc::Receiver<Event>, shared: &SharedState, within: Duration,
+) -> Option<(f64, f64)> {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if let Ok(Event::Tick(instrument)) = rx.recv_timeout(Duration::from_millis(100)) {
+            let q = shared.market.quote(instrument);
+            if q.bid > 0 && q.ask > 0 {
+                return Some((
+                    q.bid as f64 / PRICE_SCALE as f64,
+                    q.ask as f64 / PRICE_SCALE as f64,
+                ));
+            }
+        }
+    }
+    None
+}
+
+pub(super) fn phase_fallback_resubscribe(conns: Conns) -> Conns {
+    // A new hot loop over the transports already open, not a reconnection of
+    // the transports themselves: what this shows is that a session built over
+    // them subscribes again and is quoted again. Losing and rebuilding the
+    // connections is phase 105's, and the farm reconnect suite's.
+    println!("--- Phase 109: Fallback Resubscribe Under A New Session ({} — session-independent) ---", ALWAYS_QUOTING.0);
 
     // As the venue named it, in the phase before this one. Written in here, a
     // contract id that had changed or that this account sees differently read
     // as a subscription that produced nothing.
-    let Some(&con_id) = FOREX_CON_ID.get() else {
-        println!("  SKIP: the phase that asks the venue for {} did not name it\n", tick_fallback().0);
+    let Some(&con_id) = FALLBACK_CON_ID.get() else {
+        println!("  SKIP: the phase that asks the venue for {} did not name it\n", ALWAYS_QUOTING.0);
         return conns;
     };
 
-    // Step 1: Subscribe, get forex ticks
+    // Step 1: subscribe and read a quote
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
     let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
@@ -785,32 +826,28 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
 
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: tick_fallback().0.into(),
+            contract: ContractRef { con_id, symbol: ALWAYS_QUOTING.0.into(),
                 // Named, not left to the default. A subscription with no
                 // exchange is asked for on BEST, and the venue refuses a
                 // crypto there: "BEST/CRYPTO/Top". The ticks still arrive and
                 // carry no prices, so the phase saw a stream and no quote.
-                exchange: tick_fallback().2.into(), sec_type: tick_fallback().1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+                exchange: ALWAYS_QUOTING.2.into(), sec_type: ALWAYS_QUOTING.1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
 
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut got_ticks = false;
-    while Instant::now() < deadline {
-        if let Ok(Event::Tick(_)) = event_rx.recv_timeout(Duration::from_millis(100)) {
-            got_ticks = true;
-            break;
-        }
-    }
+    let before = quoted_tick(&event_rx, &shared, Duration::from_secs(15));
 
     let conns1 = shutdown_and_reclaim(&control_tx, join, account_id.clone());
 
-    if !got_ticks {
-        println!("  SKIP: No forex ticks before disconnect (weekend)\n");
-        return conns1;
-    }
-    println!("  Step 1: Got forex ticks before disconnect");
+    let (bid, ask) = before.unwrap_or_else(|| {
+        panic!(
+            "no quote for {} before the disconnect, so whatever resumes after it \
+             is not this subscription coming back",
+            ALWAYS_QUOTING.0
+        )
+    });
+    println!("  Step 1: quote before disconnect bid={bid:.5} ask={ask:.5}");
 
     // Step 2: Reconnect and verify ticks resume
     let shared2 = Arc::new(SharedState::new());
@@ -827,37 +864,24 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
 
     control_tx2
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: tick_fallback().0.into(),
+            contract: ContractRef { con_id, symbol: ALWAYS_QUOTING.0.into(),
                 // Named, not left to the default. A subscription with no
                 // exchange is asked for on BEST, and the venue refuses a
                 // crypto there: "BEST/CRYPTO/Top". The ticks still arrive and
                 // carry no prices, so the phase saw a stream and no quote.
-                exchange: tick_fallback().2.into(), sec_type: tick_fallback().1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+                exchange: ALWAYS_QUOTING.2.into(), sec_type: ALWAYS_QUOTING.1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join2 = run_hot_loop(hot_loop2);
 
-    let deadline2 = Instant::now() + Duration::from_secs(15);
-    let mut got_ticks_after = false;
-    while Instant::now() < deadline2 {
-        if let Ok(Event::Tick(inst)) = event_rx2.recv_timeout(Duration::from_millis(100)) {
-            let q = shared2.market.quote(inst);
-            println!(
-                "  Step 2: Tick after reconnect bid={:.5} ask={:.5}",
-                q.bid as f64 / PRICE_SCALE as f64,
-                q.ask as f64 / PRICE_SCALE as f64
-            );
-            got_ticks_after = true;
-            break;
-        }
-    }
+    let after = quoted_tick(&event_rx2, &shared2, Duration::from_secs(15));
 
     let conns2 = shutdown_and_reclaim(&control_tx2, join2, conns1.account_id);
 
-    assert!(
-        got_ticks_after,
-        "Should receive forex ticks after reconnection"
-    );
+    let (bid, ask) = after.unwrap_or_else(|| {
+        panic!("no quote for {} after reconnecting", ALWAYS_QUOTING.0)
+    });
+    println!("  Step 2: quote after reconnect bid={bid:.5} ask={ask:.5}");
     println!("  PASS\n");
     conns2
 }
