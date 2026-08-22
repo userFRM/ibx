@@ -103,6 +103,12 @@ pub fn next_after_last(path: &Path, key: &str) -> u64 {
 pub fn remember(path: &Path, key: &str, id: u64) -> io::Result<()> {
     let mut kept = read_all(path);
     match kept.get(key) {
+        // A mark too wide to ask a request under is not a mark to hold to. Left
+        // standing it refuses every id that follows, because remembering only
+        // moves forward — so nothing counting on from the clock is ever
+        // written down, and two sessions starting in the same second are given
+        // the same number for their first order.
+        Some(last) if *last >= WIDEST_A_REQUEST_CARRIES => kept.insert(key.to_string(), id),
         Some(last) if *last >= id => return Ok(()),
         _ => kept.insert(key.to_string(), id),
     };
@@ -212,6 +218,32 @@ mod tests {
             "a session started at {start}, which no request it makes can state",
         );
         assert!(start > 1_700_000_000, "and it is still the clock, not one");
+    }
+
+    /// And a session that found one carries on from where it restarted.
+    ///
+    /// Stepping around the mark was not enough: it stayed, and remembering
+    /// only moves forward, so every id counted from the clock was refused as
+    /// lower and nothing was written down. Two sessions starting in the same
+    /// second were handed the same number for their first order, which is the
+    /// one thing this file exists to prevent.
+    #[test]
+    fn a_session_after_a_too_wide_mark_does_not_repeat_itself() {
+        let path = scratch("after-too-wide");
+        let key = "someone";
+        remember(&path, key, 1_787_352_716_770_078).unwrap();
+
+        // One session starts, takes an id and records it.
+        let first = next_after_last(&path, key);
+        remember(&path, key, first).unwrap();
+        assert_eq!(last_used(&path, key), Some(first), "the id it used went unrecorded");
+
+        // The next starts in the same second and must not be given that id.
+        let second = next_after_last(&path, key);
+        assert!(
+            second > first,
+            "two sessions were handed {first}, so both numbered an order the same",
+        );
     }
 
     /// One inside the width is handed on as before.
