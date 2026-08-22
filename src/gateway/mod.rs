@@ -176,7 +176,13 @@ const COMPETING_READ_ONLY: &str = "(RO)";
 /// it names a backup host without being asked, and ending the connection over
 /// one gives up on a venue that has not refused anything. What is not read
 /// past is what means something: an error is surfaced with its words, and a
-/// retarget is reported so it can be followed rather than lost.
+/// retarget ends the attempt naming where it was sent instead.
+///
+/// Naming it is as far as this goes. Following one is done where the venue
+/// issues them, which is after the connect request has said which account is
+/// asking — by then it knows enough to send you elsewhere. One arriving before
+/// that is reported and the attempt ends, rather than being read past and
+/// waited out against a host that has already answered.
 ///
 /// Bounded by the clock the auth socket is already given. The socket's own
 /// timeout ends a venue that goes quiet; this ends one that keeps talking

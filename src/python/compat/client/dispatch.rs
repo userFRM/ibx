@@ -77,6 +77,12 @@ impl EClient {
             // recovery the engine was in the middle of.
             if shared.reference.session_over().is_some() {
                 self.session_ended.store(true, Ordering::Release);
+                // A question kept for a model belongs to the session that
+                // asked it, and this session is finished. `connect()` may be
+                // called again without `disconnect()`, so a question left here
+                // would be answered in the next one under a request id nobody
+                // there ever used.
+                self.pending_option_calcs.lock().unwrap().clear();
             }
             call_wrapper!(self.wrapper, py, "error", (-1i64, 1100i64, "Connectivity between client and server has been lost", ""));
         }
