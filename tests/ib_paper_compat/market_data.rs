@@ -5,7 +5,7 @@ use ibx::control::contracts;
 use ibx::protocol::fix;
 
 pub(super) fn phase_market_data(conns: Conns) -> Conns {
-    println!("--- Phase 2: Market Data Ticks (AAPL) ---");
+    phase!("--- Phase 2: Market Data Ticks (AAPL) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -71,7 +71,7 @@ pub(super) fn phase_market_data(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
-    println!("--- Phase 3: Multi-Instrument Subscription (AAPL+MSFT+SPY) ---");
+    phase!("--- Phase 3: Multi-Instrument Subscription (AAPL+MSFT+SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -156,7 +156,7 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
-    println!("--- Phase 16: Subscribe + Unsubscribe Cleanup ---");
+    phase!("--- Phase 16: Subscribe + Unsubscribe Cleanup ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -241,7 +241,7 @@ pub(super) fn phase_subscribe_unsubscribe(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_market_depth(conns: Conns) -> Conns {
-    println!("--- Phase 130: Market Depth Subscribe/Unsubscribe (SPY) ---");
+    phase!("--- Phase 130: Market Depth Subscribe/Unsubscribe (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -327,7 +327,7 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
             .or_else(|| shared.reference.take_error_for(req_id));
         match refused {
             Some((code, why)) => {
-                println!("  SKIP: the venue will not serve this book: {why} ({code})\n");
+                skipped!("  SKIP: the venue will not serve this book: {why} ({code})\n");
             }
             None => no_market(&shared, "no depth updates and no refusal either"),
         }
@@ -338,7 +338,7 @@ pub(super) fn phase_market_depth(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_news_ticks(conns: Conns) -> Conns {
-    println!("--- Phase 131: News Tick Subscribe/Unsubscribe (AAPL) ---");
+    phase!("--- Phase 131: News Tick Subscribe/Unsubscribe (AAPL) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -376,7 +376,7 @@ pub(super) fn phase_news_ticks(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
     if news_events == 0 && drained_news.is_empty() {
-        println!("  SKIP: No tick news in 8s (normal if no live headlines)\n");
+        skipped!("  SKIP: No tick news in 8s (normal if no live headlines)\n");
     } else {
         println!(
             "  PASS ({} event news, {} drained headlines)\n",
@@ -388,7 +388,7 @@ pub(super) fn phase_news_ticks(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
-    println!("--- Phase 61: Tick-by-Tick Data (SPY via HMDS) ---");
+    phase!("--- Phase 61: Tick-by-Tick Data (SPY via HMDS) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -463,7 +463,7 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
-    println!("--- Phase 102: Streaming Data Validation (SPY tick quality) ---");
+    phase!("--- Phase 102: Streaming Data Validation (SPY tick quality) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -555,7 +555,7 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
 
 pub(super) fn phase_fallback_market_data(conns: Conns) -> Conns {
     let (symbol, sec_type, exchange) = ALWAYS_QUOTING;
-    println!("--- Phase 107: Fallback Market Data Ticks ({symbol} on {exchange} — session-independent) ---");
+    phase!("--- Phase 107: Fallback Market Data Ticks ({symbol} on {exchange} — session-independent) ---");
 
     // Look up the contract first
     let now = ibx::protocol::datetime::chrono_free_timestamp();
@@ -695,13 +695,13 @@ pub(super) fn phase_fallback_market_data(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_fallback_streaming_validation(conns: Conns) -> Conns {
-    println!("--- Phase 108: Fallback Streaming Validation ({} — session-independent) ---", ALWAYS_QUOTING.0);
+    phase!("--- Phase 108: Fallback Streaming Validation ({} — session-independent) ---", ALWAYS_QUOTING.0);
 
     // As the venue named it, in the phase before this one. Written in here, a
     // contract id that had changed or that this account sees differently read
     // as a subscription that produced nothing.
     let Some(&con_id) = FALLBACK_CON_ID.get() else {
-        println!("  SKIP: the phase that asks the venue for {} did not name it\n", ALWAYS_QUOTING.0);
+        skipped!("  SKIP: the phase that asks the venue for {} did not name it\n", ALWAYS_QUOTING.0);
         return conns;
     };
 
@@ -736,6 +736,11 @@ pub(super) fn phase_fallback_streaming_validation(conns: Conns) -> Conns {
     // delivers ticks that carry no price, and a spread read off those is a
     // spread this phase never saw.
     let mut quoted = 0u32;
+    // How many of those quotes differed. A tick carries no price of its own —
+    // the book is read from the cache beside it — so counting ticks alone says
+    // a stream is alive without saying the book under it moved. Reported, not
+    // asserted: a book can legitimately stand still for the length of a phase.
+    let mut distinct: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
     let mut spread_valid = true;
 
     while Instant::now() < deadline {
@@ -747,6 +752,7 @@ pub(super) fn phase_fallback_streaming_validation(conns: Conns) -> Conns {
 
             if q.bid > 0 && q.ask > 0 {
                 quoted += 1;
+                distinct.insert((q.bid, q.ask));
                 if q.ask < q.bid {
                     spread_valid = false;
                     println!("  WARNING: Crossed spread bid={bid:.5} ask={ask:.5}");
@@ -767,7 +773,10 @@ pub(super) fn phase_fallback_streaming_validation(conns: Conns) -> Conns {
          so the spread this phase validates was never read"
     );
     assert!(spread_valid, "Spread should not be crossed");
-    println!("  {quoted} quoted of {tick_count} ticks, spread_valid={spread_valid}");
+    println!(
+        "  {quoted} quoted of {tick_count} ticks, {} of them distinct, spread_valid={spread_valid}",
+        distinct.len(),
+    );
     println!("  PASS\n");
     conns
 }
@@ -800,13 +809,13 @@ pub(super) fn phase_fallback_resubscribe(conns: Conns) -> Conns {
     // the transports themselves: what this shows is that a session built over
     // them subscribes again and is quoted again. Losing and rebuilding the
     // connections is phase 105's, and the farm reconnect suite's.
-    println!("--- Phase 109: Fallback Resubscribe Under A New Session ({} — session-independent) ---", ALWAYS_QUOTING.0);
+    phase!("--- Phase 109: Fallback Resubscribe Under A New Session ({} — session-independent) ---", ALWAYS_QUOTING.0);
 
     // As the venue named it, in the phase before this one. Written in here, a
     // contract id that had changed or that this account sees differently read
     // as a subscription that produced nothing.
     let Some(&con_id) = FALLBACK_CON_ID.get() else {
-        println!("  SKIP: the phase that asks the venue for {} did not name it\n", ALWAYS_QUOTING.0);
+        skipped!("  SKIP: the phase that asks the venue for {} did not name it\n", ALWAYS_QUOTING.0);
         return conns;
     };
 
@@ -889,7 +898,7 @@ pub(super) fn phase_fallback_resubscribe(conns: Conns) -> Conns {
 // ─── Phase 110: High-frequency tick stress test ───
 
 pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
-    println!("--- Phase 110: High-Frequency Tick Stress Test (SPY+AAPL+MSFT, 30s) ---");
+    phase!("--- Phase 110: High-Frequency Tick Stress Test (SPY+AAPL+MSFT, 30s) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -988,7 +997,7 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
 // ─── Phase 126: TBT Subscribe + Unsubscribe lifecycle ───
 
 pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
-    println!("--- Phase 126: TBT Subscribe + Unsubscribe (SPY via HMDS) ---");
+    phase!("--- Phase 126: TBT Subscribe + Unsubscribe (SPY via HMDS) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1083,7 +1092,7 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
 // ─── Phase 128: TBT + Regular Quotes Dual Stream ───
 
 pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
-    println!("--- Phase 128: TBT + Regular Quotes Dual Stream (SPY) ---");
+    phase!("--- Phase 128: TBT + Regular Quotes Dual Stream (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1181,9 +1190,9 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
     if got_tick && got_tbt {
         println!("  PASS (both streams active simultaneously)\n");
     } else if got_tick {
-        println!("  SKIP: regular ticks only — nothing came on tick-by-tick to run beside them\n");
+        skipped!("  SKIP: regular ticks only — nothing came on tick-by-tick to run beside them\n");
     } else {
-        println!("  SKIP: tick-by-tick only — no regular ticks to run beside it\n");
+        skipped!("  SKIP: tick-by-tick only — no regular ticks to run beside it\n");
     }
     conns
 }
@@ -1191,7 +1200,7 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
 // ─── Phase 129: Concurrent Subscribe Stress (10 instruments) ───
 
 pub(super) fn phase_concurrent_subscribe_stress(conns: Conns) -> Conns {
-    println!("--- Phase 129: Concurrent Subscribe Stress (10 instruments, 20s) ---");
+    phase!("--- Phase 129: Concurrent Subscribe Stress (10 instruments, 20s) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());

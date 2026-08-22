@@ -5,7 +5,7 @@ use super::common::*;
 // ─── Phase 6: Market order round-trip ───
 
 pub(super) fn phase_market_order(conns: Conns) -> Conns {
-    println!("--- Phase 6: Market Order Round-Trip (SPY) ---");
+    phase!("--- Phase 6: Market Order Round-Trip (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -77,12 +77,12 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if uncertain {
         super::common::note_lost_session("an order's state after the session went away");
-        println!("  SKIP: the connection went away with the order on it, so its state is not known\n");
+        skipped!("  SKIP: the connection went away with the order on it, so its state is not known\n");
         return conns;
     }
     if buy_price == 0 {
@@ -108,7 +108,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
 // ─── Phase 7: Limit order submit + cancel ───
 
 pub(super) fn phase_limit_order(conns: Conns) -> Conns {
-    println!("--- Phase 7: Limit Order Submit + Cancel (SPY) ---");
+    phase!("--- Phase 7: Limit Order Submit + Cancel (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -186,7 +186,7 @@ pub(super) fn phase_limit_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
 
@@ -213,7 +213,7 @@ pub(super) fn phase_stop_order(conns: Conns) -> Conns {
 // ─── Phase 9: Order modify (35=G) ───
 
 pub(super) fn phase_modify_order(conns: Conns) -> Conns {
-    println!("--- Phase 9: Order Modify (35=G) + Cancel (SPY) ---");
+    phase!("--- Phase 9: Order Modify (35=G) + Cancel (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -270,7 +270,7 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Modify test rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Modify test rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(order_acked) { return conns; }
@@ -303,7 +303,7 @@ pub(super) fn phase_stop_limit_order(conns: Conns) -> Conns {
 // ─── Phase 17: Commission tracking ───
 
 pub(super) fn phase_commission(conns: Conns) -> Conns {
-    println!("--- Phase 17: Commission Tracking (GTC+OutsideRTH fill) ---");
+    phase!("--- Phase 17: Commission Tracking (GTC+OutsideRTH fill) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -363,12 +363,12 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if uncertain {
         super::common::note_lost_session("an order's state after the session went away");
-        println!("  SKIP: the connection went away with the order on it, so its state is not known\n");
+        skipped!("  SKIP: the connection went away with the order on it, so its state is not known\n");
         return conns;
     }
     // With no socket the engine holds an order for the reconnect rather than
@@ -378,7 +378,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     // connection, not the market.
     if super::common::lost_unasked(&shared) {
         super::common::note_lost_session("an order left waiting when the session went away");
-        println!("  SKIP: the trading connection was lost, so the order is still waiting to be sent\n");
+        skipped!("  SKIP: the trading connection was lost, so the order is still waiting to be sent\n");
         return conns;
     }
     if buy_price == 0 {
@@ -406,7 +406,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
 // ─── Phase 10b: Outside RTH GTC Stop ───
 
 pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
-    println!("--- Phase 10b: Outside RTH GTC Stop Order (SPY) ---");
+    phase!("--- Phase 10b: Outside RTH GTC Stop Order (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -457,7 +457,7 @@ pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: GTC stop outside RTH rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: GTC stop outside RTH rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(order_acked) { return conns; }
@@ -470,7 +470,7 @@ pub(super) fn phase_outside_rth_stop(conns: Conns) -> Conns {
 // ─── Phase 9b: Modify Order Qty ───
 
 pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
-    println!("--- Phase 9b: Order Modify Qty (SPY) ---");
+    phase!("--- Phase 9b: Order Modify Qty (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -527,7 +527,7 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Modify qty test rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Modify qty test rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(order_acked) { return conns; }
@@ -560,7 +560,7 @@ pub(super) fn phase_trailing_stop_limit(conns: Conns) -> Conns {
 // ─── Phase 21: Limit IOC ───
 
 pub(super) fn phase_limit_ioc(conns: Conns) -> Conns {
-    println!("--- Phase 21: Limit IOC Order (SPY) ---");
+    phase!("--- Phase 21: Limit IOC Order (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -597,7 +597,7 @@ pub(super) fn phase_limit_ioc(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: IOC order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: IOC order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     assert!(order_cancelled, "IOC order was not cancelled (should expire immediately at $1)");
@@ -608,7 +608,7 @@ pub(super) fn phase_limit_ioc(conns: Conns) -> Conns {
 // ─── Phase 22: Limit FOK ───
 
 pub(super) fn phase_limit_fok(conns: Conns) -> Conns {
-    println!("--- Phase 22: Limit FOK Order (SPY) ---");
+    phase!("--- Phase 22: Limit FOK Order (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -723,7 +723,7 @@ pub(super) fn phase_loc_order(conns: Conns) -> Conns {
 // ─── Phase 29: Bracket Order ───
 
 pub(super) fn phase_bracket_order(conns: Conns) -> Conns {
-    println!("--- Phase 29: Bracket Order (SPY) ---");
+    phase!("--- Phase 29: Bracket Order (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -777,7 +777,7 @@ pub(super) fn phase_bracket_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Bracket order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Bracket order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(parent_acked) { return conns; }
@@ -884,7 +884,7 @@ pub(super) fn phase_trailing_stop_pct(conns: Conns) -> Conns {
 // ─── Phase 37: OCA Group ───
 
 pub(super) fn phase_oca_group(conns: Conns) -> Conns {
-    println!("--- Phase 37: OCA Group (SPY) ---");
+    phase!("--- Phase 37: OCA Group (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -944,7 +944,7 @@ pub(super) fn phase_oca_group(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: OCA order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: OCA order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(order1_acked && order2_acked) { return conns; }
@@ -1243,7 +1243,7 @@ pub(super) fn phase_box_top_order(conns: Conns) -> Conns {
 // ─── Phase 72: What-If Order ───
 
 pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
-    println!("--- Phase 72: What-If Order (SPY) ---");
+    phase!("--- Phase 72: What-If Order (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1337,7 +1337,7 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
 // ─── Phase 73: Cash Quantity Order ───
 
 pub(super) fn phase_cash_qty_order(conns: Conns) -> Conns {
-    println!("--- Phase 73: Cash Quantity Order (SPY) ---");
+    phase!("--- Phase 73: Cash Quantity Order (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1387,7 +1387,7 @@ pub(super) fn phase_cash_qty_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Cash qty rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Cash qty rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(order_acked) { return conns; }
@@ -1400,7 +1400,7 @@ pub(super) fn phase_cash_qty_order(conns: Conns) -> Conns {
 // ─── Phase 74: Fractional Shares Order ───
 
 pub(super) fn phase_fractional_order(conns: Conns) -> Conns {
-    println!("--- Phase 74: Fractional Shares Order (SPY) ---");
+    phase!("--- Phase 74: Fractional Shares Order (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1450,7 +1450,7 @@ pub(super) fn phase_fractional_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Fractional rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Fractional rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(order_acked) { return conns; }
@@ -1479,7 +1479,7 @@ pub(super) fn phase_adjustable_stop_order(conns: Conns) -> Conns {
 // ─── Phase 51: Bracket Fill Cascade ───
 
 pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
-    println!("--- Phase 51: Bracket Fill Cascade (SPY) ---");
+    phase!("--- Phase 51: Bracket Fill Cascade (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1576,7 +1576,7 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Bracket fill cascade rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Bracket fill cascade rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     println!("  Entry filled: {entry_filled}, TP active: {tp_active}, SL active: {sl_active}");
@@ -1601,7 +1601,7 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
 // ─── Phase 52: PnL After Round Trip ───
 
 pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
-    println!("--- Phase 52: PnL After Round Trip (SPY) ---");
+    phase!("--- Phase 52: PnL After Round Trip (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1674,7 +1674,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
-    if let Some(id) = rejected_order { println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id)); return conns; }
+    if let Some(id) = rejected_order { skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id)); return conns; }
     if !buy_filled { no_market(&shared, "no fill"); return conns; }
 
     println!("  Buy filled: {buy_filled}, Sell filled: {sell_filled}");
@@ -1690,7 +1690,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
 // ─── Phase 87: CancelReject Event path ───
 
 pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
-    println!("--- Phase 87: CancelReject Event (bogus order cancel) ---");
+    phase!("--- Phase 87: CancelReject Event (bogus order cancel) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1747,14 +1747,14 @@ pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !order_acked {
-        println!("  SKIP: Order never acknowledged\n");
+        skipped!("  SKIP: Order never acknowledged\n");
         return conns;
     }
     if got_reject {
         println!("  PASS\n");
     } else {
         // CancelReject may not be emitted if IB silently ignores the second cancel
-        println!("  SKIP: No CancelReject received (IB may silently ignore duplicate cancel)\n");
+        skipped!("  SKIP: No CancelReject received (IB may silently ignore duplicate cancel)\n");
     }
     conns
 }
@@ -1767,7 +1767,7 @@ pub(super) fn phase_cancel_reject(conns: Conns) -> Conns {
 // connection this phase inherits after 112 phases have used it. Do not re-chase
 // it as an order-path defect until the shared-connection state is ruled out.
 pub(super) fn phase_rapid_order_dedup(conns: Conns) -> Conns {
-    println!("--- Phase 113: Rapid Order Submission + Dedup (5 orders, SPY) ---");
+    phase!("--- Phase 113: Rapid Order Submission + Dedup (5 orders, SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1834,7 +1834,7 @@ pub(super) fn phase_rapid_order_dedup(conns: Conns) -> Conns {
         acked.len(), cancelled.len(), rejected.len(), duplicate_acks);
 
     if rejected.len() == order_ids.len() {
-        println!("  SKIP: All orders rejected — {}\n", reject_reason(&shared, order_ids[0]));
+        skipped!("  SKIP: All orders rejected — {}\n", reject_reason(&shared, order_ids[0]));
         return conns;
     }
 
@@ -1848,7 +1848,7 @@ pub(super) fn phase_rapid_order_dedup(conns: Conns) -> Conns {
 // ─── Phase 115: Modify both price and qty simultaneously ───
 
 pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
-    println!("--- Phase 115: Modify Price + Qty Simultaneously (SPY) ---");
+    phase!("--- Phase 115: Modify Price + Qty Simultaneously (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1907,7 +1907,7 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(order_acked) { return conns; }
@@ -1922,7 +1922,7 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
 // ─── Phase 116: Double modify chain ───
 
 pub(super) fn phase_double_modify(conns: Conns) -> Conns {
-    println!("--- Phase 116: Double Modify Chain (SPY: $1→$2→$3) ---");
+    phase!("--- Phase 116: Double Modify Chain (SPY: $1→$2→$3) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1988,7 +1988,7 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(phase >= 3) { return conns; }
@@ -2001,7 +2001,7 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
 // ─── Phase 117: Cancel during modify (race condition) ───
 
 pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
-    println!("--- Phase 117: Cancel During Modify (race condition, SPY) ---");
+    phase!("--- Phase 117: Cancel During Modify (race condition, SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -2065,7 +2065,7 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(order_acked) { return conns; }
@@ -2079,7 +2079,7 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
 // ─── Phase 123: Global Cancel (CancelAll — emergency kill switch) ───
 
 pub(super) fn phase_global_cancel(conns: Conns) -> Conns {
-    println!("--- Phase 123: Global Cancel (3 orders → CancelAll) ---");
+    phase!("--- Phase 123: Global Cancel (3 orders → CancelAll) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -2136,7 +2136,7 @@ pub(super) fn phase_global_cancel(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if skip_unacked_if_closed(cancel_all_sent) { return conns; }
@@ -2150,7 +2150,7 @@ pub(super) fn phase_global_cancel(conns: Conns) -> Conns {
 // ─── Phase 124: Cancel Filled Order (expect CancelReject) ───
 
 pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
-    println!("--- Phase 124: Cancel Filled Order (expect CancelReject) ---");
+    phase!("--- Phase 124: Cancel Filled Order (expect CancelReject) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -2237,7 +2237,7 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if let Some(id) = rejected_order {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, id));
         return conns;
     }
     if phase < 2 {

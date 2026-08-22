@@ -4,7 +4,7 @@ use super::common::*;
 use ibx::control::contracts;
 
 pub(super) fn phase_contract_details(conns: Conns) -> Conns {
-    println!("--- Phase 12: Contract Details Lookup (SPY, conId=756733) ---");
+    phase!("--- Phase 12: Contract Details Lookup (SPY, conId=756733) ---");
 
     // Step 1: Create HotLoop with real connections
     let account_id = conns.account_id;
@@ -87,7 +87,7 @@ pub(super) fn phase_contract_details(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_contract_details_by_symbol(conns: Conns) -> Conns {
-    println!("--- Phase 78: Contract Details by Symbol Search (AAPL) ---");
+    phase!("--- Phase 78: Contract Details by Symbol Search (AAPL) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -135,7 +135,7 @@ pub(super) fn phase_contract_details_by_symbol(conns: Conns) -> Conns {
 /// What a caller can see is what is checked now: ask for the contract, and the
 /// hours, the liquid hours and the time zone are on the answer.
 pub(super) fn phase_trading_hours(conns: Conns) -> Conns {
-    println!("--- Phase 80: Trading Hours (AAPL) ---");
+    phase!("--- Phase 80: Trading Hours (AAPL) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -185,7 +185,7 @@ pub(super) fn phase_trading_hours(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_matching_symbols(conns: Conns) -> Conns {
-    println!("--- Phase 81: Matching Symbols Search (pattern=\"SPY\") ---");
+    phase!("--- Phase 81: Matching Symbols Search (pattern=\"SPY\") ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -236,7 +236,7 @@ pub(super) fn phase_matching_symbols(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_market_rule_id(conns: Conns) -> Conns {
-    println!("--- Phase 84: Market Rule ID (SPY, tag 6031) ---");
+    phase!("--- Phase 84: Market Rule ID (SPY, tag 6031) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -273,7 +273,7 @@ pub(super) fn phase_market_rule_id(conns: Conns) -> Conns {
 // ─── Phase 125: Matching Symbols via ControlCommand channel ───
 
 pub(super) fn phase_matching_symbols_channel(conns: Conns) -> Conns {
-    println!("--- Phase 125: Matching Symbols via Channel (pattern=\"AAPL\") ---");
+    phase!("--- Phase 125: Matching Symbols via Channel (pattern=\"AAPL\") ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -318,7 +318,7 @@ pub(super) fn phase_matching_symbols_channel(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
-    println!("--- Phase 86: Contract Details via Event Channel (SPY) ---");
+    phase!("--- Phase 86: Contract Details via Event Channel (SPY) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -377,7 +377,7 @@ pub(super) fn phase_contract_details_channel(conns: Conns) -> Conns {
     // whether this client reads one.
     if !got_details && shared.take_connection_lost() {
         super::common::note_lost_session("a contract lookup after the session went away");
-        println!("  SKIP: the connection was lost, so nothing could answer\n");
+        skipped!("  SKIP: the connection was lost, so nothing could answer\n");
         return conns;
     }
     assert!(got_details, "Event::ContractDetails not received for SPY");

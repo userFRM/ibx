@@ -266,7 +266,139 @@ pub(super) fn next_order_id() -> OrderId {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64 * 1000;
-    base + (SEQ.fetch_add(1, Ordering::Relaxed) % 1000)
+    let id = base + (SEQ.fetch_add(1, Ordering::Relaxed) % 1000);
+    IDS_THIS_RUN.lock().unwrap().push(id);
+    id
+}
+
+/// How many phases have announced themselves.
+///
+/// Counted as it happens. A total worked out from a hardcoded phase count less
+/// a hardcoded list of expected skips reports a phase that returned early for
+/// any other reason as having run, and drifts from the number of phases in the
+/// file as phases are added to it.
+static PHASES_ANNOUNCED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many of those went on to verify nothing.
+static PHASES_SKIPPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Record that a phase has begun, and its verdict where it states one in the
+/// same breath as its name.
+///
+/// The announcement is read rather than the call site asked to classify itself.
+/// A phase that names itself and skips in one line would otherwise be counted
+/// as having run and never as having skipped, and every new phase would have to
+/// remember which of two macros to reach for.
+pub(super) fn note_phase_announced(announcement: &str) {
+    PHASES_ANNOUNCED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // A new phase, so its verdict is its own.
+    THIS_PHASE_SKIPPED.store(false, std::sync::atomic::Ordering::Relaxed);
+    if states_a_skip(announcement) {
+        note_phase_skipped();
+    }
+}
+
+/// Whether an announcement carries its own verdict.
+///
+/// Separate from the counters so it can be read on its own: what it decides is
+/// the difference between a phase reported as having verified something and one
+/// reported as having declined to.
+fn states_a_skip(announcement: &str) -> bool {
+    announcement.contains("SKIP")
+}
+
+/// Record that a phase declined to verify anything. Called by the `skipped!`
+/// macro.
+///
+/// Counted once for the phase, however many times it says so: a phase that
+/// reports two of its parts missing is one phase that verified less than it
+/// meant to, not two, and counting the lines would report more skips than there
+/// are phases to skip.
+pub(super) fn note_phase_skipped() {
+    let seen = std::sync::atomic::Ordering::Relaxed;
+    if !THIS_PHASE_SKIPPED.swap(true, seen) {
+        PHASES_SKIPPED.fetch_add(1, seen);
+    }
+}
+
+/// Whether the phase being announced now has already said it skipped.
+static THIS_PHASE_SKIPPED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// What has been announced and skipped since this was last called.
+///
+/// Read as a difference because the counters outlive any one test: the focused
+/// phases in this binary run in the same process, and a summary that read the
+/// totals would report their work as the suite's.
+pub(super) fn phase_tally_since_baseline() -> (u32, u32) {
+    let seen = std::sync::atomic::Ordering::Relaxed;
+    let (announced, skipped) = (PHASES_ANNOUNCED.load(seen), PHASES_SKIPPED.load(seen));
+    let (was_announced, was_skipped) = *BASELINE.lock().unwrap();
+    (announced - was_announced, skipped - was_skipped)
+}
+
+/// Start counting from here, so what follows is reported on its own.
+pub(super) fn take_phase_baseline() {
+    let seen = std::sync::atomic::Ordering::Relaxed;
+    *BASELINE.lock().unwrap() = (PHASES_ANNOUNCED.load(seen), PHASES_SKIPPED.load(seen));
+}
+
+static BASELINE: std::sync::Mutex<(u32, u32)> = std::sync::Mutex::new((0, 0));
+
+/// Every order id this run has handed out.
+///
+/// Kept because the venue names what is working only once, unprompted, when a
+/// session opens: a teardown that reuses the session already open is never told
+/// again, so what to withdraw has to be what this run knows it placed. Holding
+/// the ids also keeps the teardown off an order somebody placed by hand on the
+/// same account, which is not in here.
+static IDS_THIS_RUN: std::sync::Mutex<Vec<OrderId>> = std::sync::Mutex::new(Vec::new());
+
+/// Withdraw the orders this run left working.
+///
+/// Phases place orders that rest by design, and the venue caps how many may
+/// rest at once on one side of a contract. Left behind, a later run is refused
+/// on that cap rather than on anything it did, and the refusal reads as a
+/// defect in the order it just built.
+///
+/// Only this run's orders are withdrawn. The venue states what is working when
+/// a session opens, so nothing has to be asked for; what comes back is filtered
+/// against [`FIRST_ID_THIS_RUN`] so an order placed by hand on the same account
+/// is left where it is.
+pub(super) fn withdraw_orders_this_run_left(conns: Conns) -> Conns {
+    let placed: Vec<OrderId> = IDS_THIS_RUN.lock().unwrap().clone();
+    if placed.is_empty() {
+        println!("--- Teardown: no order was placed, so none is left working ---\n");
+        return conns;
+    }
+    println!("--- Teardown: withdrawing the {} orders this run placed ---", placed.len());
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        None,
+        account_id.clone(),
+        conns.farm,
+        conns.ccp,
+        conns.hmds,
+        None,
+    );
+    let join = run_hot_loop(hot_loop);
+
+    // Every one of them, not the ones still working: which are still working is
+    // what the venue states unprompted as a session opens, and this runs on the
+    // session already open. A withdrawal for an order that filled or was
+    // withdrawn already is refused, which costs nothing and is not read here.
+    for order_id in &placed {
+        let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: *order_id }));
+    }
+    // Long enough for the last of them to leave, since shutting the loop down
+    // with sends still queued would drop them.
+    std::thread::sleep(Duration::from_secs(10));
+    println!("  {} asked to withdraw\n", placed.len());
+
+    shutdown_and_reclaim(&control_tx, join, account_id)
 }
 
 /// Rebuild the trading connection on the session already open, whatever state
@@ -644,7 +776,7 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
     }
     let session = market_session().0;
     if session != MarketSession::Regular {
-        println!(
+        skipped!(
             "  SKIP: {session:?} — order not acknowledged (order type/venue needs a live market)\n",
         );
         return true;
@@ -691,7 +823,7 @@ pub(super) fn london_is_trading() -> bool {
 /// and words so the log says which request was refused and for what.
 pub(super) fn historical_silence(shared: &SharedState, what: &str) {
     if let Some((_, code, message)) = shared.reference.drain_historical_errors().first() {
-        println!("  SKIP: {what} — the venue refused it, {code}: {message}\n");
+        skipped!("  SKIP: {what} — the venue refused it, {code}: {message}\n");
         return;
     }
     panic!(
@@ -753,8 +885,9 @@ pub(super) fn no_phase_lost_the_session_unasked() {
     assert!(
         lost.is_empty(),
         "the session went away during the run and no phase asked it to, so \
-         {} phase(s) reported SKIP having verified nothing: {}. The phase \
-         count above counts them as run. Diagnose the disconnect rather than \
+         {} phase(s) reported SKIP having verified nothing: {}. The count above \
+         reports them among the phases that verified nothing, which is not the \
+         same as the market being shut. Diagnose the disconnect rather than \
          reading this suite as green.",
         lost.len(),
         lost.join("; "),
@@ -771,7 +904,7 @@ pub(super) fn session_owed(shared: &SharedState, what: &str) {
     // explains the absence, and explains it better than the rule does.
     if lost_unasked(shared) {
         note_lost_session(what);
-        println!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
+        skipped!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
         return;
     }
     panic!("{what} — the session delivers this whether or not the market is trading.");
@@ -819,7 +952,7 @@ pub(super) fn no_market(shared: &SharedState, what: &str) {
     // is certainly false.
     if lost_unasked(shared) {
         note_lost_session(what);
-        println!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
+        skipped!("  SKIP: {what} — the connection was lost, so nothing could arrive\n");
         return;
     }
     let (session, _) = market_session();
@@ -828,7 +961,7 @@ pub(super) fn no_market(shared: &SharedState, what: &str) {
         "{what} — during regular hours, so this is not a quiet market. \
          The client did not get what it asked for."
     );
-    println!("  SKIP: {session:?} — {what}\n");
+    skipped!("  SKIP: {session:?} — {what}\n");
 }
 
 /// Reasons a rejection is about the market or the account rather than the
@@ -932,7 +1065,7 @@ pub(super) fn run_submit_cancel_phase(
     order_req: OrderRequest,
     fill_or_cancel: bool,
 ) -> Conns {
-    println!("--- {phase_name} ---");
+    phase!("--- {phase_name} ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1045,11 +1178,11 @@ pub(super) fn run_submit_cancel_phase(
     }
 
     if order_rejected {
-        println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, order_id));
+        skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, order_id));
         return conns;
     }
     if order_inactive {
-        println!("  SKIP: parked Inactive — the venue does not accept this order type here\n");
+        skipped!("  SKIP: parked Inactive — the venue does not accept this order type here\n");
         return conns;
     }
     if fill_or_cancel {
@@ -1061,7 +1194,7 @@ pub(super) fn run_submit_cancel_phase(
         let (session, _) = market_session();
         if session != MarketSession::Regular && !(order_filled || order_cancelled) {
             let state = if order_acked { "acknowledged and resting" } else { "not acknowledged" };
-            println!("  SKIP: {session:?} — {state}; filling needs a live market\n");
+            skipped!("  SKIP: {session:?} — {state}; filling needs a live market\n");
             return conns;
         }
         // Say what was seen, not only what was not. "Neither filled nor
@@ -1097,9 +1230,9 @@ pub(super) fn run_submit_cancel_phase(
             // message comes back refused, with the field named.
             let (session, _) = market_session();
             if session == MarketSession::Regular {
-                println!("  SKIP: no answer — the venue neither took nor refused this order type here\n");
+                skipped!("  SKIP: no answer — the venue neither took nor refused this order type here\n");
             } else {
-                println!("  SKIP: {session:?} — not acknowledged (this order type needs a live market)\n");
+                skipped!("  SKIP: {session:?} — not acknowledged (this order type needs a live market)\n");
             }
             return conns;
         }
@@ -1275,5 +1408,42 @@ mod holiday_tests {
     #[test]
     fn normal_trading_day_is_open() {
         assert_eq!(kind(2026, 7, 8), Holiday::Open); // ordinary Wednesday
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::states_a_skip;
+
+    /// A phase that names itself and declines in one line is both, and one that
+    /// only names itself is neither. Read off the announcement, so a phase
+    /// added later cannot be counted wrongly by reaching for the wrong macro.
+    /// A phase that reports two of its parts missing skipped once. Counting
+    /// the lines would report more skips than there are phases to skip.
+    ///
+    /// The baseline is retaken here and the suite retakes its own when it
+    /// starts, so this leaves nothing behind for the summary to read.
+    #[test]
+    fn a_phase_saying_it_skipped_twice_is_counted_once() {
+        super::take_phase_baseline();
+        super::note_phase_announced("--- Phase 95: Scanner ---");
+        super::note_phase_skipped();
+        super::note_phase_skipped();
+        assert_eq!(super::phase_tally_since_baseline(), (1, 1));
+
+        super::note_phase_announced("--- Phase 96: Something else ---");
+        assert_eq!(
+            super::phase_tally_since_baseline(),
+            (2, 1),
+            "announcing a phase counted a skip it did not report",
+        );
+    }
+
+    #[test]
+    fn an_announcement_is_read_for_its_own_verdict() {
+        assert!(states_a_skip("--- Phase 2: Market Data Ticks ---\n  SKIP: Closed — no ticks\n"));
+        assert!(states_a_skip("  SKIP: no sterling listing came back"));
+        assert!(!states_a_skip("--- Phase 2: Market Data Ticks (AAPL) ---"));
+        assert!(!states_a_skip("--- Phase 123: Global Cancel (3 orders) ---"));
     }
 }

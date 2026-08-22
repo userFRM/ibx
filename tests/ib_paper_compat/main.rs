@@ -19,6 +19,26 @@
 //! Is why the digits are not grouped in threes.
 #![allow(clippy::inconsistent_digit_grouping)]
 
+/// Announce a phase and count it.
+///
+/// Every phase header goes through this so the closing summary states what ran
+/// rather than what was expected to run.
+macro_rules! phase {
+    ($($arg:tt)*) => {{
+        let announcement = format!($($arg)*);
+        crate::common::note_phase_announced(&announcement);
+        println!("{announcement}");
+    }};
+}
+
+/// Announce that a phase verified nothing, and count that too.
+macro_rules! skipped {
+    ($($arg:tt)*) => {{
+        crate::common::note_phase_skipped();
+        println!($($arg)*);
+    }};
+}
+
 mod account;
 mod common;
 mod connection;
@@ -75,6 +95,9 @@ fn compat_suite() {
     let needs_ticks = matches!(session, MarketSession::Regular | MarketSession::PreMarket | MarketSession::AfterHours);
     let needs_moc = needs_ticks && et_min < 945;
     println!("=== Compatibility Suite (session={session:?}) ===\n");
+    // From here, so the focused phases in this binary are not counted as this
+    // suite's work when one of them runs first in the same process.
+    common::take_phase_baseline();
     let suite_start = Instant::now();
 
     let start = Instant::now();
@@ -94,7 +117,7 @@ fn compat_suite() {
     };
 
     if needs_ticks {
-        println!("--- RAW SUBSCRIBE TEST ---");
+        phase!("--- RAW SUBSCRIBE TEST ---");
         let conn = &mut conns.farm;
         let result = conn.send_fixcomp(&[
             (fix::TAG_MSG_TYPE, "V"),
@@ -179,7 +202,7 @@ fn compat_suite() {
         }
         println!();
     } else {
-        println!("--- RAW SUBSCRIBE TEST ---\n  SKIP: {session:?} — no ticks expected\n");
+        phase!("--- RAW SUBSCRIBE TEST ---\n  SKIP: {session:?} — no ticks expected\n");
     }
 
     conns = account::phase_account_pnl(conns);
@@ -192,7 +215,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = account::phase_enriched_exec_details(conns);
     } else {
-        println!("--- Phase 133: Enriched exec_details ---\n  SKIP: {session:?} — needs fills\n");
+        phase!("--- Phase 133: Enriched exec_details ---\n  SKIP: {session:?} — needs fills\n");
     }
     conns = account::phase_pnl_subscription(conns);
     conns = account::phase_pnl_subscribe_command(conns);
@@ -229,9 +252,9 @@ fn compat_suite() {
         conns = market_data::phase_multi_instrument(conns);
         conns = account::phase_account_data(conns);
     } else {
-        println!("--- Phase 2: Market Data Ticks (AAPL) ---\n  SKIP: {session:?} — no ticks expected\n");
-        println!("--- Phase 3: Multi-Instrument Subscription (AAPL+MSFT+SPY) ---\n  SKIP: {session:?} — no ticks expected\n");
-        println!("--- Phase 4: Account Data Reception ---\n  SKIP: {session:?} — needs ticks to trigger\n");
+        phase!("--- Phase 2: Market Data Ticks (AAPL) ---\n  SKIP: {session:?} — no ticks expected\n");
+        phase!("--- Phase 3: Multi-Instrument Subscription (AAPL+MSFT+SPY) ---\n  SKIP: {session:?} — no ticks expected\n");
+        phase!("--- Phase 4: Account Data Reception ---\n  SKIP: {session:?} — needs ticks to trigger\n");
     }
 
     conns = orders::phase_outside_rth(conns);
@@ -293,15 +316,15 @@ fn compat_suite() {
     if needs_ticks && conns.hmds.is_some() {
         conns = market_data::phase_tbt_subscribe(conns);
     } else {
-        println!("--- Phase 61: Tick-by-Tick Data (SPY) ---\n  SKIP: needs ticks+HMDS\n");
+        phase!("--- Phase 61: Tick-by-Tick Data (SPY) ---\n  SKIP: needs ticks+HMDS\n");
     }
 
     if needs_moc {
         conns = orders::phase_moc_order(conns);
         conns = orders::phase_loc_order(conns);
     } else {
-        println!("--- Phase 27: MOC Order (SPY) ---\n  SKIP: {session:?} et_min={et_min} — only before 3:45 PM ET\n");
-        println!("--- Phase 28: LOC Order (SPY) ---\n  SKIP: {session:?} et_min={et_min} — only before 3:45 PM ET\n");
+        phase!("--- Phase 27: MOC Order (SPY) ---\n  SKIP: {session:?} et_min={et_min} — only before 3:45 PM ET\n");
+        phase!("--- Phase 28: LOC Order (SPY) ---\n  SKIP: {session:?} et_min={et_min} — only before 3:45 PM ET\n");
     }
 
     conns = market_data::phase_subscribe_unsubscribe(conns);
@@ -325,10 +348,10 @@ fn compat_suite() {
         conns = orders::phase_bracket_fill_cascade(conns);
         conns = orders::phase_pnl_after_round_trip(conns);
     } else {
-        println!("--- Phase 6: Market Order Round-Trip (SPY) ---\n  SKIP: {session:?} — needs ticks+fills\n");
-        println!("--- Phase 17: Commission Tracking (GTC+OutsideRTH fill) ---\n  SKIP: {session:?} — needs fills\n");
-        println!("--- Phase 51: Bracket Fill Cascade (SPY) ---\n  SKIP: {session:?} — needs fills\n");
-        println!("--- Phase 52: PnL After Round Trip (SPY) ---\n  SKIP: {session:?} — needs fills\n");
+        phase!("--- Phase 6: Market Order Round-Trip (SPY) ---\n  SKIP: {session:?} — needs ticks+fills\n");
+        phase!("--- Phase 17: Commission Tracking (GTC+OutsideRTH fill) ---\n  SKIP: {session:?} — needs fills\n");
+        phase!("--- Phase 51: Bracket Fill Cascade (SPY) ---\n  SKIP: {session:?} — needs fills\n");
+        phase!("--- Phase 52: PnL After Round Trip (SPY) ---\n  SKIP: {session:?} — needs fills\n");
     }
 
     // CCP may have died during the long-running fill phases. Reconnect the full
@@ -348,7 +371,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = account::phase_position_tracking(conns);
     } else {
-        println!("--- Phase 97: Position Tracking (SPY) ---\n  SKIP: {session:?} — needs fills\n");
+        phase!("--- Phase 97: Position Tracking (SPY) ---\n  SKIP: {session:?} — needs fills\n");
     }
     conns = connection::phase_connection_recovery(conns, &gw, &config);
     conns = ensure_ccp_alive(conns, &mut gw, &config);
@@ -362,14 +385,14 @@ fn compat_suite() {
     if needs_ticks {
         conns = market_data::phase_streaming_validation(conns);
     } else {
-        println!("--- Phase 102: Streaming Data Validation (SPY) ---\n  SKIP: {session:?} — needs ticks\n");
+        phase!("--- Phase 102: Streaming Data Validation (SPY) ---\n  SKIP: {session:?} — needs ticks\n");
     }
     conns = historical::phase_historical_ohlc_validation(conns);
     conns = error_handling::phase_ib_error_handling(conns);
     if needs_ticks {
         conns = connection::phase_reconnection_state_recovery(conns, &gw, &config);
     } else {
-        println!("--- Phase 105: Reconnection State Recovery ---\n  SKIP: {session:?} — needs ticks\n");
+        phase!("--- Phase 105: Reconnection State Recovery ---\n  SKIP: {session:?} — needs ticks\n");
     }
     conns = account::phase_account_summary(conns);
 
@@ -377,7 +400,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = market_data::phase_tick_stress_test(conns);
     } else {
-        println!("--- Phase 110: Tick Stress Test (SPY+AAPL+MSFT) ---\n  SKIP: {session:?} — needs ticks\n");
+        phase!("--- Phase 110: Tick Stress Test (SPY+AAPL+MSFT) ---\n  SKIP: {session:?} — needs ticks\n");
     }
     conns = historical::phase_large_historical_dataset(conns);
     conns = historical::phase_dst_boundary_historical(conns);
@@ -399,7 +422,7 @@ fn compat_suite() {
     if needs_ticks {
         conns = orders::phase_cancel_filled_order(conns);
     } else {
-        println!("--- Phase 124: Cancel Filled Order ---\n  SKIP: {session:?} — needs fills\n");
+        phase!("--- Phase 124: Cancel Filled Order ---\n  SKIP: {session:?} — needs fills\n");
     }
 
     // ── P1: Matching symbols via ControlCommand channel ──
@@ -409,7 +432,7 @@ fn compat_suite() {
     if needs_ticks && conns.hmds.is_some() {
         conns = market_data::phase_tbt_unsubscribe(conns);
     } else {
-        println!("--- Phase 126: TBT Unsubscribe ---\n  SKIP: needs ticks+HMDS\n");
+        phase!("--- Phase 126: TBT Unsubscribe ---\n  SKIP: needs ticks+HMDS\n");
     }
 
     // ── P1: Cancel data requests (historical, fundamental, histogram, head timestamp) ──
@@ -419,14 +442,14 @@ fn compat_suite() {
     if needs_ticks && conns.hmds.is_some() {
         conns = market_data::phase_tbt_and_quotes_dual_stream(conns);
     } else {
-        println!("--- Phase 128: TBT + Regular Quotes Dual Stream ---\n  SKIP: needs ticks+HMDS\n");
+        phase!("--- Phase 128: TBT + Regular Quotes Dual Stream ---\n  SKIP: needs ticks+HMDS\n");
     }
 
     // ── P2: Concurrent subscribe stress (10 instruments) ──
     if needs_ticks {
         conns = market_data::phase_concurrent_subscribe_stress(conns);
     } else {
-        println!("--- Phase 129: Concurrent Subscribe Stress ---\n  SKIP: {session:?} — needs ticks\n");
+        phase!("--- Phase 129: Concurrent Subscribe Stress ---\n  SKIP: {session:?} — needs ticks\n");
     }
 
     // ── P2: Historical data + live orders coexistence ──
@@ -448,6 +471,10 @@ fn compat_suite() {
         conns = market_data::phase_fallback_resubscribe(conns);
     }
 
+    // Before the heartbeat phase, which parks the trading connection behind a
+    // dead socket: nothing can be withdrawn over it after that.
+    conns = common::withdraw_orders_this_run_left(conns);
+
     // Runs last: it parks the real CCP behind a dead socket for 30s and is the one
     // phase asserting a hard liveness deadline, so a failure here cannot take the
     // phases behind it down with the suite.
@@ -455,15 +482,13 @@ fn compat_suite() {
 
     let _conns = connection::phase_graceful_shutdown(conns);
 
-    // Session-dependent phases: 2,3,4,6,17,27,28,51,52,61,97,102,105,110,124,126,128,129 = 18
-    // Forex fallback phases cover 3 of those when !needs_ticks (107,108,109)
-    // Phase 134 (PnL subscribe/cancel command) is session-independent and always runs.
-    let total_phases = 129;
-    let skipped = if needs_ticks { 0 } else { 18 };
-    let forex_fallback = if needs_ticks { 0 } else { 3 };
-    let ran = total_phases - skipped + forex_fallback;
-    println!("\n=== {}/{} phases ran ({} skipped, {} forex-fallback, {:?}) in {:.1}s ===",
-        ran, total_phases, skipped, forex_fallback, session, suite_start.elapsed().as_secs_f64());
+    // Counted, not worked out: a total less a list of expected skips states
+    // that every phase ran whatever each one did.
+    let (announced, skipped) = common::phase_tally_since_baseline();
+    println!(
+        "\n=== {announced} phases ran, {skipped} of them verifying nothing ({session:?}) in {:.1}s ===",
+        suite_start.elapsed().as_secs_f64(),
+    );
 
     // Last, and after the count is printed, so a reader sees both the count
     // this run claims and the reason it does not stand.
@@ -1226,7 +1251,7 @@ fn a_cancel_racing_an_unacked_replace_live() {
             if matches!(u.status, OrderStatus::Rejected | OrderStatus::Inactive) {
                 let _ = control_tx.send(ControlCommand::Shutdown);
                 let _ = join.join();
-                println!(
+                skipped!(
                     "\n  SKIP: the venue refused the order — {}",
                     common::reject_reason(&shared, order_id),
                 );
@@ -1343,7 +1368,7 @@ fn european_fill_books_what_the_venue_reported_live() {
         }
     }
     let Some(def) = listing else {
-        println!("\n  SKIP: no sterling listing of VOD came back");
+        skipped!("\n  SKIP: no sterling listing of VOD came back");
         return;
     };
     println!("  listing: con_id={} currency={}", def.con_id, def.currency);
@@ -1392,13 +1417,13 @@ fn european_fill_books_what_the_venue_reported_live() {
 
     let Some(fill) = filled else {
         if refused {
-            println!(
+            skipped!(
                 "\n  SKIP: the venue refused it — {}",
                 common::reject_reason(&shared, order_id),
             );
             return;
         }
-        println!("\n  SKIP: nothing traded within the wait — the listing may be closed");
+        skipped!("\n  SKIP: nothing traded within the wait — the listing may be closed");
         return;
     };
 
@@ -1509,7 +1534,7 @@ fn fractional_order_phase_live() {
     let _ = control_tx.send(ControlCommand::Shutdown);
     let _ = join.join();
     if refused {
-        println!(
+        skipped!(
             "\n  SKIP: the venue refused it — {}; the quantity was stated and read, \n\
              so this says who may place one rather than whether it can be written",
             common::reject_reason(&shared, order_id),

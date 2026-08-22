@@ -3,7 +3,7 @@
 use super::common::*;
 
 pub(super) fn phase_ib_error_handling(conns: Conns) -> Conns {
-    println!("--- Phase 104: IB-Side Error Handling (invalid requests) ---");
+    phase!("--- Phase 104: IB-Side Error Handling (invalid requests) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -59,7 +59,7 @@ pub(super) fn phase_ib_error_handling(conns: Conns) -> Conns {
         println!("  PASS\n");
     } else {
         // The order may have been silently ignored or the hot loop handled it
-        println!("  SKIP: No rejection/error received (order may have been filtered)\n");
+        skipped!("  SKIP: No rejection/error received (order may have been filtered)\n");
     }
     conns
 }
@@ -73,7 +73,7 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
     // after this. What it can establish is that none of the ten went missing —
     // each is answered, or the venue says why. A request that vanishes with
     // nothing reported is the defect, and reads the same as a throttled one.
-    println!("--- Phase 114: Ten rapid historical requests are each answered or explained ---");
+    phase!("--- Phase 114: Ten rapid historical requests are each answered or explained ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -148,7 +148,7 @@ pub(super) fn phase_pacing_violation_recovery(conns: Conns) -> Conns {
 
     if responses_received.is_empty() && errors_received.is_empty() {
         // Historical server may be fully rate-limited from prior historical phases
-        println!("  SKIP: nothing came back at all — HMDS is likely throttled from earlier phases\n");
+        skipped!("  SKIP: nothing came back at all — HMDS is likely throttled from earlier phases\n");
     } else {
         // A request that neither answered nor was refused is one this client
         // dropped on the floor, which is not the same as a throttled one.

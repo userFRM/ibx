@@ -6,7 +6,7 @@ use ibx::api::wrapper::Wrapper;
 use ibx::protocol::fix;
 
 pub(super) fn phase_account_data(conns: Conns) -> Conns {
-    println!("--- Phase 4: Account Data Reception ---");
+    phase!("--- Phase 4: Account Data Reception ---");
 
     let account_id = conns.account_id;
 
@@ -60,7 +60,7 @@ pub(super) fn phase_account_data(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
-    println!("--- Phase 14: Account PnL Reception ---");
+    phase!("--- Phase 14: Account PnL Reception ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -131,7 +131,7 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
-    println!("--- Phase 97: Position Tracking (SPY buy+sell round trip) ---");
+    phase!("--- Phase 97: Position Tracking (SPY buy+sell round trip) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -194,7 +194,7 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
                     // Shut down first: the engine records the reason after it
                     // emits the update, so reading it here would race the write.
                     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-                    println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, update.order_id));
+                    skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, update.order_id));
                     return conns;
                 }
             _ => {}
@@ -225,15 +225,15 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
         );
         println!("  PASS (position returned to {pos})\n");
     } else if phase == 2 {
-        println!("  SKIP: the sell was sent and did not fill within the wait\n");
+        skipped!("  SKIP: the sell was sent and did not fill within the wait\n");
     } else {
-        println!("  SKIP: Only reached phase {phase} (buy may not have filled)\n");
+        skipped!("  SKIP: Only reached phase {phase} (buy may not have filled)\n");
     }
     conns
 }
 
 pub(super) fn phase_account_summary(conns: Conns) -> Conns {
-    println!("--- Phase 106: Account Summary (verify individual tag values) ---");
+    phase!("--- Phase 106: Account Summary (verify individual tag values) ---");
 
     let account_id = conns.account_id.clone();
     let shared = Arc::new(SharedState::new());
@@ -302,7 +302,7 @@ pub(super) fn phase_account_summary(conns: Conns) -> Conns {
 
 /// Phase: Completed Orders — submit an order, cancel it, verify it appears in drain_completed_orders.
 pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
-    println!("--- Phase 120: Completed Orders (submit+cancel → drain) ---");
+    phase!("--- Phase 120: Completed Orders (submit+cancel → drain) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -359,11 +359,11 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !terminal {
-        println!("  SKIP: Order never reached terminal state\n");
+        skipped!("  SKIP: Order never reached terminal state\n");
         return conns;
     }
     if refused {
-        println!(
+        skipped!(
             "  SKIP: the venue refused the order — {}; nothing was withdrawn, so the \
              cancel this phase exists to follow was never sent\n",
             reject_reason(&shared, order_id),
@@ -388,7 +388,7 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
 /// callbacks (completed_order, position) and verify the Contract/Order/OrderState fields
 /// match the ibapi GT capture format.
 pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
-    println!("--- Phase 130: Enriched API Wrapper Output (submit+cancel → req_completed_orders) ---");
+    phase!("--- Phase 130: Enriched API Wrapper Output (submit+cancel → req_completed_orders) ---");
 
     // Recording wrapper that captures full field data from completed_order/position callbacks
     struct GtWrapper {
@@ -508,7 +508,7 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !terminal {
-        println!("  SKIP: Order never reached terminal state\n");
+        skipped!("  SKIP: Order never reached terminal state\n");
         return conns;
     }
 
@@ -574,7 +574,7 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
 /// Phase: req_all_open_orders — submit a limit order, call open_order Wrapper callback,
 /// verify Contract/Order/OrderState fields match GT, then cancel.
 pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
-    println!("--- Phase 131: Enriched open_order Wrapper Output (submit → req_all_open_orders → cancel) ---");
+    phase!("--- Phase 131: Enriched open_order Wrapper Output (submit → req_all_open_orders → cancel) ---");
 
     struct OoWrapper {
         orders: Vec<(i64, api::Contract, api::Order, api::OrderState)>,
@@ -620,7 +620,7 @@ pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
 
     if !submitted {
         let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-        println!("  SKIP: Order never submitted\n");
+        skipped!("  SKIP: Order never submitted\n");
         return conns;
     }
 
@@ -694,7 +694,7 @@ pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
 /// Phase: req_positions — verify position callback delivers enriched Contract
 /// with symbol/secType/currency from the contract cache.
 pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
-    println!("--- Phase 132: Enriched position Wrapper Output (req_positions) ---");
+    phase!("--- Phase 132: Enriched position Wrapper Output (req_positions) ---");
 
     struct PosWrapper {
         positions: Vec<(String, api::Contract, f64, f64)>,
@@ -762,7 +762,7 @@ pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     if !got_pos && wrapper.positions.is_empty() {
-        println!("  SKIP: No positions in account (need prior fills)\n");
+        skipped!("  SKIP: No positions in account (need prior fills)\n");
         return conns;
     }
 
@@ -806,7 +806,7 @@ pub(super) fn phase_enriched_positions(conns: Conns) -> Conns {
 /// Phase: exec_details — submit a market order (fills immediately), verify exec_details
 /// callback has enriched Contract with conId/symbol/secType.
 pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
-    println!("--- Phase 133: Enriched exec_details Wrapper Output (market order → fill) ---");
+    phase!("--- Phase 133: Enriched exec_details Wrapper Output (market order → fill) ---");
 
     struct ExecWrapper {
         execs: Vec<(i64, api::Contract, api::Execution)>,
@@ -853,7 +853,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
             }
             Ok(Event::OrderUpdate(u)) if u.status == OrderStatus::Rejected => {
                 let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-                println!("  SKIP: Order rejected — {}\n", reject_reason(&shared, u.order_id));
+                skipped!("  SKIP: Order rejected — {}\n", reject_reason(&shared, u.order_id));
                 return conns;
             }
             _ => {}
@@ -937,7 +937,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
 
 /// Phase: PnL Subscription Lifecycle — verify daily/unrealized/realized PnL populated.
 pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
-    println!("--- Phase 121: PnL Subscription (verify all 3 PnL fields) ---");
+    phase!("--- Phase 121: PnL Subscription (verify all 3 PnL fields) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1020,7 +1020,7 @@ pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
 /// order. This exercises the `SubscribePnl`/`CancelPnl` ControlCommands directly.
 /// Session-independent: P&L is account data, available whether or not the market is open.
 pub(super) fn phase_pnl_subscribe_command(conns: Conns) -> Conns {
-    println!("--- Phase 134: PnL Subscribe/Cancel Command (CCP 6040=142) ---");
+    phase!("--- Phase 134: PnL Subscribe/Cancel Command (CCP 6040=142) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -1073,7 +1073,7 @@ pub(super) fn phase_pnl_subscribe_command(conns: Conns) -> Conns {
 
 /// Phase: News Bulletins — drain news bulletins from SharedState.
 pub(super) fn phase_news_bulletins(conns: Conns) -> Conns {
-    println!("--- Phase 122: News Bulletins (drain from SharedState) ---");
+    phase!("--- Phase 122: News Bulletins (drain from SharedState) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());

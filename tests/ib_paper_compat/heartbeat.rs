@@ -4,7 +4,7 @@ use super::common::*;
 use std::net::TcpListener;
 
 pub(super) fn phase_heartbeat_keepalive(conns: Conns) -> Conns {
-    println!("--- Phase 13: Heartbeat Keepalive (20s > CCP 10s interval) ---");
+    phase!("--- Phase 13: Heartbeat Keepalive (20s > CCP 10s interval) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -49,7 +49,7 @@ pub(super) fn phase_heartbeat_keepalive(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_farm_heartbeat_keepalive(conns: Conns) -> Conns {
-    println!("--- Phase 55: Farm Heartbeat Keepalive (65s > 2x farm 30s interval) ---");
+    phase!("--- Phase 55: Farm Heartbeat Keepalive (65s > 2x farm 30s interval) ---");
 
     let account_id = conns.account_id;
     let shared = Arc::new(SharedState::new());
@@ -94,7 +94,7 @@ pub(super) fn phase_farm_heartbeat_keepalive(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
-    println!("--- Phase 56: Heartbeat Timeout Detection (simulated stale CCP) ---");
+    phase!("--- Phase 56: Heartbeat Timeout Detection (simulated stale CCP) ---");
 
     // This phase takes the session away itself: it parks the real connection
     // behind a dead socket to measure how long the engine takes to notice. A
