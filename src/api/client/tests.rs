@@ -5099,7 +5099,11 @@ mod answering_calls_receive_through_dispatch {
     #[test]
     fn the_dispatch_that_does_not_deliver_them_still_leaves_them() {
         let shared = SharedState::new();
+        // Recorded as this client's own, which is what the ask path does when
+        // it hands the id out. Which ids those are is no longer read off their
+        // magnitude, so a number alone establishes nothing.
         let ask_id = crate::bridge::ReferenceState::ASK_ID_BASE;
+        crate::bridge::note_ours(ask_id as i64);
         shared.reference.push_contract_details(
             ask_id,
             ContractDefinition { con_id: 756733, ..Default::default() },
@@ -5113,6 +5117,33 @@ mod answering_calls_receive_through_dispatch {
         assert_eq!(delivered.len(), 1, "a caller's own reply was withheld");
         assert_eq!(delivered[0].0, 7);
         assert_eq!(shared.reference.take_contract_details_for(ask_id).len(), 1);
+        crate::bridge::forget_ours(ask_id as i64);
+    }
+
+    /// A caller may number a request anything at all, including inside the
+    /// band this client counts its own from.
+    ///
+    /// The band was how the two were told apart, so a program numbering its
+    /// requests from a counter that had climbed into it had its answers
+    /// withheld and nothing said why. Nothing is withheld now but what was
+    /// recorded.
+    #[test]
+    fn a_caller_may_number_a_request_inside_this_clients_own_band() {
+        let shared = SharedState::new();
+        let theirs = crate::bridge::ReferenceState::ASK_ID_BASE + 5;
+        shared.reference.push_contract_details(
+            theirs,
+            ContractDefinition { con_id: 756733, ..Default::default() },
+        );
+
+        let delivered = shared.reference.drain_contract_details_for_dispatch();
+        assert_eq!(
+            delivered.len(),
+            1,
+            "a caller's reply was withheld for its number rather than because \
+             this client was waiting on it",
+        );
+        assert_eq!(delivered[0].0, theirs);
     }
 }
 

@@ -106,6 +106,11 @@ impl EClient {
 
     /// Cancel market data. Matches `cancelMktData` in C++.
     pub fn cancel_mkt_data(&self, req_id: i64) -> Result<(), Refusal> {
+        // A stream opened by `watch` holds its id as this client's own for as
+        // long as it runs. Withdrawing it is where that ends. An id the caller
+        // chose was never held, and releasing one that was not held does
+        // nothing.
+        crate::bridge::forget_ours(req_id);
         let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only

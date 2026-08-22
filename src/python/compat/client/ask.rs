@@ -35,13 +35,40 @@ const ANSWER_TIMEOUT: Duration =
 /// answer is not made to wait on the poll, long enough not to spin a core.
 const POLL: Duration = Duration::from_millis(5);
 
-/// Ids for questions this layer asks on the caller's behalf. Far above what a
-/// caller is likely to use, so an answer to one of these is never mistaken for
-/// an answer to theirs.
+/// Ids for questions this layer asks on the caller's behalf.
+///
+/// Counted from a high number so they read apart from a caller's in a log, but
+/// nothing depends on where they fall: each is recorded as this client's own
+/// while its answer is outstanding, which is what keeps a caller's dispatch
+/// from taking it.
 static NEXT_ASK_ID: AtomicI64 = AtomicI64::new(crate::bridge::ReferenceState::ASK_ID_BASE as i64);
 
-fn ask_id() -> i64 {
-    NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed)
+/// An id this layer asked a question under, held while the answer is
+/// outstanding.
+///
+/// Recorded where it is handed out rather than where it is waited on: the
+/// request goes out first, and an answer arriving before the wait began would
+/// otherwise be taken by a caller's own dispatch. Released on drop, so a
+/// question given up on stops being held.
+pub(crate) struct AskId(i64);
+
+impl AskId {
+    /// The number the question went out under.
+    pub(crate) fn get(&self) -> i64 {
+        self.0
+    }
+}
+
+impl Drop for AskId {
+    fn drop(&mut self) {
+        crate::bridge::forget_ours(self.0);
+    }
+}
+
+fn ask_id() -> AskId {
+    let id = NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed);
+    crate::bridge::note_ours(id);
+    AskId(id)
 }
 
 /// The id the next question will be asked under. Lets a test put an answer in
@@ -145,7 +172,8 @@ impl EClient {
         what_to_show: &str,
         use_rth: i32,
     ) -> PyResult<Vec<BarData>> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_historical_data(
             py, req_id, contract, end_date_time, duration_str, bar_size_setting,
             what_to_show, use_rth, 1, false, Vec::new(),
@@ -192,7 +220,8 @@ impl EClient {
         what_to_show: &str,
         use_rth: i32,
     ) -> PyResult<String> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_head_time_stamp(py, req_id, contract, what_to_show, use_rth, 1)?;
         let shared = self.connected_shared()?;
         let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
@@ -208,7 +237,8 @@ impl EClient {
         py: Python<'_>,
         pattern: &str,
     ) -> PyResult<Vec<ContractDescription>> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_matching_symbols(py, req_id, pattern)?;
         let shared = self.connected_shared()?;
         let what = format!("a symbol search for {pattern}");
@@ -246,7 +276,8 @@ impl EClient {
         end_date_time: &str,
         total_results: i32,
     ) -> PyResult<Vec<(String, String, String, String)>> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_historical_news(
             py, req_id, con_id, provider_codes, start_date_time, end_date_time,
             total_results, Vec::new(),
@@ -274,7 +305,8 @@ impl EClient {
         duration_str: &str,
         use_rth: bool,
     ) -> PyResult<TradingSchedule> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_historical_schedule(py, req_id, contract, end_date_time, duration_str, use_rth)?;
         let shared = self.connected_shared()?;
         let what = format!("when {} trades", contract.symbol);
@@ -301,7 +333,8 @@ impl EClient {
         underlying_sec_type: &str,
         underlying_con_id: i64,
     ) -> PyResult<Vec<crate::python::compat::contract::OptionChain>> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_sec_def_opt_params(
             py, req_id, underlying_symbol, fut_fop_exchange, underlying_sec_type,
             underlying_con_id,
@@ -333,7 +366,8 @@ impl EClient {
         use_rth: bool,
         time_period: &str,
     ) -> PyResult<Vec<(f64, i64)>> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_histogram_data(py, req_id, contract, use_rth, time_period)?;
         let shared = self.connected_shared()?;
         let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
@@ -350,7 +384,8 @@ impl EClient {
         contract: &Contract,
         report_type: &str,
     ) -> PyResult<String> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_fundamental_data(py, req_id, contract, report_type, Vec::new())?;
         let shared = self.connected_shared()?;
         let what = format!("a {report_type} report for {}", contract.symbol);
@@ -417,7 +452,8 @@ impl EClient {
         py: Python<'_>,
         contract: &Contract,
     ) -> Result<Vec<ContractDetails>, Refusal> {
-        let req_id = ask_id();
+        let asked = ask_id();
+        let req_id = asked.get();
         self.req_contract_details(py, req_id, contract)
             .map_err(|e| Refusal::not_connected(e.to_string()))?;
 

@@ -212,7 +212,7 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < g.len() {
-            if Self::is_ask_id(g[i]) { i += 1; } else { out.push(g.remove(i)); }
+            if self.is_ours(g[i] as i64) { i += 1; } else { out.push(g.remove(i)); }
         }
         out
     }
@@ -224,7 +224,7 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < g.len() {
-            if Self::is_ask_id(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
+            if self.is_ours(g[i].0 as i64) { i += 1; } else { out.push(g.remove(i)); }
         }
         out
     }
@@ -255,6 +255,15 @@ impl ReferenceState {
         (Self::ASK_ID_BASE..ENGINE_ID_BASE).contains(&req_id)
     }
 
+    /// Whether this id belongs to a question this client asked for itself.
+    ///
+    /// Read from what was recorded when the id was handed out, so a caller's
+    /// own number — however large, and whatever counter it came from — is
+    /// never mistaken for one of these.
+    pub fn is_ours(&self, req_id: i64) -> bool {
+        is_ours(req_id)
+    }
+
     /// Drain what a dispatch loop should deliver, leaving behind what a waiting
     /// answering call is going to take.
     ///
@@ -269,7 +278,7 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < g.len() {
-            if Self::is_ask_id(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
+            if is_ours(g[i].0 as i64) { i += 1; } else { out.push(g.remove(i)); }
         }
         out
     }
@@ -393,7 +402,7 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < held.len() {
-            if Self::is_ask_id(held[i].0) {
+            if self.is_ours(held[i].0 as i64) {
                 i += 1;
             } else {
                 out.push(held.remove(i));
@@ -433,7 +442,7 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < held.len() {
-            if Self::is_ask_id(held[i].0) {
+            if self.is_ours(held[i].0 as i64) {
                 i += 1;
             } else {
                 out.push(held.remove(i));
@@ -806,6 +815,36 @@ impl ReferenceState {
 /// auto-fetch, a scanner enrichment. Nothing a caller or an answering call
 /// issues reaches this far.
 pub const ENGINE_ID_BASE: u32 = 0xF000_0000;
+
+/// The ids this client is itself waiting on an answer for.
+///
+/// A caller's dispatch must not take an answer to a question this client asked
+/// on their behalf. Which ids those were used to be decided by their magnitude
+/// — anything inside a high range this client allocates in — which is a guess
+/// about numbers a caller will not use, and a program numbering its requests
+/// from the counter it numbers its orders from walked into the range and had
+/// its answers withheld in silence.
+///
+/// Recorded when the id is handed out instead, and only for as long as the
+/// question is outstanding, so a caller may number a request anything at all.
+static OURS_IN_FLIGHT: Mutex<Option<std::collections::HashSet<i64>>> = Mutex::new(None);
+
+/// Record that this client is waiting on an answer under this id.
+pub fn note_ours(req_id: i64) {
+    OURS_IN_FLIGHT.lock().unwrap().get_or_insert_with(Default::default).insert(req_id);
+}
+
+/// Stop holding an id, whether the question was answered or given up on.
+pub fn forget_ours(req_id: i64) {
+    if let Some(held) = OURS_IN_FLIGHT.lock().unwrap().as_mut() {
+        held.remove(&req_id);
+    }
+}
+
+/// Whether this id belongs to a question this client asked for itself.
+pub fn is_ours(req_id: i64) -> bool {
+    OURS_IN_FLIGHT.lock().unwrap().as_ref().is_some_and(|held| held.contains(&req_id))
+}
 
 /// The band stays clear of the engine's own requests. Ordered by construction,
 /// so a base moved into them fails the build rather than a test that might not
