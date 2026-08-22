@@ -480,6 +480,54 @@ def test_solving_an_option_answers_rather_than_refusing():
     assert w.computed[0][0] == 77, "under the request that asked for it"
 
 
+def test_a_question_kept_for_a_model_does_not_outlive_its_session():
+    """It belongs to the session that asked it.
+
+    Left behind, the next session answers it under a request id nobody there
+    ever used, or waits on a model for a contract it is not watching.
+    """
+    from ibx import EClient, EWrapper, Contract
+
+    class W(EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.computed = []
+
+        def tick_option_computation(self, req_id, tick_type, attrib, implied_vol,
+                                    delta, opt_price, pv_dividend, gamma, vega,
+                                    theta, und_price):
+            self.computed.append(req_id)
+
+        def error(self, req_id, code, msg, advanced=""):
+            pass
+
+    w = W()
+    c = EClient(w)
+    c._test_connect("T")
+    option = Contract()
+    option.conId = 999003
+    option.secType = "OPT"
+    option.symbol = "SPY"
+    option.strike = 500.0
+    option.right = "C"
+    option.lastTradeDateOrContractMonth = "20270115"
+    c._test_map_con_id(999003, 2)
+    c._test_map_instrument(91, 2)
+    c.calculate_implied_volatility(91, option, 35.0, 505.0)
+    c.disconnect()
+
+    # A second session, and the venue publishes a model for that slot.
+    c._test_connect("T")
+    c._test_map_con_id(999003, 2)
+    c._test_push_option_model(2, 0.20, 30.0, 505.0)
+    c._test_dispatch_once()
+
+    assert 91 not in w.computed, (
+        "the question outlived the session that asked it and was answered "
+        f"under an id this one never used: {w.computed}"
+    )
+
+
 def test_a_calculation_asked_before_the_model_waits_for_it():
     """A question asked before the venue has stated a model is kept, not
     refused, and answered when the model arrives.

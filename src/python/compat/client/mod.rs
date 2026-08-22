@@ -505,6 +505,11 @@ impl EClient {
         *self.event_rx.lock().unwrap() = None;
         *self.account_id.lock().unwrap() = None;
         self.accounts.lock().unwrap().clear();
+        // A question kept for a model the venue had not yet published belongs
+        // to the session that asked it. Left behind, the next session answers
+        // it under a request id nobody in that session ever used, or waits on
+        // a model for a contract it is not watching.
+        self.pending_option_calcs.lock().unwrap().clear();
         self.core.reset();
         Ok(())
     }
