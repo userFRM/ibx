@@ -246,7 +246,15 @@ pub fn recv_secure<R: Read>(
     // taken for a failure. It states a backup host without being asked, and
     // refusing the login over one would end a session the venue had no
     // complaint about.
+    let secure_deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(crate::config::TIMEOUT_SSL_AUTH);
     let body = loop {
+        if std::time::Instant::now() >= secure_deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "no secure message before the auth timeout, with the venue still speaking",
+            ));
+        }
         let (payload, _) = ns::ns_recv(stream)?;
         let text = String::from_utf8_lossy(&payload);
         let parts: Vec<&str> = text.split(';').collect();
@@ -305,7 +313,18 @@ pub fn recv_secure<R: Read>(
 /// and the result, and taking the first thing to arrive for the answer refused
 /// a logon over a message that states no answer at all.
 fn srp_result_fields<R: Read>(stream: &mut R) -> io::Result<Vec<String>> {
+    // Bounded by the same clock the auth socket is given, not by a count of
+    // messages: the socket's own timeout ends a quiet venue, and this ends one
+    // that keeps talking without ever stating a verdict.
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(crate::config::TIMEOUT_SSL_AUTH);
     loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "no SRP result before the auth timeout, with the venue still speaking",
+            ));
+        }
         match recv_msg(stream)? {
             RecvMsg::Xyz { state, fields, .. } if state == SRP_AUTH_RESULT => {
                 return Ok(fields);
@@ -1574,7 +1593,15 @@ pub fn do_srp_farm(
     //
     // As on the session's own SRP: a message carrying an id this exchange does
     // not use is skipped rather than read as the verdict.
+    let farm_deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(crate::config::TIMEOUT_SSL_AUTH);
     let fields6 = loop {
+        if std::time::Instant::now() >= farm_deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "no farm SRP result before the auth timeout, with the venue still speaking",
+            ));
+        }
         let frame = recv_8eq1(stream, carry)?;
         let xyz = extract_xyz(&frame);
         let (_, _, state, fields) = xyz::xyz_parse_response(xyz).ok_or_else(|| {

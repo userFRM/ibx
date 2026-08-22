@@ -1164,14 +1164,32 @@ fn dial_auth_server(
     // taken for a failure. It states a backup host of its own accord, and
     // ending the connection over one would give up on a venue that had not
     // refused anything.
+    let hello_deadline = std::time::Instant::now()
+        + Duration::from_secs(TIMEOUT_SSL_AUTH);
     let hello = loop {
+        if std::time::Instant::now() >= hello_deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "no key exchange before the auth timeout, with the venue still speaking",
+            ));
+        }
         let (payload, _) = ns::ns_recv(&mut tls)?;
         let text = String::from_utf8_lossy(&payload);
         let parts: Vec<&str> = text.split(';').collect();
         let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        if msg_type == ns::NS_SECURE_ERROR {
+        if msg_type == ns::NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
             return Err(io::Error::other(
                 format!("DH error: {}", parts[2..].join(";")),
+            ));
+        }
+        // A retarget is not something to read past. Read past, the venue's
+        // instruction to go elsewhere is lost and the connection waits out its
+        // timeout against a host that has already said where to go instead.
+        if msg_type == ns::NS_REDIRECT {
+            let target = parts.get(2).unwrap_or(&"");
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                format!("REDIRECT:{target}"),
             ));
         }
         if msg_type == ns::NS_SECURE_CONNECTION_START {
