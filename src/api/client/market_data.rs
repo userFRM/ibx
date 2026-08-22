@@ -110,7 +110,7 @@ impl EClient {
         // long as it runs. Withdrawing it is where that ends. An id the caller
         // chose was never held, and releasing one that was not held does
         // nothing.
-        crate::bridge::forget_ours(req_id);
+        self.shared.reference.forget_ours(req_id);
         let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only

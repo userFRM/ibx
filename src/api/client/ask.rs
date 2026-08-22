@@ -43,12 +43,17 @@ static NEXT_ASK_ID: AtomicI64 = AtomicI64::new(crate::bridge::ReferenceState::AS
 /// otherwise be taken by a caller's own dispatch. Released on drop, so a
 /// question given up on — timed out, refused, or cut short by an early return
 /// — stops being held.
-pub(crate) struct AskId(i64);
+pub(crate) struct AskId {
+    id: i64,
+    /// The session that is waiting, so releasing it releases it there and not
+    /// on another session that happens to count from the same number.
+    shared: std::sync::Arc<crate::bridge::SharedState>,
+}
 
 impl AskId {
     /// The number the question went out under.
     pub(crate) fn get(&self) -> i64 {
-        self.0
+        self.id
     }
 
     /// Take the number and stop releasing it on drop.
@@ -58,7 +63,7 @@ impl AskId {
     /// whoever withdraws it releases it with
     /// [`forget_ours`](crate::bridge::forget_ours).
     pub(crate) fn keep(self) -> i64 {
-        let id = self.0;
+        let id = self.id;
         std::mem::forget(self);
         id
     }
@@ -66,14 +71,14 @@ impl AskId {
 
 impl Drop for AskId {
     fn drop(&mut self) {
-        crate::bridge::forget_ours(self.0);
+        self.shared.reference.forget_ours(self.id);
     }
 }
 
-pub(crate) fn ask_id() -> AskId {
+pub(crate) fn ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> AskId {
     let id = NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed);
-    crate::bridge::note_ours(id);
-    AskId(id)
+    shared.reference.note_ours(id);
+    AskId { id, shared: std::sync::Arc::clone(shared) }
 }
 
 #[derive(Default)]
@@ -266,7 +271,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Bars { req_id, state: Arc::clone(&state) };
@@ -322,7 +327,7 @@ impl EClient {
                 underlying.symbol,
             )));
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Chain { req_id, state: Arc::clone(&state) };
@@ -357,7 +362,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Head { req_id, state: Arc::clone(&state) };
@@ -394,7 +399,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Matches { req_id, state: Arc::clone(&state) };
@@ -440,7 +445,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Headlines { req_id, state: Arc::clone(&state) };
@@ -478,7 +483,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Histogram { req_id, state: Arc::clone(&state) };
@@ -510,7 +515,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Document { req_id, state: Arc::clone(&state) };
@@ -563,7 +568,7 @@ impl EClient {
                 }
             }
         }
-        let asked_under = ask_id();
+        let asked_under = ask_id(&self.shared);
         let order_id = asked_under.get();
         let asked = crate::types::model::Order { what_if: true, ..order.clone() };
         let state = Arc::new(Mutex::new(Pending::default()));
@@ -627,7 +632,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Values { req_id, state: Arc::clone(&state) };
@@ -743,7 +748,7 @@ impl EClient {
     pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let answer = Arc::new(Mutex::new(Answer::default()));
         let mut collector = Collector { req_id, answer: Arc::clone(&answer) };
@@ -892,7 +897,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Rows { req_id, state: Arc::clone(&state) };
@@ -934,7 +939,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = When { req_id, state: Arc::clone(&state) };
@@ -983,7 +988,7 @@ impl EClient {
                 }
             }
         }
-        let asked = ask_id();
+        let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Json { req_id, state: Arc::clone(&state) };

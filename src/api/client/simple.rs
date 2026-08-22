@@ -159,10 +159,15 @@ impl EClient {
     pub fn watch(&self, contract: &Contract) -> Result<i64, Refusal> {
         // Kept rather than released at the end of this call: the stream lives
         // until the caller withdraws it, and until then the id is this
-        // client's own. `cancel_mkt_data` releases it.
-        let req_id = super::ask::ask_id().keep();
+        // session's own. `cancel_mkt_data` releases it.
+        //
+        // Kept only once the subscription is away. Kept before, a refused
+        // request left the id held for the life of the session with no stream
+        // to withdraw and nothing to release it.
+        let asked = super::ask::ask_id(&self.shared);
+        let req_id = asked.get();
         self.req_mkt_data(req_id, contract, "", false, false)?;
-        Ok(req_id)
+        Ok(asked.keep())
     }
 
     /// The latest bid, ask and last for a contract being watched.

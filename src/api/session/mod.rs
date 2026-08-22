@@ -393,7 +393,7 @@ impl Client {
     /// The stream ends when the session does. Dropping it is how a caller says
     /// they have finished, and the subscription is withdrawn with it.
     pub fn ticks(&self, contract: &Contract) -> Result<Ticks, Refusal> {
-        let asked = super::client::ask::ask_id();
+        let asked = super::client::ask::ask_id(&self.shared);
         let req_id = asked.get();
         let (tx, rx) = std::sync::mpsc::sync_channel(TICK_BACKLOG);
         self.kept().stream_ticks(req_id, tx);
@@ -408,7 +408,7 @@ impl Client {
     /// the same rule [`bars`](EClient::bars) follows. Dropping the stream
     /// withdraws the subscription.
     pub fn live_bar_stream(&self, contract: &Contract) -> Result<LiveBars, Refusal> {
-        let asked = super::client::ask::ask_id();
+        let asked = super::client::ask::ask_id(&self.shared);
         let req_id = asked.get();
         let (tx, rx) = std::sync::mpsc::sync_channel(TICK_BACKLOG);
         self.kept().stream_bars(req_id, tx);

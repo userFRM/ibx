@@ -16,6 +16,13 @@ use crate::types::model as api;
 /// Historical data, contract definitions, scanners, news archives, market rules,
 /// contract cache.
 pub struct ReferenceState {
+    /// The ids this session is itself waiting on an answer for.
+    ///
+    /// Held here rather than beside the counter that hands them out: the
+    /// queues these guard belong to a session, and two sessions in one process
+    /// count from the same number, so a set shared between them would let one
+    /// release what the other is waiting on.
+    ours_in_flight: Mutex<std::collections::HashSet<i64>>,
     historical_data: Mutex<Vec<(u32, HistoricalResponse)>>,
     head_timestamps: Mutex<Vec<(u32, HeadTimestampResponse)>>,
     /// Set while the smart-component table is this client's own rather than
@@ -80,6 +87,7 @@ pub struct ReferenceState {
 impl ReferenceState {
     pub(super) fn new() -> Self {
         Self {
+            ours_in_flight: Mutex::new(Default::default()),
             historical_data: Mutex::new(Vec::with_capacity(16)),
             head_timestamps: Mutex::new(Vec::with_capacity(8)),
             smart_components_provisional: AtomicBool::new(false),
@@ -154,55 +162,55 @@ impl ReferenceState {
     /// The definitions a dispatch loop should deliver, leaving an answering
     /// call's own where that call will find them.
     pub fn drain_contract_details_for_dispatch(&self) -> Vec<(u32, ContractDefinition)> {
-        Self::drain_dispatchable(&self.contract_details)
+        self.drain_dispatchable(&self.contract_details)
     }
 
     /// Take every historical data a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
     pub fn drain_historical_data_for_dispatch(&self) -> Vec<(u32, HistoricalResponse)> {
-        Self::drain_dispatchable(&self.historical_data)
+        self.drain_dispatchable(&self.historical_data)
     }
 
     /// Take every head timestamps a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
     pub fn drain_head_timestamps_for_dispatch(&self) -> Vec<(u32, HeadTimestampResponse)> {
-        Self::drain_dispatchable(&self.head_timestamps)
+        self.drain_dispatchable(&self.head_timestamps)
     }
 
     /// Take every calendar meta data a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
     pub fn drain_calendar_meta_data_for_dispatch(&self) -> Vec<(u32, String)> {
-        Self::drain_dispatchable(&self.calendar_meta_data)
+        self.drain_dispatchable(&self.calendar_meta_data)
     }
 
     /// Take every calendar events a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
     pub fn drain_calendar_events_for_dispatch(&self) -> Vec<(u32, String)> {
-        Self::drain_dispatchable(&self.calendar_events)
+        self.drain_dispatchable(&self.calendar_events)
     }
 
     /// Take every matching symbols a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
     pub fn drain_matching_symbols_for_dispatch(&self) -> Vec<(u32, Vec<SymbolMatch>)> {
-        Self::drain_dispatchable(&self.matching_symbols)
+        self.drain_dispatchable(&self.matching_symbols)
     }
 
     /// Take every histogram data a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
     pub fn drain_histogram_data_for_dispatch(&self) -> Vec<(u32, Vec<HistogramEntry>)> {
-        Self::drain_dispatchable(&self.histogram_data)
+        self.drain_dispatchable(&self.histogram_data)
     }
 
     /// Take every fundamental data a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
     pub fn drain_fundamental_data_for_dispatch(&self) -> Vec<(u32, String)> {
-        Self::drain_dispatchable(&self.fundamental_data)
+        self.drain_dispatchable(&self.fundamental_data)
     }
 
     /// Take every historical schedules a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
     pub fn drain_historical_schedules_for_dispatch(&self) -> Vec<(u32, HistoricalScheduleResponse)> {
-        Self::drain_dispatchable(&self.historical_schedules)
+        self.drain_dispatchable(&self.historical_schedules)
     }
 
     /// Take every contract details end a dispatch loop should deliver, leaving behind
@@ -255,13 +263,23 @@ impl ReferenceState {
         (Self::ASK_ID_BASE..ENGINE_ID_BASE).contains(&req_id)
     }
 
-    /// Whether this id belongs to a question this client asked for itself.
+    /// Record that this session is waiting on an answer under this id.
+    pub fn note_ours(&self, req_id: i64) {
+        self.ours_in_flight.lock().unwrap().insert(req_id);
+    }
+
+    /// Stop holding an id, whether the question was answered or given up on.
+    pub fn forget_ours(&self, req_id: i64) {
+        self.ours_in_flight.lock().unwrap().remove(&req_id);
+    }
+
+    /// Whether this id belongs to a question this session asked for itself.
     ///
     /// Read from what was recorded when the id was handed out, so a caller's
     /// own number — however large, and whatever counter it came from — is
     /// never mistaken for one of these.
     pub fn is_ours(&self, req_id: i64) -> bool {
-        is_ours(req_id)
+        self.ours_in_flight.lock().unwrap().contains(&req_id)
     }
 
     /// Drain what a dispatch loop should deliver, leaving behind what a waiting
@@ -273,12 +291,12 @@ impl ReferenceState {
     /// what happened, and the tests of the day could not see it: they filled
     /// the queues by hand, with ids of their own choosing, so the band was
     /// never the one a session hands out.
-    pub fn drain_dispatchable<T>(q: &Mutex<Vec<(u32, T)>>) -> Vec<(u32, T)> {
+    pub fn drain_dispatchable<T>(&self, q: &Mutex<Vec<(u32, T)>>) -> Vec<(u32, T)> {
         let mut g = q.lock().unwrap();
         let mut out = Vec::new();
         let mut i = 0;
         while i < g.len() {
-            if is_ours(g[i].0 as i64) { i += 1; } else { out.push(g.remove(i)); }
+            if self.is_ours(g[i].0 as i64) { i += 1; } else { out.push(g.remove(i)); }
         }
         out
     }
@@ -816,36 +834,6 @@ impl ReferenceState {
 /// issues reaches this far.
 pub const ENGINE_ID_BASE: u32 = 0xF000_0000;
 
-/// The ids this client is itself waiting on an answer for.
-///
-/// A caller's dispatch must not take an answer to a question this client asked
-/// on their behalf. Which ids those were used to be decided by their magnitude
-/// — anything inside a high range this client allocates in — which is a guess
-/// about numbers a caller will not use, and a program numbering its requests
-/// from the counter it numbers its orders from walked into the range and had
-/// its answers withheld in silence.
-///
-/// Recorded when the id is handed out instead, and only for as long as the
-/// question is outstanding, so a caller may number a request anything at all.
-static OURS_IN_FLIGHT: Mutex<Option<std::collections::HashSet<i64>>> = Mutex::new(None);
-
-/// Record that this client is waiting on an answer under this id.
-pub fn note_ours(req_id: i64) {
-    OURS_IN_FLIGHT.lock().unwrap().get_or_insert_with(Default::default).insert(req_id);
-}
-
-/// Stop holding an id, whether the question was answered or given up on.
-pub fn forget_ours(req_id: i64) {
-    if let Some(held) = OURS_IN_FLIGHT.lock().unwrap().as_mut() {
-        held.remove(&req_id);
-    }
-}
-
-/// Whether this id belongs to a question this client asked for itself.
-pub fn is_ours(req_id: i64) -> bool {
-    OURS_IN_FLIGHT.lock().unwrap().as_ref().is_some_and(|held| held.contains(&req_id))
-}
-
 /// The band stays clear of the engine's own requests. Ordered by construction,
 /// so a base moved into them fails the build rather than a test that might not
 /// be run.
@@ -883,11 +871,36 @@ mod ask_id_band {
     /// And such an answer actually leaves the queue a dispatch loop drains.
     #[test]
     fn the_dispatch_loop_delivers_it() {
+        let state = ReferenceState::new();
+        // Recorded, because that is what makes it this session's own now. Read
+        // off its size, the test passed only when some other test in the same
+        // run had happened to record it — and failed on its own.
+        state.note_ours(ReferenceState::ASK_ID_BASE as i64);
         let q = std::sync::Mutex::new(vec![(1_786_766_504_u32, "theirs"),
                                            (ReferenceState::ASK_ID_BASE, "ours")]);
-        let out = ReferenceState::drain_dispatchable(&q);
+        let out = state.drain_dispatchable(&q);
         assert_eq!(out.len(), 1, "the caller's answer is delivered");
         assert_eq!(out[0].1, "theirs");
         assert_eq!(q.lock().unwrap().len(), 1, "and ours is left for the waiting call");
+    }
+
+    /// Two sessions in one process do not hold each other's ids.
+    ///
+    /// Both count their own questions from the same number, so a record shared
+    /// between them would let one release what the other is waiting on, and an
+    /// answer meant for a waiting call would be handed to a dispatch loop that
+    /// never asked.
+    #[test]
+    fn one_session_does_not_release_what_another_is_waiting_on() {
+        let mine = ReferenceState::new();
+        let theirs = ReferenceState::new();
+        let id = ReferenceState::ASK_ID_BASE as i64;
+
+        mine.note_ours(id);
+        theirs.note_ours(id);
+        theirs.forget_ours(id);
+
+        assert!(mine.is_ours(id), "another session's release took mine with it");
+        assert!(!theirs.is_ours(id), "and its own release still took effect");
     }
 }
