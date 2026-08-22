@@ -1165,10 +1165,10 @@ fn what_an_advisor_request_is_answered_with_live() {
 /// cancel has to state which version it is withdrawing. This client advances
 /// its record of that when it sends the replace rather than when the venue
 /// confirms it, which is the reading FIX states and the opposite of waiting
-/// for the acknowledgement. Nothing in the gateway settles it — the tag is
-/// not written as a literal anywhere in it — so it is settled here, against
-/// the venue, by racing a cancel past an unacknowledged replace and seeing
-/// whether the order goes away.
+/// for the acknowledgement. The protocol does not settle which of the two a
+/// venue expects, so it is settled here, against the venue itself, by racing
+/// a cancel past an unacknowledged replace and seeing whether the order goes
+/// away.
 ///
 /// A cancel naming the wrong version is answered as an order the venue does
 /// not have, and the order is left working.
