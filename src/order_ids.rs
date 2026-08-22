@@ -68,12 +68,31 @@ pub fn last_used(path: &Path, key: &str) -> Option<u64> {
     read_all(path).get(key).copied()
 }
 
+/// The widest id a request can be asked for under.
+///
+/// An order may be numbered past this — a caller numbering its own orders is
+/// theirs to do, and the venue takes them — but a request states its id in
+/// four bytes. A session that started counting past this could place orders
+/// and ask for nothing.
+const WIDEST_A_REQUEST_CARRIES: u64 = u32::MAX as u64;
+
 /// The id to hand out next: one past what was last remembered, or a first one.
 ///
 /// Reading alone. Nothing is remembered until [`remember`] is called with an
 /// id that was actually used.
+///
+/// A remembered id too wide for a request does not become the next session's
+/// starting point. One order numbered by a caller in microseconds raised the
+/// mark past four bytes and stayed there, and every session afterwards was
+/// born unable to ask the venue anything: the ids were refused before they
+/// left, and a program driving this client through its own request numbering
+/// got that refusal on its first call. The clock is what a first session
+/// counts from, and it is what a session counts from again here.
 pub fn next_after_last(path: &Path, key: &str) -> u64 {
-    last_used(path, key).map_or_else(from_the_clock, |last| last.saturating_add(1))
+    match last_used(path, key) {
+        Some(last) if last < WIDEST_A_REQUEST_CARRIES => last.saturating_add(1),
+        _ => from_the_clock(),
+    }
 }
 
 /// Remember an id as used, so no later run hands it out again.
@@ -168,6 +187,39 @@ mod tests {
         remember(&path, &k, 900).unwrap();
         remember(&path, &k, 100).unwrap();
         assert_eq!(last_used(&path, &k), Some(900));
+    }
+
+    /// An id too wide for a request does not become the next session's start.
+    ///
+    /// A caller numbering its own orders in microseconds raised the mark past
+    /// four bytes, and it stayed there: every session afterwards counted from
+    /// it and had every request it built refused before the request left.
+    #[test]
+    fn a_mark_too_wide_for_a_request_does_not_start_the_next_session() {
+        let path = scratch("too-wide");
+        let key = "someone";
+
+        remember(&path, key, 1_787_352_716_770_078).unwrap();
+        assert_eq!(
+            last_used(&path, key),
+            Some(1_787_352_716_770_078),
+            "the account did use it, and that is worth remembering",
+        );
+
+        let start = next_after_last(&path, key);
+        assert!(
+            start <= u32::MAX as u64,
+            "a session started at {start}, which no request it makes can state",
+        );
+        assert!(start > 1_700_000_000, "and it is still the clock, not one");
+    }
+
+    /// One inside the width is handed on as before.
+    #[test]
+    fn a_mark_a_request_can_carry_is_counted_on_from() {
+        let path = scratch("within");
+        remember(&path, "someone", 4_000).unwrap();
+        assert_eq!(next_after_last(&path, "someone"), 4_001);
     }
 
     /// A file that is not there, or not readable, is a first run rather than a
