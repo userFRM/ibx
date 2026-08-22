@@ -335,7 +335,7 @@ fn order_lifecycle_cancel_reject_on_filled_order() {
 /// Subscribe → receive ticks → unsubscribe → verify no more ticks.
 #[test]
 fn market_data_subscribe_ticks_unsubscribe() {
-    let (client, _rx, shared) = test_client();
+    let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
 
     // Mapped by hand, since the real engine is bypassed
@@ -355,6 +355,15 @@ fn market_data_subscribe_ticks_unsubscribe() {
 
     // Unsubscribe
     client.cancel_mkt_data(1).unwrap();
+
+    // The venue is told, and not only the dispatch loop. Asserted on the ticks
+    // alone, this passes for a client that stops delivering while the
+    // subscription stays up at the far end, which is the leak rather than the
+    // withdrawal.
+    assert!(
+        rx.try_iter().any(|c| matches!(c, ibx::types::ControlCommand::Unsubscribe { .. })),
+        "the withdrawal never reached the engine",
+    );
 
     // Push new quote — should NOT be dispatched
     q.bid = 449 * PRICE_SCALE;

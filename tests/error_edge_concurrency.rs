@@ -588,17 +588,30 @@ fn rapid_subscribe_unsubscribe_no_stale_state() {
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
 
-    for _ in 0..100 {
-        let _ = client.req_mkt_data(1, &spy(), "", false, false);
+    // Answers registrations the way the engine does, and keeps what it was
+    // sent. A client assembled from parts has no engine behind it, so without
+    // this every subscribe waits out the registration timeout and fails, no
+    // request is ever mapped to an instrument, and the stale-state assertion
+    // at the end holds before the loop has run once.
+    let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let engine = {
+        let sent = Arc::clone(&sent);
+        thread::spawn(move || {
+            while let Ok(command) = rx.recv() {
+                if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = &command {
+                    let _ = reply.send(Ok(0));
+                }
+                sent.lock().unwrap().push(command);
+            }
+        })
+    };
+
+    const CYCLES: usize = 100;
+    for _ in 0..CYCLES {
+        client.req_mkt_data(1, &spy(), "", false, false).expect("the subscription was refused");
         client.cancel_mkt_data(1).unwrap();
     }
 
-    // All commands should have been sent without panic
-    let mut count = 0;
-    while rx.try_recv().is_ok() {
-        count += 1;
-    }
-    assert!(count > 0);
 
     // After all subscribe/unsubscribe cycles, mapping should be cleared
     let mut w = RecordingWrapper::default();
@@ -611,6 +624,18 @@ fn rapid_subscribe_unsubscribe_no_stale_state() {
     // No ticks should arrive since all subscriptions were cancelled
     let ticks: Vec<_> = w.events.iter().filter(|e| e.starts_with("tick_price:1:")).collect();
     assert!(ticks.is_empty(), "no ticks after final unsubscribe");
+
+    // Counted once the channel is closed and the stub has drained it: read
+    // before that, the last command of the loop is still in flight and the
+    // count is one short of what was sent.
+    drop(client);
+    engine.join().expect("the engine stub panicked");
+
+    let sent = sent.lock().unwrap();
+    let subscribed = sent.iter().filter(|c| matches!(c, ControlCommand::Subscribe { .. })).count();
+    let withdrawn = sent.iter().filter(|c| matches!(c, ControlCommand::Unsubscribe { .. })).count();
+    assert_eq!(subscribed, CYCLES, "not every cycle subscribed");
+    assert_eq!(withdrawn, CYCLES, "not every cycle withdrew what it subscribed");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
