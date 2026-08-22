@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/userFRM/ibx/actions"><img src="https://github.com/userFRM/ibx/actions/workflows/tests.yml/badge.svg" alt="Build"></a>
-  <img src="https://img.shields.io/badge/rust-1.88+-orange.svg" alt="Rust version">
+  <img src="https://img.shields.io/badge/rust-1.89+-orange.svg" alt="Rust version">
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License"></a>
   <a href="https://userfrm.github.io/ibx/"><img src="https://img.shields.io/badge/docs-book-green.svg" alt="Docs"></a>
@@ -40,7 +40,7 @@ Python, additionally with [ib_async](https://github.com/ib-api-reloaded/ib_async
 ### Requirements
 
 * An Interactive Brokers account, paper or live
-* Rust 1.88+ for the Rust client
+* Rust 1.89+ for the Rust client
 * Python 3.11+ for the bindings
 
 No IB software is required. The `ibapi` package is not needed either.

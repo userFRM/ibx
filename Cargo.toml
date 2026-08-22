@@ -4,8 +4,9 @@ version = "0.7.1"
 edition = "2024"
 # The oldest compiler this builds on. Enforced here so it is checked
 # rather than claimed: the sources use let-chains and fixed-size slice
-# chunking, both of which arrived after the edition did.
-rust-version = "1.88"
+# chunking, both of which arrived after the edition did, and the order id
+# counter takes a lock the kernel releases on its own.
+rust-version = "1.89"
 description = "Direct connection engine for Interactive Brokers. No Java gateway required."
 license = "AGPL-3.0-only"
 repository = "https://github.com/userFRM/ibx"

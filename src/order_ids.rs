@@ -101,6 +101,63 @@ pub fn next_after_last(path: &Path, key: &str) -> u64 {
 /// caller numbering its own orders, which is theirs to do and not something to
 /// undo the account's high-water mark over.
 pub fn remember(path: &Path, key: &str, id: u64) -> io::Result<()> {
+    // The lock is a file beside the counter, so the directory holding both has
+    // to be there before either is opened.
+    if let Some(dir) = path.parent()
+        && !dir.as_os_str().is_empty()
+    {
+        fs::create_dir_all(dir)?;
+    }
+    // Held across the read and the write. The whole file is republished on
+    // every write, so without this a key one writer adds is dropped by another
+    // that read before it and published after — and a dropped mark is an id
+    // handed out twice, which the venue answers by refusing the order.
+    //
+    // The kernel holds it and releases it when this file closes, including
+    // when the process ends without closing anything, so a run that dies
+    // holding it leaves nothing behind for the next one to work around.
+    let gate = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_beside(path))?;
+    // Waited for rather than queued behind, because this is called to hand out
+    // an order id: a writer that cannot have the lock says so and the caller
+    // carries on with an id it has not written down, where waiting for ever
+    // would stop the caller trading at all.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match gate.try_lock() {
+            Ok(()) => break,
+            Err(fs::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        format!("another writer is holding {}", path.display()),
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(fs::TryLockError::Error(e)) => return Err(e),
+        }
+    }
+    publish(path, key, id)
+}
+
+/// The lock that guards a counter file, named after it.
+///
+/// Appended to the whole name rather than replacing an extension: a caller
+/// naming a counter that already ends in `.lock` would otherwise be handed its
+/// own counter to lock, and the file holding the ids would be opened as the
+/// thing guarding them.
+fn lock_beside(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".lock");
+    PathBuf::from(name)
+}
+
+/// Put this id in the file, whatever else is there.
+fn publish(path: &Path, key: &str, id: u64) -> io::Result<()> {
     let mut kept = read_all(path);
     match kept.get(key) {
         // A mark too wide to ask a request under is not a mark to hold to. Left
@@ -128,6 +185,9 @@ pub fn remember(path: &Path, key: &str, id: u64) -> io::Result<()> {
     let body: String = kept.iter().map(|(k, v)| format!("{k}\t{v}\n")).collect();
     // Replaced by rename, so a reader never sees half a file, and a run that
     // dies mid-write still finds the previous counter rather than nothing.
+    // One name, because only the writer holding the lock is ever here. A run
+    // that dies mid-write leaves this behind for the next one to overwrite,
+    // where a name per write would leave every one of them in the directory.
     let tmp = path.with_extension("tmp");
     write_private(&tmp, body.as_bytes())?;
     fs::rename(&tmp, path)
@@ -260,6 +320,39 @@ mod tests {
         let path = scratch("within");
         remember(&path, "someone", 4_000).unwrap();
         assert_eq!(next_after_last(&path, "someone"), 4_001);
+    }
+
+    /// Two writers at once both keep their mark.
+    ///
+    /// The whole file is republished on every write, so one adding a key while
+    /// another holds an older copy loses whichever publishes first — and a
+    /// mark that vanishes is an id handed out twice. The tests here ran one
+    /// session after another, which is the one arrangement that cannot show
+    /// it.
+    #[test]
+    fn two_writers_at_once_both_keep_their_mark() {
+        let path = scratch("contended");
+        let writers: Vec<_> = (0..4)
+            .map(|n| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let key = format!("account/paper/{n}");
+                    for id in 1..=40u64 {
+                        remember(&path, &key, id).expect("a writer gave up");
+                    }
+                    key
+                })
+            })
+            .collect();
+
+        let keys: Vec<String> = writers.into_iter().map(|w| w.join().unwrap()).collect();
+        for key in keys {
+            assert_eq!(
+                last_used(&path, &key),
+                Some(40),
+                "{key} was dropped by another writer, so its next run repeats an id",
+            );
+        }
     }
 
     /// A file that is not there, or not readable, is a first run rather than a
