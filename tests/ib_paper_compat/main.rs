@@ -216,6 +216,12 @@ fn compat_suite() {
     conns = historical::phase_scanner_subscription(conns);
     conns = historical::phase_historical_news(conns);
     conns = historical::phase_fundamental_data(conns);
+
+    // Fourteen phases have run since the last revival, and the venue closes an
+    // idle trading connection inside that. The rule a contract trades on is
+    // answered over it like any other definition, so a closed one reads as a
+    // lookup this client asked wrongly.
+    conns = ensure_ccp_alive(conns, &mut gw, &config);
     conns = contracts::phase_market_rule_id(conns);
 
     if needs_ticks {

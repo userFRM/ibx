@@ -554,9 +554,10 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
-    println!("--- Phase 107: Forex Market Data Ticks (EUR.USD — session-independent) ---");
+    let (symbol, sec_type, exchange) = tick_fallback();
+    println!("--- Phase 107: Fallback Market Data Ticks ({symbol} on {exchange} — session-independent) ---");
 
-    // Look up EUR.USD con_id first
+    // Look up the contract first
     let now = ibx::protocol::datetime::chrono_free_timestamp();
     let mut ccp = conns.ccp;
     ccp.send_fix(&[
@@ -564,9 +565,9 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
         (fix::TAG_SENDING_TIME, &now),
         (contracts::TAG_SECURITY_REQ_ID, "RFX107"),
         (contracts::TAG_SECURITY_REQ_TYPE, "2"),
-        (contracts::TAG_SYMBOL, "EUR"),
-        (contracts::TAG_SECURITY_TYPE, "CASH"),
-        (contracts::TAG_EXCHANGE, "IDEALPRO"),
+        (contracts::TAG_SYMBOL, symbol),
+        (contracts::TAG_SECURITY_TYPE, sec_type),
+        (contracts::TAG_EXCHANGE, exchange),
         (contracts::TAG_CURRENCY, "USD"),
         (contracts::TAG_IB_SOURCE, "Socket"),
     ])
@@ -591,7 +592,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
                     && let Some(def) = contracts::parse_secdef_response(&msg, true)
-                        && def.sec_type == contracts::SecurityType::Forex {
+                        && def.con_id > 0 {
                             forex_con_id = Some(def.con_id as i64);
                         }
             }
@@ -601,7 +602,7 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
     let con_id = match forex_con_id {
         Some(id) => id,
         None => {
-            lookup_returned_nothing("no EUR.USD contract came back");
+            lookup_returned_nothing(&format!("no {symbol} contract came back"));
         }
     };
     // Read by the two phases after this one.
@@ -623,7 +624,12 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
 
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id, symbol: tick_fallback().0.into(),
+                // Named, not left to the default. A subscription with no
+                // exchange is asked for on BEST, and the venue refuses a
+                // crypto there: "BEST/CRYPTO/Top". The ticks still arrive and
+                // carry no prices, so the phase saw a stream and no quote.
+                exchange: tick_fallback().2.into(), sec_type: tick_fallback().1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -682,13 +688,13 @@ pub(super) fn phase_forex_market_data(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
-    println!("--- Phase 108: Forex Streaming Validation (EUR.USD — session-independent) ---");
+    println!("--- Phase 108: Fallback Streaming Validation ({} — session-independent) ---", tick_fallback().0);
 
     // As the venue named it, in the phase before this one. Written in here, a
     // contract id that had changed or that this account sees differently read
     // as a subscription that produced nothing.
     let Some(&con_id) = FOREX_CON_ID.get() else {
-        println!("  SKIP: the phase that asks the venue for EUR.USD did not name it\n");
+        println!("  SKIP: the phase that asks the venue for {} did not name it\n", tick_fallback().0);
         return conns;
     };
 
@@ -707,7 +713,12 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
 
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id, symbol: tick_fallback().0.into(),
+                // Named, not left to the default. A subscription with no
+                // exchange is asked for on BEST, and the venue refuses a
+                // crypto there: "BEST/CRYPTO/Top". The ticks still arrive and
+                // carry no prices, so the phase saw a stream and no quote.
+                exchange: tick_fallback().2.into(), sec_type: tick_fallback().1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -748,13 +759,13 @@ pub(super) fn phase_forex_streaming_validation(conns: Conns) -> Conns {
 }
 
 pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
-    println!("--- Phase 109: Forex Reconnection Recovery (EUR.USD — session-independent) ---");
+    println!("--- Phase 109: Fallback Reconnection Recovery ({} — session-independent) ---", tick_fallback().0);
 
     // As the venue named it, in the phase before this one. Written in here, a
     // contract id that had changed or that this account sees differently read
     // as a subscription that produced nothing.
     let Some(&con_id) = FOREX_CON_ID.get() else {
-        println!("  SKIP: the phase that asks the venue for EUR.USD did not name it\n");
+        println!("  SKIP: the phase that asks the venue for {} did not name it\n", tick_fallback().0);
         return conns;
     };
 
@@ -774,7 +785,12 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
 
     control_tx
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id, symbol: tick_fallback().0.into(),
+                // Named, not left to the default. A subscription with no
+                // exchange is asked for on BEST, and the venue refuses a
+                // crypto there: "BEST/CRYPTO/Top". The ticks still arrive and
+                // carry no prices, so the phase saw a stream and no quote.
+                exchange: tick_fallback().2.into(), sec_type: tick_fallback().1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join = run_hot_loop(hot_loop);
@@ -811,7 +827,12 @@ pub(super) fn phase_forex_reconnection(conns: Conns) -> Conns {
 
     control_tx2
         .send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: "EUR".into(), exchange: String::new(), sec_type: String::new(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
+            contract: ContractRef { con_id, symbol: tick_fallback().0.into(),
+                // Named, not left to the default. A subscription with no
+                // exchange is asked for on BEST, and the venue refuses a
+                // crypto there: "BEST/CRYPTO/Top". The ticks still arrive and
+                // carry no prices, so the phase saw a stream and no quote.
+                exchange: tick_fallback().2.into(), sec_type: tick_fallback().1.into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, reply_tx: None,
         })
         .unwrap();
     let join2 = run_hot_loop(hot_loop2);
