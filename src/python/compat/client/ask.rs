@@ -71,12 +71,19 @@ fn ask_id() -> AskId {
     AskId(id)
 }
 
-/// The id the next question will be asked under. Lets a test put an answer in
-/// place before the question is asked, which is the only way to exercise the
-/// waiting without a venue on the other end.
+/// The id the next question will be asked under, reserved.
+///
+/// Lets a test put an answer in place before the question is asked, which is
+/// the only way to exercise the waiting without a venue on the other end.
+/// Recorded as this client's own as it is handed back, because the answer is
+/// seeded before the question allocates the id and a dispatch pass in between
+/// would otherwise take it — which is the very thing such a test is written to
+/// catch. Asking releases it in the ordinary way.
 #[doc(hidden)]
 pub(crate) fn peek_ask_id() -> i64 {
-    NEXT_ASK_ID.load(Ordering::Relaxed)
+    let id = NEXT_ASK_ID.load(Ordering::Relaxed);
+    crate::bridge::note_ours(id);
+    id
 }
 
 
