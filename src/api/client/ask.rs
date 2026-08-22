@@ -47,7 +47,11 @@ pub(crate) struct AskId {
     id: i64,
     /// The session that is waiting, so releasing it releases it there and not
     /// on another session that happens to count from the same number.
-    shared: std::sync::Arc<crate::bridge::SharedState>,
+    ///
+    /// Given up by [`AskId::keep`], which is how an id outlives the call that
+    /// took it without the session outliving anything: forgetting the guard
+    /// whole would hold this reference for as long as the process runs.
+    shared: Option<std::sync::Arc<crate::bridge::SharedState>>,
 }
 
 impl AskId {
@@ -61,24 +65,25 @@ impl AskId {
     /// For a subscription, which outlives the call that opened it: the id has
     /// to keep being this client's own until the caller withdraws it, and
     /// whoever withdraws it releases it with
-    /// [`forget_ours`](crate::bridge::forget_ours).
-    pub(crate) fn keep(self) -> i64 {
-        let id = self.id;
-        std::mem::forget(self);
-        id
+    /// `ReferenceState::forget_ours`.
+    pub(crate) fn keep(mut self) -> i64 {
+        self.shared = None;
+        self.id
     }
 }
 
 impl Drop for AskId {
     fn drop(&mut self) {
-        self.shared.reference.forget_ours(self.id);
+        if let Some(shared) = &self.shared {
+            shared.reference.forget_ours(self.id);
+        }
     }
 }
 
 pub(crate) fn ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> AskId {
     let id = NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed);
     shared.reference.note_ours(id);
-    AskId { id, shared: std::sync::Arc::clone(shared) }
+    AskId { id, shared: Some(std::sync::Arc::clone(shared)) }
 }
 
 #[derive(Default)]
@@ -1004,5 +1009,44 @@ impl EClient {
             .into_iter()
             .next()
             .ok_or_else(|| Refusal::no_answer(format!("the venue stated no {what}")))
+    }
+}
+
+#[cfg(test)]
+mod ask_id_holds_nothing_after_it_is_kept {
+    use super::*;
+    use std::sync::Arc;
+
+    /// An id kept past the call that took it does not keep the session with it.
+    ///
+    /// Forgetting the guard whole held a strong reference to the whole session
+    /// for as long as the process ran, so every stream a caller opened kept a
+    /// disconnected session's state alive.
+    #[test]
+    fn keeping_an_id_releases_the_session() {
+        let shared = Arc::new(crate::bridge::SharedState::new());
+        let before = Arc::strong_count(&shared);
+
+        let id = ask_id(&shared).keep();
+        assert_eq!(
+            Arc::strong_count(&shared),
+            before,
+            "keeping id {id} held a reference to the session it was taken from",
+        );
+        assert!(shared.reference.is_ours(id), "and the id is still this session's own");
+    }
+
+    /// One released the ordinary way gives the session up too.
+    #[test]
+    fn dropping_a_guard_releases_both() {
+        let shared = Arc::new(crate::bridge::SharedState::new());
+        let before = Arc::strong_count(&shared);
+        let id = {
+            let asked = ask_id(&shared);
+            assert!(Arc::strong_count(&shared) > before, "the guard holds it while it lives");
+            asked.get()
+        };
+        assert_eq!(Arc::strong_count(&shared), before, "and lets go when it ends");
+        assert!(!shared.reference.is_ours(id), "and the id goes with it");
     }
 }
