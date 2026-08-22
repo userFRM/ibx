@@ -439,12 +439,13 @@ fn compat_suite() {
     conns = connection::phase_update_param(conns);
     conns = coverage::phase_endpoint_coverage(conns);
 
-    // ── Session-independent forex fallback phases ──
-    // EUR.USD trades ~24h Sun-Fri, so these cover tick reception when US stocks are closed.
+    // ── Session-independent fallback phases ──
+    // These cover tick reception while US stocks are closed, so they watch
+    // something that is not: a crypto, which quotes on a Saturday too.
     if !needs_ticks {
-        conns = market_data::phase_forex_market_data(conns);
-        conns = market_data::phase_forex_streaming_validation(conns);
-        conns = market_data::phase_forex_reconnection(conns);
+        conns = market_data::phase_fallback_market_data(conns);
+        conns = market_data::phase_fallback_streaming_validation(conns);
+        conns = market_data::phase_fallback_resubscribe(conns);
     }
 
     // Runs last: it parks the real CCP behind a dead socket for 30s and is the one

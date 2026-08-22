@@ -652,35 +652,15 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
     false
 }
 
-/// What to fall back to for ticks when New York is shut, and what it is.
+/// An instrument whose top of book answers whenever this suite runs.
 ///
-/// Forex was the fallback because it trades around the clock — but only from
-/// Sunday evening to Friday evening, so on a Saturday the three phases that
-/// use it asked a shut venue and reported nothing while counting themselves
-/// as run. A crypto trades every day, and its top of book answers when
-/// everything else this suite watches is closed.
-///
-/// The window is stated in UTC and kept inside the part of the forex week that
-/// holds under either American clock, so it is never wrong in the direction
-/// that claims a market is open.
-pub(super) fn tick_fallback() -> (&'static str, &'static str, &'static str) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let days = now / 86_400;
-    // 1970-01-01 was a Thursday.
-    let weekday = (days + 4) % 7;
-    let hour = (now % 86_400) / 3600;
-    // Shut from Friday evening to Sunday evening, New York time; stated here
-    // an hour inside either end so a clock change cannot open it early.
-    let forex_shut = weekday == 6
-        || (weekday == 5 && hour >= 22)
-        || (weekday == 0 && hour < 23);
-    if forex_shut {
-        ("BTC", "CRYPTO", "PAXOS")
-    } else {
-        ("EUR", "CASH", "IDEALPRO")
-    }
-}
+/// The three phases that use it exist to prove ticks arrive while New York is
+/// shut, so what they watch has to be something that never is. Forex was the
+/// original choice and closes every weekend, between sessions each day, and on
+/// holidays — picking between two venues off the clock is a prediction, and it
+/// is wrong on the days nobody remembers. A crypto trades every day, so there
+/// is no window left to predict.
+pub(super) const ALWAYS_QUOTING: (&str, &str, &str) = ("BTC", "CRYPTO", "PAXOS");
 
 /// Whether London is trading, in UTC.
 ///
@@ -902,6 +882,13 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     // not change whose answer it is — the venue is describing the state of its
     // own book, not the message this client wrote.
     "parent order is being cancelled",
+    // A ceiling on how many orders may rest at once on one side of one
+    // contract. It is a limit the account carries, not a fault in the order:
+    // the same order is taken once something already resting is cancelled or
+    // filled. A suite run leaves orders working, so a paper account that has
+    // run it often enough reaches this and every later run is answered with
+    // it until the resting orders are cleared.
+    "orders working on either the buy or sell side",
     // The same race, lost by a wider margin: the venue had already cancelled
     // the order before the replace reached it, which is what happens to a
     // day order left resting while the market is shut. An order that no
@@ -1172,8 +1159,10 @@ pub(super) fn now_ib_timestamp() -> String {
 ///
 /// Contract ids are venue-assigned and region-specific. A phase carrying a
 /// literal id cannot distinguish a changed identity from a failed subscription.
-/// The phase that resolves it runs immediately before the phases that use it.
-pub(super) static FOREX_CON_ID: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+/// The phase that resolves it runs immediately before the phases that use it,
+/// and names [`ALWAYS_QUOTING`], so all three watch the one contract the venue
+/// answered for rather than each asking again.
+pub(super) static FALLBACK_CON_ID: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
 
 /// A schedule starting shortly from now and running four hours, formatted
 /// `YYYYMMDD-HH:MM:SS` in UTC.
