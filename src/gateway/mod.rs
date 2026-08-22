@@ -170,6 +170,55 @@ pub struct ReconnectAuth {
 /// reading only.
 const COMPETING_READ_ONLY: &str = "(RO)";
 
+/// Read on until the venue states the key exchange, and answer with its fields.
+///
+/// A message it states of its own accord while this is awaited is read past —
+/// it names a backup host without being asked, and ending the connection over
+/// one gives up on a venue that has not refused anything. What is not read
+/// past is what means something: an error is surfaced with its words, and a
+/// retarget is reported so it can be followed rather than lost.
+///
+/// Bounded by the clock the auth socket is already given. The socket's own
+/// timeout ends a venue that goes quiet; this ends one that keeps talking
+/// without ever stating the exchange.
+fn read_server_hello(tls: &mut impl std::io::Read, what: &str) -> io::Result<Vec<String>> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(TIMEOUT_SSL_AUTH);
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "{what}: no key exchange before the auth timeout, with the \
+                     venue still speaking"
+                ),
+            ));
+        }
+        let (payload, _) = ns::ns_recv(tls)?;
+        let text = String::from_utf8_lossy(&payload);
+        let parts: Vec<&str> = text.split(';').collect();
+        let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        if msg_type == ns::NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
+            return Err(io::Error::other(
+                format!("{what} DH error: {}", parts[2..].join(";")),
+            ));
+        }
+        if msg_type == ns::NS_REDIRECT {
+            let target = parts.get(2).unwrap_or(&"");
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                format!("REDIRECT:{target}"),
+            ));
+        }
+        if msg_type == ns::NS_SECURE_CONNECTION_START {
+            return Ok(parts.get(2..).unwrap_or(&[]).iter().map(|s| s.to_string()).collect());
+        }
+        log::info!(
+            "{what}: received msg id {msg_type} while awaiting the key exchange; read past"
+        );
+    }
+}
+
 /// Whether a failed connect means nothing was reached, rather than something
 /// answering and saying no.
 ///
@@ -638,17 +687,9 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     let dh_msg = channel.build_secure_connect(NS_VERSION, NS_VERSION);
     tls.write_all(&dh_msg)?;
 
-    let (payload, _) = ns::ns_recv(&mut tls)?;
-    let text = String::from_utf8_lossy(&payload);
-    let parts: Vec<&str> = text.split(';').collect();
-    let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    if msg_type != ns::NS_SECURE_CONNECTION_START {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("CCP reconnect DH: expected 533, got {msg_type}"),
-        ));
-    }
-    channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
+    let hello = read_server_hello(&mut tls, "CCP reconnect")?;
+    let hello: Vec<&str> = hello.iter().map(String::as_str).collect();
+    channel.process_server_hello(&hello)?;
 
     // CONNECT_REQUEST with SOFT_TOKEN flag + token hash (field 9)
     let flags = session::FLAG_OK_TO_REDIRECT
@@ -1164,39 +1205,7 @@ fn dial_auth_server(
     // taken for a failure. It states a backup host of its own accord, and
     // ending the connection over one would give up on a venue that had not
     // refused anything.
-    let hello_deadline = std::time::Instant::now()
-        + Duration::from_secs(TIMEOUT_SSL_AUTH);
-    let hello = loop {
-        if std::time::Instant::now() >= hello_deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "no key exchange before the auth timeout, with the venue still speaking",
-            ));
-        }
-        let (payload, _) = ns::ns_recv(&mut tls)?;
-        let text = String::from_utf8_lossy(&payload);
-        let parts: Vec<&str> = text.split(';').collect();
-        let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        if msg_type == ns::NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(io::Error::other(
-                format!("DH error: {}", parts[2..].join(";")),
-            ));
-        }
-        // A retarget is not something to read past. Read past, the venue's
-        // instruction to go elsewhere is lost and the connection waits out its
-        // timeout against a host that has already said where to go instead.
-        if msg_type == ns::NS_REDIRECT {
-            let target = parts.get(2).unwrap_or(&"");
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionReset,
-                format!("REDIRECT:{target}"),
-            ));
-        }
-        if msg_type == ns::NS_SECURE_CONNECTION_START {
-            break parts.get(2..).unwrap_or(&[]).iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        }
-        log::info!("received msg id {msg_type} while awaiting the key exchange; read past");
-    };
+    let hello = read_server_hello(&mut tls, "connect")?;
     let hello: Vec<&str> = hello.iter().map(String::as_str).collect();
     channel.process_server_hello(&hello)?;
     log::info!("Auth key exchange complete");
@@ -1304,7 +1313,7 @@ fn authenticate(
 
     let key = match (resume_key, auth_mode) {
         (Some(key), 2) => {
-            log::info!("Resuming the session for {} — no handshake", config.username);
+            log::info!("Resuming the session for {} — no handshake", crate::logging::redacted(&config.username));
             do_ccp_soft_token(tls, &key)?;
             // AUTH_FINISH follows the challenge exactly as it follows a
             // handshake, and it says whether the session exists.
@@ -1320,7 +1329,7 @@ fn authenticate(
                     "The session offered was not accepted (mode {auth_mode}) — logging on with the password",
                 );
             }
-            log::info!("Starting auth for {}", config.username);
+            log::info!("Starting auth for {}", crate::logging::redacted(&config.username));
             let session_key = do_srp(tls, &config.username, &config.password)?;
             log::info!("Auth complete");
 
