@@ -144,6 +144,15 @@ official gateway behaves the same way.
   back to the caller who wanted it. The venue echoes an id back, so one taken
   from the caller cannot be told apart from one allocated here. The venue
   allocates the same way, from one upward, and keys its subscriptions on it.
+- **A request id states four bytes, and the top quarter of that range is this
+  client's own.** A caller numbers requests below `0xC000_0000`; at and above
+  it are the ids this client allocates for the questions it asks on a caller's
+  behalf, and above `0xF000_0000` the ones the engine asks for itself. An id
+  outside what a caller may use is refused by number rather than answered,
+  because answered it would be indistinguishable from one of this client's own
+  and its reply withheld. An order may be numbered wider — the venue takes a
+  wider one — but an order id reused as a request id has to satisfy this, and
+  the interface this client mirrors encourages one counter for both.
 - **`keepUpToDate` queries are closed on first response.** Continuation is
   provided by folding the 5-second bar stream into the requested bar size.
 - **Historical execution reports require a window within 7 days.** A request
