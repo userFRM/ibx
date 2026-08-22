@@ -652,6 +652,36 @@ pub(super) fn skip_unacked_if_closed(order_acked: bool) -> bool {
     false
 }
 
+/// What to fall back to for ticks when New York is shut, and what it is.
+///
+/// Forex was the fallback because it trades around the clock — but only from
+/// Sunday evening to Friday evening, so on a Saturday the three phases that
+/// use it asked a shut venue and reported nothing while counting themselves
+/// as run. A crypto trades every day, and its top of book answers when
+/// everything else this suite watches is closed.
+///
+/// The window is stated in UTC and kept inside the part of the forex week that
+/// holds under either American clock, so it is never wrong in the direction
+/// that claims a market is open.
+pub(super) fn tick_fallback() -> (&'static str, &'static str, &'static str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let days = now / 86_400;
+    // 1970-01-01 was a Thursday.
+    let weekday = (days + 4) % 7;
+    let hour = (now % 86_400) / 3600;
+    // Shut from Friday evening to Sunday evening, New York time; stated here
+    // an hour inside either end so a clock change cannot open it early.
+    let forex_shut = weekday == 6
+        || (weekday == 5 && hour >= 22)
+        || (weekday == 0 && hour < 23);
+    if forex_shut {
+        ("BTC", "CRYPTO", "PAXOS")
+    } else {
+        ("EUR", "CASH", "IDEALPRO")
+    }
+}
+
 /// Whether London is trading, in UTC.
 ///
 /// [`market_session`] answers for New York, and a London order excused because
