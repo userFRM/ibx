@@ -375,7 +375,7 @@ def place_order(order_id, contract, order)
 
 #### `exercise_options`
 
-Exercise or lapse a long option position.  `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `_override` is taken and not applied: it selects a validation bypass applied before the order is built, and no tag on this wire carries it.
+Exercise or lapse a long option position.  `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused.  `_override` is taken and not sent, because no tag carries it: it names a check made before the order is built, not one the venue makes. The check it names is real — it is what stops an exercise of an option out of the money and a lapse of one in it — and this client does not make it, because what it rests on is the venue's word on where the option stands, which this client does not ask for. An instruction is sent as given; passing `0` says so in the log and changes nothing else.
 
 ```python
 def exercise_options(req_id, contract, exercise_action, exercise_quantity, account, _override)

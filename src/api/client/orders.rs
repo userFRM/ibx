@@ -191,15 +191,30 @@ impl EClient {
     /// Exercise or lapse a long option position. Matches `exerciseOptions` in C++.
     ///
     /// `exercise_action` is 1 to exercise and 2 to lapse; anything else is
-    /// refused. `override_` is taken for signature compatibility and is not
-    /// sent: it is a validation bypass the venue's front end applies before
-    /// it builds the order, so there is no tag for it on the wire.
+    /// refused.
+    ///
+    /// `override_` is taken and not sent, because there is no tag for it: it
+    /// names a check made before the order is built, not one the venue makes.
+    /// The check it names is a real one — it is what stops an exercise of an
+    /// option that is out of the money and a lapse of one that is in it — and
+    /// this client does not make it, because what it rests on is the venue's
+    /// word on where the option stands, which this client does not ask for.
+    /// So an instruction is sent as given, and `override_ = false` buys no
+    /// protection here. Passing `true` is the honest description of what
+    /// happens either way; passing `false` says so in the log.
     pub fn exercise_options(
         &self, req_id: i64, contract: &Contract, exercise_action: i32,
         exercise_quantity: i32, account: &str, override_: bool,
     ) -> Result<(), Refusal> {
         self.core.refuse_if_readonly("an exercise").map_err(Refusal::validation)?;
-        let _ = override_;
+        if !override_ {
+            log::warn!(
+                "exercise of {} asked to stop short of an option out of the money, and \
+                 this client does not know where the option stands: the instruction is \
+                 sent as given",
+                contract.symbol,
+            );
+        }
         let (action, qty) = ClientCore::validate_exercise(
             exercise_action, exercise_quantity, account, &self.account_id,
         )?;
