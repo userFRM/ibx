@@ -212,15 +212,29 @@ impl EClient {
     /// Exercise or lapse a long option position.
     ///
     /// `exercise_action` is 1 to exercise and 2 to lapse; anything else is
-    /// refused. `_override` is taken and not applied: it selects a validation
-    /// bypass applied before the order is built, and no tag on this wire
-    /// carries it.
+    /// refused.
+    ///
+    /// `_override` is taken and not sent, because no tag carries it: it names
+    /// a check made before the order is built, not one the venue makes. The
+    /// check it names is real — it is what stops an exercise of an option out
+    /// of the money and a lapse of one in it — and this client does not make
+    /// it, because what it rests on is the venue's word on where the option
+    /// stands, which this client does not ask for. An instruction is sent as
+    /// given; passing `0` says so in the log and changes nothing else.
     #[pyo3(signature = (req_id, contract, exercise_action, exercise_quantity, account, _override))]
     fn exercise_options(
         &self, py: Python<'_>, req_id: i64, contract: &Contract, exercise_action: i32,
         exercise_quantity: i32, account: &str, _override: i32,
     ) -> PyResult<()> {
         self.core.refuse_if_readonly("an exercise").map_err(PyRuntimeError::new_err)?;
+        if _override == 0 {
+            log::warn!(
+                "exercise of {} asked to stop short of an option out of the money, and \
+                 this client does not know where the option stands: the instruction is \
+                 sent as given",
+                contract.symbol,
+            );
+        }
         // The session is what names the account an exercise would be taken on,
         // so it is established before the one the caller named is compared
         // against it. Without a session there is nothing to compare and nothing
