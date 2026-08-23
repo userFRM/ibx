@@ -18,6 +18,14 @@ use super::{Contract, EClient};
 /// client's own numbering.
 const MODEL_OPTION_COMPUTATION: i32 = 13;
 
+/// Tick type 53: a computation this client was asked for.
+///
+/// The stream and the answer are two different things, and the venue names
+/// them apart: a caller watching a contract reads the model on 13, and a
+/// caller who asked what a volatility implies reads their answer on 53. Sent
+/// under 13, an answer arrived indistinguishable from the stream.
+const ASKED_OPTION_COMPUTATION: i32 = 53;
+
 /// What the reference client reports when a contract cannot be named.
 const NO_SECURITY_DEFINITION: i64 = 200;
 
@@ -438,18 +446,21 @@ impl EClient {
         for comp in self.shared.market.drain_option_computations() {
             // A computation answering a specific request goes to that request.
             // One published for the contract goes to every subscriber of it.
-            let to: Vec<i64> = match comp.answers {
-                Some(asked) => vec![asked],
+            let (to, tick_type): (Vec<i64>, i32) = match comp.answers {
+                Some(asked) => (vec![asked], ASKED_OPTION_COMPUTATION),
                 None => {
                     let owner = self.core.req_id_for_instrument(comp.instrument);
-                    std::iter::once(owner)
-                        .chain(self.core.followers_of(comp.instrument))
-                        .collect()
+                    (
+                        std::iter::once(owner)
+                            .chain(self.core.followers_of(comp.instrument))
+                            .collect(),
+                        MODEL_OPTION_COMPUTATION,
+                    )
                 }
             };
             for req_id in to {
                 wrapper.tick_option_computation(
-                    req_id, MODEL_OPTION_COMPUTATION, 0,
+                    req_id, tick_type, 0,
                     comp.implied_vol, comp.delta, comp.opt_price, comp.pv_dividend,
                     comp.gamma, comp.vega, comp.theta, comp.und_price,
                 );

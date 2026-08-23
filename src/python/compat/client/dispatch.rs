@@ -22,6 +22,14 @@ use super::super::super::types::PRICE_SCALE_F;
 /// Tick type 13: the venue's model computation.
 const MODEL_OPTION_COMPUTATION: i32 = 13;
 
+/// Tick type 53: a computation this client was asked for.
+///
+/// The stream and the answer are two different things, and the venue names
+/// them apart: a caller watching a contract reads the model on 13, and a
+/// caller who asked what a volatility implies reads their answer on 53. Sent
+/// under 13, an answer arrived indistinguishable from the stream.
+const ASKED_OPTION_COMPUTATION: i32 = 53;
+
 /// A figure the venue did not state, as the reference client states it.
 ///
 /// This client holds an unstated double as `f64::MAX`, and so does the
@@ -436,18 +444,21 @@ impl EClient {
             // A locally solved calculation answers the request that asked for
             // it. The venue's model belongs to the contract, so it goes to
             // every request watching that contract.
-            let to: Vec<i64> = match comp.answers {
-                Some(asked) => vec![asked],
+            let (to, tick_type): (Vec<i64>, i32) = match comp.answers {
+                Some(asked) => (vec![asked], ASKED_OPTION_COMPUTATION),
                 None => {
                     let owner = self.core.req_id_for_instrument(comp.instrument);
-                    std::iter::once(owner)
-                        .chain(self.core.followers_of(comp.instrument))
-                        .collect()
+                    (
+                        std::iter::once(owner)
+                            .chain(self.core.followers_of(comp.instrument))
+                            .collect(),
+                        MODEL_OPTION_COMPUTATION,
+                    )
                 }
             };
             for req_id in to {
                 call_wrapper!(self.wrapper, py, "tick_option_computation",
-                    (req_id, MODEL_OPTION_COMPUTATION, 0i32,
+                    (req_id, tick_type, 0i32,
                      or_unstated_price(comp.implied_vol), or_unstated_greek(comp.delta),
                      or_unstated_price(comp.opt_price), or_unstated_price(comp.pv_dividend),
                      or_unstated_greek(comp.gamma), or_unstated_greek(comp.vega),
