@@ -8,7 +8,7 @@ use crate::protocol::connection::{Connection, Frame};
 use crate::protocol::fix;
 use crate::protocol::fixcomp;
 use crate::types::{
-    CompletedOrder, Fill, InstrumentId, Price, Side, PRICE_SCALE,
+    CompletedOrder, Fill, InstrumentId, Side, PRICE_SCALE,
 };
 
 use super::{HeartbeatState, emit, parse_price_tag, decode_tif, EventSink};
@@ -413,13 +413,13 @@ impl CcpState {
                     instrument,
                     order_id: clord_id,
                     side,
-                    price: (last_px * PRICE_SCALE as f64) as i64,
+                    price: crate::types::price_from_f64(last_px),
                     qty: booked,
                     remaining: leaves_qty,
-                    commission: (commission * PRICE_SCALE as f64) as i64,
+                    commission: crate::types::price_from_f64(commission),
                     timestamp_ns: context.now_ns(),
                     cum_qty: order_cum_qty,
-                    avg_price: (order_avg_px * PRICE_SCALE as f64) as i64,
+                    avg_price: crate::types::price_from_f64(order_avg_px),
                 };
                 let delta = match side {
                     Side::Buy => booked,
@@ -441,7 +441,7 @@ impl CcpState {
                     .or_else(|| context.market.con_id(instrument));
                 if let Some(con_id) = filled_con_id {
                     shared.portfolio.apply_fill(
-                        con_id, qty_to_f64(delta), (last_px * PRICE_SCALE as f64) as Price,
+                        con_id, qty_to_f64(delta), crate::types::price_from_f64(last_px),
                     );
                 }
                 // Returned rather than announced here. A caller told about a
@@ -498,11 +498,11 @@ impl CcpState {
             .unwrap_or_else(|| prior.map_or(0, |o| o.qty));
         let limit_price_i64: i64 = parsed.get(&44)
             .and_then(|s| s.parse::<f64>().ok())
-            .map(|p| (p * PRICE_SCALE as f64) as i64)
+            .map(crate::types::price_from_f64)
             .unwrap_or_else(|| prior.map_or(0, |o| o.price));
         let stop_price_i64: i64 = parsed.get(&99)
             .and_then(|s| s.parse::<f64>().ok())
-            .map(|p| (p * PRICE_SCALE as f64) as i64)
+            .map(crate::types::price_from_f64)
             .unwrap_or_else(|| prior.map_or(0, |o| o.stop_price));
         let ord_type_byte: u8 = parsed.get(&40).and_then(|s| s.bytes().next())
             .unwrap_or_else(|| prior.map_or(b'2', |o| o.ord_type));
@@ -1030,7 +1030,7 @@ impl CcpState {
                     status,
                     filled_qty: qty_to_f64(order.filled),
                     remaining_qty: qty_to_f64(leaves_qty),
-                    avg_price: (order_avg_px * PRICE_SCALE as f64) as Price,
+                    avg_price: crate::types::price_from_f64(order_avg_px),
                     perm_id,
                     parent_id,
                     timestamp_ns: context.now_ns(),
@@ -1600,7 +1600,7 @@ fn decode_condition(c: &std::collections::HashMap<u32, String>) -> Option<crate:
         Some("1") => Some(OrderCondition::Price {
             con_id,
             exchange: text(EXCHANGE),
-            price: (number(PRICE)? * PRICE_SCALE as f64) as Price,
+            price: crate::types::price_from_f64(number(PRICE)?),
             is_more: is_more()?,
             // Tag 6127 is written outbound and absent inbound, so the trigger
             // method reads as the venue's rather than the caller's.

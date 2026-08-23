@@ -7,7 +7,7 @@ use crate::engine::context::Context;
 use crate::protocol::connection::Connection;
 use crate::types::{
     MidnightSeed,
-    PositionInfo, Price, PRICE_SCALE,
+    PositionInfo, Price,
 };
 
 use super::{HeartbeatState, emit, EventSink};
@@ -38,25 +38,25 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
                 // left no trace that the venue had stated it.
                 shared.portfolio.note_account_value(k, val, currency);
                 match k {
-                    "NetLiquidation" => { if let Ok(v) = val.parse::<f64>() { context.account.net_liquidation = (v * PRICE_SCALE as f64) as Price; } }
-                    "BuyingPower" => { if let Ok(v) = val.parse::<f64>() { context.account.buying_power = (v * PRICE_SCALE as f64) as Price; } }
-                    "MaintMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.margin_used = (v * PRICE_SCALE as f64) as Price; } }
-                    "UnrealizedPnL" => { if let Ok(v) = val.parse::<f64>() { context.account.unrealized_pnl = (v * PRICE_SCALE as f64) as Price; } }
-                    "RealizedPnL" => { if let Ok(v) = val.parse::<f64>() { context.account.realized_pnl = (v * PRICE_SCALE as f64) as Price; } }
-                    "TotalCashValue" => { if let Ok(v) = val.parse::<f64>() { context.account.total_cash_value = (v * PRICE_SCALE as f64) as Price; } }
-                    "SettledCash" => { if let Ok(v) = val.parse::<f64>() { context.account.settled_cash = (v * PRICE_SCALE as f64) as Price; } }
-                    "AccruedCash" => { if let Ok(v) = val.parse::<f64>() { context.account.accrued_cash = (v * PRICE_SCALE as f64) as Price; } }
-                    "EquityWithLoanValue" => { if let Ok(v) = val.parse::<f64>() { context.account.equity_with_loan = (v * PRICE_SCALE as f64) as Price; } }
-                    "GrossPositionValue" => { if let Ok(v) = val.parse::<f64>() { context.account.gross_position_value = (v * PRICE_SCALE as f64) as Price; } }
-                    "InitMarginReq" | "FullInitMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.init_margin_req = (v * PRICE_SCALE as f64) as Price; } }
-                    "FullMaintMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.maint_margin_req = (v * PRICE_SCALE as f64) as Price; } }
-                    "AvailableFunds" | "FullAvailableFunds" => { if let Ok(v) = val.parse::<f64>() { context.account.available_funds = (v * PRICE_SCALE as f64) as Price; } }
-                    "ExcessLiquidity" | "FullExcessLiquidity" => { if let Ok(v) = val.parse::<f64>() { context.account.excess_liquidity = (v * PRICE_SCALE as f64) as Price; } }
-                    "Cushion" => { if let Ok(v) = val.parse::<f64>() { context.account.cushion = (v * PRICE_SCALE as f64) as Price; } }
-                    "SMA" => { if let Ok(v) = val.parse::<f64>() { context.account.sma = (v * PRICE_SCALE as f64) as Price; } }
+                    "NetLiquidation" => { if let Ok(v) = val.parse::<f64>() { context.account.net_liquidation = crate::types::price_from_f64(v); } }
+                    "BuyingPower" => { if let Ok(v) = val.parse::<f64>() { context.account.buying_power = crate::types::price_from_f64(v); } }
+                    "MaintMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.margin_used = crate::types::price_from_f64(v); } }
+                    "UnrealizedPnL" => { if let Ok(v) = val.parse::<f64>() { context.account.unrealized_pnl = crate::types::price_from_f64(v); } }
+                    "RealizedPnL" => { if let Ok(v) = val.parse::<f64>() { context.account.realized_pnl = crate::types::price_from_f64(v); } }
+                    "TotalCashValue" => { if let Ok(v) = val.parse::<f64>() { context.account.total_cash_value = crate::types::price_from_f64(v); } }
+                    "SettledCash" => { if let Ok(v) = val.parse::<f64>() { context.account.settled_cash = crate::types::price_from_f64(v); } }
+                    "AccruedCash" => { if let Ok(v) = val.parse::<f64>() { context.account.accrued_cash = crate::types::price_from_f64(v); } }
+                    "EquityWithLoanValue" => { if let Ok(v) = val.parse::<f64>() { context.account.equity_with_loan = crate::types::price_from_f64(v); } }
+                    "GrossPositionValue" => { if let Ok(v) = val.parse::<f64>() { context.account.gross_position_value = crate::types::price_from_f64(v); } }
+                    "InitMarginReq" | "FullInitMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.init_margin_req = crate::types::price_from_f64(v); } }
+                    "FullMaintMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.maint_margin_req = crate::types::price_from_f64(v); } }
+                    "AvailableFunds" | "FullAvailableFunds" => { if let Ok(v) = val.parse::<f64>() { context.account.available_funds = crate::types::price_from_f64(v); } }
+                    "ExcessLiquidity" | "FullExcessLiquidity" => { if let Ok(v) = val.parse::<f64>() { context.account.excess_liquidity = crate::types::price_from_f64(v); } }
+                    "Cushion" => { if let Ok(v) = val.parse::<f64>() { context.account.cushion = crate::types::price_from_f64(v); } }
+                    "SMA" => { if let Ok(v) = val.parse::<f64>() { context.account.sma = crate::types::price_from_f64(v); } }
                     "DayTradesRemaining" => { if let Ok(v) = val.parse::<i64>() { context.account.day_trades_remaining = v; } }
-                    "Leverage-S" | "Leverage" => { if let Ok(v) = val.parse::<f64>() { context.account.leverage = (v * PRICE_SCALE as f64) as Price; } }
-                    "DailyPnL" => { if let Ok(v) = val.parse::<f64>() { context.account.daily_pnl = (v * PRICE_SCALE as f64) as Price; } }
+                    "Leverage-S" | "Leverage" => { if let Ok(v) = val.parse::<f64>() { context.account.leverage = crate::types::price_from_f64(v); } }
+                    "DailyPnL" => { if let Ok(v) = val.parse::<f64>() { context.account.daily_pnl = crate::types::price_from_f64(v); } }
                     _ => {}
                 }
                 key = None;
@@ -193,7 +193,7 @@ pub(crate) fn handle_position_elsewhere(
     let avg_cost = parsed.get(&6101)
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|v| v.is_finite())
-        .map(|v| (v * PRICE_SCALE as f64) as Price)
+        .map(crate::types::price_from_f64)
         .unwrap_or_else(|| {
             shared.portfolio.positions_elsewhere()
                 .iter()
@@ -240,7 +240,7 @@ pub(crate) fn handle_position_update(
     // average cost, which is actually the market price.
     let price_tag = |tag: u32| parsed.get(&tag)
         .and_then(|s| s.parse::<f64>().ok())
-        .map(|v| (v * PRICE_SCALE as f64) as Price)
+        .map(crate::types::price_from_f64)
         .unwrap_or(0);
     // The average cost is written into a row that persists, so an absent tag
     // must not overwrite a real one with zero — the same rule the quantity
@@ -248,7 +248,7 @@ pub(crate) fn handle_position_update(
     let avg_cost: Option<Price> = parsed.get(&6101)
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|v| v.is_finite())
-        .map(|v| (v * PRICE_SCALE as f64) as Price);
+        .map(crate::types::price_from_f64);
     let market_price: Price = price_tag(6065);
     let market_value: Price = price_tag(6067);
     let unrealized_pnl: Price = price_tag(6100);
@@ -330,7 +330,7 @@ impl CcpState {
                 if let Some(qty) = qty {
                     let avg_cost = basis_for(
                         shared, con_id,
-                        avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
+                        avg_cost_raw.map(crate::types::price_from_f64), qty,
                     );
                     shared.portfolio.set_position_info(PositionInfo {
                         con_id,
@@ -374,7 +374,7 @@ impl CcpState {
         if let Some(qty) = qty {
             let avg_cost = basis_for(
                 shared, con_id,
-                avg_cost_raw.map(|c| (c * PRICE_SCALE as f64) as Price), qty,
+                avg_cost_raw.map(crate::types::price_from_f64), qty,
             );
             shared.portfolio.set_position_info(PositionInfo {
                 con_id, position: qty, avg_cost, ..Default::default()

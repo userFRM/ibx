@@ -931,23 +931,35 @@ impl ClientCore {
         let held = self.instrument_to_req.lock().unwrap();
         match held.get(&instrument) {
             Some(&existing) if existing != req_id => {
+                self.follow_under_holder_lock(instrument, req_id);
                 drop(held);
-                self.follow(instrument, req_id);
+                // Outside both, because a request pointing at the instrument it
+                // follows is not what a withdrawal races against.
+                self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
                 true
             }
             _ => false,
         }
     }
 
-    /// Watch a contract somebody else holds.
-    fn follow(&self, instrument: InstrumentId, req_id: i64) {
+    /// Watch a contract somebody else holds, with the holder map already held.
+    ///
+    /// The follower is written down before the holder can be released. Recorded
+    /// after instead, a withdrawal of the holder running in between finds
+    /// nobody watching, takes the subscription down, and the follower is left
+    /// registered against a feed that has gone — told nothing, and with nothing
+    /// on the wire. The holder map is what decides, so the follower is recorded
+    /// under it, the same way taking one is.
+    ///
+    /// `instrument_followers` is taken under `instrument_to_req` here and
+    /// nowhere the other way round: the withdrawal path releases the followers
+    /// before it touches the holder map.
+    fn follow_under_holder_lock(&self, instrument: InstrumentId, req_id: i64) {
         let mut following = self.instrument_followers.lock().unwrap();
         let watchers = following.entry(instrument).or_default();
         if !watchers.contains(&req_id) {
             watchers.push(req_id);
         }
-        drop(following);
-        self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
     }
 
     /// Hold this contract, or follow whoever took it first.
@@ -963,8 +975,11 @@ impl ClientCore {
         let mut held = self.instrument_to_req.lock().unwrap();
         match held.get(&instrument) {
             Some(&existing) if existing != req_id => {
+                self.follow_under_holder_lock(instrument, req_id);
                 drop(held);
-                self.follow(instrument, req_id);
+                // Outside both, because a request pointing at the instrument it
+                // follows is not what a withdrawal races against.
+                self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
                 true
             }
             _ => {
@@ -2149,7 +2164,7 @@ impl ClientCore {
     fn midnight_price(shared: &SharedState, con_id: i64) -> Option<Price> {
         let raw = shared.portfolio.venue_price(con_id)?;
         let price = raw.trim().parse::<f64>().ok().filter(|p| p.is_finite())?;
-        Some((price * PRICE_SCALE_F) as Price).filter(|&p| p != 0)
+        Some(crate::types::price_from_f64(price)).filter(|&p| p != 0)
     }
 
     /// Poll PnL and return update if values changed.
@@ -2288,9 +2303,9 @@ impl ClientCore {
         }
 
         let pnl = [
-            (total_daily * PRICE_SCALE_F) as i64,
-            (total_unrealized * PRICE_SCALE_F) as i64,
-            (total_realized * PRICE_SCALE_F) as i64,
+            crate::types::price_from_f64(total_daily),
+            crate::types::price_from_f64(total_unrealized),
+            crate::types::price_from_f64(total_realized),
         ];
         let mut last = self.last_pnl.lock().unwrap();
         if pnl == *last {
@@ -2402,10 +2417,10 @@ impl ClientCore {
 
             let snapshot: [i64; 5] = [
                 qty_now as i64,
-                (daily * PRICE_SCALE_F) as i64,
-                (unrealized * PRICE_SCALE_F) as i64,
-                (realized * PRICE_SCALE_F) as i64,
-                (value * PRICE_SCALE_F) as i64,
+                crate::types::price_from_f64(daily),
+                crate::types::price_from_f64(unrealized),
+                crate::types::price_from_f64(realized),
+                crate::types::price_from_f64(value),
             ];
             if last_cache.get(&req_id) == Some(&snapshot) {
                 continue;
@@ -3286,7 +3301,7 @@ impl ClientCore {
     /// A price the caller left alone is `f64::MAX`, which is not a price and
     /// does not survive being scaled into one.
     fn price_or_unset(v: f64) -> i64 {
-        if v == f64::MAX { 0 } else { (v * PRICE_SCALE_F) as i64 }
+        if v == f64::MAX { 0 } else { crate::types::price_from_f64(v) }
     }
 
     /// Turn what a caller set into the request the engine sends.
@@ -3333,7 +3348,7 @@ impl ClientCore {
                     .get(at)
                     .copied()
                     .filter(|p| *p != f64::MAX)
-                    .map(|p| (p * PRICE_SCALE_F) as Price),
+                    .map(crate::types::price_from_f64),
             }
         }).collect();
         let ex = |kind: OrderKind| OrderRequest::SubmitEx {
@@ -3359,7 +3374,7 @@ impl ClientCore {
 
         // Adaptive orders (special-cased before generic algo)
         if order.algo_strategy.eq_ignore_ascii_case("Adaptive") {
-            let price = (order.lmt_price * PRICE_SCALE_F) as i64;
+            let price = crate::types::price_from_f64(order.lmt_price);
             let priority = adaptive_priority(&order.algo_params)?;
             return Ok(ControlCommand::Order(ex(OrderKind::Adaptive { price, priority })));
         }
@@ -3367,13 +3382,13 @@ impl ClientCore {
         // Algo orders
         if !order.algo_strategy.is_empty() {
             let algo = crate::client_core::parse_algo_params(&order.algo_strategy, &order.algo_params)?;
-            let price = (order.lmt_price * PRICE_SCALE_F) as i64;
+            let price = crate::types::price_from_f64(order.lmt_price);
             return Ok(ControlCommand::Order(ex(OrderKind::Algo { price, algo })));
         }
 
         // What-if orders
         if order.what_if {
-            let price = (order.lmt_price * PRICE_SCALE_F) as i64;
+            let price = crate::types::price_from_f64(order.lmt_price);
             // A preview states the type of the order being previewed. Sending
             // every preview as a limit made a market-only security answer
             // "The order type Limit is invalid for this combination of
@@ -3386,7 +3401,7 @@ impl ClientCore {
             // The price the previewed type triggers at. A stop states it and
             // no limit price at all, so a preview built from the limit price
             // alone asked about a stop at zero.
-            let aux = (order.aux_price * PRICE_SCALE_F) as i64;
+            let aux = crate::types::price_from_f64(order.aux_price);
             return Ok(ControlCommand::Order(ex(OrderKind::WhatIf { price, aux, ord_type })));
         }
 
@@ -3403,7 +3418,7 @@ impl ClientCore {
                 "TRAIL LIMIT" => AdjustedOrderType::TrailLimit,
                 other => return Err(format!("unknown adjustedOrderType '{other}'")),
             };
-            let scale = |v: f64| (v * PRICE_SCALE_F) as i64;
+            let scale = |v: f64| crate::types::price_from_f64(v);
             // adjusted_trailing_amount defaults to f64::MAX when unset.
             let adj_trail = if order.adjusted_trailing_amount == f64::MAX {
                 0.0
@@ -3432,21 +3447,21 @@ impl ClientCore {
                 ex(OrderKind::Market)
             }
             "LMT" => {
-                let price = (order.lmt_price * PRICE_SCALE_F) as i64;
+                let price = crate::types::price_from_f64(order.lmt_price);
                 ex(OrderKind::Limit { price })
             }
             "STP" => {
-                let stop = (order.aux_price * PRICE_SCALE_F) as i64;
+                let stop = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::Stop { stop_price: stop })
             }
             "STP LMT" => {
-                let price = (order.lmt_price * PRICE_SCALE_F) as i64;
-                let stop = (order.aux_price * PRICE_SCALE_F) as i64;
+                let price = crate::types::price_from_f64(order.lmt_price);
+                let stop = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::StopLimit { price, stop_price: stop })
             }
             "TRAIL" => {
                 // Optional initial stop trigger (tag 6117); default f64::MAX = unset.
-                let trail_stop = if order.trail_stop_price == f64::MAX { 0 } else { (order.trail_stop_price * PRICE_SCALE_F) as i64 };
+                let trail_stop = if order.trail_stop_price == f64::MAX { 0 } else { crate::types::price_from_f64(order.trail_stop_price) };
                 if order.trailing_percent > 0.0 {
                     // Wire granularity is basis points (2 decimal places): a
                     // trailing_percent with finer precision than that, e.g.
@@ -3457,7 +3472,7 @@ impl ClientCore {
                     let pct = (order.trailing_percent * 100.0) as u32;
                     ex(OrderKind::TrailPct { trail_pct: pct, trail_stop_price: trail_stop })
                 } else {
-                    let trail = (order.aux_price * PRICE_SCALE_F) as i64;
+                    let trail = crate::types::price_from_f64(order.aux_price);
                     ex(OrderKind::TrailingStop { trail_amt: trail, trail_stop_price: trail_stop })
                 }
             }
@@ -3470,25 +3485,25 @@ impl ClientCore {
                 } else {
                     order.lmt_price
                 };
-                let lmt_offset = (offset_f * PRICE_SCALE_F) as i64;
-                let trail = (order.aux_price * PRICE_SCALE_F) as i64;
-                let trail_stop = if order.trail_stop_price == f64::MAX { 0 } else { (order.trail_stop_price * PRICE_SCALE_F) as i64 };
+                let lmt_offset = crate::types::price_from_f64(offset_f);
+                let trail = crate::types::price_from_f64(order.aux_price);
+                let trail_stop = if order.trail_stop_price == f64::MAX { 0 } else { crate::types::price_from_f64(order.trail_stop_price) };
                 ex(OrderKind::TrailingStopLimit { lmt_offset, trail_amt: trail, trail_stop_price: trail_stop })
             }
             "MOC" => {
                 ex(OrderKind::Moc)
             }
             "LOC" => {
-                let price = (order.lmt_price * PRICE_SCALE_F) as i64;
+                let price = crate::types::price_from_f64(order.lmt_price);
                 ex(OrderKind::Loc { price })
             }
             "MIT" => {
-                let stop = (order.aux_price * PRICE_SCALE_F) as i64;
+                let stop = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::Mit { stop_price: stop })
             }
             "LIT" => {
-                let price = (order.lmt_price * PRICE_SCALE_F) as i64;
-                let stop = (order.aux_price * PRICE_SCALE_F) as i64;
+                let price = crate::types::price_from_f64(order.lmt_price);
+                let stop = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::Lit { price, stop_price: stop })
             }
             "MTL" | "BOX TOP" => {
@@ -3498,11 +3513,11 @@ impl ClientCore {
                 ex(OrderKind::MktPrt)
             }
             "STP PRT" => {
-                let stop = (order.aux_price * PRICE_SCALE_F) as i64;
+                let stop = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::StpPrt { stop_price: stop })
             }
             "REL" => {
-                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
+                let offset = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::Rel { offset })
             }
             // Every reference field was already carried here and then read by
@@ -3510,40 +3525,40 @@ impl ClientCore {
             // of them.
             "PEG BENCH" | "PEGBENCH" => {
                 ex(OrderKind::PegBench {
-                    price: (order.lmt_price * PRICE_SCALE_F) as i64,
+                    price: crate::types::price_from_f64(order.lmt_price),
                     ref_con_id: order.reference_contract_id.max(0) as u32,
                     is_peg_decrease: order.is_pegged_change_amount_decrease,
-                    pegged_change_amount: (order.pegged_change_amount * PRICE_SCALE_F) as i64,
-                    ref_change_amount: (order.reference_change_amount * PRICE_SCALE_F) as i64,
+                    pegged_change_amount: crate::types::price_from_f64(order.pegged_change_amount),
+                    ref_change_amount: crate::types::price_from_f64(order.reference_change_amount),
                     starting_price: Self::price_or_unset(order.starting_price),
                     stock_ref_price: Self::price_or_unset(order.stock_ref_price),
                     ref_exchange: order.reference_exchange_id.clone(),
                 })
             }
             "PEG MKT" => {
-                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
-                let price_cap = (order.lmt_price * PRICE_SCALE_F) as i64;
+                let offset = crate::types::price_from_f64(order.aux_price);
+                let price_cap = crate::types::price_from_f64(order.lmt_price);
                 ex(OrderKind::PegMkt { offset, price_cap })
             }
             "PEG MID" | "PEG MIDPT" => {
-                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
-                let price_cap = (order.lmt_price * PRICE_SCALE_F) as i64;
+                let offset = crate::types::price_from_f64(order.aux_price);
+                let price_cap = crate::types::price_from_f64(order.lmt_price);
                 ex(OrderKind::PegMid { offset, price_cap })
             }
             "MIDPX" | "MIDPRICE" => {
-                let cap = (order.lmt_price * PRICE_SCALE_F) as i64;
+                let cap = crate::types::price_from_f64(order.lmt_price);
                 ex(OrderKind::MidPrice { price_cap: cap })
             }
             "SNAP MKT" => {
-                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
+                let offset = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::SnapMkt { offset })
             }
             "SNAP MID" | "SNAP MIDPT" => {
-                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
+                let offset = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::SnapMid { offset })
             }
             "SNAP PRI" | "SNAP PRIM" => {
-                let offset = (order.aux_price * PRICE_SCALE_F) as i64;
+                let offset = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::SnapPri { offset })
             }
             _ => return Err(format!("Unsupported order type: '{}'", order.order_type)),

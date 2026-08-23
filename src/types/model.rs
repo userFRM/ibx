@@ -964,7 +964,7 @@ impl Order {
                 String::new()
             },
             parent_id: self.parent_id.max(0) as u64,
-            discretionary_amt: (self.discretionary_amt * PRICE_SCALE_F) as Price,
+            discretionary_amt: crate::types::price_from_f64(self.discretionary_amt),
             sweep_to_fill: self.sweep_to_fill,
             all_or_none: self.all_or_none,
             // `f64::MAX` is this API's "not set" for a price-like field, and
@@ -1047,7 +1047,7 @@ impl Order {
                 0..=4 | 7 | 8 => self.trigger_method as u8,
                 _ => 0,
             },
-            cash_qty: (self.cash_qty * PRICE_SCALE_F) as Price,
+            cash_qty: crate::types::price_from_f64(self.cash_qty),
             conditions: self.conditions.clone(),
             conditions_cancel_order: self.conditions_cancel_order,
             conditions_ignore_rth: self.conditions_ignore_rth,
@@ -1088,7 +1088,7 @@ impl Order {
         if !asked {
             return None;
         }
-        let px = |v: f64| if v == f64::MAX { 0 } else { (v * PRICE_SCALE_F) as i64 };
+        let px = |v: f64| if v == f64::MAX { 0 } else { crate::types::price_from_f64(v) };
         let n = |v: i32| if v == i32::MAX { 0 } else { v.max(0) as u32 };
         Some(Box::new(crate::types::ScaleAttrs {
             init_level_size: n(self.scale_init_level_size),
@@ -1112,7 +1112,7 @@ impl Order {
         Some(Box::new(crate::types::DeltaNeutralAttrs {
             order_type: self.delta_neutral_order_type.clone(),
             aux_price: if self.delta_neutral_aux_price == f64::MAX { 0 }
-                       else { (self.delta_neutral_aux_price * PRICE_SCALE_F) as i64 },
+                       else { crate::types::price_from_f64(self.delta_neutral_aux_price) },
             con_id: self.delta_neutral_con_id as i64,
         }))
     }

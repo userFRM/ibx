@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 
 use crate::error_codes::Refusal;
-use crate::types::model::{ExecutionFilter, PRICE_SCALE_F};
+use crate::types::model::ExecutionFilter;
 use crate::api::wrapper::Wrapper;
 use crate::client_core::ClientCore;
 use crate::types::*;
@@ -164,12 +164,12 @@ impl EClient {
             if let Some(refusal) = self.core.modify_refusal(oid, order) {
                 return Err(refusal.into());
             }
-            let price = (order.lmt_price * PRICE_SCALE_F) as i64;
+            let price = crate::types::price_from_f64(order.lmt_price);
             let qty = crate::types::qty_from_f64(order.total_quantity);
             // A stop's trigger rides on aux_price, exactly as it does on the
             // submit path. Reading only lmt_price left a stop order modifying
             // itself to a limit price of zero.
-            let stop_price = (order.aux_price * PRICE_SCALE_F) as i64;
+            let stop_price = crate::types::price_from_f64(order.aux_price);
             ControlCommand::Order(OrderRequest::Modify {
                 order_id: oid,
                 price,
@@ -489,7 +489,7 @@ impl EClient {
         let parent_id = self.reserve_order_ids(3);
         let (tp_id, sl_id) = (parent_id + 1, parent_id + 2);
 
-        let scaled = |price: f64| (price * PRICE_SCALE_F) as i64;
+        let scaled = |price: f64| crate::types::price_from_f64(price);
         self.send(ControlCommand::Order(OrderRequest::SubmitBracket {
             parent_id: parent_id as u64,
             tp_id: tp_id as u64,
