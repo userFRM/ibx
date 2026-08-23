@@ -619,7 +619,8 @@ impl EClient {
         // Drain HMDS query errors -> error. Surface gateway-side validation
         // failures (e.g. "Invalid time length") that previously vanished silently.
         for (req_id, code, msg) in shared.reference.drain_historical_errors_for_dispatch() {
-            call_wrapper!(self.wrapper, py, "error", (req_id as i64, code as i64, msg.as_str(), ""));
+            let req_id = crate::bridge::ReferenceState::request_id_reported(req_id);
+            call_wrapper!(self.wrapper, py, "error", (req_id, code as i64, msg.as_str(), ""));
         }
 
         // Drain historical data -> historicalData + historicalDataEnd /

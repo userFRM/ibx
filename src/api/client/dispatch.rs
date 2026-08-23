@@ -491,7 +491,10 @@ impl EClient {
         // QueryError that also queued an empty terminal HistoricalResponse fires
         // wrapper.error first, then wrapper.historical_data_end.
         for (req_id, code, msg) in self.shared.reference.drain_historical_errors() {
-            wrapper.error(req_id as i64, code as i64, &msg, "");
+            wrapper.error(
+                crate::bridge::ReferenceState::request_id_reported(req_id),
+                code as i64, &msg, "",
+            );
         }
 
         // Historical data → historical_data + historical_data_end, and after

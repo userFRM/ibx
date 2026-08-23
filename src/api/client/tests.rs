@@ -963,6 +963,26 @@ fn a_cancelled_order_stops_being_tracked() {
     );
 }
 
+/// A refusal that answers no request is reported as answering no request.
+///
+/// The reference client states those under -1. Clamped to 0, one lands on a
+/// caller's own request — 0 is a number a caller may well have asked under —
+/// and reads as an answer to something it did ask.
+#[test]
+fn a_refusal_against_no_request_is_not_reported_against_request_zero() {
+    let (client, _rx, _shared) = test_client();
+
+    client.report_reason(-1, &Refusal::not_connected("the engine has stopped"));
+
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:-1:")),
+        "reported under {:?}, not against no request",
+        w.events,
+    );
+}
+
 /// A session that goes away while a question is being answered still tells the
 /// caller so.
 ///
