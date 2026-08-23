@@ -86,8 +86,17 @@ impl EClient {
         // the ending qualifies the contract, which is a request to the venue and a
         // wait on the caller's thread, while the core subscribes to no news.
         let wants_news = generic_tick_list.split(',').any(|t| t.trim() == "292");
+        // A subscription states the contract's security type and exchange, and
+        // the venue routes on them. A caller who named the contract by id and
+        // nothing else has stated neither, and both are the venue's to say:
+        // asked for by id alone, it answers with them. Asking is a round trip
+        // on this thread, so it happens only where the caller left them out.
+        let named_by_id = contract.con_id != 0
+            && (contract.sec_type.is_empty() || contract.exchange.is_empty());
         let named;
-        let contract = if wants_news && contract.con_id == 0 && !contract.symbol.is_empty() {
+        let contract = if named_by_id
+            || (wants_news && contract.con_id == 0 && !contract.symbol.is_empty())
+        {
             named = self.qualify_contract(contract)?;
             &named
         } else {
