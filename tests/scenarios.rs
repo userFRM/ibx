@@ -26,6 +26,7 @@ fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<Sha
 fn spy() -> Contract {
     Contract {
         con_id: 756733, symbol: "SPY".into(), exchange: "SMART".into(),
+        sec_type: "STK".into(),
         ..Default::default()
     }
 }
