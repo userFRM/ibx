@@ -376,8 +376,17 @@ impl CcpState {
                 shared, con_id,
                 avg_cost_raw.map(crate::types::price_from_f64), qty,
             );
+            // With what the frame said it is, as every holding before it in
+            // the same frame is published. Left off, the last one is published
+            // unnamed and stays that way until the venue's own description of
+            // the contract arrives.
             shared.portfolio.set_position_info(PositionInfo {
-                con_id, position: qty, avg_cost, ..Default::default()
+                con_id,
+                position: qty,
+                avg_cost,
+                symbol: std::mem::take(&mut symbol),
+                sec_type: std::mem::take(&mut sec_type),
+                ..Default::default()
             });
             if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
                 adopt_position(context, instrument, qty);
