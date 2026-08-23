@@ -80,7 +80,10 @@ fn a_contract_the_venue_said_nothing_about_comes_back_without_a_quote() {
             }
         }
     });
-    let spy = Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() };
+    let spy = Contract {
+        con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), ..Default::default()
+    };
 
     let silent = session
         .quotes(std::slice::from_ref(&spy), Duration::from_millis(20))
@@ -317,7 +320,10 @@ fn an_average_already_reported_survives_a_status_that_states_none() {
 #[test]
 fn a_holding_is_what_the_account_holds_now() {
     let mut kept = LiveState::default();
-    let spy = Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() };
+    let spy = Contract {
+        con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), ..Default::default()
+    };
     kept.position("DU1", &spy, 100.0, 42.0);
     kept.position("DU1", &spy, 250.0, 43.0);
     assert_eq!(kept.positions().len(), 1);
@@ -560,7 +566,10 @@ fn shadowed_deliberately() {
 fn a_holding_is_priced_as_it_stands() {
     use crate::api::wrapper::Wrapper;
     let mut kept = LiveState::default();
-    let spy = Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() };
+    let spy = Contract {
+        con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), ..Default::default()
+    };
 
     kept.update_portfolio(&spy, 100.0, 42.0, 4_200.0, 40.0, 200.0, 0.0, "DU1");
     kept.update_portfolio(&spy, 100.0, 43.0, 4_300.0, 40.0, 300.0, 0.0, "DU1");

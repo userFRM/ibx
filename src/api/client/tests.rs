@@ -46,6 +46,7 @@ fn a_short_bracket_reads_its_exits_the_way_a_sell_does() {
 fn spy() -> Contract {
     Contract {
         con_id: 756733, symbol: "SPY".into(), exchange: "SMART".into(),
+        sec_type: "STK".into(),
         ..Default::default()
     }
 }
@@ -2804,11 +2805,8 @@ fn req_historical_data_sends_fetch_historical() {
             assert_eq!(what_to_show, "TRADES");
             assert!(use_rth);
             // The contract's own fields have to leave the client, or the
-            // engine has nothing but the old constants to fall back on. `spy()` states
-            // a destination and no security type, so
-            // the destination arrives as given and the type arrives empty for
-            // the engine to substitute — tested at its source.
-            assert_eq!(sec_type, "");
+            // engine has nothing but the old constants to fall back on.
+            assert_eq!(sec_type, "STK");
             assert_eq!(exchange, "SMART");
         }
         _ => panic!("expected FetchHistorical"),

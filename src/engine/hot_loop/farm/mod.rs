@@ -36,8 +36,16 @@ fn build_conid_subscribe_tags(
     // 207 must both be present. Confirmed against a live session: the same
     // contract is answered with them and silent without them.
     //
-    // These are the last resort when nothing upstream described the contract.
-    // They describe a US stock, so any other kind is subscribed as one.
+    // The last resort, and a guess: they describe a US stock, so anything else
+    // reaching here is subscribed as one. Every caller that names a contract by
+    // id alone is answered by the venue before it gets this far, so what
+    // arrives undescribed came in through the engine's own subscribe.
+    if exchange.is_empty() || sec_type.is_empty() {
+        log::warn!(
+            "contract {con_id} was subscribed without a security type or an exchange, \
+             and is being asked for as a smart-routed US stock",
+        );
+    }
     let exchange = if exchange.is_empty() { "SMART" } else { exchange };
     let sec_type = if sec_type.is_empty() { "STK" } else { sec_type };
     let fix_exchange = crate::control::contracts::exchange_to_fix(exchange);
