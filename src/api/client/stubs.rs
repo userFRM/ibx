@@ -121,11 +121,10 @@ impl EClient {
         }) {
             Ok(volatility) => self.shared.market.push_option_computation(
                 crate::types::OptionComputation {
-                    answers: Some(req_id),
                     implied_vol: volatility,
                     opt_price: option_price,
                     und_price: under_price,
-                    ..unstated()
+                    ..crate::types::OptionComputation::solved(req_id)
                 },
             ),
             // The venue states a model for a contract that is watched. Asking
@@ -150,11 +149,10 @@ impl EClient {
         }) {
             Ok(price) => self.shared.market.push_option_computation(
                 crate::types::OptionComputation {
-                    answers: Some(req_id),
                     implied_vol: volatility,
                     opt_price: price,
                     und_price: under_price,
-                    ..unstated()
+                    ..crate::types::OptionComputation::solved(req_id)
                 },
             ),
             // As above: the watch is opened and the answer follows.
@@ -177,11 +175,10 @@ impl EClient {
         }) {
             Ok(volatility) => {
                 self.shared.market.push_option_computation(crate::types::OptionComputation {
-                    answers: Some(req_id),
                     implied_vol: volatility,
                     opt_price: opt,
                     und_price: und,
-                    ..unstated()
+                    ..crate::types::OptionComputation::solved(req_id)
                 });
                 true
             }
@@ -200,11 +197,10 @@ impl EClient {
         }) {
             Ok(price) => {
                 self.shared.market.push_option_computation(crate::types::OptionComputation {
-                    answers: Some(req_id),
                     implied_vol: vol,
                     opt_price: price,
                     und_price: und,
-                    ..unstated()
+                    ..crate::types::OptionComputation::solved(req_id)
                 });
                 true
             }
@@ -373,21 +369,6 @@ impl EClient {
     }
 }
 
-/// A computation with nothing worked out yet.
-///
-/// Fields these two calls do not compute carry the unset sentinel, `f64::MAX`,
-/// which is the reference client's mark for a field that was not sent. Zero is a
-/// valid greek and cannot stand for one.
-fn unstated() -> crate::types::OptionComputation {
-    crate::types::OptionComputation {
-        delta: f64::MAX,
-        gamma: f64::MAX,
-        vega: f64::MAX,
-        theta: f64::MAX,
-        pv_dividend: f64::MAX,
-        ..Default::default()
-    }
-}
 
 /// The word the venue names an advisor's configuration partition by, from the
 /// number the reference client names it by.
