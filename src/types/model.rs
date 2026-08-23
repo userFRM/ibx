@@ -1613,6 +1613,10 @@ pub struct ContractDetails {
     /// The smallest amount of it that can be traded.
     pub size_increment: f64,
     /// What the venue suggests trading in.
+    ///
+    /// Zero unless the venue states one. It is a figure of its own, not the
+    /// smallest tradeable amount, and reporting the one under the other's name
+    /// would be this client's suggestion rather than the venue's.
     pub suggested_size_increment: f64,
     /// How many decimal places its prices carry.
     pub last_price_precision: f64,
