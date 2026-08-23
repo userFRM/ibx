@@ -157,9 +157,16 @@ impl LogonAck {
             if let Some(v) = fields.get(&6386)
                 && ack.ccp_token.is_empty() {
                     ack.ccp_token = v.clone();
-                    log::info!("Auth: captured ccp_token (FIX 6386, len={}, prefix={:?})",
+                    // Its length and enough of it to tell one session's token
+                    // from another's in a log, and no more. This is what the
+                    // session is authenticated by for as long as it lasts, and
+                    // sixteen characters of it is a piece of a live credential
+                    // in a file people paste. Redacted by character rather than
+                    // by byte, so a token the venue sends with a multi-byte
+                    // character in it is not sliced through the middle of one.
+                    log::info!("Auth: captured ccp_token (FIX 6386, len={}, {})",
                         ack.ccp_token.len(),
-                        if ack.ccp_token.len() > 16 { &ack.ccp_token[..16] } else { &ack.ccp_token });
+                        crate::logging::redacted(&ack.ccp_token));
                 }
             // Tag 8035: try parsed fields first, then raw byte search
             if ack.server_session_id.is_empty() {
