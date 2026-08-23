@@ -193,11 +193,17 @@ impl AsyncClient {
 
     /// Every trade printed on a contract, as it prints.
     ///
-    /// Not moved off the reactor: subscribing sends and returns. Reading the
-    /// stream blocks the thread that reads it, so read it from a task of its
-    /// own — `spawn_blocking`, or a thread.
-    pub fn ticks(&self, contract: &Contract) -> Result<super::Ticks, Refusal> {
-        self.inner.ticks(contract)
+    /// Subscribing does not always only send: a contract named by symbol
+    /// rather than by the venue's id has to be asked about first, and that
+    /// waits on the venue and on this session's turn to ask. Done on the
+    /// reactor, that stalls every other task on it, so it is done off the
+    /// reactor like every other call here that can wait.
+    ///
+    /// Reading the stream blocks the thread that reads it, so read it from a
+    /// task of its own — `spawn_blocking`, or a thread.
+    pub async fn ticks(&self, contract: &Contract) -> Result<super::Ticks, Refusal> {
+        let contract = contract.clone();
+        off_the_reactor!(self, |client| client.ticks(&contract))
     }
 
     /// Everything that happens to this session's orders, as it happens.
