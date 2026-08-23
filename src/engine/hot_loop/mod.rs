@@ -710,7 +710,14 @@ impl HotLoop {
             //    state leaves the connected path exactly as it was; a reconnect
             //    is scheduled on a backoff measured in seconds, so a millisecond
             //    here delays nothing, including shutdown.
-            if self.farm.disconnected && self.ccp.disconnected && self.hmds.disconnected {
+            // A historical connection that never came up has no socket either,
+            // and is not marked down because it was never up to go down: a
+            // session whose token was refused at logon runs with none at all.
+            // Read as still live, the spin above ran for the whole of an
+            // outage on exactly the sessions that have one transport fewer to
+            // be quick for.
+            let no_historical_socket = self.hmds.disconnected || self.hmds_conn.is_none();
+            if self.farm.disconnected && self.ccp.disconnected && no_historical_socket {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
