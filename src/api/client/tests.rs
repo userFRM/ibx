@@ -963,6 +963,29 @@ fn a_cancelled_order_stops_being_tracked() {
     );
 }
 
+/// A session that goes away while a question is being answered still tells the
+/// caller so.
+///
+/// The pumping an answering call does runs the dispatch into a collector of its
+/// own, and the notice that the session closed is delivered once. Taken there,
+/// the caller's own wrapper never hears it and nothing says so again until a
+/// reconnect — the program goes on believing it is connected.
+#[test]
+fn an_answering_call_does_not_swallow_the_notice_that_the_session_closed() {
+    let (client, _rx, shared) = test_client();
+
+    // The session goes away while the answer is being waited for.
+    shared.set_connection_lost();
+    let _ = client.qualify(spy());
+
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("connection_closed")),
+        "the caller was never told the session went away",
+    );
+}
+
 /// A request that asked for headlines and then failed to register leaves
 /// nothing behind.
 ///

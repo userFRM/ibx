@@ -224,11 +224,41 @@ fn is_connection_notice(code: i64) -> bool {
     matches!(code, 2104 | 2106 | 2107 | 2119 | 2158)
 }
 
+/// Holds the caller's right to be told the session closed, across pumping that
+/// this client does on its own behalf.
+///
+/// An answering call runs the dispatch into a collector of its own, and the
+/// notice that the session went away is delivered once and then latched.
+/// Delivered into that collector, the caller's wrapper never hears it and
+/// nothing says so again until a reconnect — the program goes on believing it
+/// is connected. Restored on the way out, and only where this call is what
+/// took it, so a caller that had already been told is not told twice.
+struct LeaveTheCloseNoticeForTheCaller<'a> {
+    client: &'a EClient,
+    told_before: bool,
+}
+
+impl<'a> LeaveTheCloseNoticeForTheCaller<'a> {
+    fn new(client: &'a EClient) -> Self {
+        let told_before = client.close_notified.load(std::sync::atomic::Ordering::Acquire);
+        Self { client, told_before }
+    }
+}
+
+impl Drop for LeaveTheCloseNoticeForTheCaller<'_> {
+    fn drop(&mut self) {
+        if !self.told_before {
+            self.client.close_notified.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 impl EClient {
     /// Pump until the collector says the answer is complete, or time runs out.
     fn wait_for<T, W: Wrapper>(
         &self, collector: &mut W, state: &Arc<Mutex<Pending<T>>>, what: &str,
     ) -> Result<Vec<T>, Refusal> {
+        let _notice = LeaveTheCloseNoticeForTheCaller::new(self);
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         while Instant::now() < deadline {
             self.process_msgs(collector);
@@ -759,6 +789,7 @@ impl EClient {
         let mut collector = Collector { req_id, answer: Arc::clone(&answer) };
         self.req_contract_details(req_id, contract)?;
 
+        let _notice = LeaveTheCloseNoticeForTheCaller::new(self);
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         while Instant::now() < deadline {
             self.process_msgs(&mut collector);
