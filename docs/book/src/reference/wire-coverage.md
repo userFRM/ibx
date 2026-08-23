@@ -96,6 +96,7 @@ A user message carries what it is for on tag 6040.
 
 | Subtype |
 | --- |
+| `60` |
 | `75` |
 | `77` |
 | `81` |
