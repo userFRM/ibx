@@ -59,6 +59,13 @@ pub const TAG_IB_BUILD: u32 = 6034;
 pub const TAG_IB_COMM_TYPE: u32 = 6040;
 /// FIX tag 6143: the comp version.
 pub const TAG_IB_COMP_VERSION: u32 = 6143;
+
+/// FIX tag 6143 again, on a news bulletin: the number the venue gives it.
+///
+/// The same tag carries the comp version on a logon. Named twice because a
+/// bulletin's id has nothing to do with a version, and reading one under the
+/// other's name is how it went unread.
+pub const TAG_BULLETIN_ID: u32 = 6143;
 /// FIX tag 6968: the version.
 pub const TAG_IB_VERSION: u32 = 6968;
 /// FIX tag 8349: the hmac signature.
