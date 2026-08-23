@@ -483,6 +483,13 @@ impl EClient {
                     return Err(Refusal::stated(code, msg));
                 }
                 if shared.reference.take_contract_details_end_for(req_id as u32) {
+                    // Once more, because the definitions and the end are held
+                    // apart and the engine writes a definition before the end
+                    // that follows it. One arriving between the drain above and
+                    // this check is in the queue but not in hand — and dropping
+                    // it turns two matches into one, which reads as a contract
+                    // described exactly enough to place an order on.
+                    found.extend(shared.reference.take_contract_details_for(req_id as u32));
                     return Ok(found);
                 }
                 // Nothing is coming. Waiting the deadline out only delays the
