@@ -57,6 +57,8 @@ fn drain(client: &EClient, heard: &mut Heard, seconds: u64) {
 
 fn main() {
     let _ = env_logger::try_init();
+    // Kept so tag 37 can be read as the venue stated it.
+    unsafe { std::env::set_var("IBX_CAPTURE_WIRE", "1") };
     let username = std::env::var("IB_USERNAME").unwrap_or_default();
     let password = std::env::var("IB_PASSWORD").unwrap_or_default();
     if username.trim().is_empty() || password.trim().is_empty() {
@@ -140,6 +142,54 @@ fn main() {
     println!("\n[withdrawing {id} again]");
     let _ = client.cancel_order(id, "");
     drain(&client, &mut heard, 5);
+
+    // What the venue actually states as the order's own id, byte for byte.
+    // The shape decides whether a permId can be read off it or not.
+    println!("\n[tag 37, as the venue stated it]");
+    let mut seen: Vec<String> = Vec::new();
+    for (conn, hex) in client.unread_wire() {
+        if conn != "trading-msg" { continue; }
+        let Ok(bytes) = (0..hex.len()).step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+            .collect::<Result<Vec<u8>, _>>() else { continue };
+        let body = String::from_utf8_lossy(&bytes);
+        let field = |tag: &str| body.split('\u{1}')
+            .find_map(|f| f.strip_prefix(tag).map(|v| v.to_string()));
+        if let Some(order_id) = field("37=") {
+            let line = format!(
+                "  35={} 37={order_id} 11={} 150={}",
+                field("35=").unwrap_or_default(),
+                field("11=").unwrap_or_default(),
+                field("150=").unwrap_or_default(),
+            );
+            if !seen.contains(&line) {
+                seen.push(line);
+            }
+        }
+    }
+    for line in seen.iter().take(4) {
+        println!("{line}");
+    }
+
+    // Every tag one execution report carried, so a field holding an id the
+    // venue issues is found rather than guessed at.
+    println!("\n[one execution report, every field]");
+    for (conn, hex) in client.unread_wire() {
+        if conn != "trading-msg" { continue; }
+        let Ok(bytes) = (0..hex.len()).step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+            .collect::<Result<Vec<u8>, _>>() else { continue };
+        let body = String::from_utf8_lossy(&bytes);
+        if !body.contains("35=8\u{1}") { continue; }
+        for f in body.split('\u{1}').filter(|f| !f.is_empty()) {
+            print!("  {f}");
+        }
+        println!();
+        break;
+    }
+    if seen.is_empty() {
+        println!("  nothing captured — IBX_CAPTURE_WIRE was not set");
+    }
 
     println!("\nRun again with IBX_REUSE_ID={id} to ask the same across sessions.");
 }
