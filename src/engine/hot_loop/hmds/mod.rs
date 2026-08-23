@@ -504,7 +504,12 @@ impl HmdsState {
                         return;
                     }
                     if let Some(resp) = crate::control::historical::parse_bar_response(xml_tag) {
-                        if let Some(pos) = self.pending_historical.iter().position(|(qid, _, _)| resp.query_id.starts_with(qid.as_str())) {
+                        // The same rule the other replies are matched by. A
+                        // plain prefix test hands `hist_10001`'s bars to
+                        // whoever is waiting on `hist_1000`, which a session
+                        // long enough to reach five figures of query ids does
+                        // hold at the same time.
+                        if let Some(pos) = self.pending_historical.iter().position(|(qid, _, _)| states(&resp.query_id, qid.as_str())) {
                             let (_, req_id, _) = self.pending_historical[pos];
                             let is_complete = resp.is_complete;
                             // Activity on this query — push the idle deadline out.
@@ -1748,6 +1753,15 @@ fn answers(xml: &str, qid: &str) -> bool {
     let Some(stated) = crate::control::xml::tag(xml, "id") else {
         return false;
     };
+    states(stated, qid)
+}
+
+/// Whether a name a reply stated is the query named by `qid`.
+///
+/// The rule [`answers`] applies, for the paths that have already read the name
+/// out of the reply and hold it as a string. Kept in one place because a plain
+/// prefix test here is the collision the doc above describes.
+fn states(stated: &str, qid: &str) -> bool {
     match stated.strip_prefix(qid) {
         Some("") => true,
         Some(rest) => !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'),
