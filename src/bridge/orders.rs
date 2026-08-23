@@ -179,12 +179,14 @@ impl OrderState {
         self.replay_done.load(Ordering::Acquire)
     }
 
-    /// The highest id an order is working under, or zero where none is.
+    /// The highest id the venue has named an order under, or zero where it has
+    /// named none.
     ///
-    /// The venue refuses an order naming an id it is still working and takes
-    /// one whose order has been withdrawn or filled, so this rises as the
-    /// venue names what is working and never has to be remembered between
-    /// runs.
+    /// The venue refuses an id it is still working an order under, and one a
+    /// fill has spent; an id whose order was withdrawn is free again. Rather
+    /// than track which is which, this counts past every id the venue has
+    /// named — the venue names them at every connect, so nothing has to be
+    /// remembered between runs.
     pub fn working_id_watermark(&self) -> u64 {
         self.working_id_watermark.load(Ordering::Acquire)
     }
@@ -258,8 +260,12 @@ impl OrderState {
     /// A correction from the venue is not a replay and goes through
     /// [`push_order_correction`](Self::push_order_correction).
     #[doc(hidden)] pub fn push_order_info(&self, order_id: u64, info: RichOrderInfo) {
+        // Every id the venue names, whatever became of the order under it. A
+        // withdrawn id is free again and a filled one is not, so counting past
+        // the working set alone handed out an id a fill had spent and the
+        // venue refused it.
+        self.working_id_watermark.fetch_max(order_id, Ordering::AcqRel);
         if crate::types::order_status::is_open_status(&info.order_state.status) {
-            self.working_id_watermark.fetch_max(order_id, Ordering::AcqRel);
             if self.recently_completed(order_id) {
                 return;
             }
