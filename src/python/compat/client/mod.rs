@@ -457,9 +457,13 @@ impl EClient {
 
         // Fire initial callbacks synchronously, matching official Python ibapi
         // where connect_ack signals "socket ready" before run() is called.
-        self.callback(py, "connect_ack", ())?;
-        self.callback(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
-        self.callback(py, "next_valid_id", (start_id as i64,))?;
+        // Announcements, not permission. The session is up and its engine is
+        // running; a handler that raises here — starting work in
+        // `next_valid_id` is the ordinary way to write one — must not make
+        // this report failure on a session that is live.
+        self.notify(py, "connect_ack", ());
+        self.notify(py, "managed_accounts", (self.accounts_csv().as_str(),));
+        self.notify(py, "next_valid_id", (start_id as i64,));
 
         Ok(())
     }
@@ -600,7 +604,7 @@ impl EClient {
         }
 
         // Signal disconnection to wrapper
-        self.callback(py, "connection_closed", ())?;
+        self.notify(py, "connection_closed", ());
 
         Ok(())
     }
@@ -842,6 +846,33 @@ impl EClient {
         }
         self.wrapper.call_method1(py, name, args)?;
         Ok(())
+    }
+
+    /// Tell the caller something, and do not let what it raises decide the
+    /// call that is telling it.
+    ///
+    /// For the notices a session sends on its way up. They are announcements,
+    /// not permission: the session is already open and its engine already
+    /// running by the time they go out, so a handler that raises must not make
+    /// opening the session report failure. A caller told that would not close
+    /// what it believes it never opened, and would find the next attempt
+    /// refused for being connected already.
+    ///
+    /// The dispatch loop holds the same rule for the same reason, so one
+    /// raising handler cannot take the loop down with it.
+    pub(crate) fn notify<'py, A>(&self, py: Python<'py>, name: &str, args: A)
+    where
+        A: pyo3::call::PyCallArgs<'py> + Clone,
+    {
+        if let Err(e) = self.callback(py, name, args) {
+            if e.is_instance_of::<pyo3::exceptions::PyException>(py) {
+                log::error!("Python callback {name}() raised: {e}");
+            } else {
+                // Not an ordinary exception — an interrupt, or the interpreter
+                // going down. Nothing here can carry on through that.
+                e.restore(py);
+            }
+        }
     }
 
     /// Every account this login holds, comma separated, which is the shape
