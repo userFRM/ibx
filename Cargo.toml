@@ -278,3 +278,8 @@ required-features = ["dev-tools"]
 name = "capture_fill_fields"
 path = "src/bin/capture_fill_fields.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_news_payload"
+path = "src/bin/capture_news_payload.rs"
+required-features = ["dev-tools"]
