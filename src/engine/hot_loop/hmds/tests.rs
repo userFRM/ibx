@@ -897,3 +897,21 @@ mod hmds_transport_tests {
         assert!(hmds.pending_head_ts.is_empty(), "and nothing is left waiting");
     }
 }
+
+/// A query id that is a prefix of another does not take its answer.
+///
+/// The bar replies are matched by the name the reply states, the same as every
+/// other reply here. Matched by prefix alone, `hist_10001`'s bars go to whoever
+/// is waiting on `hist_1000` — and a session that keeps one request resident
+/// while thousands pass does reach five figures with the first still open.
+#[test]
+fn a_query_id_that_prefixes_another_does_not_take_its_bars() {
+    use super::states;
+
+    assert!(states("hist_1000", "hist_1000"), "its own answer");
+    assert!(!states("hist_10001", "hist_1000"), "the longer id is another query");
+    assert!(!states("hist_1000_x", "hist_1000"), "and so is one continued by a word");
+    // A reply that states what it asked for after the name is still that
+    // query's, which is why the separator is not simply any character.
+    assert!(states("news_2-headlines;;x", "news_2"));
+}
