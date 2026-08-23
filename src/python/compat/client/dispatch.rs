@@ -170,18 +170,18 @@ impl EClient {
                 let c_py = Py::new(py, self.position_contract(pi, shared))?.into_any();
                 let avg_cost = pi.avg_cost as f64 / crate::types::PRICE_SCALE as f64;
                 if on_position {
-                    self.callback(
-                        py, "position",
-                        (self.account().as_str(), &c_py, pi.position, avg_cost),
-                    )?;
+                    call_wrapper!(
+                        self.wrapper, py, "position",
+                        (self.account().as_str(), &c_py, pi.position, avg_cost)
+                    );
                 }
                 // The account this session opened under, whatever the request
                 // named, as the answer to the request itself states.
                 for req_id in &per_request {
-                    self.callback(
-                        py, "position_multi",
-                        (*req_id, self.account().as_str(), "", &c_py, pi.position, avg_cost),
-                    )?;
+                    call_wrapper!(
+                        self.wrapper, py, "position_multi",
+                        (*req_id, self.account().as_str(), "", &c_py, pi.position, avg_cost)
+                    );
                 }
             }
         }
