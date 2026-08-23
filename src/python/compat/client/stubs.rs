@@ -68,11 +68,10 @@ impl EClient {
                 terms, model, option_price, under_price,
             )
         }, |volatility| crate::types::OptionComputation {
-            answers: Some(req_id),
             implied_vol: volatility,
             opt_price: option_price,
             und_price: under_price,
-            ..Default::default()
+            ..crate::types::OptionComputation::solved(req_id)
         }) {
             // The venue states a model for a contract that is watched. Asking
             // about one nobody is watching opens the watch and answers when
@@ -104,11 +103,10 @@ impl EClient {
                 terms, model, volatility, under_price,
             )
         }, |price| crate::types::OptionComputation {
-            answers: Some(req_id),
             implied_vol: volatility,
             opt_price: price,
             und_price: under_price,
-            ..Default::default()
+            ..crate::types::OptionComputation::solved(req_id)
         }) {
             // As above: the watch is opened and the answer follows.
             if !self.watch_for_option_model(
@@ -590,11 +588,10 @@ impl EClient {
                 let (implied_vol, opt_price) =
                     if wants_volatility { (answer, given) } else { (given, answer) };
                 shared.market.push_option_computation(crate::types::OptionComputation {
-                    answers: Some(req_id),
                     implied_vol,
                     opt_price,
                     und_price: und,
-                    ..Default::default()
+                    ..crate::types::OptionComputation::solved(req_id)
                 });
                 true
             }

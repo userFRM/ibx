@@ -22,6 +22,24 @@ use super::super::super::types::PRICE_SCALE_F;
 /// Tick type 13: the venue's model computation.
 const MODEL_OPTION_COMPUTATION: i32 = 13;
 
+/// A figure the venue did not state, as the reference client states it.
+///
+/// This client holds an unstated double as `f64::MAX`, and so does the
+/// reference stack — but only on its own side of the wire. What it sends a
+/// caller is `-1` where a price or a volatility is unstated and `-2` where a
+/// greek is, and the caller's library turns those two numbers back into
+/// nothing. Handed `f64::MAX` instead, that test never fires and the number
+/// goes into the caller's arithmetic.
+fn unstated_as(value: f64, sentinel: f64) -> f64 {
+    if value == f64::MAX || value.is_nan() { sentinel } else { value }
+}
+
+/// A price, a volatility or a dividend the venue did not state.
+fn or_unstated_price(value: f64) -> f64 { unstated_as(value, -1.0) }
+
+/// A greek the venue did not state.
+fn or_unstated_greek(value: f64) -> f64 { unstated_as(value, -2.0) }
+
 /// Call a Python wrapper method, catching and logging an ordinary exception instead of
 /// propagating it so one bad callback cannot kill the dispatch loop.
 /// `KeyboardInterrupt`,
@@ -429,9 +447,11 @@ impl EClient {
             };
             for req_id in to {
                 call_wrapper!(self.wrapper, py, "tick_option_computation",
-                    (req_id, MODEL_OPTION_COMPUTATION, 0i32, comp.implied_vol, comp.delta,
-                     comp.opt_price, comp.pv_dividend, comp.gamma, comp.vega, comp.theta,
-                     comp.und_price));
+                    (req_id, MODEL_OPTION_COMPUTATION, 0i32,
+                     or_unstated_price(comp.implied_vol), or_unstated_greek(comp.delta),
+                     or_unstated_price(comp.opt_price), or_unstated_price(comp.pv_dividend),
+                     or_unstated_greek(comp.gamma), or_unstated_greek(comp.vega),
+                     or_unstated_greek(comp.theta), or_unstated_price(comp.und_price)));
             }
         }
 
@@ -952,5 +972,37 @@ impl EClient {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod unstated_tests {
+    use super::{or_unstated_greek, or_unstated_price};
+
+    /// The reference stack turns `-1` and `-2` back into nothing, and turns
+    /// every other number into itself. A figure this client holds as unstated
+    /// has to arrive as one of those two or the caller reads it as a price.
+    #[test]
+    fn an_unstated_figure_arrives_as_the_number_that_means_nothing() {
+        for unstated in [f64::MAX, f64::NAN] {
+            assert_eq!(or_unstated_price(unstated), -1.0);
+            assert_eq!(or_unstated_greek(unstated), -2.0);
+        }
+        // Everything else is the venue's own figure and passes through, a
+        // negative delta and a zero among them.
+        for stated in [0.0, -0.42, 1.0, 775.4] {
+            assert_eq!(or_unstated_price(stated), stated);
+            assert_eq!(or_unstated_greek(stated), stated);
+        }
+    }
+
+    /// A solve states a volatility against a price and computes no greek.
+    #[test]
+    fn a_solved_computation_states_no_greek() {
+        let solved = crate::types::OptionComputation::solved(7);
+        assert_eq!(solved.answers, Some(7));
+        for greek in [solved.delta, solved.gamma, solved.vega, solved.theta, solved.pv_dividend] {
+            assert_eq!(or_unstated_greek(greek), -2.0, "a greek nobody computed reads as one");
+        }
     }
 }

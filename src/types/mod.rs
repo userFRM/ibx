@@ -330,6 +330,26 @@ pub struct OptionComputation {
     pub und_price: f64,
 }
 
+impl OptionComputation {
+    /// A computation with only the figures a solve produces, and every figure
+    /// it does not marked unstated.
+    ///
+    /// Solving states a volatility against a price, and no greek. Left at
+    /// zero, a greek nobody computed reads as a real one — an option with no
+    /// delta — where an unstated figure reads as the nothing it is.
+    pub fn solved(answers: i64) -> Self {
+        Self {
+            answers: Some(answers),
+            delta: f64::MAX,
+            gamma: f64::MAX,
+            vega: f64::MAX,
+            theta: f64::MAX,
+            pv_dividend: f64::MAX,
+            ..Default::default()
+        }
+    }
+}
+
 /// Tick-by-tick data type for subscription requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TbtType {
