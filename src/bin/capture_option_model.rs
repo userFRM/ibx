@@ -119,9 +119,8 @@ fn main() {
         None => println!("  this client could not solve it from the venue's numbers"),
     }
 
-    // The one number an option model needs that no tick states. It is served
-    // as a historical series rather than on a tick, so it is asked for that
-    // way.
+    // The same rate, asked for as a series. A tick states one too — this is
+    // the other way it is served, and having both is how the two are compared.
     #[derive(Default)]
     struct Heard { bars: Vec<(String, f64)>, said: Vec<String> }
     impl ibx::api::wrapper::Wrapper for Heard {

@@ -6,15 +6,25 @@
 //!
 //! What is done here is not a model of this library's own devising, and it is
 //! not seeded with numbers of its own. The venue states its own model for a
-//! contract — the volatility it used, the price that came out, the underlying
-//! it used and the dividends it took off — and that statement is what this is
-//! anchored to: the one number the venue does not state, the rate, is solved
-//! for until the model reproduces the venue's price exactly. A caller's
-//! question is then answered as a change to that, not as an opinion.
+//! contract — the volatility it used, the price that came out, and the
+//! underlying it used — and that statement is what this is anchored to: a
+//! carry is solved for until the model reproduces the venue's price exactly,
+//! and a caller's question is answered as a change to that, not as an opinion.
 //!
-//! With no such statement in hand, nothing is answered. A price worked out
-//! from a rate nobody stated is a number this library made up, and a made-up
-//! option price is worse than no answer.
+//! The venue does state a rate, on the same message as the rest of the model,
+//! and it is not what is solved for here. What it does not state on that
+//! message is the dividends, and this model has no dividend of its own to put
+//! in their place. Measured against a captured statement, substituting the
+//! stated rate and no dividend puts the model twenty-seven cents above the
+//! venue's own price for the contract, and leaves the venue's price
+//! unreachable at any volatility — the question it was asked would come back
+//! refused. So the carry stays a fit, and it absorbs the dividends along with
+//! everything else this model does differently. Taking the stated rate is
+//! worth revisiting the day the dividends are read too, and not before.
+//!
+//! With no statement in hand, nothing is answered. A price worked out from a
+//! rate nobody stated is a number this library made up, and a made-up option
+//! price is worse than no answer.
 
 /// What the venue said its own model made of a contract.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -114,9 +124,12 @@ fn exercise_value(terms: OptionTerms, underlying: f64) -> f64 {
 ///
 /// That it is a fit and not a rate is visible on the wire: two contracts on
 /// one underlying, one expiry, one minute, wanted five per cent and twenty per
-/// cent. No interest rate differs by strike. The venue does state a real one,
-/// as a historical series of its own, and taking it from there would replace
-/// this — see the note beside the calls that use it.
+/// cent. No interest rate differs by strike.
+///
+/// The venue states a rate of its own on the same message as the rest of the
+/// model, and this is not it: against a captured statement the two are three
+/// hundred basis points apart, because what this absorbs is the dividends the
+/// message does not state as well as the difference between the two models.
 pub fn carry_that_matches_the_venue(terms: OptionTerms, model: VenueModel) -> Option<f64> {
     // Searched only where the tree holds together. A step's worth of growth
     // has to stay inside a step up, or the tree's own odds leave nought-to-one
