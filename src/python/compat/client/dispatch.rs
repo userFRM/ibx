@@ -411,7 +411,7 @@ impl EClient {
         // the watch that asking opened. Answer it here, before the drain, so
         // the caller gets the question they asked rather than only the model.
         if !self.pending_option_calcs.lock().unwrap().is_empty() {
-            self.answer_kept_option_calcs(py);
+            self.answer_kept_option_calcs();
         }
 
         for comp in shared.market.drain_option_computations() {

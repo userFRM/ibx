@@ -120,21 +120,24 @@ impl EClient {
             .pending_option_calcs.lock().unwrap()
             .iter().map(|(k, v)| (*k, v.clone())).collect();
         for (req_id, calc) in kept {
+            if calc.answered {
+                continue;
+            }
             let answered = if calc.wants_volatility {
                 self.solve_and_push_volatility(req_id, &calc)
             } else {
                 self.solve_and_push_price(req_id, &calc)
             };
             if answered {
-                self.pending_option_calcs.lock().unwrap().remove(&req_id);
-                // And the watch that was opened to answer it. The question is
-                // what kept it: left up, the caller cannot take it down —
-                // withdrawing the calculation finds no question to forget and
-                // cancels nothing — and ticks go on arriving under a request id
-                // the caller was told was finished. A cancel for a request this
-                // client never subscribed under, because the caller was already
-                // watching the contract, withdraws nothing.
-                let _ = self.cancel_mkt_data(req_id);
+                // Marked, not dropped. The watch this client opened to obtain
+                // the model comes down where the caller withdraws the
+                // calculation, and a question that has been dropped cannot be
+                // withdrawn — the withdrawal finds nothing and cancels nothing,
+                // leaving a subscription the caller cannot take down. Nothing
+                // is sent here; the mark only stops it being solved again.
+                if let Some(kept) = self.pending_option_calcs.lock().unwrap().get_mut(&req_id) {
+                    kept.answered = true;
+                }
             }
         }
     }

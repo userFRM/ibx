@@ -531,6 +531,7 @@ impl EClient {
                 wants_volatility,
                 option_price,
                 under_price,
+                answered: false,
             },
         );
         true
@@ -548,19 +549,21 @@ impl EClient {
     ///
     /// One the venue still cannot answer is kept: the watch is open, so the
     /// model may yet arrive. It is dropped when the caller withdraws it.
-    pub(crate) fn answer_kept_option_calcs(&self, py: Python<'_>) {
+    pub(crate) fn answer_kept_option_calcs(&self) {
         let kept: Vec<(i64, crate::api::client::PendingOptionCalc)> = self
             .pending_option_calcs.lock().unwrap()
             .iter().map(|(k, v)| (*k, v.clone())).collect();
         for (req_id, calc) in kept {
+            if calc.answered {
+                continue;
+            }
             if self.solve_and_push_kept(req_id, &calc) {
-                self.pending_option_calcs.lock().unwrap().remove(&req_id);
-                // And the watch that was opened to answer it, for the reason
-                // the question was what kept it: left up, withdrawing the
-                // calculation finds no question to forget and cancels nothing,
-                // so the caller cannot take it down and ticks go on arriving
-                // under a request id it was told was finished.
-                let _ = self.cancel_mkt_data(py, req_id);
+                // Marked, not dropped, so the caller's withdrawal still has a
+                // question to find and can still take down the watch this
+                // client opened to obtain the model. Nothing is sent here.
+                if let Some(kept) = self.pending_option_calcs.lock().unwrap().get_mut(&req_id) {
+                    kept.answered = true;
+                }
             }
         }
     }
