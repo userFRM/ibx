@@ -639,8 +639,6 @@ pub struct ClientCore {
     pub last_stated_account: Mutex<HashMap<(String, String), String>>,
     /// Whether the caller has been told the account is fully stated.
     pub account_end_sent: AtomicBool,
-    /// When the venue last added a figure to the account.
-    pub last_account_field: Mutex<Option<std::time::Instant>>,
     /// Its positions as last stated.
     pub last_portfolio: Mutex<Option<Vec<PositionInfo>>>,
 
@@ -780,7 +778,6 @@ impl ClientCore {
             last_account: Mutex::new(None),
             last_stated_account: Mutex::new(HashMap::new()),
             account_end_sent: AtomicBool::new(false),
-            last_account_field: Mutex::new(None),
             last_portfolio: Mutex::new(None),
             executions: Mutex::new(Vec::new()),
             open_orders: Mutex::new(HashMap::new()),
@@ -841,7 +838,6 @@ impl ClientCore {
         *self.last_account.lock().unwrap() = None;
         self.last_stated_account.lock().unwrap().clear();
         self.account_end_sent.store(false, Ordering::Release);
-        *self.last_account_field.lock().unwrap() = None;
         *self.last_portfolio.lock().unwrap() = None;
         self.executions.lock().unwrap().clear();
         self.open_orders.lock().unwrap().clear();
@@ -1566,7 +1562,6 @@ impl ClientCore {
             *self.last_account.lock().unwrap() = None;
         self.last_stated_account.lock().unwrap().clear();
         self.account_end_sent.store(false, Ordering::Release);
-        *self.last_account_field.lock().unwrap() = None;
             *self.last_portfolio.lock().unwrap() = None;
         }
     }
@@ -2497,19 +2492,12 @@ impl ClientCore {
             fields.push(AccountFieldUpdate { key, value, currency });
         }
 
-        /// How long the account has to have been quiet before it is called
-        /// fully stated.
-        const QUIET: std::time::Duration = std::time::Duration::from_millis(1500);
-
         let delivered = !fields.is_empty();
-        // Said once, when the venue has stopped adding to the account. The
-        // figures that matter arrive seconds after the first field of any
-        // kind, so the first field is not the signal.
-        let mut last = self.last_account_field.lock().unwrap();
-        if delivered {
-            *last = Some(std::time::Instant::now());
-        }
-        let finished = matches!(*last, Some(at) if at.elapsed() >= QUIET)
+        // Said once, when the venue ends the batch it was sending. Timed out
+        // of a quiet spell instead, an account still arriving was called fully
+        // stated because it paused, and one that finished early waited on a
+        // clock for permission to say so.
+        let finished = shared.portfolio.account_download_complete()
             && !self.account_end_sent.swap(true, Ordering::AcqRel);
         Some(AccountUpdateBatch { fields, delivered, finished })
     }
