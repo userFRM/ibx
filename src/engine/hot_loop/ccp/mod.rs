@@ -49,6 +49,35 @@ fn extract_tag_value(msg: &[u8], prefix: &[u8]) -> Option<String> {
     None
 }
 
+/// What a fill cost, as the venue states it.
+///
+/// The execution report carries no commission tag — captured against real
+/// fills on two instruments, it simply is not there — so a charge taken from
+/// the report is always nothing. The venue states it on a record of its own
+/// that follows the report, naming the execution it belongs to, the amount
+/// and the currency it is charged in.
+///
+/// The quantities and the price on this record are the same fill the
+/// execution report already carried, and are left alone: booking the fill
+/// from both is how it would be counted twice. Only what it cost is taken.
+fn handle_trade_charge(parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
+    let Some(exec_id) = parsed.get(&fix::TAG_EXEC_ID).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    // Absent is not nothing: a charge the venue did not state is unstated,
+    // and reporting a zero for it is the number this was written to stop.
+    let Some(charged) = parsed.get(&fix::TAG_TRADE_CHARGE)
+        .and_then(|s| s.parse::<f64>().ok())
+    else {
+        return;
+    };
+    shared.orders.push_charge(crate::types::model::CommissionAndFeesReport::charged(
+        exec_id,
+        charged,
+        parsed.get(&fix::TAG_TRADE_CHARGE_CURRENCY).map(String::as_str).unwrap_or(""),
+    ));
+}
+
 /// What the venue says went wrong.
 ///
 /// It states the trouble as text and gives it no code and no severity. Nor,
@@ -92,10 +121,6 @@ fn known_unread(subtype: &str) -> Option<&'static str> {
             "it states the venue's clock. Every message the venue sends carries the time it \
              sent it, which this client keeps as it arrives, so a message stating the same \
              clock again adds nothing to answer a caller with",
-        ),
-        "60" => Some(
-            "it is a trade record. What it reports arrives first on the execution reports \
-             this client already reads, and a fill counted from both would be counted twice",
         ),
         "194" => Some(
             "it carries the order presets the vendor's own ticket fills its fields from. \
@@ -600,6 +625,7 @@ impl CcpState {
                         // channel: which number it arrives under depends only
                         // on a capability the session negotiated at logon, not
                         // on the error.
+                        "60" => handle_trade_charge(&parsed, shared),
                         "192" | "278" => handle_venue_error(&parsed, shared),
                         "81" => handle_algorithms(&parsed, shared),
                         "210" => handle_account_config(&parsed, shared),

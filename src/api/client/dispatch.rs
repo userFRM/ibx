@@ -175,7 +175,6 @@ impl EClient {
             self.shared.orders.drain_order_updates();
         for fill in self.shared.orders.drain_fills() {
             let price_f = fill.price as f64 / PRICE_SCALE_F;
-            let commission_and_fees_f = fill.commission as f64 / PRICE_SCALE_F;
             // Paired on the report, not the order: one pass can carry both an
             // acknowledgement and a fill for the same order. The matching report
             // is the one whose filled and remaining quantities equal the fill's.
@@ -238,16 +237,24 @@ impl EClient {
             let req_id = NO_REQUEST;
             wrapper.exec_details(req_id, &c, &exec);
 
-            let report = CommissionAndFeesReport::charged(
-                &exec.exec_id, commission_and_fees_f, &c.currency,
+            // What it cost is not stated here. It arrives on a record of its
+            // own, after this, and is reported from there — see the drain
+            // below. Stored unstated so a replay of this execution says the
+            // charge is unknown rather than that it was nothing.
+            self.core.push_execution(
+                req_id, c, exec, CommissionAndFeesReport::default(),
             );
-            wrapper.commission_and_fees_report(&report);
-
-            // Store for req_executions replay
-            self.core.push_execution(req_id, c, exec, report);
 
             // Update open order tracking
             self.core.update_order_fill(fill.order_id, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining));
+        }
+
+        // What the venue says its fills cost, each naming the execution it
+        // belongs to. Reported after the executions above, which is the order
+        // they arrive in and the order a caller reads them in.
+        for charge in self.shared.orders.drain_charges() {
+            self.core.record_charge(&charge);
+            wrapper.commission_and_fees_report(&charge);
         }
 
         // What is left: a status change with no fill on the same report.

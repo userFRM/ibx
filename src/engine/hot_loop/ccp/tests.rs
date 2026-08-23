@@ -3139,10 +3139,13 @@ fn a_message_not_read_on_purpose_is_told_apart_from_one_overlooked() {
     // Both of these arrive on a real session, which is how they came to be
     // named here: the notes had them down as never sent.
     assert!(super::known_unread("18").is_some(), "the clock every message already carries");
-    assert!(super::known_unread("60").is_some(), "a fill the execution reports already state");
     assert!(super::known_unread("93").is_some(), "an answer carrying nothing new");
     assert!(super::known_unread("194").is_some(), "defaults for a user interface");
     assert!(super::known_unread("81").is_none(), "the algorithms are read, not excused");
+    // Excused for years as a fill already stated by the execution reports.
+    // The fill is, and what it cost is not: those reports carry no charge at
+    // all, so this is the only place a caller's commission comes from.
+    assert!(super::known_unread("60").is_none(), "what a fill cost is read, not excused");
     assert!(super::known_unread("99999").is_none(), "and anything unexamined is a gap");
 }
 
@@ -4021,4 +4024,47 @@ fn an_unnumbered_bulletin_says_so() {
     ]);
     ccp.handle_news_bulletin(&parsed, &shared);
     assert_eq!(shared.market.drain_news_bulletins()[0].msg_id, i32::MAX);
+}
+
+/// The charge is on a record of its own, and the execution report carries
+/// none: captured against a real fill, the report has no commission tag at
+/// all. Taken from there, every caller was told its fills were free.
+#[test]
+fn what_a_fill_cost_is_read_off_the_record_that_states_it() {
+    let shared = SharedState::new();
+    // The record as the venue sent it, from a captured session: the execution
+    // it belongs to, what it cost, and the currency that is charged in.
+    let parsed = std::collections::HashMap::from([
+        (crate::protocol::fix::TAG_EXEC_ID, "00025b49.6a8880e4.01.01".to_string()),
+        (crate::protocol::fix::TAG_TRADE_CHARGE, "1.000003".to_string()),
+        (crate::protocol::fix::TAG_TRADE_CHARGE_CURRENCY, "USD".to_string()),
+    ]);
+    super::handle_trade_charge(&parsed, &shared);
+
+    let charged = shared.orders.drain_charges();
+    assert_eq!(charged.len(), 1);
+    assert_eq!(charged[0].exec_id, "00025b49.6a8880e4.01.01");
+    assert!((charged[0].commission_and_fees - 1.000003).abs() < 1e-9);
+    assert_eq!(charged[0].currency, "USD", "as the venue charges it, not as the contract is priced");
+    assert!(shared.orders.drain_charges().is_empty(), "read once");
+}
+
+/// A record naming no execution, or stating no charge, says nothing — and
+/// nothing is what is reported, rather than a zero against some other fill.
+#[test]
+fn a_record_that_states_no_charge_reports_none() {
+    for parsed in [
+        // No execution named.
+        std::collections::HashMap::from([
+            (crate::protocol::fix::TAG_TRADE_CHARGE, "1.5".to_string()),
+        ]),
+        // Named, and no charge stated.
+        std::collections::HashMap::from([
+            (crate::protocol::fix::TAG_EXEC_ID, "abc.def.01.01".to_string()),
+        ]),
+    ] {
+        let shared = SharedState::new();
+        super::handle_trade_charge(&parsed, &shared);
+        assert!(shared.orders.drain_charges().is_empty());
+    }
 }
