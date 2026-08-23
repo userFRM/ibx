@@ -747,9 +747,38 @@ impl Client {
             order.oca_group = oca_group.to_string();
             order.oca_type = oca_type;
         }
-        let mut ids = Vec::with_capacity(orders.len());
+        let mut ids: Vec<i64> = Vec::with_capacity(orders.len());
         for order in orders.iter() {
-            ids.push(self.submit_order(contract, order)?);
+            match self.submit_order(contract, order) {
+                Ok(id) => ids.push(id),
+                Err(refused) => {
+                    // The ones already sent are live at the venue, and the
+                    // caller is about to be told the set failed — so it holds
+                    // no id to withdraw them by, and placing the set again
+                    // doubles what is working. They are withdrawn here, and
+                    // what could not be withdrawn is named, because an order
+                    // the caller was told nothing about is the one outcome
+                    // this path must not leave behind.
+                    let mut still_working = Vec::new();
+                    for id in &ids {
+                        if self.cancel_order(*id).is_err() {
+                            still_working.push(id.to_string());
+                        }
+                    }
+                    if still_working.is_empty() {
+                        return Err(refused);
+                    }
+                    return Err(Refusal::stated(
+                        refused.code,
+                        format!(
+                            "{refused}; {} of the set was already working and could not be \
+                             withdrawn: order id(s) {}",
+                            still_working.len(),
+                            still_working.join(", "),
+                        ),
+                    ));
+                }
+            }
         }
         Ok(ids)
     }
