@@ -157,9 +157,20 @@ impl Drop for EClient {
         // bounded, and the join waits on the engine thread.
         let tx = self.control_tx.lock().unwrap().clone();
         if let Some(tx) = tx {
-            // Dropping the client ends the session, so the venue is told.
-            let _ = tx.send(ControlCommand::Logout);
-            let _ = tx.send(ControlCommand::Shutdown);
+            // Dropping the client ends the session, so the venue is told. The
+            // channel is bounded and these wait on a hot loop that is behind,
+            // and dealloc runs with the GIL held — so detach for them, the same
+            // way the join below does, and for the same reason.
+            let sent = Python::try_attach(|py| {
+                py.detach(|| {
+                    let _ = tx.send(ControlCommand::Logout);
+                    let _ = tx.send(ControlCommand::Shutdown);
+                });
+            });
+            if sent.is_none() {
+                let _ = tx.send(ControlCommand::Logout);
+                let _ = tx.send(ControlCommand::Shutdown);
+            }
         }
         let thread = self._thread.lock().unwrap().take();
         if let Some(h) = thread {
@@ -494,9 +505,14 @@ impl EClient {
         // every other thread that needs the same lock.
         let tx = self.control_tx.lock().unwrap().clone();
         if let Some(tx) = tx {
-            // The session is ending, so the venue is told before the engine stops.
-            let _ = tx.send(ControlCommand::Logout);
-            let _ = tx.send(ControlCommand::Shutdown);
+            // The session is ending, so the venue is told before the engine
+            // stops. Detached: the channel is bounded, so a hot loop that is
+            // behind makes these wait, and waiting here with the GIL held
+            // stalls every Python thread instead of this call.
+            py.detach(|| {
+                let _ = tx.send(ControlCommand::Logout);
+                let _ = tx.send(ControlCommand::Shutdown);
+            });
         }
         let thread = self._thread.lock().unwrap().take();
         if let Some(h) = thread {
@@ -755,10 +771,16 @@ impl EClient {
     /// this run used must not be handed out by the next one. Written as it is
     /// handed out rather than in a batch, because a run that ends between the
     /// two is exactly the run whose ids would be reused.
-    pub(crate) fn take_order_id(&self) -> u64 {
+    pub(crate) fn take_order_id(&self, py: Python<'_>) -> u64 {
         let id = self.next_order_id.fetch_add(1, Ordering::Relaxed);
-        if let Some((path, key)) = self.order_id_store.lock().unwrap().as_ref()
-            && let Err(e) = crate::order_ids::remember(path, key, id)
+        // Detached for the write. The counter is shared by every client this
+        // user runs, so the write takes a lock across processes and waits when
+        // somebody else holds it — waiting there with the GIL held stalls every
+        // Python thread rather than this call. Uncontended it is still several
+        // blocking syscalls per id.
+        let stored = self.order_id_store.lock().unwrap().clone();
+        if let Some((path, key)) = stored
+            && let Err(e) = py.detach(|| crate::order_ids::remember(&path, &key, id))
         {
             log::warn!("order id {id} not remembered in {}: {e}", path.display());
         }
