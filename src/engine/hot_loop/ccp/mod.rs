@@ -542,14 +542,13 @@ impl CcpState {
                     match comm.as_str() {
                         "75" => {
                             // Position + market price feed (init burst + after each
-                            // fill)
+                            // fill). Not the end of the batch: the account's own
+                            // figures follow it, and calling the download
+                            // complete here answered a caller before they
+                            // arrived. The venue ends the batch itself, below.
                             self.handle_position_feed(msg, ccp_conn, context, shared, event_tx, hb);
-                            shared.portfolio.set_account_download_complete();
                         }
-                        "77" => {
-                            self.handle_account_summary(&parsed, context, shared);
-                            shared.portfolio.set_account_download_complete();
-                        }
+                        "77" => self.handle_account_summary(&parsed, context, shared),
                         "143" => {
                             // P&L midnight seed — store for client-side daily P&L
                             // computation
