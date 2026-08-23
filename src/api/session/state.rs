@@ -333,6 +333,15 @@ pub struct LiveState {
 /// newest are the ones that explain what is happening now.
 const NOTICES_KEPT: usize = 256;
 
+/// How much of a stream is kept for a caller that looks rather than iterates.
+///
+/// The same reasoning as the remarks above, and the same answer: a caller that
+/// subscribed and then looked still finds what arrived, and one that never
+/// looks is not a reason to grow without limit. A session left running for
+/// days on one bar subscription takes several thousand bars a day, and every
+/// read copies the whole of it while the lock the reader wants is held.
+const STREAM_KEPT: usize = 4_096;
+
 impl LiveState {
     /// What the venue has said about requests, oldest first, and clears them.
     pub fn take_notices(&mut self) -> Vec<Notice> {
@@ -704,6 +713,9 @@ impl Wrapper for LiveState {
         let bar = LiveBar { req_id, time, open, high, low, close, volume, wap, count };
         // Kept as well as streamed: a caller who subscribed and then looked
         // rather than iterating still finds the bars that arrived.
+        if self.live_bars.len() == STREAM_KEPT {
+            self.live_bars.remove(0);
+        }
         self.live_bars.push(bar.clone());
         self.bar_streams
             .retain(|(id, to)| {
@@ -752,6 +764,9 @@ impl Wrapper for LiveState {
             article_id: article_id.to_string(), headline: headline.to_string(),
             extra: extra.to_string(),
         };
+        if self.news.len() == STREAM_KEPT {
+            self.news.remove(0);
+        }
         self.news.push(tick.clone());
         Self::tell(&mut self.news_streams, &tick);
         self.changed();
@@ -784,6 +799,9 @@ impl Wrapper for LiveState {
     }
 
     fn update_news_bulletin(&mut self, id: i64, kind: i32, message: &str, exchange: &str) {
+        if self.bulletins.len() == STREAM_KEPT {
+            self.bulletins.remove(0);
+        }
         self.bulletins.push(Bulletin {
             id, kind, message: message.to_string(), exchange: exchange.to_string(),
         });
