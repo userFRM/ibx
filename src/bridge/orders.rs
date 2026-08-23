@@ -13,6 +13,8 @@ pub struct OrderState {
     fills: Mutex<Vec<Fill>>,
     order_updates: Mutex<Vec<OrderUpdate>>,
     cancel_rejects: Mutex<Vec<CancelReject>>,
+    /// What each fill cost, as the venue states it on a record of its own.
+    charges: Mutex<Vec<crate::types::model::CommissionAndFeesReport>>,
     what_if_responses: Mutex<Vec<WhatIfResponse>>,
     completed_orders: Mutex<Vec<CompletedOrder>>,
     /// Enriched order info from CCP exec reports (order_id -> RichOrderInfo).
@@ -43,6 +45,7 @@ impl OrderState {
             fills: Mutex::new(Vec::with_capacity(64)),
             order_updates: Mutex::new(Vec::with_capacity(64)),
             cancel_rejects: Mutex::new(Vec::with_capacity(16)),
+            charges: Mutex::new(Vec::with_capacity(16)),
             what_if_responses: Mutex::new(Vec::with_capacity(8)),
             completed_orders: Mutex::new(Vec::with_capacity(64)),
             order_cache: Mutex::new(HashMap::new()),
@@ -82,6 +85,20 @@ impl OrderState {
     /// Take every cancel rejects waiting, leaving none.
     pub fn drain_cancel_rejects(&self) -> Vec<CancelReject> {
         self.cancel_rejects.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take what the venue has said its fills cost, leaving none.
+    ///
+    /// The charge is not on the execution report — that report carries no
+    /// commission tag at all — but on a record of its own that follows it,
+    /// naming the execution it belongs to. A caller reads it the same way:
+    /// the fill first, then what it cost.
+    pub fn drain_charges(&self) -> Vec<crate::types::model::CommissionAndFeesReport> {
+        self.charges.lock().unwrap().drain(..).collect()
+    }
+
+    #[doc(hidden)] pub fn push_charge(&self, charge: crate::types::model::CommissionAndFeesReport) {
+        self.charges.lock().unwrap().push(charge);
     }
 
     /// Drain reasons for genuinely-Inactive (39=I) transitions, each as

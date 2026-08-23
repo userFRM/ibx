@@ -228,7 +228,6 @@ impl EClient {
                 Side::Sell | Side::ShortSell => "SLD",
             };
             let price = fill.price as f64 / PRICE_SCALE_F;
-            let commission = fill.commission as f64 / PRICE_SCALE_F;
 
             // Same report, not merely the same order. A pass can carry an
             // acknowledgement and a fill for one order, and those are two
@@ -311,14 +310,11 @@ impl EClient {
                 avg_price,
                 ..Default::default()
             };
-            // What the contract is priced in, which is what its costs are
-            // charged in. Named as dollars regardless, a fill on a contract
-            // priced in anything else carried a figure and a currency that
-            // never went together.
-            let commission_currency = api_contract.currency.clone();
-            let api_commission = ApiCommissionAndFeesReport::charged(
-                &exec_id, commission, &commission_currency,
-            );
+            // What it cost is not stated on this report. It arrives on a
+            // record of its own, after this, and is reported from there — see
+            // the drain below. Stored unstated so a replay of this execution
+            // says the charge is unknown rather than that it was nothing.
+            let api_commission = ApiCommissionAndFeesReport::default();
 
             // Build Python contract for callback
             let exec_contract = Contract::from_api(&api_contract);
@@ -352,14 +348,20 @@ impl EClient {
             // Update open order tracking
             self.core.update_order_fill(fill.order_id, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining));
 
-            // Dispatch commission_and_fees_report
+        }
+
+        // What the venue says its fills cost, each naming the execution it
+        // belongs to. Reported after the executions above, which is the order
+        // they arrive in and the order a caller reads them in.
+        for charge in shared.orders.drain_charges() {
+            self.core.record_charge(&charge);
             let report = CommissionAndFeesReport {
-                exec_id,
-                commission_and_fees: commission,
-                currency: commission_currency,
-                realized_pnl: f64::MAX,
-                yield_amount: f64::MAX,
-                yield_redemption_date: String::new(),
+                exec_id: charge.exec_id.clone(),
+                commission_and_fees: charge.commission_and_fees,
+                currency: charge.currency.clone(),
+                realized_pnl: charge.realized_pnl,
+                yield_amount: charge.yield_amount,
+                yield_redemption_date: charge.yield_redemption_date.clone(),
             };
             let report_py = Py::new(py, report)?.into_any();
             call_wrapper!(self.wrapper, py, "commission_and_fees_report", (&report_py,));

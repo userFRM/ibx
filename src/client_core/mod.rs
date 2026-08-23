@@ -1639,6 +1639,18 @@ impl ClientCore {
         });
     }
 
+    /// Note what an execution cost against the execution itself, so a replay
+    /// of it carries the charge the venue stated rather than the nothing it
+    /// was stored with.
+    pub fn record_charge(&self, charge: &ApiCommissionAndFeesReport) {
+        let mut execs = self.executions.lock().unwrap();
+        for stored in execs.iter_mut() {
+            if stored.execution.exec_id == charge.exec_id {
+                stored.commission_and_fees = charge.clone();
+            }
+        }
+    }
+
     /// Executions matching `filter`, cloned out under one short lock.
     ///
     /// Callers replay these into user callbacks, and a callback may re-enter

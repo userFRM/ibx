@@ -67,6 +67,20 @@ pub const TAG_IB_COMP_VERSION: u32 = 6143;
 /// other's name is how it went unread.
 pub const TAG_BULLETIN_ID: u32 = 6143;
 /// FIX tag 6968: the version.
+/// FIX tag 17: the venue's own name for an execution.
+pub const TAG_EXEC_ID: u32 = 17;
+
+/// FIX tag 6378, on a trade record: what the fill cost.
+///
+/// The execution report states no commission of any kind — this is where the
+/// charge is. The same tag carries the estimated commission on a preview,
+/// which is the same figure asked about before the event rather than after.
+pub const TAG_TRADE_CHARGE: u32 = 6378;
+
+/// FIX tag 6381: the currency the charge is in, which need not be the
+/// contract's.
+pub const TAG_TRADE_CHARGE_CURRENCY: u32 = 6381;
+
 pub const TAG_IB_VERSION: u32 = 6968;
 /// FIX tag 8349: the hmac signature.
 pub const TAG_HMAC_SIGNATURE: u32 = 8349;
