@@ -1416,8 +1416,19 @@ fn flush_session(
 /// Format a list of sessions into a semicolon-delimited string.
 ///
 /// Output: `"YYYYMMDD:HHMM-YYYYMMDD:HHMM;YYYYMMDD:CLOSED;..."`.
-/// Times are in UTC as received from the upstream wire — consumers should
-/// convert to local time using the paired timezone identifier when displaying.
+/// Times are in UTC as received from the upstream wire.
+///
+/// **This differs from the reference client**, which states these in the zone
+/// its `time_zone_id` names — so a caller written against that contract, and
+/// converting these by the name beside them, moves every session by the
+/// offset. Measured: a US listing states `US/Eastern` beside a regular
+/// session of `1330-2000`, which is its 0930-1600 in UTC.
+///
+/// Not converted here because the zone the venue names is not always one a
+/// zone database answers to: `US/Eastern` is a legacy name that the database
+/// this crate already carries does not resolve, and mapping the legacy names
+/// by hand is a table of this client's own. Left stated as received, and
+/// said plainly, rather than converted for some contracts and not others.
 /// A zero-length session is a closed day and renders as `<date>:CLOSED`,
 /// the official-API convention.
 /// Returns an empty string if `sessions` is empty.

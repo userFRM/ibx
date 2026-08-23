@@ -547,10 +547,18 @@ pub struct ContractDetails {
     pub fund_distribution_policy_indicator: String,
     #[pyo3(get, set)]
     pub fund_asset_type: String,
+    /// When the contract trades, stated in UTC.
+    ///
+    /// The reference client states these in the zone `time_zone_id` names;
+    /// this states them in UTC, as the wire carries them. Converting them by
+    /// the name beside them moves every session by the offset.
     #[pyo3(get, set)]
     pub trading_hours: String,
+    /// Its regular session, on the same clock as `trading_hours`.
     #[pyo3(get, set)]
     pub liquid_hours: String,
+    /// The zone the exchange keeps — which is not the zone the two above are
+    /// stated on.
     #[pyo3(get, set)]
     pub time_zone_id: String,
 }
