@@ -151,7 +151,19 @@ pub fn remember(path: &Path, key: &str, id: u64) -> io::Result<()> {
 /// own counter to lock, and the file holding the ids would be opened as the
 /// thing guarding them.
 fn lock_beside(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
+    // Named after the file the counter actually is, not the name it was
+    // reached by. Two runs naming the same counter through different paths —
+    // one of them a link — would otherwise take two different locks and hold
+    // them both at once, each writing over the other's marks. Resolved only as
+    // far as it can be: on a first run the counter does not exist yet, and the
+    // directory holding it is the part that can be.
+    let resolved = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .and_then(|dir| fs::canonicalize(dir).ok())
+        .and_then(|dir| path.file_name().map(|name| dir.join(name)))
+        .unwrap_or_else(|| path.to_path_buf());
+    let mut name = resolved.into_os_string();
     name.push(".lock");
     PathBuf::from(name)
 }
