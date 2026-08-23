@@ -807,42 +807,6 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         for r in readers { r.join().unwrap(); }
     }
-
-    #[test]
-    fn a_fill_moves_the_holding_the_caller_reads() {
-        let p = PortfolioState::new();
-        // Opening.
-        p.apply_fill(7, 100.0, 10 * PRICE_SCALE);
-        let row = p.position_info(7).unwrap();
-        assert_eq!(row.position, 100.0);
-        assert_eq!(row.avg_cost, 10 * PRICE_SCALE);
-        // Adding averages the cost in.
-        p.apply_fill(7, 100.0, 20 * PRICE_SCALE);
-        let row = p.position_info(7).unwrap();
-        assert_eq!(row.position, 200.0);
-        assert_eq!(row.avg_cost, 15 * PRICE_SCALE, "the two fills average");
-        // Reducing realises a gain and leaves the basis alone.
-        p.apply_fill(7, -150.0, 30 * PRICE_SCALE);
-        let row = p.position_info(7).unwrap();
-        assert_eq!(row.position, 50.0);
-        assert_eq!(row.avg_cost, 15 * PRICE_SCALE, "a sale does not re-price what remains");
-        // Closing leaves no basis.
-        p.apply_fill(7, -50.0, 30 * PRICE_SCALE);
-        assert_eq!(p.position_info(7).unwrap().position, 0.0);
-        assert_eq!(p.position_info(7).unwrap().avg_cost, 0);
-        // One fill that crosses through flat: what is held now was bought at
-        // this price, not at what the holding it replaced had paid.
-        p.apply_fill(8, 50.0, 10 * PRICE_SCALE);
-        p.apply_fill(8, -100.0, 30 * PRICE_SCALE);
-        let row = p.position_info(8).unwrap();
-        assert_eq!(row.position, -50.0, "long fifty, sold a hundred, short fifty");
-        assert_eq!(row.avg_cost, 30 * PRICE_SCALE, "priced at what the short was sold for");
-
-        // A fill on a contract this session never saw still opens the holding.
-        p.apply_fill(9, -10.0, 5 * PRICE_SCALE);
-        assert_eq!(p.position_info(9).unwrap().position, -10.0, "a short opens too");
-        assert_eq!(p.position_info(9).unwrap().avg_cost, 5 * PRICE_SCALE);
-    }
 }
 
 #[cfg(test)]

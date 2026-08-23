@@ -207,8 +207,8 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
         no_market(&shared, "no ticks arrived");
     } else if sell_filled {
         // Read from what the session holds, which the engine moves on every fill.
-        // The position event is the venue's feed and restates on its own
-        // schedule, not on a fill, so it is not required here.
+        // The position event is the venue's own restatement, which follows a
+        // fill but not on any timetable, so it is not required here.
         let pos = shared.portfolio.position(0);
         let before = held_before.unwrap_or(0.0);
         println!(

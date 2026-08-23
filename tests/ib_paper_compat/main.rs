@@ -1319,8 +1319,8 @@ fn a_cancel_racing_an_unacked_replace_live() {
 /// Run against a European listing, which trades while New York is closed, so
 /// the order actually fills rather than resting. What is proven is the whole
 /// path a fill takes: the quantity is read off the wire as a decimal, held
-/// fixed-point, booked against the order, and moves the holding — which the
-/// broker does not restate on a fill, so the fill is the only account of it.
+/// fixed-point, booked against the order, and moves the holding this session
+/// keeps for the instrument.
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn european_fill_books_what_the_venue_reported_live() {
