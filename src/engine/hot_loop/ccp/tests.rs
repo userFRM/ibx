@@ -3952,3 +3952,27 @@ fn a_holding_carries_the_contract_the_feed_names() {
     assert_eq!(aapl.symbol, "AAPL", "each entry carries its own, not the one before it");
     assert_eq!(aapl.sec_type, "STK");
 }
+
+/// Every ask for account and position data draws its own key, and the state
+/// remembers the one it last asked under.
+///
+/// The venue answers a key it is already serving with nothing, so two asks
+/// sharing a key means the second is not answered — and a reconnect that named
+/// a fixed key was asking under one the refreshes had already spent, leaving
+/// the position pushes not resuming after a drop. The recorded key matters for
+/// the same reason: the unsubscribe closes what it names.
+#[test]
+fn every_account_request_draws_its_own_key() {
+    let mut ccp = CcpState::new();
+
+    let first = ccp.next_account_request_key();
+    assert_eq!(ccp.account_request_key.as_deref(), Some(first.as_str()));
+
+    let second = ccp.next_account_request_key();
+    assert_ne!(first, second, "two asks shared a key, so one goes unanswered");
+    assert_eq!(
+        ccp.account_request_key.as_deref(),
+        Some(second.as_str()),
+        "the unsubscribe would close a key this connection is no longer served under",
+    );
+}

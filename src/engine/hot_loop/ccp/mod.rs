@@ -1400,11 +1400,7 @@ impl CcpState {
         // use it, so a counter reset with each loop asks under a key the
         // connection has already seen and is not answered at all. The opening
         // sequence has used AR.1.
-        static NEXT_ACCOUNT_REQUEST: std::sync::atomic::AtomicU32 =
-            std::sync::atomic::AtomicU32::new(2);
-        let n = NEXT_ACCOUNT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let key = format!("AR.{n}");
-        self.account_request_key = Some(key.clone());
+        let key = self.next_account_request_key();
         let _ = conn.send_fix(&[
             (fix::TAG_MSG_TYPE, "U"),
             (fix::TAG_SENDING_TIME, &ts),
@@ -1416,6 +1412,26 @@ impl CcpState {
         hb.last_ccp_sent = Instant::now();
     }
 
+    /// The next key to ask for account and position data under, recorded as
+    /// the one this state now holds.
+    ///
+    /// Unique for the life of the process, not of this state. The venue keys
+    /// the subscription on 6529 and answers a key it is already serving with
+    /// nothing, and a connection outlives the loops that use it — so every
+    /// place that asks draws from here rather than naming a key of its own.
+    /// A reconnect that named one directly asked under a key a refresh had
+    /// already spent, was answered with nothing, and the position pushes did
+    /// not resume.
+    fn next_account_request_key(&mut self) -> String {
+        static NEXT_ACCOUNT_REQUEST: std::sync::atomic::AtomicU32 =
+            std::sync::atomic::AtomicU32::new(2);
+        let n = NEXT_ACCOUNT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let key = format!("AR.{n}");
+        self.account_request_key = Some(key.clone());
+        key
+    }
+
+    /// life of the connection and the venue stops answering new ones.
     /// Send P&L subscribe: 6040=142, 6529=PLR.{N}, 1={account}.
     /// Close the account subscription this state opened.
     ///
@@ -2165,9 +2181,17 @@ impl CcpState {
                 (fix::TAG_MSG_TYPE, "U"), (fix::TAG_SENDING_TIME, &ts),
                 (6040, "91"), (1, account_id), (6556, "DR.1"), (6712, "1"),
             ]);
+            // Drawn from the counter, not named here. The venue answers a key
+            // it is already serving with nothing, and the refreshes on this
+            // connection have been spending keys from that counter since the
+            // session opened — so a fixed one is a key that has very likely
+            // already been used, and the account and position pushes this asks
+            // for simply do not resume. Recorded too, so the unsubscribe that
+            // follows closes the key this connection is actually served under.
+            let key = self.next_account_request_key();
             let _ = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"), (fix::TAG_SENDING_TIME, &ts),
-                (6040, "6"), (6036, "1"), (6095, account_id), (6529, "AR.3"),
+                (6040, "6"), (6036, "1"), (6095, account_id), (6529, &key),
             ]);
 
             // Resting open orders are pushed unsolicited by CCP as 35=8 with
