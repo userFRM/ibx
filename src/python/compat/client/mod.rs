@@ -1071,7 +1071,7 @@ w = W()",
             shared.orders.push_order_info(41, working());
             assert_eq!(
                 client.stated_order_id(), 42,
-                "an order working under 41 is what the next id has to clear",
+                "an order named under 41 is what the next id has to clear",
             );
             assert_eq!(client.take_order_id(py), 42);
             assert_eq!(client.take_order_id(py), 43, "and the count goes on from there");
@@ -1079,7 +1079,23 @@ w = W()",
             shared.orders.push_order_info(7, working());
             assert_eq!(
                 client.take_order_id(py), 44,
-                "an order working under a lower id does not move the count back",
+                "an order named under a lower id does not move the count back",
+            );
+
+            // A fill spends its id as surely as a working order holds it: the
+            // venue refuses the second placement under it either way.
+            let filled = crate::bridge::RichOrderInfo {
+                contract: Default::default(),
+                order: Default::default(),
+                order_state: crate::types::model::OrderState {
+                    status: "Filled".into(), ..Default::default()
+                },
+                last_exec: Default::default(),
+            };
+            shared.orders.push_order_info(90, filled);
+            assert_eq!(
+                client.take_order_id(py), 91,
+                "an id a fill has spent is counted past, not handed out again",
             );
         });
     }
