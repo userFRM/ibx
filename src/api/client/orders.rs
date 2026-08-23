@@ -302,7 +302,17 @@ impl EClient {
         if let Some((path, key)) = self.order_id_store.as_ref()
             && let Err(e) = crate::order_ids::remember(path, key, last)
         {
-            log::warn!("order id {last} not remembered in {}: {e}", path.display());
+            // An error, not a remark: the id was handed out and the account's
+            // high-water mark did not move with it, so a run started after this
+            // one reads a mark that is behind and hands the same id out again,
+            // which the venue refuses. The order this call is numbering still
+            // goes out — refusing to trade over a bookkeeping failure is worse
+            // than the failure — but nothing else says this happened.
+            log::error!(
+                "order id {last} was handed out and not remembered in {}: {e} — a run \
+                 started after this one will hand it out again",
+                path.display(),
+            );
         }
         first as i64
     }
