@@ -40,7 +40,10 @@ class AccountDeepWrapper(EWrapper):
         # P&L
         self.pnl_data = None
         self.got_pnl = threading.Event()
-        self.pnl_single = {}  # con_id -> data
+        # Not `pnl_single`: an attribute of that name shadows the callback
+        # of that name, and the venue's answer lands on a dict rather than a
+        # method.
+        self.pnl_single_data = {}  # req_id -> data
         self.got_pnl_single = threading.Event()
 
         # Histogram
@@ -103,7 +106,7 @@ class AccountDeepWrapper(EWrapper):
         self.got_pnl.set()
 
     def pnl_single(self, req_id, pos, daily_pnl, unrealized_pnl, realized_pnl, value):
-        self.pnl_single[req_id] = {
+        self.pnl_single_data[req_id] = {
             "pos": pos,
             "daily_pnl": daily_pnl,
             "unrealized_pnl": unrealized_pnl,
@@ -239,7 +242,7 @@ class TestAccountDeep:
         answered = []
         for req_id, pos in req_ids:
             self.client.cancel_pnl_single(req_id)
-            data = self.wrapper.pnl_single.get(req_id)
+            data = self.wrapper.pnl_single_data.get(req_id)
             if data:
                 answered.append(req_id)
                 print(f"    {pos['symbol']}: pos={data['pos']} daily={data['daily_pnl']:.2f} "
