@@ -98,38 +98,6 @@ def test_a_fills_cost_arrives_as_the_record_their_wrapper_reads():
     assert seen[0].execId == "0001.1"
 
 
-def test_the_order_id_file_is_the_one_the_caller_named(tmp_path):
-    """Stored and never passed on, a custom path and an opt-out both did
-    nothing, and the counter restarted with the account's ids already used."""
-    named = tmp_path / "order-ids"
-    passed = {}
-
-    class Recording:
-        def connect(self, **kwargs):
-            passed.update(kwargs)
-
-        def get_account_id(self):
-            return "DU1"
-
-        def req_managed_accts(self):
-            pass
-
-        def next_order_id(self):
-            return 1
-
-        def poll(self):
-            pass
-
-    import asyncio
-
-    ib = ib_async.IB()
-    c = IbxClient(ib.wrapper, order_id_file=str(named))
-    c._client = Recording()
-    c._start_pump = lambda: None
-    asyncio.run(c.connectAsync("", 0, 1))
-    assert passed.get("order_id_file") == str(named), passed
-
-
 def test_every_account_the_login_holds_crosses_over():
     """The default account read off the client is the first one. Used as the
     whole list, an advisor with several saw one standing for all of them."""

@@ -47,7 +47,7 @@ class IbxClient:
     MaxClientVersion = 178
 
     def __init__(self, wrapper, username="", password="", paper=True,
-                 session_file=None, order_id_file=None, client_id=None):
+                 session_file=None, client_id=None):
         self.wrapper = wrapper
         self._username = username or os.environ.get("IB_USERNAME", "")
         self._password = password or os.environ.get("IB_PASSWORD", "")
@@ -84,11 +84,6 @@ class IbxClient:
         # only, sealed with the password, and refused if it names another
         # account. Pass session_file=False to attach() to keep nothing.
         self._session_file = session_file
-        # Where the last order id handed out is kept. An id belongs to the
-        # account rather than to the run: a client that counts from one on
-        # every start asks the venue for an id it already holds, and the venue
-        # places nothing and answers "Duplicate ID".
-        self._order_id_file = order_id_file
         # Which counter this session counts on. Their own connect names one
         # too; stated here it is what the counter is keyed by before that call
         # is ever made.
@@ -115,7 +110,6 @@ class IbxClient:
                 paper=self._paper,
                 client_id=self.clientId,
                 session_file=self._session_file,
-                order_id_file=self._order_id_file,
             ),
         )
         self.connState = IbxClient.CONNECTED
@@ -677,7 +671,7 @@ def _as_ours(value):
 
 
 def attach(ib, username="", password="", paper=True, session_file=None,
-           order_id_file=None, client_id=None):
+           client_id=None):
     """Point an `ib_async.IB` at this engine, and hand it back.
 
     The credentials are this session's; left out, `IB_USERNAME` and
@@ -690,11 +684,8 @@ def attach(ib, username="", password="", paper=True, session_file=None,
     far fewer of them. Name another path to move it, or pass ``False`` to keep
     nothing and log in fully every time.
 
-    The last order id handed out is kept the same way, in ``~/.ibx/order-ids``,
-    keyed by this account, the kind of session and ``client_id``. An id belongs
-    to the account rather than to the run: a client that counts from one on
-    every start asks for an id the account already holds, and the venue places
-    nothing. Name another path, or pass ``False`` to keep nothing.
+    Order ids are counted from what the account is working, which the venue
+    names at every connect, so nothing about them is kept between runs.
     """
     if session_file is None:
         who = username or os.environ.get("IB_USERNAME", "")
@@ -702,11 +693,7 @@ def attach(ib, username="", password="", paper=True, session_file=None,
         session_file = str(pathlib.Path.home() / ".ibx" / f"session-{who}-{kind}")
     elif session_file is False:
         session_file = None
-    if order_id_file is False:
-        order_id_file = None
-    elif order_id_file is None:
-        order_id_file = str(pathlib.Path.home() / ".ibx" / "order-ids")
     ib.client = IbxClient(ib.wrapper, username, password, paper, session_file,
-                          order_id_file, client_id)
+                          client_id)
     ib.wrapper.client = ib.client
     return ib

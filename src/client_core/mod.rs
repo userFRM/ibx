@@ -3689,35 +3689,3 @@ pub fn remember_session(
     }
     session
 }
-
-/// Where this account's order ids continue from, and the file that remembers
-/// them.
-///
-/// An id belongs to the account rather than to the process: counting from one
-/// on every start collides with everything placed yesterday, and the venue
-/// answers that with "Duplicate ID" and places nothing.
-///
-/// Where no file is named, the clock — seconds, not milliseconds: an id a
-/// thousand times larger does not fit the width a request is carried under, so
-/// every request built from one is refused before it leaves.
-pub fn order_ids_continue_from(
-    file: Option<std::path::PathBuf>,
-    username: &str,
-    paper: bool,
-    client_id: i32,
-) -> (u64, Option<(std::path::PathBuf, String)>) {
-    let key = crate::order_ids::key(username, paper, client_id);
-    match file {
-        Some(path) => {
-            let start = crate::order_ids::next_after_last(&path, &key);
-            (start, Some((path, key)))
-        }
-        None => (
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            None,
-        ),
-    }
-}

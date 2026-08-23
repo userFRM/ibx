@@ -90,7 +90,6 @@ pub mod gateway;
 pub mod logging;
 /// The last order id handed out, kept between runs.
 #[doc(hidden)]
-pub mod order_ids;
 #[doc(hidden)]
 pub mod protocol;
 

@@ -167,17 +167,6 @@ pub struct EClientConfig {
     /// which today, on the servers reached from here, is nothing. That is a
     /// cost with no measured return, so it is a decision rather than a default.
     pub session_file: Option<std::path::PathBuf>,
-    /// Where the last order id handed out is kept, so the next run does not
-    /// hand out the same ones.
-    ///
-    /// An order id belongs to the account rather than to the process: the
-    /// venue answers an order under an id it already holds with "Duplicate ID"
-    /// and places nothing. The last id is remembered in the session's own
-    /// settings and hands out that value plus one; this is the same, in a file
-    /// keyed by account, kind of session and client id. Left unset the counter
-    /// lives as long as the process, which is enough for one run and not for
-    /// two.
-    pub order_id_file: Option<std::path::PathBuf>,
 }
 
 /// A calculation asked for before the venue had stated a model, kept until it
@@ -258,9 +247,9 @@ pub struct EClient {
     /// opens the watch and the answer follows, rather than the question being
     /// refused because it was asked first.
     pub(crate) pending_option_calcs: Mutex<std::collections::HashMap<i64, PendingOptionCalc>>,
+    /// Zero until the working orders the venue names at connect have been
+    /// read and an id above them settled on.
     pub(crate) next_order_id: AtomicU64,
-    /// Where the last id handed out is kept, and under which key.
-    pub(crate) order_id_store: Option<(std::path::PathBuf, String)>,
     /// One question at a time.
     ///
     /// A question drives the message pump itself, and the pump hands every
@@ -461,14 +450,6 @@ impl EClient {
             .name("ib-engine-hotloop".into())
             .spawn(move || { hot_loop.run_with_panic_recovery(); })?;
 
-        // One past the last id this account handed out, where a file remembers
-        // it. Otherwise the clock — seconds, not milliseconds: an id a
-        // thousand times larger does not fit the width a request is carried
-        // under, so every request built from one is refused before it leaves.
-        let (start_id, order_id_store) = crate::client_core::order_ids_continue_from(
-            config.order_id_file.clone(), &config.username, config.paper, 0,
-        );
-
         let core = ClientCore::new();
         // Stated before the client is handed back, so a caller cannot place
         // anything between the session opening and the setting taking hold.
@@ -487,8 +468,7 @@ impl EClient {
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
             pending_option_calcs: Mutex::new(std::collections::HashMap::new()),
-            next_order_id: AtomicU64::new(start_id),
-            order_id_store,
+            next_order_id: AtomicU64::new(0),
             asking: Mutex::new(()),
             discarded: Default::default(),
             completed: Mutex::new(Vec::new()),
@@ -508,10 +488,6 @@ impl EClient {
         handle: thread::JoinHandle<()>,
         account_id: String,
     ) -> Self {
-        let start_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() * 1000;
         Self {
             shared,
             control_tx,
@@ -524,9 +500,7 @@ impl EClient {
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
             pending_option_calcs: Mutex::new(std::collections::HashMap::new()),
-            next_order_id: AtomicU64::new(start_id),
-            // Built from parts, so nothing is remembered anywhere.
-            order_id_store: None,
+            next_order_id: AtomicU64::new(0),
             asking: Mutex::new(()),
             discarded: Default::default(),
             completed: Mutex::new(Vec::new()),

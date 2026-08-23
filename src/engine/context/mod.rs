@@ -101,17 +101,25 @@ impl Context {
             cancel_attempts: HashMap::new(),
             account: AccountState::default(),
             clock: Clock::new(),
-            next_order_id: {
-                // Epoch-based to avoid "Duplicate ID" across IB sessions
-                let secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                secs * 1000
-            },
+            // Settled on first use, against what the venue names as working.
+            next_order_id: 0,
             recv_at: Instant::now(),
             loop_iterations: 0,
         }
+    }
+
+    /// Take `n` consecutive ids, starting past anything working.
+    ///
+    /// The venue refuses an order naming an id it is still working and takes
+    /// one whose order has been withdrawn or filled, so an id is spent only
+    /// while its order is live. The venue names what is live at every connect,
+    /// and those land in `open_orders`, so there is nothing to carry between
+    /// runs.
+    fn take_order_ids(&mut self, n: OrderId) -> OrderId {
+        let floor = self.open_orders.keys().copied().max().unwrap_or(0) + 1;
+        let first = self.next_order_id.max(floor);
+        self.next_order_id = first + n;
+        first
     }
 
     // ── Market data (read, zero-copy) ──
@@ -209,8 +217,7 @@ impl Context {
         tif: u8,
         attrs: OrderAttrs,
     ) -> OrderId {
-        let id = self.next_order_id;
-        self.next_order_id += 1;
+        let id = self.take_order_ids(1);
         self.pending_orders.push(OrderRequest::SubmitEx {
             order_id: id, instrument, side, qty: qty_from_wire(qty as i64), kind, tif, attrs,
         });
@@ -228,10 +235,9 @@ impl Context {
         take_profit: Price,
         stop_loss: Price,
     ) -> (OrderId, OrderId, OrderId) {
-        let parent_id = self.next_order_id;
-        let tp_id = self.next_order_id + 1;
-        let sl_id = self.next_order_id + 2;
-        self.next_order_id += 3;
+        let parent_id = self.take_order_ids(3);
+        let tp_id = parent_id + 1;
+        let sl_id = parent_id + 2;
         self.pending_orders.push(OrderRequest::SubmitBracket {
             parent_id,
             tp_id,
@@ -264,8 +270,7 @@ impl Context {
         qty: Qty,
         price: Price,
     ) -> OrderId {
-        let id = self.next_order_id;
-        self.next_order_id += 1;
+        let id = self.take_order_ids(1);
         self.pending_orders.push(OrderRequest::SubmitEx {
             order_id: id,
             instrument,

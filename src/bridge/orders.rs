@@ -1,7 +1,7 @@
 //! What has been submitted, filled, and refused.
 
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use std::sync::Mutex;
 use std::collections::HashMap;
@@ -26,6 +26,10 @@ pub struct OrderState {
     /// it does unprompted after a connect. Until then "none" and "not yet
     /// told" look the same to a caller.
     replay_done: AtomicBool,
+    /// The highest id the venue has named an order working under, from any
+    /// session. An id is spent only while its order is live, so this is the
+    /// floor a new id has to clear.
+    working_id_watermark: AtomicU64,
     /// Reason for a genuinely-Inactive (39=I) transition: (order_id, ibapi
     /// error code, message). ibapi has no callback dedicated to "order
     /// parked with reason", so this is drained into `Wrapper::error` the
@@ -44,6 +48,7 @@ impl OrderState {
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
             replay_done: AtomicBool::new(false),
+            working_id_watermark: AtomicU64::new(0),
             order_inactive: Mutex::new(Vec::with_capacity(8)),
         }
     }
@@ -174,6 +179,16 @@ impl OrderState {
         self.replay_done.load(Ordering::Acquire)
     }
 
+    /// The highest id an order is working under, or zero where none is.
+    ///
+    /// The venue refuses an order naming an id it is still working and takes
+    /// one whose order has been withdrawn or filled, so this rises as the
+    /// venue names what is working and never has to be remembered between
+    /// runs.
+    pub fn working_id_watermark(&self) -> u64 {
+        self.working_id_watermark.load(Ordering::Acquire)
+    }
+
     /// A new connection has not yet named what it has working.
     ///
     /// Set once and never cleared, this state outlived the connection that
@@ -244,6 +259,7 @@ impl OrderState {
     /// [`push_order_correction`](Self::push_order_correction).
     #[doc(hidden)] pub fn push_order_info(&self, order_id: u64, info: RichOrderInfo) {
         if crate::types::order_status::is_open_status(&info.order_state.status) {
+            self.working_id_watermark.fetch_max(order_id, Ordering::AcqRel);
             if self.recently_completed(order_id) {
                 return;
             }
