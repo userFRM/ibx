@@ -498,12 +498,17 @@ impl EClient {
                     call_wrapper!(self.wrapper, py, "tick_string", (id, TICK_LAST_TIMESTAMP, ts_secs.to_string().as_str()));
                 }
             }
-            if self.core.check_snapshot_done(
-                req_id, result.delivered,
-                crate::client_core::ClientCore::is_quoted(&shared.market.quote(iid)),
-            ) {
-                call_wrapper!(self.wrapper, py, "tick_snapshot_end", (req_id,));
-                snapshot_done.push(req_id);
+            // The holder and everyone watching it, for the reason the ticks
+            // above go to both: a caller that asked for a snapshot of a
+            // contract somebody was already watching is recorded as a
+            // follower, and naming only the holder left its snapshot never
+            // completed and never withdrawn.
+            let quoted = crate::client_core::ClientCore::is_quoted(&shared.market.quote(iid));
+            for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
+                if self.core.check_snapshot_done(id, result.delivered, quoted) {
+                    call_wrapper!(self.wrapper, py, "tick_snapshot_end", (id,));
+                    snapshot_done.push(id);
+                }
             }
         }
         for req_id in snapshot_done {
