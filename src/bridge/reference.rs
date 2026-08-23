@@ -227,6 +227,19 @@ impl ReferenceState {
 
     /// Take every historical errors a dispatch loop should deliver, leaving behind
     /// what a waiting answering call will take.
+    /// What a refusal against no request at all is carried as.
+    ///
+    /// The queue holds the request id unsigned, and a refusal that answers no
+    /// request has none to hold — the reference client states those under -1,
+    /// and reporting one under 0 puts it on a caller's own request instead.
+    /// Read back by [`request_id_reported`].
+    pub const NO_REQUEST: u32 = u32::MAX;
+
+    /// The request id to report an error under, as the caller numbers them.
+    pub fn request_id_reported(stored: u32) -> i64 {
+        if stored == Self::NO_REQUEST { -1 } else { i64::from(stored) }
+    }
+
     pub fn drain_historical_errors_for_dispatch(&self) -> Vec<(u32, i32, String)> {
         let mut g = self.historical_errors.lock().unwrap();
         let mut out = Vec::new();
