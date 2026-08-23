@@ -887,10 +887,6 @@ pub fn parse_secdef_response(
         .find(|v| *v > 0.0)
     {
         def.size_increment = size;
-        // The reference client publishes a suggested size beside the required
-        // one. The venue states one table; where it states no separate
-        // suggestion, the suggestion is the increment itself.
-        def.suggested_size_increment = size;
     }
     if let Some(v) = tags.get(&TAG_MULTIPLIER) {
         def.multiplier = v.parse().unwrap_or(1.0);
