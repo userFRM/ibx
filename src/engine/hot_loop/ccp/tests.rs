@@ -3976,3 +3976,49 @@ fn every_account_request_draws_its_own_key() {
         "the unsubscribe would close a key this connection is no longer served under",
     );
 }
+
+/// The venue's urgency and the caller's kind are two numberings, and the two
+/// exchange kinds sit the other way round in each. Passed straight through, a
+/// caller halting on an exchange that had stopped trading acted on one that
+/// had started.
+#[test]
+fn a_bulletin_is_reported_as_the_kind_a_caller_reads_not_the_urgency_stated() {
+    // Stated urgency -> the kind a caller is told, and what that kind means.
+    let cases = [
+        (1, 1, "ordinary news"),
+        (2, 3, "an exchange that has stopped trading"),
+        (3, 2, "an exchange that has started"),
+        (8, 4, "plain text"),
+        (9, 5, "a message meant to be shown"),
+        (10, 6, "one written as markup"),
+    ];
+    for (urgency, kind, what) in cases {
+        let mut ccp = CcpState::new();
+        let shared = SharedState::new();
+        let parsed = std::collections::HashMap::from([
+            (crate::protocol::fix::TAG_URGENCY, urgency.to_string()),
+            (crate::protocol::fix::TAG_HEADLINE, what.to_string()),
+            (crate::protocol::fix::TAG_SECURITY_EXCHANGE, "NASDAQ".to_string()),
+            (crate::protocol::fix::TAG_BULLETIN_ID, "4242".to_string()),
+        ]);
+        ccp.handle_news_bulletin(&parsed, &shared);
+        let sent = shared.market.drain_news_bulletins();
+        assert_eq!(sent.len(), 1, "urgency {urgency} was dropped");
+        assert_eq!(sent[0].msg_type, kind, "urgency {urgency} names {what}");
+        assert_eq!(sent[0].msg_id, 4242, "the venue numbers its own bulletins");
+    }
+}
+
+/// A bulletin the venue did not number stands at the widest number one is
+/// carried under, rather than at a count this session kept.
+#[test]
+fn an_unnumbered_bulletin_says_so() {
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    let parsed = std::collections::HashMap::from([
+        (crate::protocol::fix::TAG_URGENCY, "1".to_string()),
+        (crate::protocol::fix::TAG_HEADLINE, "something".to_string()),
+    ]);
+    ccp.handle_news_bulletin(&parsed, &shared);
+    assert_eq!(shared.market.drain_news_bulletins()[0].msg_id, i32::MAX);
+}

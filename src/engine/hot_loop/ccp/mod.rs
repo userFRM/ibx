@@ -266,7 +266,6 @@ pub(crate) struct CcpState {
     /// the whole set — a wholesale clear would let a post-reconnect server
     /// replay of a recently-seen ExecID double-count a fill.
     pub(crate) exec_id_order: VecDeque<String>,
-    pub(crate) bulletin_next_id: i32,
     /// Live news subscriptions: instrument, request id, the providers the
     /// caller asked for, and the contract. The providers are kept because a
     /// reconnect has to send the same request again, and the request is the
@@ -422,7 +421,6 @@ impl CcpState {
         Self {
             seen_exec_ids: HashSet::with_capacity(256),
             exec_id_order: VecDeque::with_capacity(256),
-            bulletin_next_id: 0,
             news_subscriptions: Vec::new(),
             disconnected: false,
             recovery_sweep_at: None,
@@ -1014,8 +1012,16 @@ impl CcpState {
     }
 
     fn handle_news_bulletin(&mut self, parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
+        // The urgency the venue states, and the kind a caller is told about.
+        // They are not the same numbering and they are not in the same order:
+        // the venue's second kind is an exchange that has stopped trading and
+        // its third is one that has started, while a caller reads those the
+        // other way round. Passed straight through, a caller halting on an
+        // exchange going down acted on one coming up. The last three are
+        // kinds of their own — plain text, a message meant to be shown, and
+        // one written as markup — and were all reported as ordinary news.
         static BULLETIN_TYPE_MAP: &[(i32, i32)] = &[
-            (1, 1), (2, 2), (3, 3), (8, 1), (9, 1), (10, 1),
+            (1, 1), (2, 3), (3, 2), (8, 4), (9, 5), (10, 6),
         ];
         let fix_type: i32 = parsed.get(&fix::TAG_URGENCY)
             .and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -1041,9 +1047,17 @@ impl CcpState {
         };
         let message = parsed.get(&fix::TAG_HEADLINE).cloned().unwrap_or_default();
         let exchange = parsed.get(&fix::TAG_SECURITY_EXCHANGE).cloned().unwrap_or_default();
-        self.bulletin_next_id += 1;
+        // The venue numbers its own bulletins and states the number here.
+        // Counted locally instead, the numbering started again at every
+        // connect and named nothing the venue would recognise, so the same
+        // bulletin arriving twice across a reconnect could not be told from
+        // two. Absent, it stands at the widest number a bulletin id is
+        // carried under, which is what says nothing was stated.
+        let msg_id = parsed.get(&fix::TAG_BULLETIN_ID)
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(i32::MAX);
         let bulletin = NewsBulletin {
-            msg_id: self.bulletin_next_id,
+            msg_id,
             msg_type: api_type,
             message,
             exchange,
