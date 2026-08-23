@@ -798,7 +798,15 @@ impl EClient {
         if let Some((path, key)) = stored
             && let Err(e) = py.detach(|| crate::order_ids::remember(&path, &key, id))
         {
-            log::warn!("order id {id} not remembered in {}: {e}", path.display());
+            // An error, not a remark, for the reason the other surface gives:
+            // the id was handed out and the account's high-water mark did not
+            // move with it, so a run started after this one hands the same id
+            // out again and the venue refuses it.
+            log::error!(
+                "order id {id} was handed out and not remembered in {}: {e} — a run \
+                 started after this one will hand it out again",
+                path.display(),
+            );
         }
         id
     }
