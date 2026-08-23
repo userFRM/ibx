@@ -800,11 +800,6 @@ fn provider_panicked() -> io::Error {
     )
 }
 
-/// Compact hex dump for diagnostic logging.
-fn hex_dump(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
-}
-
 /// Default deadline for the second-factor gate, matching the server-side
 /// timeout measured in capture run B (~18 min).
 pub const IB_KEY_DEFAULT_TIMEOUT_SECS: u64 = 1080;
@@ -1172,7 +1167,6 @@ pub fn do_ib_key_2fa<S: Read + Write>(
         "2FA gate: sent SWCR_TOKEN state=1 ({} bytes inner, {} bytes framed)",
         init.len(), framed.len(),
     );
-    log::debug!("2FA gate: SWCR_TOKEN bytes (framed) = {}", hex_dump(&framed));
 
     let mut approval_url = String::new();
     let mut session_id = String::new();
