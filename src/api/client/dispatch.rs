@@ -336,12 +336,18 @@ impl EClient {
                     wrapper.tick_string(id, 45, &ts_secs.to_string());
                 }
             }
-            if self.core.check_snapshot_done(
-                req_id, result.delivered,
-                crate::client_core::ClientCore::is_quoted(&self.shared.market.quote(iid)),
-            ) {
-                wrapper.tick_snapshot_end(req_id);
-                snapshot_done.push(req_id);
+            // The holder and everyone watching it. A caller that asked for a
+            // snapshot of a contract somebody was already watching is recorded
+            // as a follower, and only the holder was named here — so its
+            // snapshot was never completed, never withdrawn, and a caller
+            // waiting for the end of it waited for ever.
+            let quoted =
+                crate::client_core::ClientCore::is_quoted(&self.shared.market.quote(iid));
+            for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
+                if self.core.check_snapshot_done(id, result.delivered, quoted) {
+                    wrapper.tick_snapshot_end(id);
+                    snapshot_done.push(id);
+                }
             }
         }
         for req_id in snapshot_done {
