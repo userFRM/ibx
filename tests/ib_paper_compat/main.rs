@@ -14,6 +14,23 @@
 //! Every phase builds a fresh HotLoop, runs it, then reclaims the connections
 //! for the next, so the run holds one session throughout.
 //!
+//! # The account needs clearing between runs
+//!
+//! Phases place orders that rest by design, and a run leaves roughly three
+//! dozen of them working. The venue caps how many may rest at once on one side
+//! of one contract, so an account that has run this a few times reaches that
+//! cap and refuses the next run's orders on it. The phases read that refusal as
+//! the account talking, which it is, and skip rather than failing — but they
+//! verify nothing while it stands.
+//!
+//! The suite cannot clear them itself. A cancel states the contract and the
+//! quantity as well as the order id, so it can only be built for an order the
+//! engine is tracking, and the venue names what is already working exactly once
+//! as the session opens — inside the logon exchange, before any engine of this
+//! suite's exists. Nothing this suite runs ever sees those orders.
+//!
+//! Clear them from a separate session before a run that has to be trusted.
+//!
 //! Prices here are written scaled, grouped as dollars and cents:
 //! `1_00_000_000` is $1.00 at `PRICE_SCALE`. The grouping is the unit, which
 //! Is why the digits are not grouped in threes.
@@ -470,10 +487,6 @@ fn compat_suite() {
         conns = market_data::phase_fallback_streaming_validation(conns);
         conns = market_data::phase_fallback_resubscribe(conns);
     }
-
-    // Before the heartbeat phase, which parks the trading connection behind a
-    // dead socket: nothing can be withdrawn over it after that.
-    conns = common::withdraw_orders_this_run_left(conns);
 
     // Runs last: it parks the real CCP behind a dead socket for 30s and is the one
     // phase asserting a hard liveness deadline, so a failure here cannot take the

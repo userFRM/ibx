@@ -19,7 +19,6 @@ pub(super) fn redacted(account: &str) -> String {
     }
 }
 
-
 pub(super) use std::sync::Arc;
 pub(super) use std::time::{Duration, Instant};
 
@@ -266,9 +265,7 @@ pub(super) fn next_order_id() -> OrderId {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64 * 1000;
-    let id = base + (SEQ.fetch_add(1, Ordering::Relaxed) % 1000);
-    IDS_THIS_RUN.lock().unwrap().push(id);
-    id
+    base + (SEQ.fetch_add(1, Ordering::Relaxed) % 1000)
 }
 
 /// How many phases have announced themselves.
@@ -345,61 +342,6 @@ pub(super) fn take_phase_baseline() {
 
 static BASELINE: std::sync::Mutex<(u32, u32)> = std::sync::Mutex::new((0, 0));
 
-/// Every order id this run has handed out.
-///
-/// Kept because the venue names what is working only once, unprompted, when a
-/// session opens: a teardown that reuses the session already open is never told
-/// again, so what to withdraw has to be what this run knows it placed. Holding
-/// the ids also keeps the teardown off an order somebody placed by hand on the
-/// same account, which is not in here.
-static IDS_THIS_RUN: std::sync::Mutex<Vec<OrderId>> = std::sync::Mutex::new(Vec::new());
-
-/// Withdraw the orders this run left working.
-///
-/// Phases place orders that rest by design, and the venue caps how many may
-/// rest at once on one side of a contract. Left behind, a later run is refused
-/// on that cap rather than on anything it did, and the refusal reads as a
-/// defect in the order it just built.
-///
-/// Only this run's orders are withdrawn. The venue states what is working when
-/// a session opens, so nothing has to be asked for; what comes back is filtered
-/// against [`FIRST_ID_THIS_RUN`] so an order placed by hand on the same account
-/// is left where it is.
-pub(super) fn withdraw_orders_this_run_left(conns: Conns) -> Conns {
-    let placed: Vec<OrderId> = IDS_THIS_RUN.lock().unwrap().clone();
-    if placed.is_empty() {
-        println!("--- Teardown: no order was placed, so none is left working ---\n");
-        return conns;
-    }
-    println!("--- Teardown: withdrawing the {} orders this run placed ---", placed.len());
-
-    let account_id = conns.account_id;
-    let shared = Arc::new(SharedState::new());
-    let (hot_loop, control_tx) = HotLoop::with_connections(
-        shared.clone(),
-        None,
-        account_id.clone(),
-        conns.farm,
-        conns.ccp,
-        conns.hmds,
-        None,
-    );
-    let join = run_hot_loop(hot_loop);
-
-    // Every one of them, not the ones still working: which are still working is
-    // what the venue states unprompted as a session opens, and this runs on the
-    // session already open. A withdrawal for an order that filled or was
-    // withdrawn already is refused, which costs nothing and is not read here.
-    for order_id in &placed {
-        let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: *order_id }));
-    }
-    // Long enough for the last of them to leave, since shutting the loop down
-    // with sends still queued would drop them.
-    std::thread::sleep(Duration::from_secs(10));
-    println!("  {} asked to withdraw\n", placed.len());
-
-    shutdown_and_reclaim(&control_tx, join, account_id)
-}
 
 /// Rebuild the trading connection on the session already open, whatever state
 /// it is in.
