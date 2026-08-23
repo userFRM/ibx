@@ -192,6 +192,14 @@ pub(crate) struct PendingOptionCalc {
     pub(crate) option_price: f64,
     /// The underlying price the caller supplied.
     pub(crate) under_price: f64,
+    /// Whether the venue has since stated a model and this has been answered.
+    ///
+    /// Answered questions are kept rather than dropped, because the watch this
+    /// client opened to obtain the model is withdrawn where the caller
+    /// withdraws the calculation — and a question that is gone cannot be
+    /// withdrawn. Nothing is sent on the strength of this; it only stops the
+    /// entry being solved twice.
+    pub(crate) answered: bool,
 }
 
 /// ibapi-compatible EClient. Matches C++ `EClientSocket` method signatures.

@@ -235,6 +235,7 @@ impl EClient {
             wants_volatility,
             option_price,
             under_price,
+            answered: false,
         });
         true
     }
