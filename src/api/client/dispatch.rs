@@ -127,6 +127,14 @@ impl EClient {
             };
             if answered {
                 self.pending_option_calcs.lock().unwrap().remove(&req_id);
+                // And the watch that was opened to answer it. The question is
+                // what kept it: left up, the caller cannot take it down —
+                // withdrawing the calculation finds no question to forget and
+                // cancels nothing — and ticks go on arriving under a request id
+                // the caller was told was finished. A cancel for a request this
+                // client never subscribed under, because the caller was already
+                // watching the contract, withdraws nothing.
+                let _ = self.cancel_mkt_data(req_id);
             }
         }
     }
