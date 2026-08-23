@@ -59,7 +59,6 @@ pub struct EClient {
     /// Where the last id handed out is kept, and under which key. Empty when
     /// the caller asked for no file, which makes the counter this session's
     /// alone and lets it collide with what an earlier one used.
-    pub(crate) order_id_store: Mutex<Option<(std::path::PathBuf, String)>>,
     pub(crate) _thread: Mutex<Option<thread::JoinHandle<()>>>,
     /// Set by connect(), cleared by disconnect.
     pub(crate) account_id: Mutex<Option<String>>,
@@ -205,10 +204,7 @@ impl Drop for EClient {
 /// Narrow a caller's req_id to the width the request carries on the wire,
 /// refusing rather than truncating.
 ///
-/// The counter this client hands out fits: it continues from the last id the
-/// account used, and on a first run from the clock in seconds, which is well
-/// inside `u32` and is why `order_ids` states it in seconds rather than
-/// milliseconds. What need not fit is an id a caller numbers themselves, and
+/// What need not fit is an id a caller numbers themselves, and
 /// a truncated one answers under a number they never used.
 pub(crate) fn wire_req_id(req_id: i64) -> PyResult<u32> {
     crate::api::client::wire_req_id(req_id)
@@ -259,7 +255,6 @@ impl EClient {
             shared: Mutex::new(None),
             control_tx: Mutex::new(None),
             next_order_id: AtomicU64::new(0),
-            order_id_store: Mutex::new(None),
             _thread: Mutex::new(None),
             account_id: Mutex::new(None),
             accounts: Mutex::new(Vec::new()),
@@ -306,7 +301,7 @@ impl EClient {
     ///
     /// `port` is taken and not applied. The session connects to the venue
     /// directly, so there is no local socket to name a port on.
-    #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None, order_id_file=None))]
+    #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None))]
     fn connect(
         &self,
         py: Python<'_>,
@@ -333,7 +328,6 @@ impl EClient {
         session_file: Option<String>,
         // Where the last order id handed out is kept. Beside the session file
         // by default, or under the caller's home where there is none.
-        order_id_file: Option<String>,
     ) -> PyResult<()> {
         let username_for_resume = username.clone();
         let username_for_session = username.clone();
@@ -427,24 +421,6 @@ impl EClient {
             },
         );
 
-        // One past the last id this account handed out, read from the file
-        // that remembers it. An id belongs to the account rather than to the
-        // process: counting from one on every start collides with everything
-        // placed yesterday, and the venue answers that with "Duplicate ID" and
-        // places nothing.
-        // This surface always keeps a file: where the caller named none, the
-        // one beside their session, and failing that the default path.
-        let id_file = order_id_file
-            .map(std::path::PathBuf::from)
-            .or_else(|| session_file.as_ref().and_then(|s| {
-                std::path::Path::new(s).parent().map(|d| d.join("order-ids"))
-            }))
-            .unwrap_or_else(crate::order_ids::default_path);
-        let (start_id, store) = crate::client_core::order_ids_continue_from(
-            Some(id_file), &username_for_resume, paper, client_id,
-        );
-        *self.order_id_store.lock().unwrap() = store;
-
         let handle = thread::Builder::new()
             .name("ib-engine-hotloop".into())
             .spawn(move || {
@@ -455,7 +431,9 @@ impl EClient {
         *self.shared.lock().unwrap() = Some(shared);
         *self.control_tx.lock().unwrap() = Some(control_tx);
         *self.event_rx.lock().unwrap() = Some(event_rx);
-        self.next_order_id.store(start_id, Ordering::Relaxed);
+        // Counted from whatever the venue names as working, once it has;
+        // nothing is carried over from the last run.
+        self.next_order_id.store(0, Ordering::Relaxed);
         *self._thread.lock().unwrap() = Some(handle);
         self.session_ended.store(false, Ordering::Release);
         self.close_notified.store(false, Ordering::Release);
@@ -472,7 +450,7 @@ impl EClient {
         // this report failure on a session that is live.
         self.notify(py, "connect_ack", ());
         self.notify(py, "managed_accounts", (self.accounts_csv().as_str(),));
-        self.notify(py, "next_valid_id", (start_id as i64,));
+        self.notify(py, "next_valid_id", (self.stated_order_id() as i64,));
 
         Ok(())
     }
@@ -781,34 +759,37 @@ impl EClient {
             .ok_or_else(|| PyRuntimeError::new_err("Not connected"))
     }
 
-    /// Hand out the next order id, and remember it as used.
+    /// The id a caller may next place under, without taking it.
     ///
-    /// Written where it was read from, for the reason it is read at all: an id
-    /// this run used must not be handed out by the next one. Written as it is
-    /// handed out rather than in a batch, because a run that ends between the
-    /// two is exactly the run whose ids would be reused.
-    pub(crate) fn take_order_id(&self, py: Python<'_>) -> u64 {
-        let id = self.next_order_id.fetch_add(1, Ordering::Relaxed);
-        // Detached for the write. The counter is shared by every client this
-        // user runs, so the write takes a lock across processes and waits when
-        // somebody else holds it — waiting there with the GIL held stalls every
-        // Python thread rather than this call. Uncontended it is still several
-        // blocking syscalls per id.
-        let stored = self.order_id_store.lock().unwrap().clone();
-        if let Some((path, key)) = stored
-            && let Err(e) = py.detach(|| crate::order_ids::remember(&path, &key, id))
-        {
-            // An error, not a remark, for the reason the other surface gives:
-            // the id was handed out and the account's high-water mark did not
-            // move with it, so a run started after this one hands the same id
-            // out again and the venue refuses it.
-            log::error!(
-                "order id {id} was handed out and not remembered in {}: {e} — a run \
-                 started after this one will hand it out again",
-                path.display(),
-            );
+    /// One past the highest id the venue has named an order working under.
+    /// Stated rather than reserved, as the reference client states it: the
+    /// caller places under it, and the taking happens then.
+    pub(crate) fn stated_order_id(&self) -> u64 {
+        let floor = self.shared.lock().unwrap().as_ref()
+            .map(|shared| shared.orders.working_id_watermark() + 1)
+            .unwrap_or(1);
+        self.next_order_id.load(Ordering::Acquire).max(floor)
+    }
+
+    /// Hand out the next order id.
+    ///
+    /// Floored at one past the highest id the venue has named an order working
+    /// under, from any session: an id is spent only while its order is live,
+    /// and the venue names what is live at every connect. Nothing is kept
+    /// between runs, because there is nothing a run knows that the next one
+    /// will not be told.
+    pub(crate) fn take_order_id(&self, _py: Python<'_>) -> u64 {
+        let floor = self.stated_order_id();
+        let mut held = self.next_order_id.load(Ordering::Acquire);
+        loop {
+            let id = held.max(floor);
+            match self.next_order_id.compare_exchange_weak(
+                held, id + 1, Ordering::AcqRel, Ordering::Acquire,
+            ) {
+                Ok(_) => return id,
+                Err(seen) => held = seen,
+            }
         }
-        id
     }
 
     /// Send a control command to the engine. `control_tx` is a sync_channel(64)
@@ -1068,20 +1049,39 @@ w = W()",
         });
     }
 
-    /// The counter and the wire agree, so the refusal fires on a caller's own
-    /// number and not on ordinary use. Seeded from a clock in milliseconds
-    /// rather than seconds, every id this client numbered for itself would be
-    /// a thousand times too wide and every request would be refused.
+    /// An account with nothing working counts from one, and one working order
+    /// puts the count past it. The venue holds an id only while its order is
+    /// live, so this is the whole of what a new id has to clear.
     #[test]
-    fn an_id_from_the_counter_fits_on_the_wire() {
-        // The path this surface takes: connect always names a file, so a first
-        // run starts from the clock through `next_after_last`.
-        let cold = std::path::Path::new("/nonexistent/ibx-order-ids");
-        let seeded = crate::order_ids::next_after_last(cold, "someone/paper/0");
-        assert!(
-            wire_req_id(seeded as i64).is_ok(),
-            "the counter starts past what a request can carry: {seeded}",
-        );
+    fn the_counter_starts_past_what_is_working_and_no_further() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _w) = wired_client(py);
+            let client = client.borrow(py);
+            assert_eq!(client.stated_order_id(), 1, "nothing is working");
+
+            let working = || crate::bridge::RichOrderInfo {
+                contract: Default::default(),
+                order: Default::default(),
+                order_state: crate::types::model::OrderState {
+                    status: "Submitted".into(), ..Default::default()
+                },
+                last_exec: Default::default(),
+            };
+            shared.orders.push_order_info(41, working());
+            assert_eq!(
+                client.stated_order_id(), 42,
+                "an order working under 41 is what the next id has to clear",
+            );
+            assert_eq!(client.take_order_id(py), 42);
+            assert_eq!(client.take_order_id(py), 43, "and the count goes on from there");
+
+            shared.orders.push_order_info(7, working());
+            assert_eq!(
+                client.take_order_id(py), 44,
+                "an order working under a lower id does not move the count back",
+            );
+        });
     }
 
     /// An id a caller numbers themselves need not fit the width the request

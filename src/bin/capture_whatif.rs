@@ -119,14 +119,9 @@ fn main() {
         }),
     ];
 
-    // The venue remembers an order id for the account, so a run that reuses
-    // one is answered "Duplicate ID" rather than with a preview. Numbered from
-    // the clock so a second run says something about the orders rather than
-    // about the last run.
-    let first_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.as_secs() % 100_000) as i64 * 10)
-        .unwrap_or(9000);
+    // Numbered from the session's own counter, which starts past anything the
+    // account is working an order under.
+    let first_id = client.next_order_id();
 
     let mut heard = Heard::default();
     for (n, (what, order)) in cases.into_iter().enumerate() {

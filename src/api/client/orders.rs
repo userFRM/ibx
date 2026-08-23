@@ -278,8 +278,27 @@ impl EClient {
 
     /// Request next valid order ID. Matches `reqIds` in C++.
     pub fn req_ids(&self, wrapper: &mut impl Wrapper) {
-        let next_id = self.next_order_id.load(Ordering::Relaxed) as i64;
-        wrapper.next_valid_id(next_id);
+        // Stated without being taken, as the reference client states it: the
+        // caller places under it, and the reservation happens then.
+        let stated = self.next_order_id.load(Ordering::Acquire).max(self.next_id_base());
+        wrapper.next_valid_id(stated as i64);
+    }
+
+    /// One past the highest id the account is working an order under.
+    ///
+    /// The venue refuses an order that names an id it is still working, and
+    /// takes one whose order has been withdrawn or filled: an id is spent only
+    /// while its order is live. So what an id has to clear is the working set,
+    /// which the venue names unprompted at every connect — from every session,
+    /// not just this one — and not every id the account has ever used.
+    ///
+    /// Read on each reservation rather than settled once, so an order the
+    /// venue names later still raises the floor. Nothing is waited for: an
+    /// account with nothing working counts from one, and the wait that would
+    /// tell that apart from a naming still in flight costs every such account
+    /// its first order.
+    fn next_id_base(&self) -> u64 {
+        self.shared.orders.working_id_watermark() + 1
     }
 
     /// Get the next order ID (local counter).
@@ -293,28 +312,17 @@ impl EClient {
     /// Reserving them in one step keeps a concurrent placement from taking a
     /// child's id or moving the counter back over ids already handed out.
     fn reserve_order_ids(&self, n: u64) -> i64 {
-        let first = self.next_order_id.fetch_add(n, Ordering::Relaxed);
-        // Remembered as they are handed out rather than in a batch: a run that
-        // ends between the two is exactly the run whose ids would be reused.
-        // The last of the reservation is what is written down, because a
-        // restart has to continue past every id this handed out.
-        let last = first + n - 1;
-        if let Some((path, key)) = self.order_id_store.as_ref()
-            && let Err(e) = crate::order_ids::remember(path, key, last)
-        {
-            // An error, not a remark: the id was handed out and the account's
-            // high-water mark did not move with it, so a run started after this
-            // one reads a mark that is behind and hands the same id out again,
-            // which the venue refuses. The order this call is numbering still
-            // goes out — refusing to trade over a bookkeeping failure is worse
-            // than the failure — but nothing else says this happened.
-            log::error!(
-                "order id {last} was handed out and not remembered in {}: {e} — a run \
-                 started after this one will hand it out again",
-                path.display(),
-            );
+        let floor = self.next_id_base();
+        let mut held = self.next_order_id.load(Ordering::Acquire);
+        loop {
+            let first = held.max(floor);
+            match self.next_order_id.compare_exchange_weak(
+                held, first + n, Ordering::AcqRel, Ordering::Acquire,
+            ) {
+                Ok(_) => return first as i64,
+                Err(seen) => held = seen,
+            }
         }
-        first as i64
     }
 
     // ── Open Orders ──

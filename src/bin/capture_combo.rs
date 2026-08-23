@@ -92,10 +92,7 @@ fn main() {
         ..Default::default()
     };
 
-    let id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.as_secs() % 90_000) as i64 * 10 + 3)
-        .unwrap_or(4242);
+    let id = client.next_order_id();
 
     let mut heard = Heard::default();
     let cases = [

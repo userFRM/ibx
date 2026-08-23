@@ -116,10 +116,7 @@ fn main() {
     // An order placed far from the market, then changed, then withdrawn. The
     // only way to show a withdrawal reaches the venue is to have something
     // running for it to withdraw.
-    let id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.as_secs() % 90_000) as i64 * 10 + 5)
-        .unwrap_or(12345);
+    let id = client.next_order_id();
     let far_below = Order {
         action: "BUY".into(), order_type: "LMT".into(),
         total_quantity: 1.0, lmt_price: 50.0, ..Default::default()

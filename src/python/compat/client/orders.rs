@@ -336,8 +336,7 @@ impl EClient {
     #[pyo3(signature = (num_ids=1))]
     fn req_ids(&self, py: Python<'_>, num_ids: i32) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
-        let next_id = self.next_order_id.load(Ordering::Relaxed) as i64;
-        self.callback(py, "next_valid_id", (next_id,))?;
+        self.callback(py, "next_valid_id", (self.stated_order_id() as i64,))?;
         let _ = num_ids;
         Ok(())
     }
