@@ -494,6 +494,14 @@ impl FarmState {
     pub(crate) fn holds_market_data(&self, instrument: InstrumentId) -> bool {
         self.instrument_md_reqs.iter().any(|(id, _)| *id == instrument)
             || self.md_resub_info.iter().any(|r| r.0 == instrument)
+            // And the queue the reconnect replays from. Between the reconnect
+            // and the last burst, `md_resub_info` has been taken and
+            // `instrument_md_reqs` is not refilled until each subscription is
+            // sent, so an instrument waiting its turn is held here and nowhere
+            // else. Missing it, the slot reads as free while a subscription for
+            // it is still to go out, and the replay binds this contract's
+            // server tag and minimum tick onto whatever contract took the slot.
+            || self.replay_queue.iter().any(|r| r.0 == instrument)
     }
 
     pub(crate) fn new() -> Self {
@@ -1246,6 +1254,12 @@ impl FarmState {
         // record standing and the reconnect would re-subscribe an instrument
         // the caller explicitly cancelled.
         self.md_resub_info.retain(|(id, ..)| *id != instrument);
+        // And out of the replay queue, for the same reason. A reconnect moves
+        // the records here and empties the list above, so between the reconnect
+        // and the last burst this is the only place the subscription is
+        // written down — left standing, the replay re-sends a subscription the
+        // caller has just cancelled.
+        self.replay_queue.retain(|r| r.0 != instrument);
         let reqs = match self.instrument_md_reqs.iter()
             .position(|(id, _)| *id == instrument)
         {

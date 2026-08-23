@@ -575,6 +575,54 @@ mod resub_tests {
         assert!(farm.take_resub_targets(&market).is_empty());
     }
 
+    /// The window the two tests below do not reach: between a reconnect and the
+    /// last replay burst. `take_resub_targets` empties `md_resub_info` into
+    /// `replay_queue` and `instrument_md_reqs` is not refilled until each
+    /// subscription is sent, so an instrument waiting its turn is written down
+    /// there and nowhere else. Read as free, its slot is handed to another
+    /// contract and the replay then binds this contract's server tag and
+    /// minimum tick onto that one.
+    #[test]
+    fn an_instrument_waiting_in_the_replay_queue_is_not_reclaimable() {
+        let mut farm = FarmState::new();
+        let mut market = MarketState::new();
+        let instrument = market.register(756733);
+        farm.replay_queue.push_back((
+            instrument, 756733, "SPY".into(), "SMART".into(), "STK".into(), String::new(),
+            0.0, String::new(), String::new(), 0,
+        ));
+
+        assert!(
+            farm.holds_market_data(instrument),
+            "a subscription still to be replayed must keep the slot resident",
+        );
+    }
+
+    /// And the caller's withdrawal reaches it there. Left in the queue, the
+    /// replay re-sends a subscription that was explicitly cancelled.
+    #[test]
+    fn withdrawing_reaches_a_subscription_waiting_to_be_replayed() {
+        let mut farm = FarmState::new();
+        let mut market = MarketState::new();
+        let instrument = market.register(756733);
+        farm.replay_queue.push_back((
+            instrument, 756733, "SPY".into(), "SMART".into(), "STK".into(), String::new(),
+            0.0, String::new(), String::new(), 0,
+        ));
+
+        // No transport: the withdrawal has to reach the queue whether or not a
+        // cancel can go out, which is the case an unsubscribe during an outage
+        // already relies on.
+        let mut hb = HeartbeatState::new();
+        farm.send_mktdata_unsubscribe(instrument, &mut None, &mut hb);
+
+        assert!(
+            farm.replay_queue.is_empty(),
+            "the replay would re-send a subscription the caller withdrew",
+        );
+        assert!(!farm.holds_market_data(instrument));
+    }
+
     /// The case the test above does not reach: the slot is not merely freed but
     /// handed to another contract before the reconnect. `md_resub_info` holds
     /// no con_id of its own, so the record is combined with whatever con_id the
