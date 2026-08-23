@@ -64,6 +64,14 @@ pub const LIVENESS_STALL_COOLDOWN_SECS: u64 = 60;
 // window, fails the build rather than a test the optimizer folds away.
 const _: () = assert!(CCP_HEARTBEAT_SECS < LIVENESS_TEST_SECS);
 const _: () = assert!(LIVENESS_TEST_SECS < LIVENESS_DEAD_SECS);
+/// How long a book on no particular venue waits for the list of venues that
+/// offer one before the caller is told it cannot be asked for.
+///
+/// The list arrives as a session opens, and is asked for again where it is
+/// missing, so this is not a race — it is the case where the answer never
+/// comes at all.
+const DEPTH_VENUE_LIST_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
 
 /// The pinned-core hot loop. Pushes events to SharedState + optional event channel.
 pub struct HotLoop {
@@ -106,6 +114,14 @@ pub struct HotLoop {
     /// Books asked for on no particular venue, held until the server has said
     /// which venues offer one.
     depth_awaiting_venues: Vec<ControlCommand>,
+    /// When the first book started waiting for the list of venues.
+    ///
+    /// The list arrives unprompted as a session opens and is asked for again
+    /// where it is missing, but a session whose opening carried none may never
+    /// be sent one — and a book waiting on it waits for as long as the session
+    /// lasts, with nothing said to the caller. A request this client cannot
+    /// serve is answered rather than held.
+    depth_waiting_since: Option<std::time::Instant>,
     /// Whether the hot loop should keep running.
     running: bool,
     /// Account ID for order submission.
@@ -330,6 +346,7 @@ impl HotLoop {
             secdef: secdef::SecDefState::new(),
             control_rx: None,
             depth_awaiting_venues: Vec::new(),
+            depth_waiting_since: None,
             running: true,
             account_id: String::new(),
             hb: HeartbeatState::new(),
@@ -757,7 +774,28 @@ impl HotLoop {
             // for the exchange list and withdrawn in the same batch must not
             // have its withdrawal processed first.
             let held = std::mem::take(&mut self.depth_awaiting_venues);
+            self.depth_waiting_since = None;
             self.cmd_buf.splice(0..0, held);
+        }
+        // Or the list never came. Held silently, the caller waits on a book
+        // that is not coming and cannot tell that from a venue with nothing to
+        // say. Told, it can ask again naming a venue of its own.
+        if let Some(since) = self.depth_waiting_since
+            && since.elapsed() > DEPTH_VENUE_LIST_WAIT
+        {
+            for held in std::mem::take(&mut self.depth_awaiting_venues) {
+                if let ControlCommand::SubscribeDepth { req_id, .. } = held {
+                    self.shared.reference.push_historical_error(
+                        req_id,
+                        farm::DEPTH_VENUE_REFUSED,
+                        "the venue did not name the exchanges that offer a book, so one on \
+                         no particular venue cannot be asked for; name an exchange to ask \
+                         for its book"
+                            .to_string(),
+                    );
+                }
+            }
+            self.depth_waiting_since = None;
         }
         let mut cmds: Vec<ControlCommand> = std::mem::take(&mut self.ccp.resolved_named);
         cmds.append(&mut self.cmd_buf);
@@ -1158,6 +1196,7 @@ impl HotLoop {
                             req_id, num_rows, is_smart_depth, filters,
                             contract: ContractRef { con_id, exchange, sec_type, ..Default::default() },
                         });
+                        self.depth_waiting_since.get_or_insert_with(std::time::Instant::now);
                         continue;
                     }
                     self.farm.send_depth_subscribe(
