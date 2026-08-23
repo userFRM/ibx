@@ -197,46 +197,6 @@ impl PortfolioState {
         changed.iter().filter_map(|c| map.get(c).cloned()).collect()
     }
 
-    /// Apply a fill of this account's own to the holding it changes.
-    ///
-    /// The broker states holdings on a feed of its own and does not restate
-    /// them when an order fills, so a holding read back during the session is
-    /// otherwise the one the session started with. The reference client keeps
-    /// its own count between statements and so does this.
-    ///
-    /// `delta` is signed by side and `price` is what the fill paid, both per
-    /// unit. Adding to a holding averages the new cost in; reducing one leaves
-    /// the basis where it was, because a sale realises a gain and does not
-    /// re-price what remains. A holding that closes carries no basis at all.
-    #[doc(hidden)] pub fn apply_fill(&self, con_id: i64, delta: f64, price: Price) {
-        if con_id == 0 || delta == 0.0 {
-            return;
-        }
-        let mut map = self.position_infos.lock().unwrap();
-        let row = map.entry(con_id).or_insert_with(|| PositionInfo { con_id, ..Default::default() });
-        let before = row.position;
-        let after = before + delta;
-        row.position = after;
-        if after == 0.0 {
-            row.avg_cost = 0;
-        } else if before == 0.0 || (before > 0.0) == (delta > 0.0) {
-            let cost = row.avg_cost as f64 * before + price as f64 * delta;
-            row.avg_cost = (cost / after) as Price;
-        } else if (before > 0.0) != (after > 0.0) {
-            // One fill that closed the holding and opened the opposite one.
-            // Keeping the old basis prices a short against what a long paid,
-            // and every profit and loss read afterwards is measured from the
-            // wrong side. What is held now was bought at this price.
-            row.avg_cost = price;
-        }
-        // Recorded like any other move. The broker does not restate a holding
-        // when an order fills, so this is the only account this session gets
-        // of it: without the record, a caller watching positions never hears
-        // about the one thing it was most likely watching for — its own fill
-        // moving its own holding.
-        self.position_changes.lock().unwrap().insert(con_id);
-    }
-
     /// Update the per-position marks (from the account-updates portfolio message).
     /// Kept separate from set_position_info so the lean position feed, which has
     /// no marks, does not overwrite them.

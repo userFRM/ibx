@@ -427,23 +427,9 @@ impl CcpState {
                 };
                 context.update_position(instrument, qty_to_f64(delta));
                 shared.portfolio.set_position(fill.instrument, context.position(fill.instrument));
-                // The holding the caller reads is keyed by contract, and
-                // the broker restates that feed on its own schedule — never
-                // because an order filled. Left to that feed alone, a
-                // position read back after a fill is the one the session
-                // started with.
-                // The report names the contract it filled. An order placed
-                // by symbol registers an instrument that knows no contract
-                // id, so taking it from the instrument attributed nothing.
-                let filled_con_id = parsed.get(&6008)
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .filter(|id| *id != 0)
-                    .or_else(|| context.market.con_id(instrument));
-                if let Some(con_id) = filled_con_id {
-                    shared.portfolio.apply_fill(
-                        con_id, qty_to_f64(delta), crate::types::price_from_f64(last_px),
-                    );
-                }
+                // The holding the caller reads is not touched here. The broker
+                // restates it on the position feed after a fill, quantity and
+                // basis both, and that statement is the one the caller gets.
                 // Returned rather than announced here. A caller told about a
                 // fill reads the order it belongs to, and that record is written
                 // further along this same report.

@@ -3126,11 +3126,11 @@ fn a_queued_fill_survives_a_completed_orders_read() {
     );
 }
 
-/// A fill moves the holding, and the broker does not restate holdings when an
-/// order fills. Without the fill recording the move, a caller watching
-/// positions never heard about its own fill.
+/// The holding feed is live: a caller that asked for positions once keeps
+/// hearing about them as the broker restates them, which is how it learns its
+/// own fill moved its own holding.
 #[test]
-fn a_fill_moves_the_holding_and_is_reported() {
+fn a_restated_holding_reaches_a_caller_that_already_asked() {
     let (client, _rx, shared) = test_client();
     shared.portfolio.set_account_download_complete();
     shared.portfolio.set_position_info(PositionInfo {
@@ -3145,13 +3145,17 @@ fn a_fill_moves_the_holding_and_is_reported() {
     };
     assert_eq!(reported(&w), 1, "the holding held when it was asked for");
 
-    shared.portfolio.apply_fill(265598, 25.0, 150 * PRICE_SCALE);
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 265598, position: 125.0, avg_cost: 150 * PRICE_SCALE,
+        symbol: "AAPL".into(), sec_type: "STK".into(), currency: "USD".into(),
+        ..Default::default()
+    });
     client.process_msgs(&mut w);
 
-    assert_eq!(reported(&w), 2, "the fill's move reaches the caller");
+    assert_eq!(reported(&w), 2, "the restatement reaches the caller");
     assert_eq!(
         shared.portfolio.position_info(265598).unwrap().position, 125.0,
-        "and the holding is what the fill made it",
+        "and the holding is what the broker said it is",
     );
 }
 
