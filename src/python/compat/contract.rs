@@ -35,10 +35,18 @@ pub(super) fn set_from_keywords(
     let Some(keywords) = keywords else { return Ok(()) };
     for (name, value) in keywords.iter() {
         let name: String = name.extract()?;
-        if object.setattr(name.as_str(), &value).is_err() {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "no such field: {name}",
-            )));
+        if let Err(refused) = object.setattr(name.as_str(), &value) {
+            // Only a name the object does not carry is reported as one. A
+            // field that exists and was given the wrong kind of value fails
+            // here too, and answering that with "no such field" sends the
+            // caller looking for a spelling mistake in a name that is spelled
+            // correctly — the reason it was refused is the one already stated.
+            if refused.is_instance_of::<pyo3::exceptions::PyAttributeError>(object.py()) {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "no such field: {name}",
+                )));
+            }
+            return Err(refused);
         }
     }
     Ok(())
