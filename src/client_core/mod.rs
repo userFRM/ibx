@@ -1915,6 +1915,18 @@ impl ClientCore {
         o.rejected = status == OrderStatus::Rejected;
         o.filled = filled;
         o.remaining = remaining;
+        drop(orders);
+        // An order that is done is dropped, the way one that fills already is.
+        // Only a fill removed it before, and a fill is not how most orders end:
+        // a cancelled or rejected one reports a quantity still outstanding and
+        // produces none, so it stayed for the life of the session and the cost
+        // of listing what is open grew with every cancel. Nothing reads it
+        // after this — what is open is answered by status, and these are not
+        // open. `Inactive` is not among them: it returns to working when
+        // whatever holds the order clears.
+        if matches!(status, OrderStatus::Cancelled | OrderStatus::Rejected) {
+            self.untrack_order(order_id);
+        }
     }
 
     /// Collect open orders: merge local tracking with shared state.

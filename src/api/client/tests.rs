@@ -931,6 +931,38 @@ fn two_callers_racing_for_one_contract_ask_for_the_headlines_once() {
     let _ = rx.try_recv();
 }
 
+/// An order that is done stops being tracked, whether it filled or not.
+///
+/// Only a fill removed it before, and a fill is not how most orders end. A
+/// cancelled or rejected order reports a quantity still outstanding and
+/// produces none, so it stayed for the life of the session and the cost of
+/// listing what is open grew with every cancel.
+#[test]
+fn a_cancelled_order_stops_being_tracked() {
+    let (client, _rx, shared) = test_client();
+
+    client.core.update_order_status(&shared, 7, OrderStatus::Submitted, 0.0, 100.0);
+    assert_eq!(client.core.open_orders.lock().unwrap().len(), 1, "working, so tracked");
+
+    client.core.update_order_status(&shared, 7, OrderStatus::Cancelled, 0.0, 100.0);
+    assert!(
+        client.core.open_orders.lock().unwrap().is_empty(),
+        "a cancelled order is kept for the life of the session",
+    );
+
+    // And one the venue refused.
+    client.core.update_order_status(&shared, 8, OrderStatus::Submitted, 0.0, 100.0);
+    client.core.update_order_status(&shared, 8, OrderStatus::Rejected, 0.0, 100.0);
+    assert!(client.core.open_orders.lock().unwrap().is_empty(), "and a rejected one");
+
+    // What is held back is the one that can return to working on its own.
+    client.core.update_order_status(&shared, 9, OrderStatus::Inactive, 0.0, 100.0);
+    assert_eq!(
+        client.core.open_orders.lock().unwrap().len(), 1,
+        "an inactive order returns to working when what holds it clears",
+    );
+}
+
 /// A request that asked for headlines and then failed to register leaves
 /// nothing behind.
 ///
