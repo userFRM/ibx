@@ -268,3 +268,8 @@ serde_json = "1"
 
 [profile.release]
 lto = "fat"
+
+[[bin]]
+name = "capture_position_burst"
+path = "src/bin/capture_position_burst.rs"
+required-features = ["dev-tools"]
