@@ -240,7 +240,7 @@ const GREEKS_VENUE: &str = "IBVOL";
 ///
 /// The refusal itself carries no number: the venue names the request and says
 /// why in words, and the number is the one a caller is owed for those words.
-const DEPTH_VENUE_REFUSED: i32 = 354;
+pub(super) const DEPTH_VENUE_REFUSED: i32 = 354;
 
 /// The option model's own tick, in place of a request type.
 const GREEKS_REQUEST_TYPE: u32 = 732;
