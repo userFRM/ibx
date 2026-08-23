@@ -342,6 +342,15 @@ const NOTICES_KEPT: usize = 256;
 /// read copies the whole of it while the lock the reader wants is held.
 const STREAM_KEPT: usize = 4_096;
 
+/// How much of a full stream is let go at once.
+///
+/// Dropping the oldest one at a time moves everything behind it on every
+/// arrival, for the whole life of a session that has reached the cap — which
+/// on a one-second bar is every second, for ever. Dropping a run of them
+/// leaves that cost once per run, and the run is small enough that what is
+/// kept is still most of the cap.
+const STREAM_RELEASED: usize = 512;
+
 impl LiveState {
     /// What the venue has said about requests, oldest first, and clears them.
     pub fn take_notices(&mut self) -> Vec<Notice> {
@@ -713,8 +722,8 @@ impl Wrapper for LiveState {
         let bar = LiveBar { req_id, time, open, high, low, close, volume, wap, count };
         // Kept as well as streamed: a caller who subscribed and then looked
         // rather than iterating still finds the bars that arrived.
-        if self.live_bars.len() == STREAM_KEPT {
-            self.live_bars.remove(0);
+        if self.live_bars.len() >= STREAM_KEPT {
+            self.live_bars.drain(..STREAM_RELEASED);
         }
         self.live_bars.push(bar.clone());
         self.bar_streams
@@ -764,8 +773,8 @@ impl Wrapper for LiveState {
             article_id: article_id.to_string(), headline: headline.to_string(),
             extra: extra.to_string(),
         };
-        if self.news.len() == STREAM_KEPT {
-            self.news.remove(0);
+        if self.news.len() >= STREAM_KEPT {
+            self.news.drain(..STREAM_RELEASED);
         }
         self.news.push(tick.clone());
         Self::tell(&mut self.news_streams, &tick);
@@ -799,8 +808,8 @@ impl Wrapper for LiveState {
     }
 
     fn update_news_bulletin(&mut self, id: i64, kind: i32, message: &str, exchange: &str) {
-        if self.bulletins.len() == STREAM_KEPT {
-            self.bulletins.remove(0);
+        if self.bulletins.len() >= STREAM_KEPT {
+            self.bulletins.drain(..STREAM_RELEASED);
         }
         self.bulletins.push(Bulletin {
             id, kind, message: message.to_string(), exchange: exchange.to_string(),
