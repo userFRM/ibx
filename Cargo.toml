@@ -273,3 +273,8 @@ lto = "fat"
 name = "capture_position_burst"
 path = "src/bin/capture_position_burst.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "capture_fill_fields"
+path = "src/bin/capture_fill_fields.rs"
+required-features = ["dev-tools"]
