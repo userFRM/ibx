@@ -3538,6 +3538,35 @@ mod tests {
         assert_eq!(raw(1), "0.00000001");
     }
 
+    /// A decimal price a caller states reaches the wire as that price.
+    ///
+    /// The whole path, because each half is right on its own and the fault was
+    /// in the join: converting to fixed point and then writing the field. A
+    /// double holding a decimal sits a hair below it about as often as above,
+    /// so a conversion that drops the remainder writes `0.28999999` for a
+    /// caller who asked for `0.29` — off the cent grid the instrument trades
+    /// on, and not the price that was asked for.
+    ///
+    /// Every cent from 0.01 to 99.99, because better than five in a hundred of
+    /// them land on that side and picking a few by hand is how this was missed:
+    /// the one place that carried a decimal to the venue asked for 1.00, which
+    /// converts exactly and so could never show it.
+    #[test]
+    fn a_decimal_price_reaches_the_wire_as_the_price_stated() {
+        for cents in 1..10_000u32 {
+            let stated = f64::from(cents) / 100.0;
+            let on_the_wire = format_price(crate::types::price_from_f64(stated)).to_string();
+            let expected = if cents % 100 == 0 {
+                format!("{}", cents / 100)
+            } else if cents % 10 == 0 {
+                format!("{}.{}", cents / 100, (cents % 100) / 10)
+            } else {
+                format!("{}.{:02}", cents / 100, cents % 100)
+            };
+            assert_eq!(on_the_wire, expected, "{stated} did not reach the wire as itself");
+        }
+    }
+
     // The CCP/farm ladder — floor 2s, ladder 0/5/15/30/50/60s,
     // jitter range growing 5s -> 20s, ceiling 82s.
     #[test]
