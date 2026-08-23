@@ -755,10 +755,16 @@ impl Client {
                     // The ones already sent are live at the venue, and the
                     // caller is about to be told the set failed — so it holds
                     // no id to withdraw them by, and placing the set again
-                    // doubles what is working. They are withdrawn here, and
-                    // what could not be withdrawn is named, because an order
-                    // the caller was told nothing about is the one outcome
-                    // this path must not leave behind.
+                    // doubles what is working. A withdrawal is asked for on
+                    // each, because an order the caller was told nothing about
+                    // is the one outcome this path must not leave behind.
+                    //
+                    // Asked for, not completed: the withdrawal is queued for
+                    // the engine and reaches the venue after this returns, so
+                    // a caller that places the set again immediately can hold
+                    // both for as long as that takes. What could not even be
+                    // asked for is named in the refusal, which is the part
+                    // this call can be sure of.
                     let mut still_working = Vec::new();
                     for id in &ids {
                         if self.cancel_order(*id).is_err() {
