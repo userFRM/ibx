@@ -2387,7 +2387,7 @@ pub(crate) fn format_price(price: Price) -> StackStr {
 pub(crate) fn parse_price_tag(val: Option<&String>) -> Price {
     val.and_then(|s| s.parse::<f64>().ok())
         .filter(|f| f.is_finite())
-        .map(|f| (f * PRICE_SCALE as f64) as Price)
+        .map(crate::types::price_from_f64)
         .unwrap_or(0)
 }
 

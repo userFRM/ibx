@@ -102,6 +102,27 @@ pub fn qty_to_f64(qty: Qty) -> f64 {
 /// above any single order.
 pub const MAX_EXACT_QTY_SHARES: f64 = (1u64 << 53) as f64 / QTY_SCALE as f64;
 
+/// Convert a decimal price into the fixed-point form `Price` holds.
+///
+/// The one place the multiplication lives, and rounded rather than truncated
+/// for the same reason [`qty_from_f64`] is. A binary double holding a decimal
+/// price sits a hair below it about as often as above: `0.29 * 1e8` is
+/// `28999999.999...`, and truncating sends `0.28999999` — a price the caller
+/// never stated, off the instrument's tick, which the venue may refuse or may
+/// work at a price that is not the one asked for. Better than five in a
+/// hundred ordinary two-decimal prices land on that side.
+///
+/// Reading a price the venue stated is the same conversion and wants the same
+/// answer: a fill reported at `0.29` is worth `0.29`, not a hundredth of a
+/// cent less, everywhere it is later added up.
+#[inline]
+pub fn price_from_f64(price: f64) -> Price {
+    if !price.is_finite() {
+        return 0;
+    }
+    (price * PRICE_SCALE as f64).round() as Price
+}
+
 /// Convert a caller's decimal quantity into the fixed-point form `Qty` holds.
 ///
 /// The inverse of [`qty_to_f64`], and the one place the multiplication lives.

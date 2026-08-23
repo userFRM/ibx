@@ -568,6 +568,30 @@ fn order_attrs_cash_qty_default_zero() {
     assert_eq!(attrs.cash_qty, 0);
 }
 
+/// A decimal price converts to the price the caller stated, not to the one a
+/// binary double sits just below. Truncating sends 0.29 as 0.28999999 — off the
+/// instrument's tick, and not the price that was asked for — and better than
+/// five in a hundred ordinary two-decimal prices land on that side.
+#[test]
+fn a_stated_price_converts_to_the_price_that_was_stated() {
+    use super::{price_from_f64, PRICE_SCALE};
+
+    for cents in 1..10_000i64 {
+        let stated = cents as f64 / 100.0;
+        assert_eq!(
+            price_from_f64(stated),
+            cents * (PRICE_SCALE / 100),
+            "{stated} did not convert to itself",
+        );
+    }
+
+    // The ones that truncate low, named so a regression says which rule broke.
+    assert_eq!(price_from_f64(0.29), 29_000_000);
+    assert_eq!(price_from_f64(8.62), 862_000_000);
+    assert_eq!(price_from_f64(-0.29), -29_000_000, "and on the sell side");
+    assert_eq!(price_from_f64(f64::NAN), 0, "nothing is not a price");
+}
+
 /// A caller's decimal becomes the fixed-point form exactly, both ways, for
 /// every quantity the order path accepts.
 #[test]
