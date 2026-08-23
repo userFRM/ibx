@@ -1179,7 +1179,25 @@ impl ClientCore {
         // gone out, left a live subscription the caller was told did not happen
         // and held no req_id to cancel by. The engine now refuses
         // before the subscribe reaches the wire and that refusal arrives here.
-        let instrument_id = self.recv_registration(reply_rx)?;
+        let instrument_id = match self.recv_registration(reply_rx) {
+            Ok(id) => id,
+            Err(refused) => {
+                // The headlines were asked for before this could fail, and the
+                // record of who asked is what decides whether the next caller
+                // sends the request at all. Left standing for a request that
+                // never started, this contract's headlines are never asked for
+                // again — the next caller reads somebody as already watching —
+                // and the subscription that did go out cannot be withdrawn,
+                // because the path that withdraws it needs a request this one
+                // no longer has.
+                if wants_news
+                    && let Some(instrument) = self.release_news(req_id)
+                {
+                    let _ = control_tx.send(ControlCommand::UnsubscribeNews { instrument });
+                }
+                return Err(refused);
+            }
+        };
         self.cache_instrument(con_id, instrument_id);
         // The contract may have been named only by symbol, in which case the
         // engine is the first to know which slot it holds — and it may already

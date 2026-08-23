@@ -931,6 +931,32 @@ fn two_callers_racing_for_one_contract_ask_for_the_headlines_once() {
     let _ = rx.try_recv();
 }
 
+/// A request that asked for headlines and then failed to register leaves
+/// nothing behind.
+///
+/// The headlines go out before the registration can fail, and the record of
+/// who asked is what the next caller reads to decide whether to ask at all.
+/// Left standing for a request that never started, this contract's headlines
+/// are never requested again and the subscription that did go out cannot be
+/// withdrawn — the path that withdraws it needs a request this one no longer
+/// has.
+#[test]
+fn a_failed_request_does_not_keep_this_contract_from_asking_for_news_again() {
+    let (client, rx, _shared) = test_client();
+    let con_id = spy().con_id;
+
+    // No engine answers a registration here, so the request fails after the
+    // headlines have been asked for.
+    let refused = client.req_mkt_data(1, &spy(), "292", false, false);
+    assert!(refused.is_err(), "the registration was expected to fail");
+
+    assert!(
+        client.core.first_to_ask_for_news(con_id, 2),
+        "the failed request is still recorded as watching, so nobody asks again",
+    );
+    let _ = rx.try_iter().count();
+}
+
 /// A calculation asked before the venue has stated a model keeps the question
 /// and waits, rather than refusing it for having been asked first. The venue
 /// states a model for a contract that is watched, so asking about one that is
