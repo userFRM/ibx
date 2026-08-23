@@ -29,11 +29,6 @@ use crate::protocol::fixcomp;
 /// window at any hour of the day.
 const EXECUTIONS_REACH_BACK_DAYS: u64 = 6;
 
-/// Count of priming messages in the opening burst. The venue states no value
-/// for this anywhere, and it is not derivable from the session; 92 is the
-/// count observed to be accepted. Sending fewer is untested.
-const PRIMING_MESSAGES: usize = 92;
-
 /// What the auth server's logon answer states about this login.
 ///
 /// Filled twice: once from the ACK the logon is answered with, and again from
@@ -360,9 +355,6 @@ pub(super) fn send_init_sequence(
     send(&[(35, "U"), (52, now), (6040, "72"), (6536, &window_start), (6537, now), (6556, "today4")])?;
     send(&[(35, "U"), (52, now), (6040, "74"), (1, ""), (6544, "2")])?;
     send(&[(35, "U"), (52, now), (6040, "76"), (1, ""), (6565, "1")])?;
-    for _ in 0..PRIMING_MESSAGES {
-        send(&[(35, "U"), (52, now), (6040, "80")])?;
-    }
     w.flush()?;
     Ok(seq)
 }
@@ -1290,10 +1282,10 @@ mod tests {
         .unwrap();
 
         let msgs = sent(&wire);
-        // Ninety-nine, written out rather than derived from the constant the
-        // burst is built from: a length checked against its own input agrees
-        // with any value that input takes.
-        assert_eq!(msgs.len(), 99);
+        // Seven, written out rather than counted from the burst: a length
+        // checked against its own input agrees with any value that input
+        // takes.
+        assert_eq!(msgs.len(), 7);
         assert_eq!(end, 1 + msgs.len() as u32);
 
         let comm_type = |m: &HashMap<u32, String>| m[&6040].clone();
@@ -1301,7 +1293,6 @@ mod tests {
             msgs[..7].iter().map(comm_type).collect::<Vec<_>>(),
             ["91", "193", "101", "209", "72", "74", "76"],
         );
-        assert!(msgs[7..].iter().all(|m| comm_type(m) == "80"));
         assert_eq!(msgs[0][&34], "000002");
         assert_eq!(msgs.last().unwrap()[&34], format!("{end:06}"));
         assert_eq!(msgs[0][&1], "DU111111");
