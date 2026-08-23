@@ -95,6 +95,13 @@ pub struct EClient {
     /// venue now, and the pumps ask this one whether there is any point
     /// waiting for it to.
     pub(crate) session_ended: AtomicBool,
+    /// Whether the caller has been told this session closed.
+    ///
+    /// Delivered once, and from wherever the caller drives the dispatch from:
+    /// a program with an event loop of its own drives it a pass at a time and
+    /// never reaches the end of `run`, which is where the notice used to be
+    /// sent — so it was never told the session had ended at all.
+    pub(crate) close_notified: AtomicBool,
     /// The number this session connected under, as the caller gave it.
     ///
     /// One session holds the account here, so this does not route anything.
@@ -261,6 +268,7 @@ impl EClient {
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
             session_ended: AtomicBool::new(false),
+            close_notified: AtomicBool::new(false),
             event_rx: Mutex::new(None),
             events_lost: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             _test_event_tx: Mutex::new(None),
@@ -450,6 +458,7 @@ impl EClient {
         self.next_order_id.store(start_id, Ordering::Relaxed);
         *self._thread.lock().unwrap() = Some(handle);
         self.session_ended.store(false, Ordering::Release);
+        self.close_notified.store(false, Ordering::Release);
         self.connected.store(true, Ordering::Release);
 
         self.client_id.store(client_id, Ordering::Release);
@@ -566,7 +575,9 @@ impl EClient {
         let Some(shared) = self.shared.lock().unwrap().clone() else {
             return Ok(());
         };
-        self.dispatch_once(py, &shared)
+        let delivered = self.dispatch_once(py, &shared);
+        self.tell_the_caller_it_closed(py);
+        delivered
     }
 
     /// Deliver callbacks until the session ends.
@@ -603,8 +614,9 @@ impl EClient {
             });
         }
 
-        // Signal disconnection to wrapper
-        self.notify(py, "connection_closed", ());
+        // The same place `poll` says it from, so a caller driving this a pass
+        // at a time hears it too, and neither hears it twice.
+        self.tell_the_caller_it_closed(py);
 
         Ok(())
     }
@@ -846,6 +858,18 @@ impl EClient {
         }
         self.wrapper.call_method1(py, name, args)?;
         Ok(())
+    }
+
+    /// Say the session closed, once, however the caller drives the dispatch.
+    ///
+    /// Not a method on the Python object: it is this client telling the
+    /// caller, not something the caller calls.
+    fn tell_the_caller_it_closed(&self, py: Python<'_>) {
+        if self.session_ended.load(Ordering::Acquire)
+            && !self.close_notified.swap(true, Ordering::AcqRel)
+        {
+            self.notify(py, "connection_closed", ());
+        }
     }
 
     /// Tell the caller something, and do not let what it raises decide the
