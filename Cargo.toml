@@ -181,6 +181,11 @@ path = "src/bin/capture_whatif.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "capture_order_id_reuse"
+path = "src/bin/capture_order_id_reuse.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "premarket_marketable_axti"
 path = "src/bin/premarket_marketable_axti.rs"
 required-features = ["dev-tools"]
