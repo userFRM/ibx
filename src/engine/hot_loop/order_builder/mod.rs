@@ -669,7 +669,14 @@ fn synthesize_pending_cancel(
             instrument: order.instrument,
             status: OrderStatus::PendingCancel,
             filled_qty: qty_to_f64(order.filled),
-            remaining_qty: qty_to_f64(order.qty - order.filled), avg_price: 0,
+            // Never below nothing. An order recovered from the venue's own
+            // account of it is tracked with no quantity of its own — the
+            // decimal it was submitted with lives only in the enriched record
+            // — so a fill against it takes this under zero, and a quantity
+            // still to trade cannot be less than none. The report that states
+            // the same figure already holds this.
+            remaining_qty: qty_to_f64(order.qty.saturating_sub(order.filled)),
+            avg_price: 0,
             perm_id: 0,
             parent_id: 0,
             timestamp_ns: context.now_ns(),
