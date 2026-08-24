@@ -650,14 +650,25 @@ pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
 /// moment rather than after it: the right number of records, off the wrong
 /// side of the clock, with nothing in them to say so.
 pub fn validate_tick_window(start_date_time: &str, end_date_time: &str) -> Result<(), String> {
-    if end_date_time.is_empty() && !start_date_time.is_empty() {
-        return Err(format!(
-            "historical ticks are asked for by their end here, and this request \
-             names only a start ({start_date_time}). Give end_date_time, or leave \
-             both empty for the most recent ticks.",
-        ));
+    match (start_date_time.is_empty(), end_date_time.is_empty()) {
+        // One end and a count is what the venue serves an API client, and it
+        // is the venue that says so — asked with neither it answers "2 out of
+        // startTime/endTime/timeLength parameters have to be specified", and
+        // with both and no count "Times and Sales queries not length based not
+        // allowed from API".
+        (true, true) => Err(
+            "historical ticks are asked for from one end and counted from there, and this \
+             request names neither. Give start_date_time for the ticks after a moment, or \
+             end_date_time for the ones before it."
+                .to_string(),
+        ),
+        (false, false) => Err(format!(
+            "historical ticks are asked for from one end and counted from there, and this \
+             request names both ({start_date_time} and {end_date_time}). Give one of them \
+             and the count says how far it reaches.",
+        )),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Build the XML query for a historical ticks request.
@@ -666,7 +677,7 @@ pub fn validate_tick_window(start_date_time: &str, end_date_time: &str) -> Resul
 /// t</timeLength>`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_tick_query_xml(
-    query_id: &str, con_id: i64, end_date_time: &str,
+    query_id: &str, con_id: i64, start_date_time: &str, end_date_time: &str,
     number_of_ticks: u32, what_to_show: &str, use_rth: bool,
     sec_type: &str, exchange: &str, include_expired: bool,
 ) -> String {
@@ -679,12 +690,27 @@ pub fn build_tick_query_xml(
     let rth = if use_rth { "true" } else { "false" };
     let data = tick_data_type(what_to_show).unwrap_or("AllLast");
 
-    // This query is bounded at its end and counts backwards from there. A
-    // start was once written into the same field, which asked for the ticks
+    // Both bounds, each in the field that carries it. The venue holds a start
+    // and an end apart and the reference client passes both, so a request
+    // naming only a start is one it serves; this used to refuse that, having
+    // once written the start into the end's field and asked for the ticks
     // before the moment the caller wanted the ticks after — the answer looked
-    // right and covered the wrong side of the clock. A start-only request is
-    // refused before it reaches here; see `EClient::req_historical_ticks`.
-    let time_tag = format!("<endTime>{end_date_time}</endTime>");
+    // right and covered the wrong side of the clock. The field, not the
+    // request, was the trouble.
+    //
+    // One end and a count, which is what the venue serves an API client. It
+    // says so itself when asked otherwise: naming neither end is answered
+    // "2 out of startTime/endTime/timeLength parameters have to be specified",
+    // and naming both without a count "Times and Sales queries not length
+    // based not allowed from API". Either end will do — a start was refused
+    // here before it was ever sent, and the venue answers one with the ticks
+    // after it.
+    let time_tag = if start_date_time.is_empty() {
+        format!("<endTime>{end_date_time}</endTime>")
+    } else {
+        format!("<startTime>{start_date_time}</startTime>")
+    };
+    let length_tag = format!("<timeLength>{number_of_ticks} t</timeLength>");
 
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
@@ -699,7 +725,7 @@ pub fn build_tick_query_xml(
          <type>TickData</type>\
          <data>{data}</data>\
          {time_tag}\
-         <timeLength>{number_of_ticks} t</timeLength>\
+         {length_tag}\
          <step>ticks</step>\
          <source>API</source>\
          <wholeDays>true</wholeDays>\

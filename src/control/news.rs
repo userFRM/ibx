@@ -277,6 +277,12 @@ pub(crate) fn parse_news_payload_rows(value: &str) -> Option<NewsHeadline> {
     })
 }
 
+/// The most headlines the venue is asked for at once.
+///
+/// The reference client takes the smaller of what the caller wanted and this,
+/// so a larger number is one the venue never sees.
+pub const MOST_HEADLINES_ASKED_FOR: u32 = 300;
+
 /// Whether a field is shaped like the time the venue stamps a headline with.
 ///
 /// `yyyy-MM-dd HH:mm:ss.S`, which is what the reference client looks for when

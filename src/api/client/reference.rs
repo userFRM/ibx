@@ -258,6 +258,10 @@ impl EClient {
     /// `start_time` and `end_time` are refused rather than taken and dropped:
     /// the query this client sends carries no time bounds, and `max_results` is
     /// what limits the answer.
+    ///
+    /// No more than three hundred are asked for however many are wanted. The
+    /// reference client caps it there before the request goes out, so a bigger
+    /// number is one the venue is never asked.
     pub fn req_historical_news(
         &self, req_id: i64, con_id: i64, provider_codes: &str,
         start_time: &str, end_time: &str, max_results: u32,
@@ -269,7 +273,7 @@ impl EClient {
             provider_codes: provider_codes.into(),
             start_time: start_time.into(),
             end_time: end_time.into(),
-            max_results,
+            max_results: max_results.min(crate::control::news::MOST_HEADLINES_ASKED_FOR),
         })
     }
 
@@ -339,14 +343,18 @@ impl EClient {
 
     /// Request historical tick data. Matches `reqHistoricalTicks` in C++.
     ///
-    /// Bounded at its end: the query counts back from `end_date_time`, and a
-    /// request naming only a start is refused rather than answered with the
-    /// ticks on the wrong side of it. Both empty asks for the most recent.
+    /// Named from one end and counted from there: give `start_date_time` for
+    /// the ticks after a moment or `end_date_time` for the ones before it, and
+    /// `number_of_ticks` says how far it reaches. Naming both, or neither, is
+    /// what the venue refuses.
     pub fn req_historical_ticks(
         &self, req_id: i64, contract: &Contract,
         start_date_time: &str, end_date_time: &str,
         number_of_ticks: i32, what_to_show: &str, use_rth: bool,
     ) -> Result<(), Refusal> {
+        // Before anything that reaches the venue, so an id it cannot carry is
+        // named as the trouble rather than whatever is checked first.
+        let wire_id = wire_req_id(req_id)?;
         // Named by the venue where the caller named it by id alone: a
         // request states the contract's type and its exchange, and both
         // are the venue's to say.
@@ -362,7 +370,7 @@ impl EClient {
         crate::control::historical::validate_tick_window(start_date_time, end_date_time)?;
         self.send(ControlCommand::FetchHistoricalTicks {
             contract: contract.into(),
-            req_id: wire_req_id(req_id)?,
+            req_id: wire_id,
             start_date_time: start_date_time.into(),
             end_date_time: end_date_time.into(),
             filters: contract.lookup_filters(),

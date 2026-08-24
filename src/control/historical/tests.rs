@@ -363,7 +363,7 @@ fn parse_schedule_response_rejects_other() {
 
 #[test]
 fn build_tick_query_xml_structure() {
-    let xml = build_tick_query_xml("tk_1", 265598, "20260312-15:00:00", 100, "TRADES", true, "CS", "BEST", false);
+    let xml = build_tick_query_xml("tk_1", 265598, "", "20260312-15:00:00", 100, "TRADES", true, "CS", "BEST", false);
     assert!(xml.contains("<id>tk_1</id>"));
     assert!(xml.contains("<type>TickData</type>"));
     assert!(xml.contains("<data>AllLast</data>"));
@@ -374,7 +374,7 @@ fn build_tick_query_xml_structure() {
 
 #[test]
 fn build_tick_query_xml_bid_ask() {
-    let xml = build_tick_query_xml("tk_2", 265598, "20260312-15:00:00", 50, "BID_ASK", false, "CS", "BEST", false);
+    let xml = build_tick_query_xml("tk_2", 265598, "", "20260312-15:00:00", 50, "BID_ASK", false, "CS", "BEST", false);
     assert!(xml.contains("<data>BidAsk</data>"));
     assert!(xml.contains("<useRTH>false</useRTH>"));
 }
@@ -383,11 +383,31 @@ fn build_tick_query_xml_bid_ask() {
 /// asked for the ticks before the moment the caller wanted the ticks after, and
 /// the answer looked right and covered the wrong side of the clock.
 #[test]
-fn a_tick_request_naming_only_a_start_is_refused() {
-    use crate::control::historical::validate_tick_window;
-    assert!(validate_tick_window("20260312-09:30:00", "").is_err());
+fn a_tick_request_names_one_end_and_counts_from_it() {
+    use crate::control::historical::{build_tick_query_xml, validate_tick_window};
+    let q = |start: &str, end: &str| build_tick_query_xml(
+        "tk", 265598, start, end, 100, "TRADES", true, "CS", "BEST", false,
+    );
+    // Either end is served, and the count says how far it reaches. A start
+    // used to be refused before it was ever sent; the venue answers one with
+    // a hundred and twenty-five ticks.
+    let from_a_start = q("20260312-09:30:00", "");
+    assert!(from_a_start.contains("<startTime>20260312-09:30:00</startTime>"));
+    assert!(!from_a_start.contains("<endTime>"), "one end, not two");
+    assert!(from_a_start.contains("<timeLength>100 t</timeLength>"));
+
+    let to_an_end = q("", "20260312-15:00:00");
+    assert!(to_an_end.contains("<endTime>20260312-15:00:00</endTime>"));
+    assert!(!to_an_end.contains("<startTime>"));
+    assert!(to_an_end.contains("<timeLength>100 t</timeLength>"));
+
+    // The two shapes the venue refuses, refused before they are sent, in its
+    // own words: neither end leaves it a parameter short, and both without a
+    // count is not served to an API client at all.
+    assert!(validate_tick_window("", "").is_err());
+    assert!(validate_tick_window("20260312-09:30:00", "20260312-15:00:00").is_err());
+    assert!(validate_tick_window("20260312-09:30:00", "").is_ok());
     assert!(validate_tick_window("", "20260312-15:00:00").is_ok());
-    assert!(validate_tick_window("", "").is_ok(), "the most recent ticks");
 }
 
 /// A historical size crosses as text because it can be a fraction of a share.
@@ -816,7 +836,7 @@ fn an_expired_contract_is_asked_about_as_expired() {
     assert!(build_query_xml(&stated(false)).contains("<expired>no</expired>"));
 
     let ticks = |include_expired: bool| build_tick_query_xml(
-        "tk_1", 495512563, "20260101-16:00:00", 100, "TRADES", true, "FUT", "CME", include_expired,
+        "tk_1", 495512563, "", "20260101-16:00:00", 100, "TRADES", true, "FUT", "CME", include_expired,
     );
     assert!(ticks(true).contains("<expired>yes</expired>"));
     assert!(ticks(false).contains("<expired>no</expired>"));
