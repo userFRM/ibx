@@ -314,7 +314,12 @@ pub struct OptionComputation {
     /// answers the call that asked for it and has no subscription behind it,
     /// so it names that call rather than borrowing the instrument field.
     pub answers: Option<i64>,
-    /// What volatility the price implies.
+    /// What volatility the price implies, over a year.
+    ///
+    /// The venue states this over one of the days it counts beside it, and the
+    /// reference client states it over a year. Handed on as the wire carries
+    /// it, every volatility read from this client would be short by the root
+    /// of a year — under one per cent where the contract carries eighteen.
     pub implied_vol: f64,
     /// How much the option moves with the underlying.
     pub delta: f64,
@@ -337,11 +342,14 @@ pub struct OptionComputation {
     /// count of whole days from this machine's clock has no hours in it, and
     /// makes a contract expiring today look expired.
     pub cal_days: f64,
-    /// The interest rate the venue discounted this contract at, stated on the
-    /// same tick as the model.
+    /// The interest rate the venue discounted this contract at, over a year.
+    ///
+    /// Stated on the same tick as the model, over one of the days it counts
+    /// beside it, and carried across to the year the volatility above is
+    /// stated over so the two read together.
     ///
     /// `f64::MAX` where the venue stated none.
-    pub daily_rate: f64,
+    pub rate: f64,
     /// Whether the venue priced this contract on a volatility stated in the
     /// contract's own price units rather than as a fraction of the underlying.
     ///

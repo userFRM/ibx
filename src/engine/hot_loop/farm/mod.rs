@@ -217,6 +217,13 @@ fn build_trading_status_subscribe_tags(
     ]
 }
 
+/// The days the venue states its option model's volatility and rate over.
+///
+/// It counts the life of a contract in days and states both figures over one
+/// of them. The reference client states them over a year, which is what a
+/// caller reads them as, so this is what carries them across.
+const A_YEAR_OF_DAYS: f64 = 365.0;
+
 /// The venue's chargeable one-shot snapshot, on tag 264.
 ///
 /// A request type of its own rather than a mode on an ordinary quote: the
@@ -499,6 +506,20 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
     let _bridge_yield = next(flags & BRIDGE_YIELD != 0);
     let _time_value = next(flags & TIME_VALUE != 0);
 
+    // Below the walk, so nothing here can be mistaken for a field and step the
+    // read position. Both figures are stated over one of the days counted
+    // beside them, and both are handed on over a year: that is the scale the
+    // reference client reports them on, and the scale a caller reads every
+    // other volatility against. A volatility grows with the root of time, so
+    // it carries over by the root of the days in a year; a rate accrues with
+    // time itself.
+    //
+    // The sentinel is left alone. It is not a figure, and scaling it would
+    // turn the mark for "not stated" into an infinity.
+    let over_a_year = |v: f64, by: f64| if v == UNSTATED { UNSTATED } else { v * by };
+    let implied_vol = over_a_year(implied_vol, A_YEAR_OF_DAYS.sqrt());
+    let rate = over_a_year(daily_rate, A_YEAR_OF_DAYS);
+
     Some(crate::types::OptionComputation {
         // The venue's, reported under whichever request subscribed it.
         answers: None,
@@ -513,7 +534,7 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
         theta,
         und_price,
         cal_days,
-        daily_rate,
+        rate,
         price_based_vol: flags & PRICE_BASED_VOL != 0,
     })
 }

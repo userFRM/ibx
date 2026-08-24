@@ -985,7 +985,16 @@ mod price_scaling_tests {
         assert!((c.vega - 0.001_164_360_917_698_559_2).abs() < 1e-15, "{c:?}");
         assert!((c.theta - -0.031_986_414_053_434_94).abs() < 1e-12, "{c:?}");
         assert!((c.und_price - 311.957_550_048_828_1).abs() < 1e-9, "{c:?}");
-        assert!((c.implied_vol - 0.031_198_042_786_232_037).abs() < 1e-12, "{c:?}");
+        // The wire carries this over one of the days it counts beside it, and
+        // it is handed on over a year: the venue's 0.0311980427862320 reads as
+        // 0.596, which is what a volatility of sixty per cent looks like on a
+        // contract a day and a half from expiring. Left as the wire carries
+        // it, every volatility this client reports is short by the root of a
+        // year.
+        assert!(
+            (c.implied_vol - 0.031_198_042_786_232_037 * 365.0_f64.sqrt()).abs() < 1e-12,
+            "{c:?}",
+        );
         // The strike was 220, so the model price sits just above the
         // intrinsic. A mis-read of the layout does not land there.
         let intrinsic = c.und_price - 220.0;

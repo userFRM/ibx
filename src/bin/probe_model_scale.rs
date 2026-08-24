@@ -151,16 +151,19 @@ fn main() {
             continue;
         }
         let years = m.cal_days / 365.0;
-        let rate = if m.daily_rate == f64::MAX { 0.0 } else { m.daily_rate };
+        let rate = if m.rate == f64::MAX { 0.0 } else { m.rate };
         // Both readings of the rate, told apart by which one prices the deep
         // strikes: their whole value is the discount, so they show it plainly.
         let per_year = (-rate * years).exp();
-        let per_day = (-rate * m.cal_days).exp();
+        let per_day = (-rate / 365.0 * m.cal_days).exp();
         // The volatility read as an annual figure, which is what a year in
         // the time makes it, against the same figure read as a day's.
-        let as_annual = call_on_fractional_vol(m.und_price, row.1, m.implied_vol, years, per_year);
+        // What the wire carries, before it is carried over to a year: the
+        // reading this had before, kept for the contrast.
+        let a_day = m.implied_vol / 365.0_f64.sqrt();
+        let as_annual = call_on_fractional_vol(m.und_price, row.1, a_day, years, per_year);
         let as_daily_both =
-            call_on_fractional_vol(m.und_price, row.1, m.implied_vol, m.cal_days, per_day);
+            call_on_fractional_vol(m.und_price, row.1, a_day, m.cal_days, per_day);
         // The same contract through this library's own model, which carries
         // the venue's figures into the units it works in itself.
         let ours = ibx::control::option_model::option_price(
@@ -205,7 +208,7 @@ fn main() {
         if (as_annual - m.opt_price).abs() < 0.01 { agree_fraction += 1 }
         println!("  {:>7.0}  {:>4}  {:>10.2}  {:>9.4}  {:>8.5}  {:>7.4}  {:>8.5}  {:>9.4}  {:>9.4}  {:>9.4}  {:>8.4}",
             row.1, m.price_based_vol as u8, m.und_price, m.opt_price, m.implied_vol,
-            m.cal_days, rate * 365.0, as_annual, as_daily_both, ours, solved);
+            m.cal_days, rate, as_annual, as_daily_both, ours, solved);
     }
     println!("\n  of {seen} strikes the venue priced: {agree_price} reproduced by this \
               library's model on a day's volatility, {agree_fraction} on a year's");

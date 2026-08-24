@@ -1545,7 +1545,7 @@ pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal>
 
 #### `calculate_implied_volatility`
 
-What volatility a price implies, under the venue's model. This protocol carries no request for it, so the value is computed here, anchored to the venue's last stated model output for this contract. Where the venue has stated no model, nothing is answered rather than a number derived from an unstated rate. Answered on the same scale as the volatility the venue states on `tick_option_computation`, so the two read against each other.
+What volatility a price implies, under the venue's model. This protocol carries no request for it, so the value is computed here, anchored to the venue's last stated model output for this contract. Where the venue has stated no model, nothing is answered rather than a number derived from an unstated rate. Answered over a year, which is the scale `tick_option_computation` reports the venue's own volatility on, so the two read against each other.
 
 ```rust
 pub fn calculate_implied_volatility( &self, req_id: i64, contract: &super::Contract, option_price: f64, under_price: f64, )

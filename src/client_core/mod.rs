@@ -3691,11 +3691,9 @@ impl ClientCore {
                 .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,
             // No dividend stated is no dividend, which is what it means.
             present_value_of_dividends: stated_or_none(stated.pv_dividend).unwrap_or(0.0),
-            // The rate it discounted at, over the same day its volatility is
-            // stated over. No rate stated is no discount, which over the days
-            // one of these has left moves the price by less than it is quoted
-            // in.
-            rate: stated_or_none(stated.daily_rate).unwrap_or(0.0),
+            // No rate stated is no discount, which over the days one of these
+            // has left moves the price by less than it is quoted in.
+            rate: stated_or_none(stated.rate).unwrap_or(0.0),
         };
         solve(terms, model).ok_or_else(|| {
             crate::error_codes::Refusal::validation(
