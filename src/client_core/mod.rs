@@ -711,7 +711,7 @@ impl Default for ClientCore {
 }
 
 /// Why neither question can be answered without the venue having spoken.
-const OPTION_MODEL_UNSTATED: &str =
+pub(crate) const OPTION_MODEL_UNSTATED: &str =
     "the venue has not stated its own model for this contract on this session. Ask for the \
      option's model first — a market-data subscription on the option carries it — and both \
      questions can then be answered against what it said";

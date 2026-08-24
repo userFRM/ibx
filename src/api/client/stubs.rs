@@ -131,10 +131,14 @@ impl EClient {
             // about one nobody is watching opens the watch and answers when
             // the model arrives, which is what the caller asked for — rather
             // than refusing the question for having been asked first.
-            Err(why) if self.watch_for_option_model(req_id, contract, true,
-                                                    option_price, under_price) => {
-                let _ = why;
-            }
+            //
+            // Only where that is the trouble. A model already stated and a
+            // question it cannot answer is not something waiting will fix,
+            // and kept anyway the caller was given neither an answer nor a
+            // reason and waited on a model that had already arrived.
+            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED
+                && self.watch_for_option_model(req_id, contract, true,
+                                               option_price, under_price) => {}
             Err(why) => self.report_reason(req_id, &why),
         }
     }
@@ -155,11 +159,12 @@ impl EClient {
                     ..crate::types::OptionComputation::solved(req_id)
                 },
             ),
-            // As above: the watch is opened and the answer follows.
-            Err(why) if self.watch_for_option_model(req_id, contract, false,
-                                                    volatility, under_price) => {
-                let _ = why;
-            }
+            // As above: the watch is opened where the model has not been
+            // stated, and the answer follows it. Where it has, and the
+            // question still cannot be answered, that is said.
+            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED
+                && self.watch_for_option_model(req_id, contract, false,
+                                               volatility, under_price) => {}
             Err(why) => self.report_reason(req_id, &why),
         }
     }
