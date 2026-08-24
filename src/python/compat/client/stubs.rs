@@ -1,5 +1,6 @@
 //! Gateway-local fakes and pure no-op stubs.
 
+use crate::error_codes::Refusal;
 use crate::python::compat::client::wire_req_id;
 use crate::types::ControlCommand;
 use pyo3::prelude::*;
@@ -82,7 +83,7 @@ impl EClient {
             // question it cannot answer is not something waiting will fix,
             // and kept anyway the caller was given neither an answer nor a
             // reason and waited on a model that had already arrived.
-            let worth_waiting = why == crate::client_core::OPTION_MODEL_UNSTATED;
+            let worth_waiting = why.message == crate::client_core::OPTION_MODEL_UNSTATED;
             if !worth_waiting || !self.watch_for_option_model(
                 py, req_id, contract, true, option_price, under_price,
             ) {
@@ -117,7 +118,7 @@ impl EClient {
             // As above: the watch is opened where the model has not been
             // stated, and the answer follows it. Where it has, and the
             // question still cannot be answered, that is said.
-            let worth_waiting = why == crate::client_core::OPTION_MODEL_UNSTATED;
+            let worth_waiting = why.message == crate::client_core::OPTION_MODEL_UNSTATED;
             if !worth_waiting || !self.watch_for_option_model(
                 py, req_id, contract, false, volatility, under_price,
             ) {
@@ -299,7 +300,7 @@ impl EClient {
         // written against it fall over on a request that merely came in the
         // wrong order.
         if let Err(reason) = self.core.update_display_group(req_id, contract_info) {
-            report_reason(self, req_id, &reason);
+            report_reason(self, req_id, &Refusal::validation(reason));
         }
         Ok(())
     }
@@ -604,7 +605,15 @@ impl EClient {
                 });
                 true
             }
-            Err(_) => false,
+            // As on the other surface: only the refusal saying the venue has
+            // not stated its model resolves by waiting. The rest never do, and
+            // read as "not yet" they keep the question for the life of the
+            // session with nothing ever said about it.
+            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED => false,
+            Err(why) => {
+                report_reason(self, req_id, &why);
+                true
+            }
         }
     }
 
@@ -617,12 +626,15 @@ impl EClient {
             crate::control::option_model::VenueModel,
         ) -> Option<f64>,
         into_computation: impl Fn(f64) -> crate::types::OptionComputation,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         let _ = req_id;
-        let shared = self.shared_state().map_err(|_| "not connected".to_string())?;
-        let answer = self.core
-            .solve_option(&shared, &contract.to_api(), solve)
-            .map_err(|why| why.message)?;
+        // The refusal is carried whole. Flattened to its text the code went
+        // with it, and every one of them reached a caller as the same number —
+        // which is the one thing a caller written against the reference client
+        // branches on.
+        let shared = self.shared_state()
+            .map_err(|_| Refusal::not_connected("not connected"))?;
+        let answer = self.core.solve_option(&shared, &contract.to_api(), solve)?;
         shared.market.push_option_computation(into_computation(answer));
         Ok(())
     }
@@ -636,15 +648,30 @@ pub(crate) fn report_unserviceable_with(
     client: &EClient, req_id: i64, code: i32, reason: &str,
 ) {
     if let Ok(shared) = client.shared_state() {
-        shared.reference.push_historical_error(req_id.max(0) as u32, code, reason.to_string());
+        shared.reference.push_historical_error(carried_under(req_id), code, reason.to_string());
     }
 }
 
 /// Answer a request this client cannot serve the way the reference client
 /// does: on the error callback, returning normally.
-fn report_reason(client: &EClient, req_id: i64, reason: &str) {
+///
+/// The refusal's own code is carried rather than one number for all of them,
+/// and a refusal belonging to no request keeps that rather than being clamped
+/// onto request zero, which a caller may well have asked under.
+fn report_reason(client: &EClient, req_id: i64, reason: &Refusal) {
     if let Ok(shared) = client.shared_state() {
-        shared.reference.push_historical_error(req_id.max(0) as u32, 321, reason.to_string());
+        shared.reference.push_historical_error(
+            carried_under(req_id), reason.code, reason.message.clone(),
+        );
+    }
+}
+
+/// The request a refusal is reported against, or the mark for none.
+fn carried_under(req_id: i64) -> u32 {
+    if req_id < 0 {
+        crate::bridge::ReferenceState::NO_REQUEST
+    } else {
+        req_id as u32
     }
 }
 
