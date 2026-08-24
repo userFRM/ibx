@@ -63,18 +63,38 @@ pub struct FundamentalRequest {
     pub currency: String,
     /// Which report is wanted.
     pub report_type: ReportType,
+    /// What this request calls itself, which the venue echoes on the answer.
+    pub query_id: String,
 }
 
-/// What a fundamentals request calls itself, and what a cancel names to
-/// withdraw it.
-pub const FUNDAMENTALS_QUERY_ID: &str = "COMPANY_FUNDAMENTALS";
+/// What a fundamentals request calls itself.
+///
+/// The reference client counts these, and puts the count in the name, so the
+/// venue echoes a different one on every answer. One name for all of them left
+/// two in flight indistinguishable, and the reply to either was handed to
+/// whichever had waited longest.
+pub fn fundamentals_query_id(counter: u32) -> String {
+    format!("COMPANY_FUNDAMENTALS{counter}")
+}
+
+/// The name the venue echoes back on an answer, so it can be matched to the
+/// request that asked.
+pub fn echoed_query_id(xml: &str) -> String {
+    let Some(at) = xml.find("<id>") else { return String::new() };
+    let rest = &xml[at + 4..];
+    match rest.find("</id>") {
+        Some(end) => rest[..end].to_string(),
+        None => String::new(),
+    }
+}
 
 /// Build the XML query for a fundamental data request.
 pub fn build_fundamental_request_xml(req: &FundamentalRequest) -> String {
+    let query_id = &req.query_id;
     format!(
         "<ListOfQueries>\
          <FundamentalsQuery>\
-         <id>{FUNDAMENTALS_QUERY_ID}</id>\
+         <id>{query_id}</id>\
          <contractID>{con_id}</contractID>\
          <exchange>RTRSFND</exchange>\
          <secType>{sec_type}</secType>\
@@ -136,6 +156,7 @@ mod tests {
     #[test]
     fn fundamental_request_xml_structure() {
         let req = FundamentalRequest {
+            query_id: fundamentals_query_id(1),
             con_id: 265598,
             sec_type: "STK".to_string(),
             currency: "USD".to_string(),
@@ -179,17 +200,24 @@ mod tests {
     /// thing, and names the request by the id the request gave itself.
     #[test]
     fn a_withdrawal_names_the_request_it_withdraws() {
-        let xml = crate::control::xml::cancel_query(FUNDAMENTALS_QUERY_ID);
+        // Each request names itself, as the reference client does — it counts
+        // them and puts the count in the name — so the venue echoes a
+        // different one on each answer and two in flight are told apart.
+        let first = fundamentals_query_id(1);
+        let second = fundamentals_query_id(2);
+        assert_ne!(first, second, "two requests do not share a name");
+
+        let asked = build_fundamental_request_xml(&FundamentalRequest {
+            con_id: 265598, sec_type: "STK".to_string(), currency: "USD".to_string(),
+            report_type: ReportType::Snapshot, query_id: first.clone(),
+        });
+        assert!(asked.contains(&format!("<id>{first}</id>")));
+        assert_eq!(echoed_query_id(&asked), first, "and the answer is matched by it");
+
         assert_eq!(
-            xml,
-            "<ListOfCancelQueries><CancelQuery><id>COMPANY_FUNDAMENTALS</id>\
-             </CancelQuery></ListOfCancelQueries>".replace(' ', ""),
-        );
-        assert!(
-            build_fundamental_request_xml(&FundamentalRequest {
-                con_id: 265598, sec_type: "STK".to_string(), currency: "USD".to_string(),
-                report_type: ReportType::Snapshot,
-            }).contains(&format!("<id>{FUNDAMENTALS_QUERY_ID}</id>")),
+            crate::control::xml::cancel_query(&first),
+            format!("<ListOfCancelQueries><CancelQuery><id>{first}</id>\
+                     </CancelQuery></ListOfCancelQueries>").replace(' ', ""),
             "the request and the withdrawal name the same thing",
         );
     }
