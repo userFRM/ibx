@@ -311,6 +311,13 @@ impl EClient {
     fn dispatch_quotes(&self, wrapper: &mut impl Wrapper) {
         // Quote polling → tick_price / tick_size (via ClientCore)
         let instruments = self.core.snapshot_instruments();
+        // Every quote gets the same one, because a quote states no attributes
+        // to carry: a tick on this feed is a kind, a width and a value, with
+        // no room for a flag beside it, and the venue names an attribute
+        // message for the tick-by-tick streams alone — which is where this
+        // client does read them off the wire. Left at the default here because
+        // there is nothing else to put in it, not because nothing was looked
+        // for.
         let attrib = crate::types::model::TickAttrib::default();
         let mut snapshot_done: Vec<i64> = Vec::new();
         for (iid, req_id) in instruments {
