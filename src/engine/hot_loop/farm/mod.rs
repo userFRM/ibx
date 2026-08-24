@@ -88,6 +88,11 @@ type MdResubInfo = (InstrumentId, String, String, String, String, f64, String, S
 type MdResubTarget = (InstrumentId, i64, String, String, String, String, f64, String, String, i32);
 
 pub(crate) struct FarmState {
+    /// The trade time the venue last stated as a base, in seconds, and how far
+    /// past it the last offset stood. The venue states the two apart and they
+    /// add; a base replaces the offset with nothing.
+    ts_base_secs: u64,
+    ts_offset_secs: u64,
     /// Subscriptions a reconnect has still to put back, and the earliest the
     /// next burst may go out.
     ///
@@ -515,6 +520,8 @@ impl FarmState {
 
     pub(crate) fn new() -> Self {
         Self {
+            ts_base_secs: 0,
+            ts_offset_secs: 0,
             replay_queue: Default::default(),
             replay_not_before: None,
             next_md_req_id: 1,
@@ -846,16 +853,37 @@ impl FarmState {
                 tick_decoder::O_VOLUME => { q.volume = qty_from_counted(tick.magnitude, size_tick); }
                 // Type 20 carries Unix seconds. Guarded because the same
                 // type also carried a `yyyymmdd` value in capture, and a date
-                // read as an epoch is worse than no timestamp. Type 21 is a
-                // per-second offset against it and is left undecoded until a
-                // capture settles how the two combine.
+                // read as an epoch is worse than no timestamp.
+                //
+                // Type 21 is the seconds since that base, and the two add.
+                // The reference client keeps them as a pair and settles it the
+                // same way: a base is stored and clears the offset, and an
+                // offset only ever moves forward. Left out, a quote carried
+                // the time of the last base for as long as one stood — every
+                // print in between stamped with the same second.
                 // Type 23 was previously folded in here and is now dropped:
                 // it did not appear once in 733 captured entries on a future,
                 // and it was writing a raw magnitude of unknown unit into a
                 // nanosecond field. Left unmapped until a capture identifies
                 // it rather than guessed at.
                 tick_decoder::O_TS_BASE if tick.magnitude > 1_000_000_000 => {
-                    q.timestamp_ns = (tick.magnitude as u64).saturating_mul(1_000_000_000);
+                    self.ts_base_secs = tick.magnitude as u64;
+                    self.ts_offset_secs = 0;
+                    q.timestamp_ns = self.ts_base_secs.saturating_mul(1_000_000_000);
+                }
+                // Only ever forward, as the reference client keeps it: an
+                // offset behind the one in hand belongs to a base that has
+                // been replaced.
+                tick_decoder::O_TS_OFFSET if self.ts_base_secs > 0 => {
+                    let offset = tick.magnitude.max(0) as u64;
+                    if offset >= self.ts_offset_secs {
+                        self.ts_offset_secs = offset;
+                        q.timestamp_ns = self.ts_base_secs
+                            .saturating_add(offset)
+                            .saturating_mul(1_000_000_000);
+                    } else {
+                        applied = false;
+                    }
                 }
                 tick_decoder::O_BID_EXCH => { q.bid_exch_mask = tick.magnitude; }
                 tick_decoder::O_ASK_EXCH => { q.ask_exch_mask = tick.magnitude; }

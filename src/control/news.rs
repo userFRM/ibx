@@ -282,7 +282,11 @@ pub fn parse_news_payload(raw: &[u8]) -> (Vec<NewsHeadline>, bool) {
         // Java Properties: unescape `\:` → `:`, `\=` → `=`
         let unescaped = line.replace("\\:", ":").replace("\\=", "=");
         if unescaped.starts_with("has_more=") {
-            has_more = unescaped.ends_with("true");
+            // The venue states this as a number and the reference client
+            // compares it to "1". Matched against the word instead, a page
+            // that said there was more said nothing this could read, and a
+            // caller paging an archive stopped at the first page.
+            has_more = unescaped.rsplit('=').next().map(str::trim) == Some("1");
             continue;
         }
         // Match h:N= keys
@@ -516,16 +520,25 @@ mod tests {
         assert_eq!(headlines[2].headline, "Plain headline");
     }
 
+    /// The venue states this as a number, and the reference client compares
+    /// it to "1". The fixture used to write the word `true`, which is not a
+    /// value the reference client can read as more — so the parser was being
+    /// checked against a payload only it would ever produce.
     #[test]
     fn parse_news_payload_has_more() {
-        let props = b"h:0=Test|2026-01-01|ART1|200|1|DJ-N|1234\nhas_more=true\n";
-        let zip = build_test_zip(b"ENTRY", props);
-        let mut payload = b"200\n".to_vec();
-        payload.extend_from_slice(&zip);
-
-        let (headlines, has_more) = parse_news_payload(&payload);
-        assert_eq!(headlines.len(), 1);
-        assert!(has_more);
+        let more = |stated: &[u8]| {
+            let mut props = b"h:0=Test|2026-01-01|ART1|200|1|DJ-N|1234\n".to_vec();
+            props.extend_from_slice(stated);
+            let zip = build_test_zip(b"ENTRY", &props);
+            let mut payload = b"200\n".to_vec();
+            payload.extend_from_slice(&zip);
+            let (headlines, has_more) = parse_news_payload(&payload);
+            assert_eq!(headlines.len(), 1);
+            has_more
+        };
+        assert!(more(b"has_more=1\n"), "the number the venue states");
+        assert!(!more(b"has_more=0\n"), "and the number that says there is not");
+        assert!(!more(b""), "nothing stated is not more");
     }
 
     /// Build a minimal ZIP archive with one stored (uncompressed) file.
