@@ -1106,7 +1106,7 @@ fn news_is_asked_for_from_the_providers_the_logon_named() {
         next.set(con_id + 1);
         let _ = core.register_mkt_data(
             &shared, &tx, con_id, con_id, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
-            false, tick_list, 0,
+            false, false, tick_list, 0,
         );
         let mut named = None;
         while let Ok(cmd) = rx.try_recv() {

@@ -194,6 +194,8 @@ pub(crate) struct PendingSubscribe {
     pub(crate) right: String,
     pub(crate) multiplier: String,
     pub(crate) mode_9887: i32,
+    /// Whether the caller asked for the venue's chargeable one-shot snapshot.
+    pub(crate) regulatory_snapshot: bool,
 }
 
 /// The contract a request names, when it carries one.

@@ -10,7 +10,10 @@ impl EClient {
 
     /// Subscribe to market data. Matches `reqMktData` in C++.
     /// When `snapshot` is true, delivers the first available quote then calls
-    /// `tick_snapshot_end` and auto-cancels the subscription.
+    /// `tick_snapshot_end` and auto-cancels the subscription. That is a
+    /// subscription this client ends, not a request of its own: the venue's
+    /// own one-shot snapshot is the chargeable one, asked for with
+    /// `regulatory_snapshot` on [`req_mkt_data_ex`](EClient::req_mkt_data_ex).
     ///
     /// `generic_tick_list` is NOT transmitted to the gateway, with one
     /// exception: "292" additionally subscribes per-contract news. Other
@@ -59,25 +62,18 @@ impl EClient {
     /// every subscription instead of naming it per request, call
     /// `req_market_data_type`.
     ///
-    /// `regulatory_snapshot` is refused rather than dropped. It names a
-    /// separate, chargeable one-shot request, and this protocol carries no
-    /// field for one: taken and ignored, a caller who asked for a single NBBO
-    /// snapshot the venue charges for and stands behind reads an ordinary
-    /// subscription instead, which is neither, with nothing to say so. Its
-    /// default is false, so an ordinary call is unaffected.
+    /// `regulatory_snapshot` asks for the venue's own chargeable one-shot
+    /// snapshot: a request type of its own rather than a mode on an ordinary
+    /// quote, asked for under the snapshot action and with no feed named
+    /// beside it. It is billed per snapshot and needs the entitlement — an
+    /// account without it is refused by the venue, which names the request
+    /// type back. It ends the way an ordinary snapshot does, so a caller hears
+    /// `tick_snapshot_end` either way. Its default is false.
     pub fn req_mkt_data_ex(
         &self, req_id: i64, contract: &Contract,
         generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool,
         mode_9887: i32,
     ) -> Result<(), Refusal> {
-        if regulatory_snapshot {
-            return Err(Refusal::validation(
-                "regulatory_snapshot is not carried by this protocol: the subscription \
-                 states the contract and the kind of feed, with no field asking for the \
-                 chargeable one-shot snapshot. Ask for an ordinary snapshot with \
-                 snapshot=true",
-            ));
-        }
         // A contract's news is asked for by the venue's id for the contract,
         // and the caller may have stated a description instead. Resolved only
         // when news is what was asked for: a quote on a description is asked
@@ -101,7 +97,7 @@ impl EClient {
             contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
             &contract.currency,
             &contract.last_trade_date_or_contract_month, contract.strike, &contract.right, &contract.multiplier,
-            snapshot, generic_tick_list, mode_9887,
+            snapshot, regulatory_snapshot, generic_tick_list, mode_9887,
         )?;
         Ok(())
     }

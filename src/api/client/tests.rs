@@ -6154,18 +6154,21 @@ fn asking_for_the_accounts_pnl_asks_the_venue() {
     )));
 }
 
-/// `regulatory_snapshot` is refused: the subscription carries no field for it,
-/// and an ordinary subscription is a different, unchargeable request.
+/// `regulatory_snapshot` reaches the venue rather than being refused here. It
+/// names the venue's own chargeable one-shot snapshot, which is a request type
+/// of its own — an account without the entitlement is refused by the venue,
+/// which names that type back, and refusing it here instead would have hidden
+/// a request the protocol does carry. What goes on the wire is pinned where
+/// the request is built.
 #[test]
-fn a_regulatory_snapshot_is_refused_rather_than_answered_with_an_ordinary_one() {
+fn a_regulatory_snapshot_is_asked_for_rather_than_refused_here() {
     let (client, _rx, _shared) = test_client();
-    let err = client
-        .req_mkt_data(1, &spy(), "", false, true)
-        .expect_err("a request this protocol does not carry is refused");
-    assert!(err.message.contains("regulatory_snapshot"), "{err}");
-    // An ordinary subscription on the same contract still goes.
+    // Following a subscription that is already up, so the request is answered
+    // without an engine behind it.
     client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
     client.core.req_to_instrument.lock().unwrap().insert(1, 0);
-    client.req_mkt_data(2, &spy(), "", false, false).expect("an ordinary subscription");
+    client
+        .req_mkt_data_ex(2, &spy(), "", false, true, 0)
+        .expect("the chargeable snapshot is the venue's to refuse, not this client's");
 }

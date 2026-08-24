@@ -47,12 +47,12 @@ impl EClient {
     /// picks whichever feed has data. The frozen one keeps thinly-traded names
     /// streaming after hours when the realtime feed is silent.
     ///
-    /// `regulatory_snapshot` is refused rather than dropped. It names a
-    /// separate, chargeable one-shot request this protocol does not carry, so
-    /// taking it and subscribing anyway answers a different request than the
-    /// one asked for: the caller reads a stream where they asked for a single
-    /// NBBO snapshot, and nothing says so. Reported through `error`, where a
-    /// request this client will not send belongs.
+    /// `regulatory_snapshot` asks for the venue's own chargeable one-shot
+    /// snapshot: a request type of its own rather than a mode on an ordinary
+    /// quote. It is billed per snapshot and needs the entitlement, and an
+    /// account without it is refused by the venue, which names the request
+    /// type back through `error`. It ends the way an ordinary snapshot does,
+    /// so `tickSnapshotEnd` fires either way.
     #[pyo3(signature = (req_id, contract, generic_tick_list="", snapshot=false, regulatory_snapshot=false, mode_9887=0))]
     fn req_mkt_data_ex(
         &self,
@@ -65,12 +65,6 @@ impl EClient {
         mode_9887: i32,
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
-
-        if regulatory_snapshot {
-            return self.report_refusal(py, req_id, Refusal::validation(
-                "regulatory_snapshot is not carried by this protocol: it names a                  separate, chargeable one-shot request, and answering it with an                  ordinary subscription would be a different request than the one                  asked for. Ask for the free snapshot with snapshot=True",
-            ));
-        }
 
         // A contract's news is asked for by the venue's id for the contract,
         // and the caller may have stated a description instead. Resolved only
@@ -110,7 +104,7 @@ impl EClient {
             &shared, &tx, req_id,
             con_id, &symbol, &exchange, &sec_type, &currency,
             &last_trade_date, strike, &right, &multiplier,
-            snapshot, &generic_tick_list, mode_9887,
+            snapshot, regulatory_snapshot, &generic_tick_list, mode_9887,
         )) {
             return self.report_refusal(py, req_id, why);
         }

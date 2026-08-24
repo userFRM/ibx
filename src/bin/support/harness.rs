@@ -137,7 +137,7 @@ impl BenchSession {
                     ..Default::default()
                 },
                 mode_9887: 0,
-                reply_tx: None,
+                regulatory_snapshot: false, reply_tx: None,
             })
             .unwrap();
     }

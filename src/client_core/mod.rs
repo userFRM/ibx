@@ -1085,9 +1085,13 @@ impl ClientCore {
         right: &str,
         multiplier: &str,
         snapshot: bool,
+        regulatory_snapshot: bool,
         generic_tick_list: &str,
         mode_9887: i32,
     ) -> Result<InstrumentId, Refusal> {
+        // The chargeable snapshot is one burst by construction, so it ends the
+        // way an ordinary snapshot does and the caller hears the same end.
+        let snapshot = snapshot || regulatory_snapshot;
         // News subscription if generic_tick_list names 292. The whole entry,
         // not its last three characters: "1292" is not 292, and matching on a
         // suffix subscribes to news the caller did not ask for. The list is
@@ -1169,6 +1173,7 @@ impl ClientCore {
         control_tx.send(ControlCommand::Subscribe {
             contract: ContractRef { con_id, symbol: symbol.to_string(), exchange: exchange.to_string(), sec_type: sec_type.to_string(), currency: currency.to_string(), last_trade_date: last_trade_date.to_string(), strike, right: right.to_string(), multiplier: multiplier.to_string() },
             mode_9887,
+            regulatory_snapshot,
             reply_tx: Some(reply_tx),
         }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
 

@@ -553,7 +553,7 @@ def req_mkt_data(req_id, contract, generic_tick_list, snapshot, regulatory_snaps
 
 #### `req_mkt_data_ex`
 
-Like `req_mkt_data`, but encodes the market-data mode per request (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several subscriptions on the same contract can run in parallel and the caller picks whichever feed has data. The frozen one keeps thinly-traded names streaming after hours when the realtime feed is silent.  `regulatory_snapshot` is refused rather than dropped. It names a separate, chargeable one-shot request this protocol does not carry, so taking it and subscribing anyway answers a different request than the one asked for: the caller reads a stream where they asked for a single NBBO snapshot, and nothing says so. Reported through `error`, where a request this client will not send belongs.
+Like `req_mkt_data`, but encodes the market-data mode per request (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several subscriptions on the same contract can run in parallel and the caller picks whichever feed has data. The frozen one keeps thinly-traded names streaming after hours when the realtime feed is silent.  `regulatory_snapshot` asks for the venue's own chargeable one-shot snapshot: a request type of its own rather than a mode on an ordinary quote. It is billed per snapshot and needs the entitlement, and an account without it is refused by the venue, which names the request type back through `error`. It ends the way an ordinary snapshot does, so `tickSnapshotEnd` fires either way.
 
 ```python
 def req_mkt_data_ex(req_id, contract, generic_tick_list="", snapshot=False, regulatory_snapshot=False, mode_9887=0)
