@@ -315,6 +315,11 @@ path = "src/bin/probe_snapshot_native.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "probe_model_scale"
+path = "src/bin/probe_model_scale.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "probe_tbt_last"
 path = "src/bin/probe_tbt_last.rs"
 required-features = ["dev-tools"]

@@ -337,6 +337,19 @@ pub struct OptionComputation {
     /// count of whole days from this machine's clock has no hours in it, and
     /// makes a contract expiring today look expired.
     pub cal_days: f64,
+    /// The interest rate the venue discounted this contract at, stated on the
+    /// same tick as the model.
+    ///
+    /// `f64::MAX` where the venue stated none.
+    pub daily_rate: f64,
+    /// Whether the venue priced this contract on a volatility stated in the
+    /// contract's own price units rather than as a fraction of the underlying.
+    ///
+    /// The venue states which of the two it used, per contract, on the same
+    /// tick as the model. A price-unit volatility is a standard deviation in
+    /// points per root year: read as a fraction it is wrong by roughly the
+    /// forward, which prices a far strike at nothing.
+    pub price_based_vol: bool,
 }
 
 impl OptionComputation {
