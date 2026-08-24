@@ -320,6 +320,11 @@ path = "src/bin/probe_model_scale.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "capture_scan_row"
+path = "src/bin/capture_scan_row.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "probe_tbt_last"
 path = "src/bin/probe_tbt_last.rs"
 required-features = ["dev-tools"]
