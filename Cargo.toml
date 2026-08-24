@@ -298,3 +298,8 @@ required-features = ["dev-tools"]
 name = "probe_depth_sizes"
 path = "src/bin/probe_depth_sizes.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "probe_adjusted_last"
+path = "src/bin/probe_adjusted_last.rs"
+required-features = ["dev-tools"]

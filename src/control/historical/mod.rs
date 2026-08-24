@@ -22,8 +22,6 @@ pub enum BarDataType {
     Ask,
     /// Both sides.
     BidAsk,
-    /// What traded, adjusted for splits and dividends.
-    AdjustedLast,
     /// The volatility the underlying realised.
     HistoricalVolatility,
     /// The volatility its options implied.
@@ -46,7 +44,21 @@ impl BarDataType {
             "BID" => Self::Bid,
             "ASK" => Self::Ask,
             "BID_ASK" => Self::BidAsk,
-            "ADJUSTED_LAST" => Self::AdjustedLast,
+            // Refused rather than asked for. The reference client answers
+            // this by asking for what traded and applying the splits and
+            // dividends itself, from a feed of corporate actions it keeps and
+            // this client does not read. Asked for by name instead, the venue
+            // answers "no historical market data ... NoType" and nothing
+            // comes back — so every caller that asked for an adjusted series
+            // got silence. Better to say why than to answer trade bars under
+            // the name of adjusted ones.
+            "ADJUSTED_LAST" => return Err(
+                "adjusted bars are built by applying the venue's corporate actions to what \
+                 traded, and this client does not read them. The venue states no adjusted \
+                 series of its own to ask for: asking for one is answered with nothing. Ask \
+                 for TRADES and apply the actions, or ask for what the venue does state"
+                    .to_string(),
+            ),
             "HISTORICAL_VOLATILITY" => Self::HistoricalVolatility,
             "OPTION_IMPLIED_VOLATILITY" => Self::ImpliedVolatility,
             // The rate the venue prices options at, as a series of its own.
@@ -57,7 +69,7 @@ impl BarDataType {
             other => {
                 return Err(format!(
                     "Unsupported what_to_show '{other}': expected TRADES, MIDPOINT, \
-                     BID, ASK, BID_ASK, ADJUSTED_LAST, HISTORICAL_VOLATILITY \
+                     BID, ASK, BID_ASK, HISTORICAL_VOLATILITY, \
                      OPTION_IMPLIED_VOLATILITY or OPTION_EXERCISE_INTEREST_RATE",
                 ));
             }
@@ -78,7 +90,6 @@ impl BarDataType {
             Self::Bid => "Bid",
             Self::Ask => "Ask",
             Self::BidAsk => "BidAsk",
-            Self::AdjustedLast => "AdjustedLast",
             Self::HistoricalVolatility => "HV",
             Self::ImpliedVolatility => "IV",
             Self::OptionInterestRate => "OptExInterestRate",
@@ -386,7 +397,6 @@ pub fn build_query_xml(req: &HistoricalRequest) -> String {
          <type>BarData</type>\
          <data>{data}</data>\
          {end_time}\
-         <cutoffDate>20090224</cutoffDate>\
          {refresh}\
          <timeLength>{dur}</timeLength>\
          <step>{step}</step>\
