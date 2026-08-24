@@ -1428,60 +1428,32 @@ fn flush_session(
     }
 }
 
-/// The zone a venue names, under the name a zone database answers to.
+/// The clock a venue names, resolved against a time-zone database.
 ///
-/// The venue names its exchanges' zones the old way — `US/Eastern`,
-/// `GB-Eire`, `Japan`, `Australia/NSW` — and those are links in the time-zone
-/// database's own `backward` file, which the copy on a machine may or may not
-/// carry. Every pair below is that file's, not this client's: each is the
-/// zone the database itself says the old name is another name for.
-fn zone_the_database_knows(named: &str) -> &str {
-    match named {
-        "US/Eastern" => "America/New_York",
-        "US/Central" => "America/Chicago",
-        "US/Mountain" => "America/Denver",
-        "US/Pacific" => "America/Los_Angeles",
-        "US/Alaska" => "America/Anchorage",
-        "US/Hawaii" => "Pacific/Honolulu",
-        "US/Arizona" => "America/Phoenix",
-        "Canada/Eastern" => "America/Toronto",
-        "Canada/Central" => "America/Winnipeg",
-        "Canada/Mountain" => "America/Edmonton",
-        "Canada/Pacific" => "America/Vancouver",
-        "GB" | "GB-Eire" => "Europe/London",
-        "Eire" => "Europe/Dublin",
-        "Poland" => "Europe/Warsaw",
-        "Portugal" => "Europe/Lisbon",
-        "Turkey" => "Europe/Istanbul",
-        "Iceland" => "Atlantic/Reykjavik",
-        "Israel" => "Asia/Jerusalem",
-        "Japan" => "Asia/Tokyo",
-        "PRC" => "Asia/Shanghai",
-        "ROK" => "Asia/Seoul",
-        "Hongkong" => "Asia/Hong_Kong",
-        "Singapore" => "Asia/Singapore",
-        "Iran" => "Asia/Tehran",
-        "NZ" => "Pacific/Auckland",
-        "Australia/NSW" | "Australia/ACT" | "Australia/Canberra" => "Australia/Sydney",
-        "Australia/Victoria" => "Australia/Melbourne",
-        "Australia/Queensland" => "Australia/Brisbane",
-        "Australia/West" => "Australia/Perth",
-        "Australia/South" => "Australia/Adelaide",
-        "Australia/North" => "Australia/Darwin",
-        "Australia/Tasmania" => "Australia/Hobart",
-        "Brazil/East" => "America/Sao_Paulo",
-        "Mexico/General" => "America/Mexico_City",
-        other => other,
+/// The machine's own copy first, so a zone the host has been updated for is
+/// the host's. The venue names its exchanges the way the database's own
+/// `backward` file names them — `US/Eastern`, `GB-Eire`, `Japan` — and a
+/// machine's copy may carry only the current names, which is why the complete
+/// copy answers where the host does not. Both are the database's statements
+/// about zones, neither is a table kept here.
+fn clock_named(named: &str) -> Option<jiff::tz::TimeZone> {
+    if let Ok(zone) = jiff::tz::TimeZone::get(named) {
+        return Some(zone);
     }
+    static COMPLETE: std::sync::OnceLock<jiff::tz::TimeZoneDatabase> = std::sync::OnceLock::new();
+    COMPLETE
+        .get_or_init(jiff::tz::TimeZoneDatabase::bundled)
+        .get(named)
+        .ok()
 }
 
 /// Whether the hours can be stated on the clock the venue names.
 ///
-/// False where no database on this machine answers to that name, in which case
-/// the hours stay as the wire carried them and the zone reported beside them
-/// is the UTC they are actually on.
-pub fn sessions_are_stated_on(zone_named: &str) -> bool {
-    jiff::tz::TimeZone::get(zone_the_database_knows(zone_named)).is_ok()
+/// False where no database answers to that name, in which case the hours stay
+/// as the wire carried them and the zone reported beside them is the UTC they
+/// are actually on.
+pub fn sessions_are_stated_on(named: &str) -> bool {
+    clock_named(named).is_some()
 }
 
 /// Move a session's endpoints out of the clock the wire states them on and
@@ -1519,7 +1491,7 @@ fn stated_on(endpoint: &str, zone: &jiff::tz::TimeZone) -> Option<String> {
 /// the official-API convention.
 /// Returns an empty string if `sessions` is empty.
 pub fn format_sessions_string(sessions: &[ScheduleSession], zone_named: &str) -> String {
-    let zone = jiff::tz::TimeZone::get(zone_the_database_knows(zone_named)).ok();
+    let zone = clock_named(zone_named);
     let mut out = String::with_capacity(sessions.len() * 32);
     for (i, s) in sessions.iter().enumerate() {
         if i > 0 { out.push(';'); }

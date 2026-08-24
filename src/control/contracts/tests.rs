@@ -404,6 +404,40 @@ fn format_sessions_string_basic() {
     assert_eq!(s, "20260427:1330-20260427:2000;20260428:1330-20260428:2000");
 }
 
+/// The venue names its exchanges' zones the way the time-zone database's own
+/// `backward` file names them — `US/Eastern`, not `America/New_York` — and a
+/// machine's copy of that database may carry only the current names. These are
+/// the names measured off the venue across eight exchanges, and every one has
+/// to answer, or the hours are handed over on the wrong clock.
+#[test]
+fn the_zones_the_venue_names_all_answer() {
+    for named in [
+        "US/Eastern", "US/Central", "Canada/Eastern", "GB-Eire", "MET", "Japan",
+        "Australia/NSW", "Hongkong", "ROK", "Europe/Zurich", "America/New_York",
+    ] {
+        assert!(sessions_are_stated_on(named), "{named} answers to no database");
+    }
+    // And a name no database knows is left alone rather than guessed at: the
+    // hours stay on the clock the wire carried them on.
+    assert!(!sessions_are_stated_on("Exchange/Nowhere"));
+}
+
+/// The hours arrive in UTC and are handed over on the clock the venue names
+/// them with. A US listing's regular session is 0930-1600 there, not the
+/// 1330-2000 the wire carries.
+#[test]
+fn sessions_are_moved_onto_the_clock_the_venue_names() {
+    let sessions = vec![ScheduleSession {
+        start: "20260427-13:30:00".into(),
+        end: "20260427-20:00:00".into(),
+        trade_date: "20260427".into(),
+    }];
+    assert_eq!(
+        format_sessions_string(&sessions, "US/Eastern"),
+        "20260427:0930-20260427:1600",
+    );
+}
+
 #[test]
 fn format_sessions_string_empty() {
     assert_eq!(format_sessions_string(&[], "UTC"), "");
