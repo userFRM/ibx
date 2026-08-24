@@ -91,7 +91,7 @@ fn main() {
         underlying_price: stated.und_price,
         present_value_of_dividends: if stated.pv_dividend.is_finite()
             && stated.pv_dividend != f64::MAX { stated.pv_dividend } else { 0.0 },
-            rate: stated.daily_rate,
+            rate: stated.rate,
     };
 
     match option_price(terms, model, stated.implied_vol, stated.und_price) {
@@ -104,7 +104,7 @@ fn main() {
     // What the solve has to work with. The venue states its rate over a day,
     // as it states its volatility, so both are carried into the year the tree
     // is walked in.
-    let rate = model.rate * 365.0;
+    let rate = model.rate;
     let step = terms.years_to_expiry / 256.0;
     let floor = (rate.abs() * step.sqrt() * 1.02).max(1e-4);
     println!("  rate={rate:.6} years={:.4} floor={floor:.6}", terms.years_to_expiry);

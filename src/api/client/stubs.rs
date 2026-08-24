@@ -111,8 +111,9 @@ impl EClient {
     /// contract. Where the venue has stated no model, nothing is answered rather
     /// than a number derived from an unstated rate.
     ///
-    /// Answered on the same scale as the volatility the venue states on
-    /// `tick_option_computation`, so the two read against each other.
+    /// Answered over a year, which is the scale `tick_option_computation`
+    /// reports the venue's own volatility on, so the two read against each
+    /// other.
     pub fn calculate_implied_volatility(
         &self, req_id: i64, contract: &super::Contract,
         option_price: f64, under_price: f64,

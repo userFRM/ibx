@@ -150,7 +150,7 @@ fn main() {
                                 got = Stated {
                                     implied_vol: m.implied_vol,
                                     cal_days: m.cal_days,
-                                    daily_rate: m.daily_rate,
+                                    daily_rate: m.rate,
                                     und_price: m.und_price,
                                     opt_price: m.opt_price,
                                 };
@@ -190,7 +190,7 @@ fn main() {
                             if m.implied_vol > 0.0 && m.implied_vol != f64::MAX {
                                 now = Stated {
                                     implied_vol: m.implied_vol, cal_days: m.cal_days,
-                                    daily_rate: m.daily_rate,
+                                    daily_rate: m.rate,
                                     und_price: m.und_price, opt_price: m.opt_price,
                                 };
                             }
