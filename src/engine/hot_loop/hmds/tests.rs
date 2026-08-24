@@ -900,3 +900,18 @@ fn a_query_id_that_prefixes_another_does_not_take_its_bars() {
     // query's, which is why the separator is not simply any character.
     assert!(states("news_2-headlines;;x", "news_2"));
 }
+
+/// The query that opens a tick stream states the contract, the kind of stream
+/// and where it came from, and nothing it was not given.
+#[test]
+fn a_tick_stream_states_the_contract_and_the_kind() {
+    let q = super::HmdsState::build_tbt_query(7, 265598, "BEST", "CS", "AllLast");
+    assert!(q.contains("<id>tbt_7</id>"));
+    assert!(q.contains("<contractID>265598</contractID>"));
+    assert!(q.contains("<data>AllLast</data>"));
+    assert!(q.contains("<source>API</source>"));
+    // Nothing states a filter: the venue carries one, and this client has not
+    // settled how to make it take effect, so it sends none rather than an
+    // empty one.
+    assert!(!q.contains("filter"), "{q}");
+}

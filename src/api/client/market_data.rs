@@ -152,9 +152,12 @@ impl EClient {
         }
         if ignore_size {
             return Err(Refusal::validation(
-                "ignore_size is not carried by this protocol: a tick-by-tick \
-                 subscription has no field for suppressing size-only changes, so \
-                 every change the venue sends is delivered",
+                "ignore_size is not sent by this client. The query the venue answers does \
+                 carry a filter and the filter does carry this term, so the protocol is \
+                 not the reason — what is not settled is how to make the venue apply it: \
+                 asked for two ways, the stream came back with the size-only changes \
+                 still in it. Sent regardless, a caller would be told the changes were \
+                 filtered and be reading a stream that was not",
             ));
         }
         let kind = TbtType::named(tick_type)?;

@@ -1097,11 +1097,16 @@ impl ClientCore {
         // suffix subscribes to news the caller did not ask for. The list is
         // split on commas first, so a comma-joined entry never matches.
         let wants_news = generic_tick_list.split(',').any(|t| t.trim() == "292");
-        // And nothing else is carried. The subscription this protocol sends
-        // states a contract and a mode, with no room for a list of extra
-        // ticks. Every other number a caller names is therefore unsendable —
-        // option volume, shortable shares — and is reported rather than
-        // accepted in silence.
+        // And nothing else is served. Not because the protocol cannot carry
+        // it: a tick is asked for as a subscription of its own, under the
+        // venue's number for it in the request type, which is how the option
+        // model, the trading status and the venue map are already asked for
+        // here. What is missing is the venue's number for each of the numbers
+        // a caller names, and a reader for what each one answers with.
+        //
+        // So every other number is reported rather than accepted in silence —
+        // option volume, shortable shares. A caller hears that it will not
+        // arrive instead of watching for a tick that never comes.
         let unsent: Vec<&str> = generic_tick_list
             .split(',')
             .map(str::trim)
@@ -1109,8 +1114,8 @@ impl ClientCore {
             .collect();
         if !unsent.is_empty() {
             log::warn!(
-                "generic tick(s) {} were asked for and are not carried by this \
-                 protocol's subscription, so no tick of those kinds will arrive",
+                "generic tick(s) {} were asked for and are not served by this \
+                 client, so no tick of those kinds will arrive",
                 unsent.join(", "),
             );
         }
