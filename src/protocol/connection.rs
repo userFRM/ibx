@@ -171,6 +171,9 @@ pub struct Connection {
     /// the peer does not share. There is no resuming mid-frame: the transport
     /// is finished and the reconnect path takes it from here.
     write_failed: bool,
+    /// Set when a frame failed to verify. The chain cannot advance past one,
+    /// so nothing further on this socket can be read.
+    read_failed: bool,
 }
 
 impl Connection {
@@ -212,6 +215,7 @@ impl Connection {
             heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
+            read_failed: false,
         })
     }
 
@@ -245,6 +249,17 @@ impl Connection {
     /// direction that matters even where the peer is still sending.
     pub fn write_failed(&self) -> bool {
         self.write_failed
+    }
+
+    /// Whether a frame failed to verify, which finishes the connection for
+    /// reading.
+    ///
+    /// The chain only advances on a frame that verified, so one that did not
+    /// leaves the receiver a step behind a sender that moved on: every frame
+    /// after it fails the same way. There is no recovering the step, and
+    /// nothing arrives again on this socket.
+    pub fn read_failed(&self) -> bool {
+        self.read_failed
     }
 
     /// Non-blocking read from the socket into the internal buffer.
@@ -476,7 +491,18 @@ impl Connection {
             // unauthenticated input is the side to err on; the connection
             // wanting a teardown rather than a guess is the real answer, and is
             // a larger change than this.
-            log::warn!("inbound frame failed signature verification — dropped");
+            // And the connection is finished, not just this frame. The chain
+            // does not advance past a frame that did not verify, so the sender
+            // is now a step ahead for good and every frame after this one
+            // fails the same test. Left standing, the socket keeps delivering
+            // bytes — which is what the liveness deadlines watch — so it reads
+            // as healthy while nothing on it is ever read again. Given up
+            // instead, so it is rebuilt.
+            self.read_failed = true;
+            log::warn!(
+                "inbound frame failed signature verification — the chain cannot advance \
+                 past it, so this transport is given up to be rebuilt",
+            );
             return None;
         }
         self.read_iv = new_iv;
@@ -506,6 +532,7 @@ impl Connection {
             heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
+            read_failed: false,
         };
         (conn, peer)
     }
@@ -831,6 +858,7 @@ mod tests {
             heartbeat_secs: None,
             routing: Default::default(),
             write_failed: false,
+            read_failed: false,
         }
     }
 
@@ -1142,6 +1170,25 @@ mod tests {
 
         let mut conn = signed_conn(b"0123456789abcdef", &[0u8; 16]);
         assert_eq!(conn.unsign(&plain), Some(plain), "no 8349 tag on the frame");
+    }
+
+    /// A frame that fails to verify finishes the connection for reading.
+    ///
+    /// The chain advances only on a frame that verified, so one that did not
+    /// leaves the receiver a step behind a sender that carried on — every
+    /// frame after it fails the same way. Dropped one at a time the socket
+    /// keeps delivering bytes, which is what the liveness deadlines watch, so
+    /// it reads as healthy while nothing on it is read again. It has to be
+    /// given up instead.
+    #[test]
+    fn a_frame_that_fails_to_verify_finishes_the_connection() {
+        let mut conn = signed_conn(b"0123456789abcdef", &[0u8; 16]);
+        assert!(!conn.read_failed(), "nothing has failed yet");
+
+        // Carries the signature tag, so it is verified — and does not verify.
+        let forged = fix_build(&[(35, "0"), (8349, "not-a-real-signature")], 1);
+        assert_eq!(conn.unsign(&forged), None, "an unverifiable frame is not passed on");
+        assert!(conn.read_failed(), "and the transport is finished for reading");
     }
 
     /// The same rule at the pre-check. An *unsigned* frame quoting the tag in a
