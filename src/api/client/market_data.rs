@@ -198,7 +198,14 @@ impl EClient {
         // Only what this request took out. Removing the contract's quote
         // mapping here took the quotes away from whoever was watching them.
         self.tbt_kinds.lock().unwrap().remove(&req_id);
-        if let Some(instrument) = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id) {
+        // Taken out before the send rather than across it. The guard in an
+        // `if let` scrutinee lives to the end of the body, and the send is
+        // bounded — it waits when the engine's queue is full, which is
+        // ordinary backpressure. Held across that wait, this lock stops
+        // another thread opening or withdrawing a different stream, and stops
+        // a disconnect resetting at all, for as long as the queue stays full.
+        let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
+        if let Some(instrument) = instrument {
             self.send(ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         }
         Ok(())
