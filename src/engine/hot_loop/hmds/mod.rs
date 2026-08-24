@@ -61,7 +61,9 @@ pub(crate) struct HmdsState {
     /// response carries no end date, so the requested one is reported back.
     pub(crate) pending_schedule: Vec<(String, u32, String)>,
     pub(crate) pending_ticks: Vec<(String, u32, String)>,
-    pub(crate) rtbar_subs: Vec<(String, u32, Option<u32>, f64)>,
+    /// (query name, caller's request id, the venue's ticker for the stream,
+    /// the increment its prices move in, the increment its sizes move in).
+    pub(crate) rtbar_subs: Vec<(String, u32, Option<u32>, f64, f64)>,
     /// req_ids that should keep streaming after initial batch (keepUpToDate=True).
     pub(crate) keep_up_to_date_reqs: std::collections::HashSet<u32>,
     /// The bars still forming, one per request keeping its bars up to date.
@@ -167,6 +169,12 @@ pub(crate) struct FormingBar {
 impl FormingBar {
     /// Fold a five-second bar in, and answer with the bar as it now stands.
     fn fold(&mut self, five: &crate::types::RealTimeBar) -> crate::types::RealTimeBar {
+        // Counted from the epoch, so a bar opens on a whole multiple of its
+        // own length. Right to the clock for every size up to an hour; for a
+        // day it is midnight UTC, which is the trading day of an instrument
+        // that trades around the clock and the middle of the evening for one
+        // that does not. Folding on the contract's own trading day needs the
+        // schedule down here, which this does not have.
         let opened_at = five.timestamp - five.timestamp % self.seconds;
         if opened_at != self.opened_at {
             self.opened_at = opened_at;
@@ -615,6 +623,14 @@ impl HmdsState {
                         else {
                             return;
                         };
+                        // Stated in the same element as the price increment.
+                        // A volume is a count of it, the way a size is on the
+                        // quote and tick-by-tick streams; absent, sizes are
+                        // already whole and one leaves them alone.
+                        let size_tick = crate::control::xml::tag(xml_tag, "sizeMinTick")
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .filter(|t| *t > 0.0)
+                            .unwrap_or(1.0);
                         let ticker_id: u32 = ticker_id_str.parse().unwrap_or(0);
                         let mut matched = false;
                         for sub in &mut self.rtbar_subs {
@@ -632,7 +648,7 @@ impl HmdsState {
                                 if answers(xml_tag, qid) && self.keep_up_to_date_reqs.contains(req_id) {
                                     // Store as rtbar subscription so 35=G bars get
                                     // dispatched
-                                    self.rtbar_subs.push((qid.clone(), *req_id, Some(ticker_id), min_tick));
+                                    self.rtbar_subs.push((qid.clone(), *req_id, Some(ticker_id), min_tick, size_tick));
                                     matched = true;
                                     break;
                                 }
@@ -669,13 +685,13 @@ impl HmdsState {
                                 // that nothing had rejected.
                                 released_req_id = Some(req_id);
                                 from_historical = true;
-                            } else if let Some(pos) = self.rtbar_subs.iter().position(|(q, _, _, _)| q == qid) {
+                            } else if let Some(pos) = self.rtbar_subs.iter().position(|(q, ..)| q == qid) {
                                 // A rejected bar query is matched on the query
                                 // id, which is the one identifier that is
                                 // unique across request kinds. Its reconnect
                                 // record goes too, or the next reconnect asks
                                 // for a stream the server already refused.
-                                let (_, req_id, _, _) = self.rtbar_subs.remove(pos);
+                                let (_, req_id, ..) = self.rtbar_subs.remove(pos);
                                 self.rtbar_resub.retain(|r| r.req_id != req_id);
                                 released_req_id = Some(req_id);
                             } else if let Some(pos) = self.pending_head_ts.iter().position(|(q, _)| q == qid) {
@@ -1029,13 +1045,15 @@ impl HmdsState {
         let timestamp = u32::from_be_bytes([body[6], body[7], body[8], body[9]]);
         let payload_len = body[10] as usize;
         if body.len() < 11 + payload_len { return; }
-        let sub = self.rtbar_subs.iter().find(|(_, _, tid, _)| *tid == Some(ticker_id));
-        let (req_id, min_tick) = match sub {
-            Some((_, rid, _, mt)) => (*rid, *mt),
+        let sub = self.rtbar_subs.iter().find(|(_, _, tid, ..)| *tid == Some(ticker_id));
+        let (req_id, min_tick, size_tick) = match sub {
+            Some((_, rid, _, mt, st)) => (*rid, *mt, *st),
             None => return,
         };
         let payload = &body[11..11 + payload_len];
-        if let Some(mut bar) = crate::control::historical::decode_bar_payload(payload, min_tick) {
+        if let Some(mut bar) =
+            crate::control::historical::decode_bar_payload(payload, min_tick, size_tick)
+        {
             bar.timestamp = timestamp;
             // A caller keeping bars up to date asked for its own bar size, so
             // what it hears is the bar it asked for as it stands, not the
@@ -1653,7 +1671,7 @@ fn build_tbt_query(
             hb.last_hmds_sent = Instant::now();
             log::info!("Sent rtbar subscribe: req_id={req_id} con_id={con_id} what={what_to_show}");
         }
-        self.rtbar_subs.push((query_id, req_id, None, 0.01));
+        self.rtbar_subs.push((query_id, req_id, None, 0.01, 1.0));
         self.rtbar_resub.retain(|r| r.req_id != req_id);
         self.rtbar_resub.push(RtBarRequest {
             req_id, con_id,

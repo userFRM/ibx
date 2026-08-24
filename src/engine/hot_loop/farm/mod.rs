@@ -817,7 +817,13 @@ impl FarmState {
             // rather than pinning it: a saturated value is ~92e9 at
             // PRICE_SCALE, which reads downstream as an ordinary quote, and
             // leaving the previous one standing is the honest failure.
-            let scaled = |m: i64| m.checked_mul(mts);
+            // And an increment of nothing scales every price to nothing,
+            // which reads downstream as a real quote of zero rather than as
+            // the absent increment it is. The venue states one per contract
+            // and this is what happens when it has not, or when it states one
+            // finer than the scale can hold. The tick-by-tick path already
+            // refuses on the same test.
+            let scaled = |m: i64| if mts > 0 { m.checked_mul(mts) } else { None };
             // Whether this entry changed the quote. An unmapped opcode does
             // not mark the instrument notified; it is visible in the raw trace
             // above instead.

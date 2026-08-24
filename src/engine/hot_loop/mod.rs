@@ -711,10 +711,19 @@ impl HotLoop {
                 self.reconnect_cfg.stable_window,
                 !self.farm.disconnected && !self.ccp.disconnected,
             );
-            self.maybe_spawn_farm_reconnect();
-            self.maybe_spawn_ccp_reconnect();
-            self.maybe_spawn_hmds_reconnect();
-            self.maybe_spawn_secdef_reconnect();
+            // Not once the stop has been processed. Control commands are read
+            // further up this same lap, so a stop that arrived with a
+            // transport already down would otherwise launch a fresh logon
+            // after the caller had been told the engine stopped — a session
+            // opened at the venue after the disconnect, never logged out, and
+            // on the trading connection one the account reads as a second
+            // session competing with itself.
+            if self.running {
+                self.maybe_spawn_farm_reconnect();
+                self.maybe_spawn_ccp_reconnect();
+                self.maybe_spawn_hmds_reconnect();
+                self.maybe_spawn_secdef_reconnect();
+            }
 
             // 6. Wake any waiting consumers (e.g. Python event loop)
             self.shared.notify();
@@ -1023,9 +1032,9 @@ impl HotLoop {
                     // it from the resubscribe record so a reconnect does not
                     // request it again.
                     let rtbar_query: Option<String> = self.hmds.rtbar_subs.iter()
-                        .find(|(_, rid, _, _)| *rid == req_id)
+                        .find(|(_, rid, ..)| *rid == req_id)
                         .map(|(qid, ..)| qid.clone());
-                    self.hmds.rtbar_subs.retain(|(_, rid, _, _)| *rid != req_id);
+                    self.hmds.rtbar_subs.retain(|(_, rid, ..)| *rid != req_id);
                     self.hmds.rtbar_resub.retain(|r| r.req_id != req_id);
                     if let Some(qid) = rtbar_query {
                         self.hmds.send_historical_cancel(&qid, &mut self.hmds_conn, &mut self.hb);
@@ -1164,8 +1173,8 @@ impl HotLoop {
                 }
                 ControlCommand::CancelRealTimeBar { req_id } => {
                     self.hmds.rtbar_resub.retain(|r| r.req_id != req_id);
-                    if let Some(pos) = self.hmds.rtbar_subs.iter().position(|(_, rid, _, _)| *rid == req_id) {
-                        let (query_id, _, ticker_id, _) = self.hmds.rtbar_subs.remove(pos);
+                    if let Some(pos) = self.hmds.rtbar_subs.iter().position(|(_, rid, ..)| *rid == req_id) {
+                        let (query_id, _, ticker_id, ..) = self.hmds.rtbar_subs.remove(pos);
                         let cancel_id = ticker_id.map(|t| t.to_string()).unwrap_or(query_id);
                         self.hmds.send_historical_cancel(&cancel_id, &mut self.hmds_conn, &mut self.hb);
                     }
@@ -1272,6 +1281,18 @@ impl HotLoop {
                     self.force_ccp_disconnect();
                 }
                 ControlCommand::Shutdown => {
+                    // Orders handed over before the stop go out before it.
+                    // They are drained at the top of a lap and this arm runs
+                    // further down one, so an order batched with the stop was
+                    // buffered and never reached the venue — while its caller
+                    // had been told it was accepted, and given an id for it.
+                    // The buffer's own rule is that nothing is dropped from it
+                    // because a dropped order is one nobody was told about.
+                    order_builder::drain_and_send_orders(
+                        &mut self.ccp_conn, &mut self.context, &self.account_id, &mut self.hb,
+                        self.ccp.disconnected, &self.shared,
+                        self.ccp.recovery_sweep_at.is_some(), &self.event_tx,
+                    );
                     // The account subscription this loop opened is closed with
                     // it. Left open, each loop holds one for the life of the
                     // connection, and the venue stops answering new ones.
@@ -1322,6 +1343,12 @@ impl HotLoop {
         // All senders dropped — treat as implicit shutdown.
         if sender_dropped && self.running {
             log::warn!("Control channel disconnected — shutting down hot loop");
+            // As above: what was accepted goes out before the loop stops.
+            order_builder::drain_and_send_orders(
+                &mut self.ccp_conn, &mut self.context, &self.account_id, &mut self.hb,
+                self.ccp.disconnected, &self.shared,
+                self.ccp.recovery_sweep_at.is_some(), &self.event_tx,
+            );
             self.running = false;
             self.shared.reference
                 .set_session_over(retry::DisconnectReason::ByDesign.as_str());
@@ -1640,24 +1667,25 @@ impl HotLoop {
         self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.context.market, &self.shared);
     }
 
-    /// Give up any transport a write has abandoned.
+    /// Give up any transport that can no longer be written to, or whose
+    /// inbound chain has stopped and cannot be restarted.
     fn disconnect_write_dead_transports(&mut self) {
         if !self.ccp.disconnected
-            && self.ccp_conn.as_ref().is_some_and(|c| c.write_failed())
+            && self.ccp_conn.as_ref().is_some_and(|c| c.write_failed() || c.read_failed())
         {
-            log::error!("CCP transport can no longer be written to — giving it up");
+            log::error!("CCP transport can no longer carry traffic — giving it up");
             self.ccp.handle_disconnect(&mut self.context, &self.shared, &self.event_tx);
         }
         if !self.farm.disconnected
-            && self.farm_conn.as_ref().is_some_and(|c| c.write_failed())
+            && self.farm_conn.as_ref().is_some_and(|c| c.write_failed() || c.read_failed())
         {
-            log::error!("Farm transport can no longer be written to — giving it up");
+            log::error!("Farm transport can no longer carry traffic — giving it up");
             self.farm.handle_disconnect(&mut self.context, &self.event_tx);
         }
         if !self.hmds.disconnected
-            && self.hmds_conn.as_ref().is_some_and(|c| c.write_failed())
+            && self.hmds_conn.as_ref().is_some_and(|c| c.write_failed() || c.read_failed())
         {
-            log::error!("HMDS transport can no longer be written to — giving it up");
+            log::error!("HMDS transport can no longer carry traffic — giving it up");
             self.hmds.disconnect(&mut self.hmds_conn, &self.shared, &self.event_tx);
         }
         // The calendar's connection, on the same terms as the other three. Its
@@ -1665,8 +1693,8 @@ impl HotLoop {
         // without a read error after it leaves the connection installed — and
         // the reconnect declines to build another while one is, so the calendar
         // stays on a socket nothing can be sent through.
-        if self.secdef_conn.as_ref().is_some_and(|c| c.write_failed()) {
-            log::error!("Security-definition transport can no longer be written to — giving it up");
+        if self.secdef_conn.as_ref().is_some_and(|c| c.write_failed() || c.read_failed()) {
+            log::error!("Security-definition transport can no longer carry traffic — giving it up");
             self.secdef.give_up(&mut self.secdef_conn, &self.shared);
         }
     }
@@ -2965,7 +2993,7 @@ mod tests {
         let req_id = 7u32;
 
         hl.hmds.keep_up_to_date_reqs.insert(req_id);
-        hl.hmds.rtbar_subs.push(("hist_1".to_string(), req_id, Some(99), 0.01));
+        hl.hmds.rtbar_subs.push(("hist_1".to_string(), req_id, Some(99), 0.01, 1.0));
         hl.hmds.forming_bars.push(crate::engine::hot_loop::hmds::FormingBar {
             req_id,
             seconds: 60,
@@ -2982,7 +3010,7 @@ mod tests {
 
         assert!(!hl.hmds.keep_up_to_date_reqs.contains(&req_id));
         assert!(
-            !hl.hmds.rtbar_subs.iter().any(|(_, rid, _, _)| *rid == req_id),
+            !hl.hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == req_id),
             "the stream's routing goes with the request",
         );
         assert!(
@@ -3004,7 +3032,7 @@ mod tests {
         hl.hmds_conn = Some(conn);
 
         hl.hmds.keep_up_to_date_reqs.insert(req_id);
-        hl.hmds.rtbar_subs.push(("rt_4".to_string(), req_id, Some(99), 0.01));
+        hl.hmds.rtbar_subs.push(("rt_4".to_string(), req_id, Some(99), 0.01, 1.0));
         hl.hmds.rtbar_resub.push(crate::engine::hot_loop::hmds::RtBarRequest {
             req_id,
             con_id: 756733,
