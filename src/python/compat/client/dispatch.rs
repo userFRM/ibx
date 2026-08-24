@@ -154,6 +154,19 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "error", (-1i64, 1102i64, "Connectivity between client and server has been restored - data maintained", ""));
         }
 
+        // One of the connections the venue keeps data on went away or came
+        // back. Said as it happens, under the number the venue reports it
+        // under: a caller reading quotes has nothing else to tell it that the
+        // last price it holds stopped being a price, and the quotes it can
+        // read do not go anywhere when the connection carrying them does.
+        for event in &events {
+            if let Event::VenueData { which, up } = event {
+                let (broken, ok) = which.codes();
+                call_wrapper!(self.wrapper, py, "error",
+                    (-1i64, if *up { ok } else { broken }, which.says(*up), ""));
+            }
+        }
+
         // The status that came with the same report, so one execution report
         // produces one `orderStatus` and not two. The engine announces the fill
         // and the order's resulting status together; emitting them separately

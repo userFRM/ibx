@@ -1488,7 +1488,7 @@ impl HotLoop {
             if since_recv > HeartbeatState::farm_test_after(stated) {
                 if since_recv > HeartbeatState::farm_dead_after(stated) {
                     log::error!("HMDS liveness timeout ({since_recv}s silent) — connection lost");
-                    self.hmds.disconnect(&mut self.hmds_conn, &self.shared);
+                    self.hmds.disconnect(&mut self.hmds_conn, &self.shared, &self.event_tx);
                 } else if self.hb.pending_hmds_test.is_none() {
                     let test_id = self.hb.next_test_id();
                     let _ = conn.send_fix(&[
@@ -1655,7 +1655,7 @@ impl HotLoop {
             && self.hmds_conn.as_ref().is_some_and(|c| c.write_failed())
         {
             log::error!("HMDS transport can no longer be written to — giving it up");
-            self.hmds.disconnect(&mut self.hmds_conn, &self.shared);
+            self.hmds.disconnect(&mut self.hmds_conn, &self.shared, &self.event_tx);
         }
         // The calendar's connection, on the same terms as the other three. Its
         // read path gives it up when the socket goes, but a write that fails
@@ -1843,6 +1843,12 @@ impl HotLoop {
                 self.farm_reconnect_attempt = 0;
                 self.clear_halt_if_it_was_not_settled();
                 self.budget.record_connected(Instant::now());
+                // Said whether or not a loss was ever announced, because the
+                // break was said the same way.
+                emit(&self.event_tx, Event::VenueData {
+                    which: crate::bridge::VenueDataConnection::MarketData,
+                    up: true,
+                });
                 self.announce_reconnected();
                 self.farm_next_attempt_at = None;
                 self.pending_farm_reconnect = None;
@@ -2147,6 +2153,10 @@ impl HotLoop {
                 self.hmds_reconnect_attempt = 0;
                 self.hmds_next_attempt_at = None;
                 self.pending_hmds_reconnect = None;
+                emit(&self.event_tx, Event::VenueData {
+                    which: crate::bridge::VenueDataConnection::Historical,
+                    up: true,
+                });
             }
             Ok(Err(e)) => {
                 log::warn!(

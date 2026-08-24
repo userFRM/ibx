@@ -20,6 +20,41 @@ pub struct RichOrderInfo {
     pub last_exec: api::Execution,
 }
 
+/// A connection the venue keeps data on, as it names each in its own notices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VenueDataConnection {
+    /// Quotes and books.
+    MarketData,
+    /// Bars, historical ticks and everything asked for by time.
+    Historical,
+    /// What a contract is.
+    SecurityDefinition,
+}
+
+impl VenueDataConnection {
+    /// The number the venue reports this connection under, going down and
+    /// coming back.
+    pub fn codes(self) -> (i64, i64) {
+        match self {
+            Self::MarketData => (2103, 2104),
+            Self::Historical => (2105, 2106),
+            Self::SecurityDefinition => (2157, 2158),
+        }
+    }
+
+    /// What the venue says about it, in its own words.
+    pub fn says(self, up: bool) -> &'static str {
+        match (self, up) {
+            (Self::MarketData, false) => "Market data farm connection is broken",
+            (Self::MarketData, true) => "Market data farm connection is OK",
+            (Self::Historical, false) => "HMDS data farm connection is broken",
+            (Self::Historical, true) => "HMDS data farm connection is OK",
+            (Self::SecurityDefinition, false) => "Sec-def data farm connection is broken",
+            (Self::SecurityDefinition, true) => "Sec-def data farm connection is OK",
+        }
+    }
+}
+
 /// Events emitted by the IB engine.
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -90,6 +125,18 @@ pub enum Event {
     /// `Disconnected`, so a client that stood down on one has the signal to
     /// resume — without it an overnight outage leaves it stood down for good.
     Reconnected,
+    /// One of the connections the venue keeps data on went away, or came back.
+    ///
+    /// Said as it happens rather than once a rebuild has been given up on: a
+    /// caller reading quotes has no other way to know the last price it holds
+    /// stopped being a price, and the quotes it can read do not go anywhere
+    /// when the connection carrying them does.
+    VenueData {
+        /// Which connection.
+        which: VenueDataConnection,
+        /// Whether it is carrying traffic.
+        up: bool,
+    },
     /// Gateway logon completed. `ccp_session_id` matches the `x-ccp-session-id` header
     /// expected by webapp REST endpoints. `misc_urls` maps logical names (e.g.
     /// `region_dam`)
@@ -103,4 +150,25 @@ pub enum Event {
         /// Hosts the venue pushed at logon, by name.
         misc_urls: HashMap<String, String>,
     },
+}
+
+#[cfg(test)]
+mod venue_data_tests {
+    use super::VenueDataConnection::*;
+
+    /// The numbers and the words are the venue's, not this client's. A caller
+    /// written against the reference stack matches on both.
+    #[test]
+    fn each_connection_is_reported_as_the_venue_reports_it() {
+        assert_eq!(MarketData.codes(), (2103, 2104));
+        assert_eq!(Historical.codes(), (2105, 2106));
+        assert_eq!(SecurityDefinition.codes(), (2157, 2158));
+
+        assert_eq!(MarketData.says(false), "Market data farm connection is broken");
+        assert_eq!(MarketData.says(true), "Market data farm connection is OK");
+        assert_eq!(Historical.says(false), "HMDS data farm connection is broken");
+        assert_eq!(Historical.says(true), "HMDS data farm connection is OK");
+        assert_eq!(SecurityDefinition.says(false), "Sec-def data farm connection is broken");
+        assert_eq!(SecurityDefinition.says(true), "Sec-def data farm connection is OK");
+    }
 }
