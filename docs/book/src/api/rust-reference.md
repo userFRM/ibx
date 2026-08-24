@@ -1355,7 +1355,7 @@ pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &st
 
 #### `req_fundamental_data`
 
-Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary). The contract is named by its venue id and nothing else of it is carried, so pass one that has an id: from [`qualify_contract`](EClient::qualify_contract), or from any contract-details answer. A description is refused rather than sent as a request about contract zero.
+Request fundamental data. Three reports, which are the three the venue states: `ReportSnapshot`, `RESC` for what analysts expect, and `CalendarReport` for what the issuer has coming. The contract is named by its venue id and nothing else of it is carried, so pass one that has an id: from [`qualify_contract`](EClient::qualify_contract), or from any contract-details answer. A description is refused rather than sent as a request about contract zero.
 
 ```rust
 pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), Refusal>

@@ -1456,15 +1456,17 @@ impl HmdsState {
     }
 
     pub(crate) fn send_fundamental_data_request(&mut self, req_id: u32, con_id: u32, report_type: &str, shared: &SharedState, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+        use crate::control::fundamental::ReportType;
         let rt = match report_type {
-            "ReportSnapshot" | "snapshot" => crate::control::fundamental::ReportType::Snapshot,
-            "ReportFinSummary" | "finsum" => crate::control::fundamental::ReportType::FinancialSummary,
-            "ReportsFinStatements" | "finstat" => crate::control::fundamental::ReportType::FinancialStatements,
+            "ReportSnapshot" | "snapshot" => ReportType::Snapshot,
+            "RESC" | "estimates" => ReportType::Estimates,
+            "CalendarReport" | "calendar" => ReportType::Calendar,
             other => {
                 // Refused rather than substituted; an unsupported report
                 // type is not silently answered with a snapshot.
                 let told = format!(
-                    "report type {other:?} is not one this client carries: it is                      ReportSnapshot, ReportFinSummary or ReportsFinStatements"
+                    "report type {other:?} is not one the venue states: it is \
+                     ReportSnapshot, RESC or CalendarReport"
                 );
                 log::warn!("{told}");
                 super::push_hmds_error(shared, req_id, told, false);

@@ -285,8 +285,11 @@ impl EClient {
 
     // ── Fundamental Data ──
 
-    /// Request fundamental data (e.g. ReportSnapshot, ReportsFinSummary). Matches
-    /// `reqFundamentalData` in C++.
+    /// Request fundamental data. Matches `reqFundamentalData` in C++.
+    ///
+    /// Three reports, which are the three the venue states: `ReportSnapshot`,
+    /// `RESC` for what analysts expect, and `CalendarReport` for what the
+    /// issuer has coming.
     ///
     /// The contract is named by its venue id and nothing else of it is
     /// carried, so pass one that has an id: from

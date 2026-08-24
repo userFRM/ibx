@@ -14,28 +14,40 @@ pub const TAG_RAW_DATA: u32 = 96;
 pub enum ReportType {
     /// A summary of the issuer as it stands.
     Snapshot,
-    /// Its headline figures.
-    FinancialSummary,
-    /// Its full statements.
-    FinancialStatements,
+    /// What analysts expect of it.
+    Estimates,
+    /// What it has coming: earnings dates and the like.
+    Calendar,
 }
 
 impl ReportType {
     /// Which provider supplies this report.
     pub fn provider(&self) -> &'static str {
-        match self {
-            Self::Snapshot => "Fundamentals",
-            Self::FinancialSummary => "Morningstar",
-            Self::FinancialStatements => "Morningstar",
-        }
+        "Fundamentals"
     }
 
     /// The name the venue knows the report by.
+    ///
+    /// Three, and these three: the reference client names exactly these and
+    /// asks for them under exactly these words. Two others used to be offered
+    /// here — a summary and the full statements — under names that appear
+    /// nowhere in the vendor build at all, so what went out for them was a
+    /// word the venue has never been asked for. The two the reference client
+    /// does offer were refused instead.
     pub fn report_type_str(&self) -> &'static str {
         match self {
             Self::Snapshot => "snapshot",
-            Self::FinancialSummary => "finsum",
-            Self::FinancialStatements => "finstat",
+            Self::Estimates => "estimates",
+            Self::Calendar => "calendar",
+        }
+    }
+
+    /// The name a caller asks for it by.
+    pub fn api_name(&self) -> &'static str {
+        match self {
+            Self::Snapshot => "ReportSnapshot",
+            Self::Estimates => "RESC",
+            Self::Calendar => "CalendarReport",
         }
     }
 }
@@ -104,16 +116,21 @@ mod tests {
     use flate2::Compression;
     use std::io::Write;
 
+    /// The three the venue states, under the words it states them by. Two
+    /// others used to be offered under words that appear nowhere in the
+    /// vendor build, so a caller asking for either sent the venue something
+    /// it has never been asked for.
     #[test]
     fn report_type_mapping() {
-        assert_eq!(ReportType::Snapshot.provider(), "Fundamentals");
-        assert_eq!(ReportType::Snapshot.report_type_str(), "snapshot");
-
-        assert_eq!(ReportType::FinancialSummary.provider(), "Morningstar");
-        assert_eq!(ReportType::FinancialSummary.report_type_str(), "finsum");
-
-        assert_eq!(ReportType::FinancialStatements.provider(), "Morningstar");
-        assert_eq!(ReportType::FinancialStatements.report_type_str(), "finstat");
+        for (kind, asked_by, on_the_wire) in [
+            (ReportType::Snapshot, "ReportSnapshot", "snapshot"),
+            (ReportType::Estimates, "RESC", "estimates"),
+            (ReportType::Calendar, "CalendarReport", "calendar"),
+        ] {
+            assert_eq!(kind.api_name(), asked_by);
+            assert_eq!(kind.report_type_str(), on_the_wire);
+            assert_eq!(kind.provider(), "Fundamentals");
+        }
     }
 
     #[test]
