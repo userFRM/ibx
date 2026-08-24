@@ -935,12 +935,15 @@ impl HotLoop {
                     self.hmds.send_tbt_unsubscribe(req_id, instrument, &mut self.hmds_conn, &mut self.hb);
                     self.try_reclaim_instrument(instrument);
                 }
-                ControlCommand::SubscribeNews { con_id, symbol, providers, reply_tx } => {
-                    if let Some(id) = self.register_or_reject(con_id, symbol, "", "", "", &reply_tx) {
+                ControlCommand::SubscribeNews { con_id, symbol, sec_type, providers, reply_tx } => {
+                    if let Some(id) = self.register_or_reject(con_id, symbol, "", &sec_type, "", &reply_tx) {
                         // Allocate req_id from farm's counter (shared ID space)
                         let req_id = self.farm.next_md_req_id;
                         self.farm.next_md_req_id += 1;
-                        self.ccp.send_news_subscribe(con_id, id, &providers, req_id, &mut self.ccp_conn, &mut self.hb);
+                        self.ccp.send_news_subscribe(
+                            con_id, id, &sec_type, &providers, req_id,
+                            &mut self.ccp_conn, &mut self.hb,
+                        );
                     }
                 }
                 ControlCommand::UnsubscribeNews { instrument } => {
@@ -3760,7 +3763,7 @@ mod tests {
         let id = hl.context.market.register(4002);
         hl.context.market.register_server_tag(910_002, id);
         hl.farm.instrument_md_reqs.push((id, vec![8]));
-        hl.ccp.news_subscriptions.push((id, 55, "BRFG".to_string(), 756733));
+        hl.ccp.news_subscriptions.push((id, 55, "BRFG".to_string(), 756733, "STK".to_string()));
 
         tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
         hl.poll_once();

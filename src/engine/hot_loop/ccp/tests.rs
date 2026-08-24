@@ -3762,7 +3762,7 @@ fn a_news_stream_is_withdrawn_by_naming_what_it_was() {
     let mut ccp = CcpState::new();
     let mut hb = HeartbeatState::new();
     let mut conn = Some(conn);
-    ccp.send_news_subscribe(756733, 3, "BRFG", 41, &mut conn, &mut hb);
+    ccp.send_news_subscribe(756733, 3, "STK", "BRFG", 41, &mut conn, &mut hb);
     let mut buf = [0u8; 4096];
     let _subscribe = peer.read(&mut buf).unwrap();
 

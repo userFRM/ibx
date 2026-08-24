@@ -149,6 +149,9 @@ pub enum ControlCommand {
         con_id: i64,
         /// The contract's ticker.
         symbol: String,
+        /// What kind of contract it is, as the venue states it. The
+        /// subscription carries it and the venue routes on it.
+        sec_type: String,
         /// Which news providers.
         providers: String,
         /// Where the engine sends the slot it registered.

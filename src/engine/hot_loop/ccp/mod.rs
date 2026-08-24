@@ -295,7 +295,7 @@ pub(crate) struct CcpState {
     /// caller asked for, and the contract. The providers are kept because a
     /// reconnect has to send the same request again, and the request is the
     /// only place they appear; the contract because the withdrawal names it.
-    pub(crate) news_subscriptions: Vec<(InstrumentId, u32, String, i64)>,
+    pub(crate) news_subscriptions: Vec<(InstrumentId, u32, String, i64, String)>,
     pub(crate) disconnected: bool,
     /// When to account for orders the reconnect did not explain.
     ///
@@ -1528,15 +1528,17 @@ impl CcpState {
         &mut self,
         con_id: i64,
         instrument: InstrumentId,
+        sec_type: &str,
         providers: &str,
         req_id: u32,
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        self.news_subscriptions.push((instrument, req_id, providers.to_string(), con_id));
+        self.news_subscriptions.push((instrument, req_id, providers.to_string(), con_id, sec_type.to_string()));
         if let Some(conn) = ccp_conn.as_mut() {
             let req_id_str = req_id.to_string();
             let con_id_str = (con_id as u32).to_string();
+            let stated_type = crate::control::contracts::sec_type_to_fix(sec_type).to_string();
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
@@ -1546,7 +1548,10 @@ impl CcpState {
                 (262, &req_id_str),
                 (6008, &con_id_str),
                 (207, "NEWS"),
-                (167, "CS"),
+                // What the contract is, as the venue states it. Stamped as a
+                // US stock, headlines for a future or an index went out
+                // describing something else.
+                (167, &stated_type),
                 (264, "292"),
                 (6472, providers),
             ]);
@@ -1590,7 +1595,7 @@ impl CcpState {
         let (req_id, con_id) =
             match self.news_subscriptions.iter().position(|(id, ..)| *id == instrument) {
                 Some(pos) => {
-                    let (_, rid, _, con_id) = self.news_subscriptions.remove(pos);
+                    let (_, rid, _, con_id, _) = self.news_subscriptions.remove(pos);
                     (rid, con_id)
                 }
                 None => return,
@@ -2245,10 +2250,10 @@ impl CcpState {
         // the connection reporting healthy the whole time.
         let stale = std::mem::take(&mut self.news_subscriptions);
         let wanted = stale.len();
-        for (instrument, req_id, providers, _) in stale {
+        for (instrument, req_id, providers, _, sec_type) in stale {
             match market.con_id(instrument) {
                 Some(con_id) => self.send_news_subscribe(
-                    con_id, instrument, &providers, req_id, ccp_conn, hb,
+                    con_id, instrument, &sec_type, &providers, req_id, ccp_conn, hb,
                 ),
                 None => log::warn!(
                     "CCP reconnect: instrument {instrument} has no contract id, \
