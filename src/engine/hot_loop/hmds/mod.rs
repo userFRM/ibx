@@ -240,10 +240,19 @@ impl HmdsState {
     /// Unanswered one-shot requests are failed here. Streaming subscriptions
     /// are restored on reconnect; one-shot requests are not, and only
     /// historical bars carry a timeout, so the rest would never complete.
-    pub(crate) fn disconnect(&mut self, hmds_conn: &mut Option<Connection>, shared: &SharedState) {
+    pub(crate) fn disconnect(
+        &mut self, hmds_conn: &mut Option<Connection>, shared: &SharedState,
+        event_tx: &Option<crate::engine::hot_loop::EventSink>,
+    ) {
         self.disconnected = true;
         *hmds_conn = None;
         self.fail_pending("the historical connection went away before the venue answered", shared);
+        // The venue says when this connection breaks, and a caller waiting on
+        // history has nothing else to read it from.
+        crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::VenueData {
+            which: crate::bridge::VenueDataConnection::Historical,
+            up: false,
+        });
     }
 
     /// Report every unanswered one-shot request as failed, and forget it.
@@ -349,7 +358,7 @@ impl HmdsState {
                     Ok(0) => {}
                     Err(e) => {
                         log::error!("HMDS connection lost: {e}");
-                        self.disconnect(hmds_conn, shared);
+                        self.disconnect(hmds_conn, shared, event_tx);
                         return;
                     }
                     Ok(n) => {

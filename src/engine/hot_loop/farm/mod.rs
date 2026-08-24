@@ -1934,7 +1934,7 @@ impl FarmState {
         }
     }
 
-    pub(crate) fn handle_disconnect(&mut self, context: &mut Context, _event_tx: &Option<EventSink>) {
+    pub(crate) fn handle_disconnect(&mut self, context: &mut Context, event_tx: &Option<EventSink>) {
         self.disconnected = true;
         // Anything the replay had not reached goes back where the next
         // reconnect looks for it. A subscription that was sent is recorded
@@ -1965,9 +1965,16 @@ impl FarmState {
         self.generic_tick_tags.clear();
         context.market.clear_server_tags();
         context.market.zero_all_quotes();
-        // Don't emit Event::Disconnected — auto-reconnect handles farm drops
-        // transparently.
-        // Python is only notified if reconnect exhausts retries.
+        // Not Event::Disconnected — that is the session going, and a rebuild
+        // usually takes this back without one. But the venue says when this
+        // connection breaks and a caller stands down on being told: the
+        // quotes it can read do not go anywhere when the connection carrying
+        // them does, so without this it goes on reading the last price before
+        // the drop as though it were still a price.
+        emit(event_tx, Event::VenueData {
+            which: crate::bridge::VenueDataConnection::MarketData,
+            up: false,
+        });
     }
 
     /// Test-only: set disconnected without clearing state or emitting events.

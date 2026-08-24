@@ -885,7 +885,7 @@ mod hmds_transport_tests {
         hmds.pending_fundamental.push(("fund".to_string(), 62));
         hmds.pending_ticks.push(("tk".to_string(), 63, "TRADES".to_string()));
 
-        hmds.disconnect(&mut conn, &shared);
+        hmds.disconnect(&mut conn, &shared, &None);
 
         let errors = shared.reference.drain_historical_errors();
         for req_id in [61, 62, 63] {
