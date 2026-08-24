@@ -34,11 +34,21 @@ fn main() {
         password: std::env::var("IB_PASSWORD").unwrap_or_default(),
         paper: true, ..Default::default() }).expect("session");
     println!("session open");
-    let c = Contract {
-        symbol: "MES".into(), sec_type: "FUT".into(), exchange: "CME".into(),
-        currency: "USD".into(),
-        last_trade_date_or_contract_month: "202709".into(), ..Default::default() };
+    // A name that is actually trading while this runs — the question cannot be
+    // answered on a contract that prints nothing.
+    let c = match std::env::var("IBX_SYMBOL").ok().as_deref() {
+        Some("MES") | None => Contract {
+            symbol: "MES".into(), sec_type: "FUT".into(), exchange: "CME".into(),
+            currency: "USD".into(),
+            last_trade_date_or_contract_month: "202709".into(), ..Default::default() },
+        Some(sym) => Contract {
+            symbol: sym.into(), sec_type: "STK".into(),
+            exchange: std::env::var("IBX_EXCH").unwrap_or_else(|_| "IBIS".into()),
+            currency: std::env::var("IBX_CCY").unwrap_or_else(|_| "EUR".into()),
+            ..Default::default() },
+    };
     let resolved = client.qualify_contract(&c).expect("named");
+    println!("  {} {} on {}", resolved.symbol, resolved.sec_type, resolved.exchange);
     let mut heard = Heard::default();
     for (req, kind) in [(1i64, "AllLast"), (2, "Last")] {
         let before = heard.ticks;
