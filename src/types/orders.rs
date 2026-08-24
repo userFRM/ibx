@@ -1342,21 +1342,29 @@ impl OrderBuffer {
     /// Nothing is dropped. The capacity is what a healthy backlog fits in, not
     /// a limit on what a caller may send: an order thrown away here would be
     /// one a caller was told nothing about, which is the one outcome an order
-    /// path cannot have. Past that size the buffer grows, and the assertion
-    /// says so in a debug build, because a backlog that deep means the
-    /// transport is not draining rather than that a caller is busy.
+    /// path cannot have. Past that size the buffer grows.
+    ///
+    /// It used to complain past that size in a debug build, on the grounds
+    /// that a backlog that deep meant the transport was not draining. It does
+    /// mean that, and this design puts it there on purpose twice: orders wait
+    /// here while the trading connection is down, to be sent when it returns,
+    /// and a batch held back during a recovery is put back at the head every
+    /// pass until the grace runs out. Both are the buffer working. The
+    /// complaint took the engine down mid-session for doing what it was built
+    /// to do, and once for a teardown that withdrew eighty-three orders at
+    /// once.
     pub fn push(&mut self, req: OrderRequest) {
-        debug_assert!(self.buf.len() < MAX_PENDING_ORDERS, "order buffer overflow");
         self.buf.push(req);
     }
 
     /// Put requests back at the head, ahead of anything queued since.
     ///
     /// Used where a batch was taken and part of it was not sent, so it waits
-    /// for the transport rather than being reported.
+    /// for the transport rather than being reported. Grows past the capacity
+    /// for the reason [`push`](Self::push) gives, and says nothing about it
+    /// for the same reason.
     pub fn requeue_front(&mut self, reqs: Vec<OrderRequest>) {
         if reqs.is_empty() { return; }
-        debug_assert!(self.buf.len() + reqs.len() <= MAX_PENDING_ORDERS, "order buffer overflow");
         self.buf.splice(0..0, reqs);
     }
 
@@ -1399,5 +1407,24 @@ fn order_buffer_no_realloc() {
     }
     // Capacity should not have grown (pre-allocated)
     assert_eq!(buf.buf.capacity(), cap_before);
+}
+
+/// A backlog deeper than the buffer was built for is what waiting for a
+/// transport looks like, and what a withdrawal of everything working looks
+/// like. It takes more room and keeps every request.
+#[test]
+fn a_backlog_past_the_capacity_keeps_everything() {
+    let mut buf = OrderBuffer::new();
+    for i in 0..MAX_PENDING_ORDERS * 2 {
+        buf.push(OrderRequest::Cancel { order_id: i as u64 });
+    }
+    buf.requeue_front((0..8).map(|i| OrderRequest::Cancel { order_id: 900 + i }).collect());
+    assert_eq!(buf.buf.len(), MAX_PENDING_ORDERS * 2 + 8);
+    let taken: Vec<_> = buf.drain().collect();
+    assert_eq!(taken.len(), MAX_PENDING_ORDERS * 2 + 8);
+    assert!(
+        matches!(taken[0], OrderRequest::Cancel { order_id: 900 }),
+        "what was put back goes at the head",
+    );
 }
 }
