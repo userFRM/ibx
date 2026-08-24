@@ -2287,7 +2287,7 @@ fn a_subscription_the_venue_never_names_is_reported() {
         strike: 0.0,
         right: String::new(),
         multiplier: String::new(),
-        mode_9887: 0,
+        mode_9887: 0, regulatory_snapshot: false,
     };
     ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new());
 
@@ -2324,7 +2324,7 @@ fn a_subscription_waits_for_the_lookup_that_names_its_contract() {
         strike: 0.0,
         right: String::new(),
         multiplier: String::new(),
-        mode_9887: 0,
+        mode_9887: 0, regulatory_snapshot: false,
     };
     ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new());
     let req_id = ccp.pending_md_subscribe[0].0;

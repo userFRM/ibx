@@ -364,7 +364,7 @@ mod resub_tests {
 
         farm.send_mktdata_subscribe(
             756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
-            &mut None, &mut hb,
+            false, &mut None, &mut hb,
         );
         farm.handle_disconnect(&mut context, &None);
         assert!(farm.instrument_md_reqs.is_empty(), "the disconnect clears the request list");
@@ -379,7 +379,7 @@ mod resub_tests {
         // so a later reconnect can retry rather than losing the subscription.
         let (id, con_id, sym, exch, st, ltd, k, r, m, mode) = targets.into_iter().next().unwrap();
         farm.send_mktdata_subscribe(
-            con_id, &sym, &exch, &st, &ltd, k, &r, &m, id, mode, &mut None, &mut hb,
+            con_id, &sym, &exch, &st, &ltd, k, &r, &m, id, mode, false, &mut None, &mut hb,
         );
         assert_eq!(farm.md_resub_info.len(), 1, "the record must survive an absent connection");
     }
@@ -397,7 +397,7 @@ mod resub_tests {
 
         farm.send_mktdata_subscribe(
             756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
-            &mut None, &mut hb,
+            false, &mut None, &mut hb,
         );
         farm.handle_disconnect(&mut context, &None);
         farm.send_mktdata_unsubscribe(instrument, &mut None, &mut hb);
@@ -423,7 +423,7 @@ mod resub_tests {
 
             farm.send_mktdata_subscribe(
                 756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
-                &mut None, &mut hb,
+                false, &mut None, &mut hb,
             );
             assert!(farm.holds_market_data(instrument), "subscribed: held");
 
@@ -687,7 +687,7 @@ fn tag_values(tags: &[(u32, String)], tag: u32) -> Vec<&str> {
 /// futures subscription, so bid/ask never arrives.
 #[test]
 fn conid_subscribe_describes_the_actual_contract() {
-    let fut = build_conid_subscribe_tags(true, 1, 2, 793356225, "CME", "FUT", 0, "T");
+    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T");
     assert_eq!(tag_values(&fut, 167), ["FUT", "FUT"], "SecurityType must say FUT");
     assert_eq!(tag_values(&fut, 207), ["CME", "CME"], "Exchange must say CME");
 
@@ -697,13 +697,56 @@ fn conid_subscribe_describes_the_actual_contract() {
     assert_eq!(tag_values(&fut, 146), ["2"]);
 }
 
+/// The chargeable snapshot is its own request type asked for under its own
+/// action: one entry whatever the feed, and no 9887 beside it, which selects
+/// between the feeds a stream is served from. Pinned because the venue names
+/// this type back when it refuses one for want of the entitlement, so the
+/// number is the venue's rather than this client's.
+#[test]
+fn the_chargeable_snapshot_is_its_own_request_type() {
+    let snap = build_conid_subscribe_tags(true, true, 1, 2, 265598, "SMART", "STK", 0, "T");
+    assert_eq!(
+        snap,
+        vec![
+            (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
+            (fix::TAG_SENDING_TIME, "T".to_string()),
+            (263, "3".to_string()),
+            (146, "1".to_string()),
+            (262, "1".to_string()),
+            (6008, "265598".to_string()),
+            (207, "BEST".to_string()),
+            (167, "CS".to_string()),
+            (264, "624".to_string()),
+            (6088, "Socket".to_string()),
+            (9830, "1".to_string()),
+            (9839, "1".to_string()),
+        ],
+    );
+
+    // And a feed named beside it does not turn it back into a stream.
+    let frozen = build_conid_subscribe_tags(false, true, 1, 2, 265598, "SMART", "STK", 2, "T");
+    assert_eq!(tag_values(&frozen, 264), ["624"]);
+    assert_eq!(tag_values(&frozen, 146), ["1"]);
+    assert!(tag_values(&frozen, 9887).is_empty(), "no feed is named beside it");
+}
+
+/// An ordinary snapshot is a subscription this client ends, not a request type
+/// of its own: the venue is asked to subscribe, exactly as for a stream, and
+/// the request is withdrawn once every kind a snapshot is made of has arrived.
+#[test]
+fn an_ordinary_snapshot_is_asked_for_as_a_subscription() {
+    let ordinary = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T");
+    assert_eq!(tag_values(&ordinary, 263), ["1"]);
+    assert_eq!(tag_values(&ordinary, 264), ["442", "443"]);
+}
+
 /// Stocks keep the exact wire shape they had before: SMART maps to BEST and
 /// STK to CS, so this path is unchanged for equities. Pinned as the whole
 /// ordered tag list rather than the two mapped tags, so a reordering or a
 /// dropped field is caught here too.
 #[test]
 fn conid_subscribe_is_unchanged_for_stocks() {
-    let stk = build_conid_subscribe_tags(true, 1, 2, 265598, "SMART", "STK", 0, "T");
+    let stk = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T");
     assert_eq!(
         stk,
         vec![
@@ -730,7 +773,7 @@ fn conid_subscribe_is_unchanged_for_stocks() {
         ],
     );
 
-    let delayed = build_conid_subscribe_tags(false, 1, 2, 265598, "SMART", "STK", 3, "T");
+    let delayed = build_conid_subscribe_tags(false, false, 1, 2, 265598, "SMART", "STK", 3, "T");
     assert_eq!(
         delayed,
         vec![
@@ -757,31 +800,31 @@ fn conid_subscribe_is_unchanged_for_stocks() {
 /// sending an empty SecurityType and Exchange would draw a partial ack.
 #[test]
 fn conid_subscribe_falls_back_when_the_contract_is_not_described() {
-    let bare = build_conid_subscribe_tags(true, 1, 2, 265598, "", "", 0, "T");
+    let bare = build_conid_subscribe_tags(true, false, 1, 2, 265598, "", "", 0, "T");
     assert_eq!(tag_values(&bare, 167), ["CS", "CS"]);
     assert_eq!(tag_values(&bare, 207), ["BEST", "BEST"]);
 
-    let described = build_conid_subscribe_tags(true, 1, 2, 265598, "SMART", "STK", 0, "T");
+    let described = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T");
     assert_eq!(bare, described, "an undescribed conId keeps the smart-routed stock shape");
 }
 
 /// Non-realtime modes collapse to a single TOP subscription carrying 9887.
 #[test]
 fn conid_subscribe_collapses_to_one_entry_when_not_realtime() {
-    let delayed = build_conid_subscribe_tags(false, 7, 8, 265598, "SMART", "STK", 3, "T");
+    let delayed = build_conid_subscribe_tags(false, false, 7, 8, 265598, "SMART", "STK", 3, "T");
     assert_eq!(tag_values(&delayed, 262), ["7"], "only the first req id is used");
     assert_eq!(tag_values(&delayed, 264), ["1"]);
     assert_eq!(tag_values(&delayed, 146), ["1"]);
     assert_eq!(tag_values(&delayed, 9887), ["3"], "delayed mode must be carried");
 
-    let realtime = build_conid_subscribe_tags(true, 7, 8, 265598, "SMART", "STK", 0, "T");
+    let realtime = build_conid_subscribe_tags(true, false, 7, 8, 265598, "SMART", "STK", 0, "T");
     assert!(tag_values(&realtime, 9887).is_empty(), "realtime carries no 9887");
 }
 
 /// Every entry must be self-contained: the server reads conId per entry.
 #[test]
 fn each_entry_carries_its_own_conid() {
-    let fut = build_conid_subscribe_tags(true, 1, 2, 793356225, "CME", "FUT", 0, "T");
+    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T");
     assert_eq!(tag_values(&fut, 6008), ["793356225", "793356225"]);
 
     let counts: HashMap<u32, usize> =
@@ -807,7 +850,7 @@ mod stale_ack_tests {
 
         farm.send_mktdata_subscribe(
             756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
-            &mut None, &mut hb,
+            false, &mut None, &mut hb,
         );
         let pending: Vec<u32> = farm.md_req_to_instrument.iter().map(|(r, _)| *r).collect();
         assert!(!pending.is_empty(), "the subscribe must register at least one request");
@@ -972,7 +1015,7 @@ mod price_scaling_tests {
         let mut hb = HeartbeatState::new();
         farm.send_mktdata_subscribe(
             805711629, "AAPL", "SMART", "OPT", "20260821", 220.0, "C", "100",
-            instrument, 0, &mut conn, &mut hb,
+            instrument, 0, false, &mut conn, &mut hb,
         );
         assert_eq!(farm.greeks_subs.len(), 1, "an option is worth modelling");
         let reqs = &farm.instrument_md_reqs.iter()
@@ -994,7 +1037,7 @@ mod price_scaling_tests {
             .try_register_contract(756733, "SPY", "STK", "SMART", "").unwrap();
         farm.send_mktdata_subscribe(
             756733, "SPY", "SMART", "STK", "", 0.0, "", "",
-            instrument, 0, &mut None, &mut HeartbeatState::new(),
+            instrument, 0, false, &mut None, &mut HeartbeatState::new(),
         );
         assert!(farm.greeks_subs.is_empty());
     }

@@ -650,7 +650,7 @@ impl HotLoop {
                     self.farm.send_mktdata_subscribe(
                         con_id, &p.symbol, &exchange, &sec_type,
                         &p.last_trade_date, p.strike, &p.right, &p.multiplier,
-                        p.instrument, p.mode_9887,
+                        p.instrument, p.mode_9887, p.regulatory_snapshot,
                         &mut self.farm_conn,
                         &mut self.hb,
                     );
@@ -807,7 +807,7 @@ impl HotLoop {
                 continue;
             };
             match cmd {
-                ControlCommand::Subscribe { contract, mode_9887, reply_tx } => {
+                ControlCommand::Subscribe { contract, mode_9887, regulatory_snapshot, reply_tx } => {
                     let ContractRef { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier } = contract;
                     // What tells two conId-less contracts on one underlying apart.
                     // Built by the same function an order uses, or the two
@@ -864,6 +864,7 @@ impl HotLoop {
                                         right: right.clone(),
                                         multiplier: multiplier.clone(),
                                         mode_9887,
+                                        regulatory_snapshot,
                                     },
                                     &mut self.ccp_conn,
                                     &mut self.hb,
@@ -874,7 +875,7 @@ impl HotLoop {
                                 self.farm.send_mktdata_subscribe(
                                     con_id, &symbol, &exchange, &sec_type,
                                     &last_trade_date, strike, &right, &multiplier,
-                                    id, mode_9887,
+                                    id, mode_9887, regulatory_snapshot,
                                     &mut self.farm_conn,
                                     &mut self.hb,
                                 );
@@ -3050,7 +3051,7 @@ mod tests {
                 strike: 0.0,
                 right: String::new(),
                 multiplier: String::new(),
-                mode_9887: 0,
+                mode_9887: 0, regulatory_snapshot: false,
             };
             match stage {
                 // Out on the wire, no answer yet.

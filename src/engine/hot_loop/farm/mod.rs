@@ -19,6 +19,7 @@ use super::{HeartbeatState, ReplayPacing, emit, fast_extract_msg_type, find_body
 /// than an error.
 fn build_conid_subscribe_tags(
     realtime: bool,
+    regulatory_snapshot: bool,
     bid_ask_id: u32,
     last_id: u32,
     con_id: i64,
@@ -51,19 +52,25 @@ fn build_conid_subscribe_tags(
     let fix_exchange = crate::control::contracts::exchange_to_fix(exchange);
     let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type);
 
-    // 146 = NoRelatedSym count: 2 entries for the realtime fan-out, 1 for TOP.
-    let mut tags: Vec<(u32, String)> = vec![
-        (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
-        (fix::TAG_SENDING_TIME, ts.to_string()),
-        (263, "1".to_string()),
-        (146, if realtime { "2" } else { "1" }.to_string()),
-    ];
-
-    let entries: &[(u32, &str)] = if realtime {
+    // The chargeable snapshot is a request type of its own and one entry. A
+    // stream is the realtime fan-out into BID_ASK and LAST, or the single TOP
+    // the delayed and frozen feeds are served on.
+    let entries: &[(u32, &str)] = if regulatory_snapshot {
+        &[(bid_ask_id, REGULATORY_SNAPSHOT_REQUEST_TYPE)]
+    } else if realtime {
         &[(bid_ask_id, "442"), (last_id, "443")]
     } else {
         &[(bid_ask_id, "1")]
     };
+    // 146 = NoRelatedSym: how many entries follow, counted rather than stated
+    // per shape, so a shape added here cannot state the wrong number.
+    let mut tags: Vec<(u32, String)> = vec![
+        (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
+        (fix::TAG_SENDING_TIME, ts.to_string()),
+        (263, if regulatory_snapshot { SNAPSHOT_ACTION } else { SUBSCRIBE_ACTION }.to_string()),
+        (146, entries.len().to_string()),
+    ];
+
     for (req_id, depth) in entries {
         tags.push((262, req_id.to_string()));
         tags.push((6008, con_id_str.clone()));
@@ -73,7 +80,10 @@ fn build_conid_subscribe_tags(
         tags.push((6088, "Socket".to_string()));
         tags.push((9830, "1".to_string()));
         tags.push((9839, "1".to_string()));
-        if !realtime {
+        // Named only where it selects between the feeds the venue serves a
+        // stream from. The chargeable snapshot is served from none of them and
+        // is asked for without it.
+        if !realtime && !regulatory_snapshot {
             tags.push((9887, mode_9887.to_string()));
         }
     }
@@ -206,6 +216,20 @@ fn build_trading_status_subscribe_tags(
         (9839, "1".to_string()),
     ]
 }
+
+/// The venue's chargeable one-shot snapshot, on tag 264.
+///
+/// A request type of its own rather than a mode on an ordinary quote: the
+/// venue names it `regsshot` when it refuses one, and an account without the
+/// entitlement is refused by name. It is asked for under the snapshot action
+/// below and never with a feed named beside it.
+const REGULATORY_SNAPSHOT_REQUEST_TYPE: &str = "624";
+
+/// Deliver the request once, on tag 263, in place of subscribing to it.
+const SNAPSHOT_ACTION: &str = "3";
+
+/// Open a subscription, on tag 263.
+const SUBSCRIBE_ACTION: &str = "1";
 
 /// The trading-status tick's own number, in place of a request type.
 const TRADING_STATUS_REQUEST_TYPE: u32 = 437;
@@ -1101,12 +1125,15 @@ impl FarmState {
         multiplier: &str,
         instrument: InstrumentId,
         mode_9887: i32,
+        regulatory_snapshot: bool,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
         // Realtime fans out into BID_ASK + LAST; frozen/delayed/delayed-frozen
-        // collapse to a single 264=1 (TOP) sub with 9887=mode_9887.
-        let realtime = mode_9887 == 0;
+        // collapse to a single 264=1 (TOP) sub with 9887=mode_9887. The
+        // chargeable snapshot is one entry whatever the feed, so it takes one
+        // id and has no second leg to route.
+        let realtime = mode_9887 == 0 && !regulatory_snapshot;
         let bid_ask_id = self.next_md_req_id;
         let last_id = self.next_md_req_id + 1;
         if realtime {
@@ -1114,6 +1141,7 @@ impl FarmState {
         } else {
             self.next_md_req_id += 1;
         }
+
 
         // An option is worth asking the venue to model. Anything else has no
         // volatility to imply, and the venue answers such a request with
@@ -1170,7 +1198,10 @@ impl FarmState {
                 self.instrument_md_reqs.push((instrument, reqs));
             }
         }
-        if self.md_resub_info.iter().all(|(id, ..)| *id != instrument) {
+        // A chargeable snapshot is not recorded for replay: the caller asked
+        // for the contract once, and a reconnect that re-sent it would deliver
+        // — and bill for — a second burst nobody asked for.
+        if !regulatory_snapshot && self.md_resub_info.iter().all(|(id, ..)| *id != instrument) {
             self.md_resub_info.push((instrument, symbol.to_string(), exchange.to_string(), sec_type.to_string(), last_trade_date.to_string(), strike, right.to_string(), multiplier.to_string(), mode_9887));
         }
 
@@ -1192,7 +1223,8 @@ impl FarmState {
             // as well so the server can resolve by description.
             if con_id > 0 {
                 let tags = build_conid_subscribe_tags(
-                    realtime, bid_ask_id, last_id, con_id, exchange, sec_type, mode_9887, &ts,
+                    realtime, regulatory_snapshot, bid_ask_id, last_id, con_id, exchange, sec_type,
+                    mode_9887, &ts,
                 );
                 let refs: Vec<(u32, &str)> =
                     tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
@@ -1242,10 +1274,12 @@ impl FarmState {
                 let mut tags: Vec<(u32, &str)> = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
                     (fix::TAG_SENDING_TIME, &ts),
-                    (263, "1"),
+                    (263, if regulatory_snapshot { SNAPSHOT_ACTION } else { SUBSCRIBE_ACTION }),
                     (146, no_related_sym),
                 ];
-                let entries: &[(&String, &str)] = if realtime {
+                let entries: &[(&String, &str)] = if regulatory_snapshot {
+                    &[(&bid_ask_str, REGULATORY_SNAPSHOT_REQUEST_TYPE)]
+                } else if realtime {
                     &[(&bid_ask_str, "442"), (&last_str, "443")]
                 } else {
                     &[(&bid_ask_str, "1")]
@@ -1263,7 +1297,7 @@ impl FarmState {
                     tags.push((6088, "Socket"));
                     tags.push((9830, "1"));
                     tags.push((9839, "1"));
-                    if !realtime { tags.push((9887, &mode_str)); }
+                    if !realtime && !regulatory_snapshot { tags.push((9887, &mode_str)); }
                 }
                 let _ = conn.send_fixcomp(&tags);
             }
@@ -2123,7 +2157,9 @@ impl FarmState {
             };
             self.send_mktdata_subscribe(
                 con_id, &sym, &exch, &st, &ltd, strike, &right, &mult, instrument, mode,
-                farm_conn, hb,
+                // Nothing replayed here is a snapshot: a one-shot is never
+                // written down for replay in the first place.
+                false, farm_conn, hb,
             );
         }
         self.replay_not_before =
