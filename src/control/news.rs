@@ -249,6 +249,50 @@ fn extract_zip_entry(data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// Read one `h:N=` row into a headline.
+///
+/// Split out so the reading can be checked on its own: the row is found by its
+/// time rather than counted from the left, because a headline may carry the
+/// delimiter.
+pub(crate) fn parse_news_payload_rows(value: &str) -> Option<NewsHeadline> {
+    let fields: Vec<&str> = value.split('|').collect();
+    let at_time = fields.iter().position(|f| is_a_time(f)).unwrap_or(1);
+    let headline_raw = fields[..at_time].join("|");
+    let mut parts: Vec<&str> = Vec::with_capacity(fields.len() - at_time + 1);
+    parts.push(headline_raw.as_str());
+    parts.extend_from_slice(&fields[at_time..]);
+    if parts.len() < 6 {
+        return None;
+    }
+    let raw = parts[0];
+    let headline = match raw.strip_prefix('{').and_then(|_| raw.find('}')) {
+        Some(i) => raw[i + 1..].to_string(),
+        None => raw.to_string(),
+    };
+    Some(NewsHeadline {
+        headline: unescape_venue_characters(&headline),
+        time: parts[1].to_string(),
+        article_id: parts[2].to_string(),
+        provider_code: parts[5].to_string(),
+    })
+}
+
+/// Whether a field is shaped like the time the venue stamps a headline with.
+///
+/// `yyyy-MM-dd HH:mm:ss.S`, which is what the reference client looks for when
+/// it works out where the headline ends.
+fn is_a_time(field: &str) -> bool {
+    let b = field.as_bytes();
+    b.len() >= 19
+        && b.len() <= 24
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[10] == b' '
+        && b[13] == b':'
+        && b[16] == b':'
+        && b[..4].iter().all(u8::is_ascii_digit)
+}
+
 /// Undo the escaping a Java properties file carries.
 ///
 /// The venue writes headlines into one, so a colon, an equals or a hash in a
@@ -386,30 +430,8 @@ pub fn parse_news_payload(raw: &[u8]) -> (Vec<NewsHeadline>, bool) {
             let key = &unescaped[..eq_pos];
             if key.starts_with("h:") && key[2..].parse::<u32>().is_ok() {
                 let value = &unescaped[eq_pos + 1..];
-                // Parse pipe-delimited:
-                // headline|time|articleId|status|hasContent|providerCode|conIds..
-                let parts: Vec<&str> = value.split('|').collect();
-                if parts.len() >= 6 {
-                    let raw = parts[0];
-                    let headline = if raw.starts_with('{') {
-                        match raw.find('}') {
-                            Some(i) => raw[i + 1..].to_string(),
-                            None => raw.to_string(),
-                        }
-                    } else {
-                        raw.to_string()
-                    };
-                    // With the characters the venue escaped put back. It
-                    // writes anything outside plain ASCII that way, so a
-                    // headline in any language but English arrived wearing
-                    // the escapes.
-                    let headline = unescape_venue_characters(&headline);
-                    headlines.push(NewsHeadline {
-                        headline,
-                        time: parts[1].to_string(),
-                        article_id: parts[2].to_string(),
-                        provider_code: parts[5].to_string(),
-                    });
+                if let Some(row) = parse_news_payload_rows(value) {
+                    headlines.push(row);
                 }
             }
         }
@@ -697,5 +719,34 @@ mod escaping_tests {
             unescape_venue_characters("plain ASCII passes"), "plain ASCII passes",
             "and nothing is done where there is nothing to do",
         );
+    }
+}
+
+#[cfg(test)]
+mod row_tests {
+    use super::parse_news_payload_rows;
+
+    /// A headline may carry the delimiter. Counted from the left, the rest of
+    /// it is read as the time, the time as the article and so on — every field
+    /// wrong and none of them empty. Found by the time instead, it cannot
+    /// shift.
+    #[test]
+    fn a_headline_carrying_the_delimiter_does_not_shift_the_rest() {
+        let row = "Apple|Google merger talks|2026-08-24 09:11:24.0|ART1|200|1|DJ-N|1234";
+        let got = parse_news_payload_rows(row).expect("a row is read");
+        assert_eq!(got.headline, "Apple|Google merger talks");
+        assert_eq!(got.time, "2026-08-24 09:11:24.0");
+        assert_eq!(got.article_id, "ART1");
+        assert_eq!(got.provider_code, "DJ-N");
+    }
+
+    /// The ordinary shape still reads as it did.
+    #[test]
+    fn a_headline_without_one_reads_as_before() {
+        let row = "Plain headline|2026-08-24 09:11:24.0|ART2|200|1|BZ|99";
+        let got = parse_news_payload_rows(row).expect("a row is read");
+        assert_eq!(got.headline, "Plain headline");
+        assert_eq!(got.time, "2026-08-24 09:11:24.0");
+        assert_eq!(got.provider_code, "BZ");
     }
 }

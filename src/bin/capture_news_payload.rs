@@ -16,12 +16,29 @@ use ibx::api::wrapper::Wrapper;
 #[derive(Default)]
 struct Heard {
     lines: Vec<String>,
+    rows: usize,
+    misread: usize,
 }
 
 impl Wrapper for Heard {
     fn historical_news(
         &mut self, req_id: i64, time: &str, provider: &str, article_id: &str, headline: &str,
     ) {
+        // The row is split on a delimiter and read by position. The vendor
+        // finds the date first and treats everything before it as the
+        // headline, precisely because a headline may contain the delimiter.
+        // A time that is not a time is that going wrong.
+        let time_is_a_time = time.len() >= 16
+            && time.as_bytes()[4] == b'-' && time.as_bytes()[7] == b'-'
+            && time.as_bytes()[10] == b' ' && time.as_bytes()[13] == b':';
+        if !time_is_a_time {
+            self.misread += 1;
+            self.lines.push(format!(
+                "  MISREAD {req_id}: time={time:?} provider={provider:?} id={article_id:?}\n           headline={headline:?}"
+            ));
+            return;
+        }
+        self.rows += 1;
         self.lines.push(format!(
             "  parsed {req_id}: time={time:?} provider={provider:?} id={article_id:?}\n           headline={headline:?}"
         ));
@@ -62,7 +79,7 @@ fn main() {
     };
 
     let mut heard = Heard::default();
-    if let Err(e) = client.req_historical_news(9001, resolved.con_id, &providers, "", "", 10) {
+    if let Err(e) = client.req_historical_news(9001, resolved.con_id, &providers, "", "", 250) {
         println!("  refused before sending: {e}");
         return;
     }
@@ -73,6 +90,7 @@ fn main() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
+    println!("\n  {} rows read, {} where the fields did not line up", heard.rows, heard.misread);
     println!("\n[the answer as it arrived]");
     let mut shown = 0;
     for (conn, hex) in client.unread_wire() {
