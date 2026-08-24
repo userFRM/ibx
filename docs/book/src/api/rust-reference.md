@@ -1021,7 +1021,7 @@ pub fn quote_by_instrument(&self, instrument: InstrumentId) -> Option<Quote>
 
 #### `req_historical_data`
 
-Request historical data.
+Request historical data. With `keep_up_to_date`, the bar still forming is folded here from the stream the venue sends, and it opens on a whole multiple of its own length counted from the epoch. For every size up to an hour that is the clock boundary a caller expects. For `1 day` it is midnight UTC, which is the trading day of an instrument that trades around the clock and is the middle of the evening for one that does not — a US listing's forming daily bar opens in its after-hours session and spans two of them. Bars already closed are the venue's own and are not folded here.
 
 ```rust
 pub fn req_historical_data( &self, req_id: i64, contract: &Contract, end_date_time: &str, duration: &str, bar_size: &str, what_to_show: &str, use_rth: bool, format_date: i32, keep_up_to_date: bool, ) -> Result<(), Refusal>

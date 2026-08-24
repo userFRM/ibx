@@ -567,11 +567,24 @@ fn single_tick_payload(low_ticks: u32, volume: u32) -> Vec<u8> {
     stream.chunks(4).flat_map(|c| c.iter().rev().copied()).collect()
 }
 
+/// A bar's volume is a count of the increment the venue said this
+/// contract's sizes move in, the same as a size on the quote and
+/// tick-by-tick streams. Counted as whole units, one instrument reported
+/// two different volumes depending on which stream it was read from.
+#[test]
+fn a_bars_volume_counts_the_contracts_size_increment() {
+    let payload = single_tick_payload(15_000, 100);
+    let whole = decode_bar_payload(&payload, 0.01, 1.0).expect("it decodes");
+    let counted = decode_bar_payload(&payload, 0.01, 0.5).expect("it decodes");
+    assert_eq!(counted.volume, whole.volume * 0.5, "the count is in the venue's unit");
+}
+
+
 #[test]
 fn decode_bar_payload_single_tick() {
     // Count of one, so the bar collapses to a single price: 15000 ticks of a
     // cent is 150.00, and the volume is stated in the narrow field.
-    let bar = decode_bar_payload(&single_tick_payload(15_000, 100), 0.01)
+    let bar = decode_bar_payload(&single_tick_payload(15_000, 100), 0.01, 1.0)
         .expect("a whole payload decodes");
     assert_eq!(bar.count, 1);
     assert!((bar.low - 150.00).abs() < 1e-9, "{bar:?}");
@@ -580,7 +593,7 @@ fn decode_bar_payload_single_tick() {
     assert!((bar.close - 150.00).abs() < 1e-9, "{bar:?}");
     assert!((bar.volume - 100.0).abs() < 1e-9, "{bar:?}");
 
-    assert!(decode_bar_payload(&[], 0.01).is_none());
+    assert!(decode_bar_payload(&[], 0.01, 1.0).is_none());
 }
 
 /// A read past the end of the payload takes zeroes, and so does every field
@@ -591,7 +604,7 @@ fn a_bar_payload_cut_short_is_not_decoded() {
     let whole = single_tick_payload(15_000, 100);
     for cut in 1..whole.len() {
         assert!(
-            decode_bar_payload(&whole[..cut], 0.01).is_none(),
+            decode_bar_payload(&whole[..cut], 0.01, 1.0).is_none(),
             "{cut} of {} bytes decoded into a bar", whole.len(),
         );
     }
@@ -706,7 +719,7 @@ mod tick_data_type_tests {
             payload.extend_from_slice(&c);
         }
 
-        let bar = super::super::decode_bar_payload(&payload, min_tick).unwrap();
+        let bar = super::super::decode_bar_payload(&payload, min_tick, 1.0).unwrap();
         assert_eq!(bar.count, 1);
         assert!((bar.low - 10.0).abs() < 1e-9);    // 1000 * 0.01
         assert!((bar.open - bar.low).abs() < 1e-9);
@@ -761,7 +774,7 @@ mod tick_data_type_tests {
             payload.extend_from_slice(&c);
         }
 
-        let bar = super::super::decode_bar_payload(&payload, min_tick).unwrap();
+        let bar = super::super::decode_bar_payload(&payload, min_tick, 1.0).unwrap();
         assert_eq!(bar.count, 5);
         let low = 2000.0 * min_tick; // 20.00
         assert!((bar.low - low).abs() < 1e-9);

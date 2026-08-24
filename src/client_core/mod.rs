@@ -2420,6 +2420,15 @@ impl ClientCore {
             };
             let unit_value = if pi.market_value != 0 {
                 pi.market_value as f64 / PRICE_SCALE_F
+            } else if position_is_multiplied(&pi) {
+                // The venue states a value that already carries the contract's
+                // multiplier and a price that does not. With no value stated,
+                // multiplying the quantity by the price alone values a
+                // multiplied contract at a hundredth of what it is worth — and
+                // that is the branch an update carrying only the price takes,
+                // because an absent value reads as zero. Both neighbours here
+                // test for this; this one did not.
+                continue;
             } else {
                 qty_now * price_now as f64 / PRICE_SCALE_F
             };
@@ -3517,13 +3526,18 @@ impl ClientCore {
                 // Optional initial stop trigger (tag 6117); default f64::MAX = unset.
                 let trail_stop = if order.trail_stop_price == f64::MAX { 0 } else { crate::types::price_from_f64(order.trail_stop_price) };
                 if order.trailing_percent > 0.0 {
-                    // Wire granularity is basis points (2 decimal places): a
-                    // trailing_percent with finer precision than that, e.g.
-                    // 1.239, truncates to 1.23. validate_order has already
-                    // confirmed the value is finite, non-negative and fits
-                    // u32 once scaled; this is a documented rounding, not a
-                    // coercion.
-                    let pct = (order.trailing_percent * 100.0) as u32;
+                    // Wire granularity is basis points, so a percentage
+                    // stated finer than that is put on the nearest one.
+                    // Rounded rather than cut: a hundredth of a per cent is
+                    // not exactly a double, and 0.29 times a hundred is
+                    // 28.999999999999996, so cutting sends 0.28 for a figure
+                    // the wire can carry exactly. Five hundred and
+                    // seventy-three of the ten thousand basis points went out
+                    // a point low. This is the hazard `price_from_f64` names
+                    // and rounds for on the price path. validate_order has
+                    // already confirmed the value is finite, non-negative and
+                    // fits u32 once scaled.
+                    let pct = (order.trailing_percent * 100.0).round() as u32;
                     ex(OrderKind::TrailPct { trail_pct: pct, trail_stop_price: trail_stop })
                 } else {
                     let trail = crate::types::price_from_f64(order.aux_price);

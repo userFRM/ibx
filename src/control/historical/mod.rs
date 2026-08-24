@@ -860,7 +860,11 @@ pub fn build_realtime_bar_xml(
 ///
 /// Uses LSB-first bit reader with 4-byte group reversal.
 /// Returns (low, open, high, close, volume, wap, count) or None.
-pub fn decode_bar_payload(payload: &[u8], min_tick: f64) -> Option<crate::types::RealTimeBar> {
+pub fn decode_bar_payload(
+    payload: &[u8],
+    min_tick: f64,
+    size_tick: f64,
+) -> Option<crate::types::RealTimeBar> {
     if payload.is_empty() {
         return None;
     }
@@ -943,12 +947,16 @@ pub fn decode_bar_payload(payload: &[u8], min_tick: f64) -> Option<crate::types:
         wap_sum = 0.0;
     }
 
-    // Volume: 1-bit flag selects width
-    let volume = if read_bits(&mut pos, 1) == 1 {
+    // Volume: 1-bit flag selects width. A count of the increment the venue
+    // said this contract's sizes move in, the same as a size on the quote and
+    // tick-by-tick streams — where it was left as a whole number, one
+    // instrument reported two different volumes.
+    let counted = if read_bits(&mut pos, 1) == 1 {
         read_bits(&mut pos, 16) as f64
     } else {
         read_bits(&mut pos, 32) as f64
     };
+    let volume = counted * size_tick;
 
     let wap = if count > 1 && volume > 0.0 {
         low + wap_sum * min_tick / volume
