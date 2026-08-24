@@ -286,7 +286,12 @@ impl Drop for EClient {
     fn drop(&mut self) {
         // Ensure the hot-loop thread is stopped and joined.
         let _ = self.control_tx.send(ControlCommand::Shutdown);
-        if let Some(h) = self.thread.lock().unwrap().take() {
+        // Taken out before the join, not across it: the guard in an `if let`
+        // scrutinee lives to the end of the body, and a second thread reaching
+        // here would wait on this lock for as long as the engine takes to
+        // stop — with no bound on that wait if the engine is wedged.
+        let running = self.thread.lock().unwrap().take();
+        if let Some(h) = running {
             let _ = h.join();
         }
     }
@@ -583,7 +588,12 @@ impl EClient {
         // The session is ending, so the venue is told before the engine stops.
         let _ = self.control_tx.send(ControlCommand::Logout);
         let _ = self.control_tx.send(ControlCommand::Shutdown);
-        if let Some(h) = self.thread.lock().unwrap().take() {
+        // Taken out before the join, not across it: the guard in an `if let`
+        // scrutinee lives to the end of the body, and a second thread reaching
+        // here would wait on this lock for as long as the engine takes to
+        // stop — with no bound on that wait if the engine is wedged.
+        let running = self.thread.lock().unwrap().take();
+        if let Some(h) = running {
             let _ = h.join();
         }
         self.connected.store(false, Ordering::Release);
