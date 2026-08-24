@@ -755,6 +755,12 @@ impl HmdsState {
                         }
                         "10005" => {
                             let payload = parsed.get(&6118);
+                            // What the venue actually states per row, which is
+                            // the only way to tell a field it does not send
+                            // from one this client does not read.
+                            if let Some(xml) = payload {
+                                log::debug!("scan response payload: {xml}");
+                            }
                             if payload.is_none() {
                                 log::warn!("scan response carried no payload (msg_len={})", msg.len());
                             }
@@ -765,11 +771,14 @@ impl HmdsState {
                                             None
                                         })
                                     && let Some(req_id) = self.scanner_answered(xml) {
-                                        // ScanResponse only carries con_ids; contract
-                                        // metadata must be
-                                        // resolved via 35=c on CCP. Park results with
-                                        // cache-miss con_ids
-                                        // for the engine to enrich before dispatch.
+                                        // A row is a contract id and the time it
+                                        // entered the scan, and nothing else —
+                                        // measured on the wire, not assumed — so
+                                        // everything a caller reads about the
+                                        // contract is resolved on the trading
+                                        // connection. Results whose ids are not
+                                        // cached are parked for the engine to
+                                        // enrich before they are handed over.
                                         let any_cold = result.entries.iter().any(|e| {
                                             e.con_id != 0
                                                 && shared.reference.get_contract(e.con_id as i64).is_none()
