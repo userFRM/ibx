@@ -1614,9 +1614,12 @@ pub struct ContractDetails {
     pub size_increment: f64,
     /// What the venue suggests trading in.
     ///
-    /// Zero unless the venue states one. It is a figure of its own, not the
-    /// smallest tradeable amount, and reporting the one under the other's name
-    /// would be this client's suggestion rather than the venue's.
+    /// A figure of its own, which the reference client works out from the
+    /// contract's market rule and its security definition. This client does
+    /// not do that arithmetic and stands it on `size_increment` instead, which
+    /// is what the reference client's own record does where nothing separate
+    /// was stated. Not the same thing as deriving it, and closer than leaving
+    /// it empty, which no reference client does.
     pub suggested_size_increment: f64,
     /// How many decimal places its prices carry.
     pub last_price_precision: f64,
