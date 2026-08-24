@@ -233,6 +233,24 @@ pub fn option_price(
     )
 }
 
+/// Why an answer to a hypothetical carries no greeks.
+///
+/// The reference client's own calculator works them out for the contract as
+/// asked about, and sends them beside the answer — the ones the venue streams
+/// belong to the volatility the venue used, not the one a caller asked with.
+/// So this is a real gap, and it is left open rather than filled badly.
+///
+/// Taking them off this tree was tried and measured against the venue's own,
+/// on contracts it was streaming at the time. Far enough into the money they
+/// land exactly — delta 0.999959 against 0.999959. Near the money they do not:
+/// 1.000112 against 0.998395, and a gamma of nothing against 0.000107. The
+/// step a derivative is taken over has to be small beside how far the option
+/// is from its strike and large beside the tree's own spacing, and near the
+/// money there is little room between those. That is a numerical question
+/// this has one sample to answer, on a contract whose pricing already has a
+/// gap of its own, and a delta that is wrong where delta matters is worse than
+/// none.
+
 /// Find where a rising function crosses zero, between two bounds.
 ///
 /// Bisection rather than anything faster: it cannot run away from a bad
