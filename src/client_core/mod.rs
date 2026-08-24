@@ -3614,14 +3614,6 @@ impl ClientCore {
             .market
             .option_model(instrument)
             .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
-        let years = years_to_expiry(&contract.last_trade_date_or_contract_month)
-            .ok_or_else(|| "the contract states no expiry to measure from".to_string())?;
-        let terms = crate::control::option_model::OptionTerms {
-            strike: contract.strike,
-            years_to_expiry: years,
-            is_call: contract.right.eq_ignore_ascii_case("C")
-                || contract.right.eq_ignore_ascii_case("CALL"),
-        };
         // What the venue did not state is not a number. It writes the largest
         // double where it has nothing to say, which this client passes on
         // as-is because the reference client does — so it has to be read back
@@ -3629,6 +3621,30 @@ impl ClientCore {
         // contract with no dividend had the largest double in the world
         // subtracted from its underlying.
         let stated_or_none = |v: f64| (v.is_finite() && v != f64::MAX).then_some(v);
+        // How long the contract has left, as the venue says it on the same
+        // statement as the rest of its model — carried to the fraction, the
+        // hours of the last day included. Counted here instead, from whole
+        // days off this machine's clock, a contract expiring today has none
+        // left and is refused, and so is every contract from the evening
+        // before its expiry, because the clock has already turned over in
+        // UTC. The venue's own count says 0.73 of a day where this said none.
+        //
+        // Its basis is 365: the daily rate it states beside this divides the
+        // annual one by 365 exactly.
+        let years = match stated_or_none(stated.cal_days) {
+            Some(days) if days > 0.0 => days / 365.0,
+            // Where it stated none, back to counting — a contract with hours
+            // left still reads as expired, which is the old behaviour and not
+            // worse than refusing outright.
+            _ => years_to_expiry(&contract.last_trade_date_or_contract_month)
+                .ok_or_else(|| "the contract states no expiry to measure from".to_string())?,
+        };
+        let terms = crate::control::option_model::OptionTerms {
+            strike: contract.strike,
+            years_to_expiry: years,
+            is_call: contract.right.eq_ignore_ascii_case("C")
+                || contract.right.eq_ignore_ascii_case("CALL"),
+        };
         let model = crate::control::option_model::VenueModel {
             volatility: stated_or_none(stated.implied_vol)
                 .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,

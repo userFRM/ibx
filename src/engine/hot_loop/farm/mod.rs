@@ -461,7 +461,7 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
     let _forward_coeff = next(flags & FORWARD_COEFF != 0);
     let und_price = next(flags & UNDERLYING_PRICE != 0);
     let implied_vol = next(flags & IMPLIED_VOL != 0);
-    let _calendar_days = next(flags & CALENDAR_DAYS != 0);
+    let cal_days = next(flags & CALENDAR_DAYS != 0);
     let _daily_rate = next(flags & DAILY_RATE != 0);
     let _model_yield = next(flags & MODEL_YIELD != 0);
     let _bridge_yield = next(flags & BRIDGE_YIELD != 0);
@@ -480,6 +480,7 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
         vega,
         theta,
         und_price,
+        cal_days,
     })
 }
 
