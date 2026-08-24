@@ -841,12 +841,16 @@ impl HmdsState {
                                 } else {
                                     xml.clone()
                                 };
-                                // Oldest first. Every fundamentals query goes
-                                // out under the single name its cancel also
-                                // uses, so two in flight are indistinguishable
-                                // on the wire.
-                                if !self.pending_fundamental.is_empty() {
-                                    let (_, req_id) = self.pending_fundamental.remove(0);
+                                // Under the name the venue echoes, which is
+                                // this request's own. Taken oldest-first
+                                // instead, two in flight were indistinguishable
+                                // and either answer went to whichever had
+                                // waited longest.
+                                let echoed = crate::control::fundamental::echoed_query_id(xml);
+                                let at = self.pending_fundamental.iter()
+                                    .position(|(qid, _)| *qid == echoed);
+                                if let Some(at) = at {
+                                    let (_, req_id) = self.pending_fundamental.remove(at);
                                     shared.reference.push_fundamental_data(req_id, data);
                                 } else {
                                     shared.market.note_unread_wire(
@@ -1488,15 +1492,20 @@ impl HmdsState {
             super::push_hmds_error(shared, req_id, told, false);
             return;
         };
+        // Its own name, which the venue echoes on the answer. The name was
+        // worked out here and then not sent: every request went out under one
+        // constant, so two in flight could only be told apart by which had
+        // waited longer.
+        let query_id = crate::control::fundamental::fundamentals_query_id(self.next_hmds_query_id);
+        self.next_hmds_query_id += 1;
         let req = crate::control::fundamental::FundamentalRequest {
             con_id,
             sec_type: described.sec_type.clone(),
             currency: described.currency.clone(),
             report_type: rt,
+            query_id: query_id.clone(),
         };
         let xml = crate::control::fundamental::build_fundamental_request_xml(&req);
-        let query_id = format!("fund_{}", self.next_hmds_query_id);
-        self.next_hmds_query_id += 1;
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
@@ -1525,13 +1534,16 @@ impl HmdsState {
         // list. That list is emptied by the first response the venue sends,
         // which is not the same moment the venue stops serving it — so gating
         // the withdrawal on it sent nothing in the case that actually leaks.
-        if let Some(pos) = self.pending_fundamental.iter().position(|(_, rid)| *rid == req_id) {
-            self.pending_fundamental.remove(pos);
-        }
+        // Withdrawn under the name it went out with, which is its own.
+        let named = self.pending_fundamental.iter()
+            .position(|(_, rid)| *rid == req_id)
+            .map(|pos| self.pending_fundamental.remove(pos).0);
         let Some(conn) = hmds_conn.as_mut() else { return };
-        let xml = crate::control::xml::cancel_query(
-            crate::control::fundamental::FUNDAMENTALS_QUERY_ID,
-        );
+        let Some(query_id) = named else {
+            log::debug!("fundamentals withdrawal for req_id={req_id}, which is not waiting");
+            return;
+        };
+        let xml = crate::control::xml::cancel_query(&query_id);
         let ts = chrono_free_timestamp();
         let _ = conn.send_fix(&[
             (fix::TAG_MSG_TYPE, "U"),

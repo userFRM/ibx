@@ -704,12 +704,18 @@ mod hmds_correlation_tests {
         let shared = SharedState::new();
         let mut hb = HeartbeatState::new();
         let mut conn: Option<Connection> = None;
-        hmds.pending_fundamental.push(("fund_1".to_string(), 51));
+        let named = crate::control::fundamental::fundamentals_query_id(1);
+        hmds.pending_fundamental.push((named.clone(), 51));
 
         // Tag 95 states the length, which frames a payload containing SOH
-        // bytes.
+        // bytes. The answer names the request that asked, which is how it is
+        // matched.
         let mut msg = Vec::new();
-        msg.extend_from_slice(b"35=U\x016040=10012\x016118=<FundamentalsResponse/>\x0195=");
+        msg.extend_from_slice(b"35=U\x016040=10012\x016118=");
+        msg.extend_from_slice(
+            format!("<FundamentalsResponse><id>{named}</id></FundamentalsResponse>").as_bytes(),
+        );
+        msg.extend_from_slice(b"\x0195=");
         msg.extend_from_slice(compressed.len().to_string().as_bytes());
         msg.extend_from_slice(b"\x0196=");
         msg.extend_from_slice(&compressed);
