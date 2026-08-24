@@ -1042,6 +1042,36 @@ impl HmdsState {
 
 
 
+/// The query that opens one tick stream.
+///
+/// Every element is named for the field the venue's own query holds it in,
+/// without its prefix, and one it has not been given is left out rather than
+/// sent empty.
+fn build_tbt_query(
+    req_id: u32,
+    con_id: i64,
+    venue: &str,
+    stype: &str,
+    tbt_type_str: &str,
+) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+         <ListOfQueries>\
+         <Query>\
+         <id>tbt_{req_id}</id>\
+         <contractID>{con_id}</contractID>\
+         <exchange>{venue}</exchange>\
+         <secType>{stype}</secType>\
+         <expired>no</expired>\
+         <type>TickData</type>\
+         <refresh>ticks</refresh>\
+         <data>{tbt_type_str}</data>\
+         <source>API</source>\
+         </Query>\
+         </ListOfQueries>"
+    )
+}
+
     pub(crate) fn send_tbt_subscribe(
         &mut self,
         // What the caller numbered this request, which every record it
@@ -1082,22 +1112,12 @@ impl HmdsState {
         // description that was not its own.
         let venue = hist_exchange(exchange);
         let stype = hist_sec_type(sec_type);
-        let xml = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
-             <ListOfQueries>\
-             <Query>\
-             <id>tbt_{req_id}</id>\
-             <contractID>{con_id}</contractID>\
-             <exchange>{venue}</exchange>\
-             <secType>{stype}</secType>\
-             <expired>no</expired>\
-             <type>TickData</type>\
-             <refresh>ticks</refresh>\
-             <data>{tbt_type_str}</data>\
-             <source>API</source>\
-             </Query>\
-             </ListOfQueries>"
-        );
+        // The changes that move only the size, left out where the caller asked
+        // for them to be. Named the way every other element of this query is —
+        // the field the query holds it in, without its prefix — and left out
+        // entirely where nothing asked for it, which is what the venue's own
+        // query does with a filter it has not been given.
+        let xml = Self::build_tbt_query(req_id, con_id, &venue, &stype, tbt_type_str);
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
@@ -1121,7 +1141,7 @@ impl HmdsState {
             min_tick: min_tick_scaled,
             size_tick: 0.0,
             running: Default::default(),
-        });
+                });
     }
 
     pub(crate) fn send_tbt_unsubscribe(
