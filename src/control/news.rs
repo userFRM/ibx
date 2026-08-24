@@ -249,6 +249,93 @@ fn extract_zip_entry(data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// Undo the escaping a Java properties file carries.
+///
+/// The venue writes headlines into one, so a colon, an equals or a hash in a
+/// value arrives with a backslash before it. Only the first two were undone,
+/// and a hash reached callers still wearing it — which is every headline
+/// carrying a character the venue escapes, because it writes those as
+/// `&#xNN;` and the hash in that is escaped in turn.
+fn unescape_properties(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            // A backslash before anything else is the escape rather than part
+            // of the value: a colon, an equals, a hash, a space, a backslash.
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Put back the characters the venue escapes out of a headline.
+///
+/// It writes anything outside plain ASCII as `&#xNN;`, a byte at a time, so a
+/// word with an accent in it arrives as a run of them. The reference client
+/// reads them back — it carries the pattern for exactly this. Left alone, a
+/// caller reading a headline in any language but English got the escapes.
+fn unescape_venue_characters(text: &str) -> String {
+    // Nothing escaped, nothing to put back.
+    if !text.contains('&') {
+        return text.to_string();
+    }
+    let raw = text.as_bytes();
+    let mut bytes: Vec<u8> = Vec::with_capacity(raw.len());
+    let mut at = 0usize;
+    while at < raw.len() {
+        let taken = raw[at..].starts_with(b"&#x")
+            .then(|| raw[at + 3..].iter().position(|b| *b == b';'))
+            .flatten()
+            .filter(|end| *end > 0)
+            .and_then(|end| {
+                let hex = std::str::from_utf8(&raw[at + 3..at + 3 + end]).ok()?;
+                let value = u32::from_str_radix(hex, 16).ok()?;
+                Some((value, 3 + end + 1))
+            });
+        match taken {
+            // Up to a byte it is one, which is how the venue writes a
+            // character outside ASCII: several of them, one per byte, and
+            // reading each as a character of its own turns a word into
+            // nonsense. Past a byte it is the character itself.
+            Some((value, width)) if value <= 0xFF => {
+                bytes.push(value as u8);
+                at += width;
+            }
+            Some((value, width)) => {
+                match char::from_u32(value) {
+                    Some(c) => {
+                        let mut buf = [0u8; 4];
+                        bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    }
+                    None => bytes.extend_from_slice(&raw[at..at + width]),
+                }
+                at += width;
+            }
+            None => { bytes.push(raw[at]); at += 1; }
+        }
+    }
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    // And the five it names rather than numbers.
+    if text.contains('&') {
+        return text
+            .replace("&apos;", "'")
+            .replace("&quot;", "\"")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&");
+    }
+    text
+}
+
 /// Parse historical news headlines from the binary payload in tag 96.
 ///
 /// Format: "200\n" + offset_table + ZIP(ENTRY with Java Properties)
@@ -285,7 +372,7 @@ pub fn parse_news_payload(raw: &[u8]) -> (Vec<NewsHeadline>, bool) {
             continue; // Skip Java Properties comments and blank lines
         }
         // Java Properties: unescape `\:` → `:`, `\=` → `=`
-        let unescaped = line.replace("\\:", ":").replace("\\=", "=");
+        let unescaped = unescape_properties(line);
         if unescaped.starts_with("has_more=") {
             // The venue states this as a number and the reference client
             // compares it to "1". Matched against the word instead, a page
@@ -312,6 +399,11 @@ pub fn parse_news_payload(raw: &[u8]) -> (Vec<NewsHeadline>, bool) {
                     } else {
                         raw.to_string()
                     };
+                    // With the characters the venue escaped put back. It
+                    // writes anything outside plain ASCII that way, so a
+                    // headline in any language but English arrived wearing
+                    // the escapes.
+                    let headline = unescape_venue_characters(&headline);
                     headlines.push(NewsHeadline {
                         headline,
                         time: parts[1].to_string(),
@@ -408,8 +500,7 @@ pub fn parse_article_payload(raw: &[u8]) -> Option<(i32, String)> {
 
     for line in text.lines() {
         let line = line.trim();
-        // Java Properties: unescape \: and \=
-        let unescaped = line.replace("\\:", ":").replace("\\=", "=");
+        let unescaped = unescape_properties(line);
         if let Some(val) = unescaped.strip_prefix("b=") {
             body_encoded = Some(val.to_string());
         }
@@ -577,5 +668,34 @@ mod tests {
             }
         }
         !crc
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::{unescape_properties, unescape_venue_characters};
+
+    /// The venue writes headlines into a properties file, so a hash inside one
+    /// arrives escaped — and every character it writes as `&#xNN;` carries a
+    /// hash. Undoing only the colon and the equals left every such headline
+    /// wearing its own escaping.
+    #[test]
+    fn a_hash_inside_a_headline_is_unescaped_like_the_rest() {
+        assert_eq!(unescape_properties(r"d&\#xC3;&\#xB3;lares"), "d&#xC3;&#xB3;lares");
+        assert_eq!(unescape_properties(r"a\: b\= c"), "a: b= c");
+    }
+
+    /// Captured from the venue: it writes a character outside plain ASCII as
+    /// one escape per BYTE, and a character above a byte as itself.
+    #[test]
+    fn the_characters_the_venue_escapes_are_put_back() {
+        assert_eq!(unescape_venue_characters("d&#xC3;&#xB3;lares"), "dólares");
+        assert_eq!(unescape_venue_characters("d&#xE2;&#x80;&#x99;un"), "d’un");
+        assert_eq!(unescape_venue_characters("Nvidia&#x2019;s"), "Nvidia’s");
+        assert_eq!(unescape_venue_characters("l&apos;IA"), "l'IA");
+        assert_eq!(
+            unescape_venue_characters("plain ASCII passes"), "plain ASCII passes",
+            "and nothing is done where there is nothing to do",
+        );
     }
 }
