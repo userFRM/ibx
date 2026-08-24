@@ -1334,11 +1334,21 @@ impl CcpState {
             } else {
                 Some(sched.timezone.clone())
             };
+            // On the clock the venue names beside them. Where that zone is
+            // one no database here answers to, the hours stay as the wire
+            // carried them and the zone is reported as the UTC they are on,
+            // so a caller is never given a name the times do not match.
+            let named = sched.timezone.as_str();
+            let stated_on_the_named_clock =
+                crate::control::contracts::sessions_are_stated_on(named);
+            if !stated_on_the_named_clock {
+                pair.def.time_zone_id = Some("UTC".to_string());
+            }
             pair.def.trading_hours = Some(
-                crate::control::contracts::format_sessions_string(&sched.trading_hours)
+                crate::control::contracts::format_sessions_string(&sched.trading_hours, named)
             );
             pair.def.liquid_hours = Some(
-                crate::control::contracts::format_sessions_string(&sched.liquid_hours)
+                crate::control::contracts::format_sessions_string(&sched.liquid_hours, named)
             );
         }
         let for_event = clone_for_event(event_tx, &pair.def);

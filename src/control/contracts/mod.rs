@@ -1428,26 +1428,98 @@ fn flush_session(
     }
 }
 
+/// The zone a venue names, under the name a zone database answers to.
+///
+/// The venue names its exchanges' zones the old way — `US/Eastern`,
+/// `GB-Eire`, `Japan`, `Australia/NSW` — and those are links in the time-zone
+/// database's own `backward` file, which the copy on a machine may or may not
+/// carry. Every pair below is that file's, not this client's: each is the
+/// zone the database itself says the old name is another name for.
+fn zone_the_database_knows(named: &str) -> &str {
+    match named {
+        "US/Eastern" => "America/New_York",
+        "US/Central" => "America/Chicago",
+        "US/Mountain" => "America/Denver",
+        "US/Pacific" => "America/Los_Angeles",
+        "US/Alaska" => "America/Anchorage",
+        "US/Hawaii" => "Pacific/Honolulu",
+        "US/Arizona" => "America/Phoenix",
+        "Canada/Eastern" => "America/Toronto",
+        "Canada/Central" => "America/Winnipeg",
+        "Canada/Mountain" => "America/Edmonton",
+        "Canada/Pacific" => "America/Vancouver",
+        "GB" | "GB-Eire" => "Europe/London",
+        "Eire" => "Europe/Dublin",
+        "Poland" => "Europe/Warsaw",
+        "Portugal" => "Europe/Lisbon",
+        "Turkey" => "Europe/Istanbul",
+        "Iceland" => "Atlantic/Reykjavik",
+        "Israel" => "Asia/Jerusalem",
+        "Japan" => "Asia/Tokyo",
+        "PRC" => "Asia/Shanghai",
+        "ROK" => "Asia/Seoul",
+        "Hongkong" => "Asia/Hong_Kong",
+        "Singapore" => "Asia/Singapore",
+        "Iran" => "Asia/Tehran",
+        "NZ" => "Pacific/Auckland",
+        "Australia/NSW" | "Australia/ACT" | "Australia/Canberra" => "Australia/Sydney",
+        "Australia/Victoria" => "Australia/Melbourne",
+        "Australia/Queensland" => "Australia/Brisbane",
+        "Australia/West" => "Australia/Perth",
+        "Australia/South" => "Australia/Adelaide",
+        "Australia/North" => "Australia/Darwin",
+        "Australia/Tasmania" => "Australia/Hobart",
+        "Brazil/East" => "America/Sao_Paulo",
+        "Mexico/General" => "America/Mexico_City",
+        other => other,
+    }
+}
+
+/// Whether the hours can be stated on the clock the venue names.
+///
+/// False where no database on this machine answers to that name, in which case
+/// the hours stay as the wire carried them and the zone reported beside them
+/// is the UTC they are actually on.
+pub fn sessions_are_stated_on(zone_named: &str) -> bool {
+    jiff::tz::TimeZone::get(zone_the_database_knows(zone_named)).is_ok()
+}
+
+/// Move a session's endpoints out of the clock the wire states them on and
+/// into the one the venue names them with.
+fn stated_on(endpoint: &str, zone: &jiff::tz::TimeZone) -> Option<String> {
+    // `YYYYMMDD:HHMM` or `YYYYMMDD:HHMMSS`, as the wire carries it.
+    let (date, time) = endpoint.split_once(':')?;
+    if date.len() != 8 || time.len() < 4 {
+        return None;
+    }
+    let n = |at: usize, len: usize| date.get(at..at + len)?.parse::<i16>().ok();
+    let t = |at: usize| time.get(at..at + 2)?.parse::<i8>().ok();
+    let civil = jiff::civil::datetime(
+        n(0, 4)?, n(4, 2)? as i8, n(6, 2)? as i8, t(0)?, t(2)?, 0, 0,
+    );
+    let there = civil.to_zoned(jiff::tz::TimeZone::UTC).ok()?.with_time_zone(zone.clone());
+    Some(there.strftime("%Y%m%d:%H%M").to_string())
+}
+
 /// Format a list of sessions into a semicolon-delimited string.
 ///
-/// Output: `"YYYYMMDD:HHMM-YYYYMMDD:HHMM;YYYYMMDD:CLOSED;..."`.
-/// Times are in UTC as received from the upstream wire.
+/// Output: `"YYYYMMDD:HHMM-YYYYMMDD:HHMM;YYYYMMDD:CLOSED;..."`, on the clock
+/// the venue names beside them.
 ///
-/// **This differs from the reference client**, which states these in the zone
-/// its `time_zone_id` names — so a caller written against that contract, and
-/// converting these by the name beside them, moves every session by the
-/// offset. Measured: a US listing states `US/Eastern` beside a regular
-/// session of `1330-2000`, which is its 0930-1600 in UTC.
+/// The wire carries these in UTC and names the exchange's own zone alongside.
+/// The reference client states them in the zone it names, and a caller written
+/// against that contract converts by that name — so handing over UTC under an
+/// exchange's name moved every session by the offset. A US listing stated
+/// `US/Eastern` beside `1330-2000`, which is its 0930-1600.
 ///
-/// Not converted here because the zone the venue names is not always one a
-/// zone database answers to: `US/Eastern` is a legacy name that the database
-/// this crate already carries does not resolve, and mapping the legacy names
-/// by hand is a table of this client's own. Left stated as received, and
-/// said plainly, rather than converted for some contracts and not others.
+/// Where the zone is one no database on this machine answers to, the times
+/// stay as the wire carried them and the caller is told the zone is UTC, so
+/// the two always agree with each other.
 /// A zero-length session is a closed day and renders as `<date>:CLOSED`,
 /// the official-API convention.
 /// Returns an empty string if `sessions` is empty.
-pub fn format_sessions_string(sessions: &[ScheduleSession]) -> String {
+pub fn format_sessions_string(sessions: &[ScheduleSession], zone_named: &str) -> String {
+    let zone = jiff::tz::TimeZone::get(zone_the_database_knows(zone_named)).ok();
     let mut out = String::with_capacity(sessions.len() * 32);
     for (i, s) in sessions.iter().enumerate() {
         if i > 0 { out.push(';'); }
@@ -1468,9 +1540,14 @@ pub fn format_sessions_string(sessions: &[ScheduleSession]) -> String {
             out.push_str(date);
             out.push_str(":CLOSED");
         } else {
-            out.push_str(&trim_session_endpoint(&s.start));
+            let shift = |at: &str| match zone.as_ref() {
+                Some(zone) => stated_on(&trim_session_endpoint(at), zone)
+                    .unwrap_or_else(|| trim_session_endpoint(at)),
+                None => trim_session_endpoint(at),
+            };
+            out.push_str(&shift(&s.start));
             out.push('-');
-            out.push_str(&trim_session_endpoint(&s.end));
+            out.push_str(&shift(&s.end));
         }
     }
     out
