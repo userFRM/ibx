@@ -293,3 +293,8 @@ required-features = ["dev-tools"]
 name = "probe_live_options"
 path = "src/bin/probe_live_options.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "probe_depth_sizes"
+path = "src/bin/probe_depth_sizes.rs"
+required-features = ["dev-tools"]
