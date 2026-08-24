@@ -1056,10 +1056,19 @@ impl HmdsState {
     ) {
         let req_id = self.next_tbt_req_id;
         self.next_tbt_req_id += 1;
-        // The venue names one trade stream. Asked for under the other name it
-        // acknowledges the subscription and sends nothing, which is how a
-        // caller asking for the exchange's own trades was answered with
-        // silence; what tells the two apart arrives on each trade.
+        // KNOWN TO DIVERGE. The vendor build states these apart — `Last`,
+        // `AllLast` and `BidAsk` are three distinct values it writes — and
+        // both trade streams are asked for here under one of them, with the
+        // other made afterwards by dropping the prints the venue marks as not
+        // reported to the tape. That rule is this client's reading of what
+        // belongs on a tape, not the venue's.
+        //
+        // The note this replaced said the venue acknowledges the other name
+        // and sends nothing. That may still be so — the vendor's own query
+        // carries fields this one omits, any of which could be why — but it
+        // was not re-checked, and a contract thin enough to trade nothing in
+        // twenty seconds cannot check it. Settle it on a liquid name in a
+        // session, by asking for `Last` and seeing whether trades arrive.
         let tbt_type_str = match tbt_type {
             TbtType::AllLast | TbtType::Last => "AllLast",
             TbtType::BidAsk => "BidAsk",
@@ -1651,6 +1660,7 @@ impl HmdsState {
     ///
     /// A query whose connection goes away is still failed, where that is
     /// stated — see `fail_pending`.
+    #[cfg(test)]
     pub(crate) fn pending_historical_count(&self) -> usize {
         self.pending_historical.len()
     }
