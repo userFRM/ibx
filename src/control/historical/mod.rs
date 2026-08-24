@@ -1025,11 +1025,11 @@ pub fn parse_schedule_response(xml: &str) -> Option<crate::types::HistoricalSche
         query_id,
         timezone,
         start_date_time,
-        // The answer states where the schedule starts and not where it ends,
-        // so this stays empty here and the sender fills it with the end its
-        // own request named. Left empty all the way through, every caller was
-        // told the schedule ran to nothing.
-        end_date_time: String::new(),
+        // The venue derives both ends of what it covered and states both.
+        // Only the start was read, and the end a caller got back was the one
+        // it had asked for — so a request reaching past what the venue holds
+        // was answered with its own timestamp as the coverage.
+        end_date_time: tag(xml, "derivedEnd").unwrap_or("").to_string(),
         sessions,
     })
 }

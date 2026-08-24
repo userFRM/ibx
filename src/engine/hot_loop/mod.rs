@@ -687,7 +687,6 @@ impl HotLoop {
             self.ccp.sweep_contract_details(&self.shared, &self.event_tx);
             self.ccp.sweep_pending_subscribes(&self.shared);
             self.ccp.sweep_pending_named(&self.shared);
-            self.hmds.sweep_pending_historical(&self.shared);
 
             // 4. Check control_plane_rx (SPSC) for commands
             self.poll_control_commands();
@@ -1034,8 +1033,8 @@ impl HotLoop {
                     // the same id folds its first bars into the cancelled
                     // one's partial.
 
-                    if let Some(pos) = self.hmds.pending_historical.iter().position(|(_, rid, _)| *rid == req_id) {
-                        let (query_id, _, _) = self.hmds.pending_historical.remove(pos);
+                    if let Some(pos) = self.hmds.pending_historical.iter().position(|(_, rid)| *rid == req_id) {
+                        let (query_id, _) = self.hmds.pending_historical.remove(pos);
                         self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
                     }
                 }

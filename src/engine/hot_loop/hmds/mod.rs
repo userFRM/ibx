@@ -9,13 +9,6 @@ use crate::types::{InstrumentId, TbtType};
 
 use super::{HeartbeatState, emit, clone_for_event, find_body_after_tag, extract_raw_tag, EventSink};
 
-/// Idle bound for an in-flight historical query: if no bar segment, error,
-/// or completion arrives for this long, the request is failed with error 162
-/// and a terminal sentinel instead of hanging forever. The
-/// gateway's pacing limiter drops requests silently, which is otherwise
-/// indistinguishable from a permanent hang.
-const HISTORICAL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-
 /// One tick-by-tick stream, and everything that is true of it alone.
 ///
 /// Held per subscription rather than per contract. Two streams of different
@@ -51,13 +44,11 @@ pub(crate) struct HmdsState {
     pub(crate) tbt_subscriptions: Vec<TbtSubscription>,
     pub(crate) next_hmds_query_id: u32,
     pub(crate) disconnected: bool,
-    /// In-flight historical bar queries: (query_id, req_id, idle deadline).
-    /// The deadline is refreshed on every matched bar segment and swept by
-    /// `sweep_pending_historical` — a gateway that goes silent (e.g. the
-    /// pacing limiter tripping) no longer hangs the request forever. keepUpToDate
-    /// entries are exempt: they stay resident by
-    /// design and their bars flow on a different path.
-    pub(crate) pending_historical: Vec<(String, u32, Instant)>,
+    /// In-flight historical bar queries: the venue's id for each, and the
+    /// request it answers. Waited on for as long as the venue takes, which is
+    /// what the reference client does; one whose connection goes away is
+    /// failed where that is stated.
+    pub(crate) pending_historical: Vec<(String, u32)>,
     pub(crate) pending_head_ts: Vec<(String, u32)>,
     pub(crate) pending_scanner_params: bool,
     pub(crate) pending_scanner: Vec<(String, u32)>,
@@ -261,7 +252,7 @@ impl HmdsState {
         // Bars are failed on the data channel as well as the error channel;
         // a caller blocked on the series needs the empty completion. Other
         // request kinds use the error channel alone.
-        stranded.extend(self.pending_historical.drain(..).map(|(_, rid, _)| (rid, true)));
+        stranded.extend(self.pending_historical.drain(..).map(|(_, rid)| (rid, true)));
         stranded.extend(self.pending_head_ts.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_scanner.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_news.drain(..).map(|(_, rid)| (rid, false)));
@@ -518,11 +509,10 @@ impl HmdsState {
                         // whoever is waiting on `hist_1000`, which a session
                         // long enough to reach five figures of query ids does
                         // hold at the same time.
-                        if let Some(pos) = self.pending_historical.iter().position(|(qid, _, _)| states(&resp.query_id, qid.as_str())) {
-                            let (_, req_id, _) = self.pending_historical[pos];
+                        if let Some(pos) = self.pending_historical.iter().position(|(qid, _)| states(&resp.query_id, qid.as_str())) {
+                            let (_, req_id) = self.pending_historical[pos];
                             let is_complete = resp.is_complete;
                             // Activity on this query — push the idle deadline out.
-                            self.pending_historical[pos].2 = Instant::now() + HISTORICAL_IDLE_TIMEOUT;
                             // Bar completion rides <eoq>true> in the final segmented
                             // ResultSetBar; earlier segments carry <eoq>false>. Kept at
                             // debug: fires per bar batch.
@@ -599,10 +589,14 @@ impl HmdsState {
                     else if let Some(resp) = crate::control::historical::parse_schedule_response(xml_tag) {
                         if let Some(pos) = self.pending_schedule.iter().position(|(qid, _, _)| *qid == resp.query_id) {
                             let (_, req_id, asked_to) = self.pending_schedule.remove(pos);
-                            // The response carries a start but no end, so
-                            // the end reported is the one the request stated.
+                            // The venue states where its coverage ends. Only
+                            // where it says nothing does the request's own end
+                            // stand in, which is the caller's timestamp and
+                            // not a statement about what is covered.
                             let mut resp = resp;
-                            resp.end_date_time = asked_to;
+                            if resp.end_date_time.is_empty() {
+                                resp.end_date_time = asked_to;
+                            }
                             shared.reference.push_historical_schedule(req_id, resp);
                         }
                     }
@@ -627,7 +621,7 @@ impl HmdsState {
                         }
                         if !matched {
                             // Check keepUpToDate historical queries
-                            for (qid, req_id, _) in &self.pending_historical {
+                            for (qid, req_id) in &self.pending_historical {
                                 if answers(xml_tag, qid) && self.keep_up_to_date_reqs.contains(req_id) {
                                     // Store as rtbar subscription so 35=G bars get
                                     // dispatched
@@ -655,8 +649,8 @@ impl HmdsState {
                         let mut released_req_id: Option<u32> = None;
                         let mut from_historical = false;
                         if let Some(qid) = &query_id {
-                            if let Some(pos) = self.pending_historical.iter().position(|(q, _, _)| q == qid) {
-                                let (_, req_id, _) = self.pending_historical.remove(pos);
+                            if let Some(pos) = self.pending_historical.iter().position(|(q, _)| q == qid) {
+                                let (_, req_id) = self.pending_historical.remove(pos);
                                 self.keep_up_to_date_reqs.remove(&req_id);
                                 // The reconnect list is what gets asked for
                                 // again, so a query the server rejected has to
@@ -1236,7 +1230,7 @@ impl HmdsState {
             log::info!("Sent historical request: req_id={req_id} con_id={con_id} bar_size={bar_size}");
             hb.last_hmds_sent = Instant::now();
         }
-        self.pending_historical.push((query_id, req_id, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
+        self.pending_historical.push((query_id, req_id));
     }
 
     /// Tell the venue to stop serving a query.
@@ -1636,48 +1630,24 @@ impl HmdsState {
         self.pending_schedule.push((query_id, req_id, end_date_time));
     }
 
-    /// Fail historical queries whose idle deadline has passed.
-    /// Mirrors the `<QueryError>` path: surfaces error 162 plus a terminal
-    /// `is_complete=true` sentinel so a consumer blocked on
-    /// historical_data_end unblocks with no API change. keepUpToDate
-    /// subscriptions are exempt — they stay resident by design and their
-    /// live bars flow on the rtbar path.
-    pub(crate) fn sweep_pending_historical(&mut self, shared: &SharedState) {
-        if self.pending_historical.is_empty() {
-            return;
-        }
-        let now = Instant::now();
-        let mut expired: Vec<(String, u32)> = Vec::new();
-        let kut = &self.keep_up_to_date_reqs;
-        self.pending_historical.retain(|(qid, req_id, deadline)| {
-            if now >= *deadline && !kut.contains(req_id) {
-                expired.push((qid.clone(), *req_id));
-                false
-            } else {
-                true
-            }
-        });
-        for (query_id, req_id) in expired {
-            log::warn!(
-                "HMDS historical timeout: req_id={req_id} query_id={query_id} — no response within {HISTORICAL_IDLE_TIMEOUT:?}",
-            );
-            shared.reference.push_historical_error(
-                req_id, 162,
-                "historical request timed out — no response from the gateway".to_string(),
-            );
-            shared.reference.push_historical_data(
-                req_id,
-                crate::control::historical::HistoricalResponse {
-                    query_id,
-                    timezone: String::new(),
-                    is_complete: true,
-                    bars: Vec::new(),
-                },
-            );
-        }
+    /// Every historical query still waiting on the venue.
+    ///
+    /// There used to be a sweep here that failed one after a minute of quiet,
+    /// under the venue's own number for a historical error and with a bar
+    /// answer of nothing to unblock whoever was waiting. Neither was the
+    /// venue's: the reference client sets no deadline of its own on a
+    /// historical query — the budget it carries is the widest a long can hold
+    /// — and paces its requests so the limiter is not tripped in the first
+    /// place. A minute is short for a deep query, so the sweep manufactured
+    /// failures the venue never stated, under a number that made them
+    /// indistinguishable from ones it did.
+    ///
+    /// A query whose connection goes away is still failed, where that is
+    /// stated — see `fail_pending`.
+    pub(crate) fn pending_historical_count(&self) -> usize {
+        self.pending_historical.len()
     }
 }
-
 
 
 /// What the venue says when it takes on a tick subscription.

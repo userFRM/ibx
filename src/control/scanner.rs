@@ -88,7 +88,6 @@ pub fn build_scanner_subscribe_xml(sub: &ScannerSubscription, scan_id: &str) -> 
          {filter}\
          <suspend>no</suspend>\
          <inclRestrictedLocations>yes</inclRestrictedLocations>\
-         <apiManual>no</apiManual>\
          <aggGroup>-1</aggGroup>\
          </ScanSubscription>",
         id = scan_id,

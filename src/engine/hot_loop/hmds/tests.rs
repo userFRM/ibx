@@ -124,7 +124,7 @@ fn a_reconnect_asks_for_the_five_second_bars_again() {
         "and the bar it was folding is still the one being folded",
     );
     assert!(
-        hmds.pending_historical.iter().all(|(_, rid, _)| *rid != 9),
+        hmds.pending_historical.iter().all(|(_, rid)| *rid != 9),
         "nothing else is asked for on its behalf: one request, one stream",
     );
 }
@@ -195,7 +195,7 @@ fn segmented_bar_reply_completes_on_eoq_true() {
     let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let mut conn: Option<Connection> = None;
-    hmds.pending_historical.push(("q7".to_string(), 21, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
+    hmds.pending_historical.push(("q7".to_string(), 21));
 
     hmds.process_hmds_message(&make_bar_msg("q7", false), &mut conn, &shared, &None, &mut hb);
     assert_eq!(hmds.pending_historical.len(), 1, "entry must persist through eoq=false");
@@ -218,7 +218,7 @@ fn conadj_response_frame_is_skipped_without_disturbing_pending() {
     let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let mut conn: Option<Connection> = None;
-    hmds.pending_historical.push(("q8".to_string(), 22, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
+    hmds.pending_historical.push(("q8".to_string(), 22));
 
     let mut msg = Vec::new();
     msg.extend_from_slice(b"35=U\x016040=10022\x016118=");
@@ -237,7 +237,7 @@ fn query_error_releases_historical_and_emits_error_and_end_sentinel() {
     let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let mut conn: Option<Connection> = None;
-    hmds.pending_historical.push(("hist_1003".to_string(), 11, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
+    hmds.pending_historical.push(("hist_1003".to_string(), 11));
     hmds.keep_up_to_date_reqs.insert(11);
 
     let msg = make_query_error_msg("hist_1003", "Invalid time length");
@@ -300,45 +300,24 @@ fn engine_rejects_unknown_bar_size_with_error_and_sentinel() {
     assert!(hist[0].1.is_complete);
 }
 
-// ── idle-deadline sweep ──
+// ── a query waits for the venue ──
 
+/// There used to be a sweep here that failed a historical query after a
+/// minute of quiet, under the venue's own number. The reference client sets
+/// no deadline of its own on one — the budget it carries is the widest a long
+/// can hold — so a query now waits, and is failed only where the venue or the
+/// connection says something.
 #[test]
-fn sweep_times_out_idle_historical_with_error_and_end_sentinel() {
+fn a_historical_query_waits_rather_than_being_failed_on_a_clock() {
     let mut hmds = HmdsState::new();
     let shared = SharedState::new();
-    // Deadline already in the past — the gateway went silent.
-    hmds.pending_historical.push(("hist_1010".to_string(), 21, Instant::now() - std::time::Duration::from_secs(1)));
+    hmds.pending_historical.push(("hist_1010".to_string(), 21));
 
-    hmds.sweep_pending_historical(&shared);
-
-    assert!(hmds.pending_historical.is_empty(), "expired entry must be reclaimed");
-    let errors = shared.reference.drain_historical_errors();
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].0, 21);
-    assert_eq!(errors[0].1, 162);
-    let hist = shared.reference.drain_historical_data();
-    assert_eq!(hist.len(), 1, "terminal sentinel must unblock historical_data_end waiters");
-    assert_eq!(hist[0].0, 21);
-    assert!(hist[0].1.is_complete);
-    assert!(hist[0].1.bars.is_empty());
-}
-
-#[test]
-fn sweep_spares_keep_up_to_date_and_live_entries() {
-    let mut hmds = HmdsState::new();
-    let shared = SharedState::new();
-    // keepUpToDate entry: resident by design, even past its deadline.
-    hmds.pending_historical.push(("hist_kut".to_string(), 30, Instant::now() - std::time::Duration::from_secs(1)));
-    hmds.keep_up_to_date_reqs.insert(30);
-    // Live entry: deadline in the future.
-    hmds.pending_historical.push(("hist_live".to_string(), 31, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
-
-    hmds.sweep_pending_historical(&shared);
-
-    assert_eq!(hmds.pending_historical.len(), 2, "neither entry may be swept");
-    assert!(shared.reference.drain_historical_errors().is_empty());
+    assert_eq!(hmds.pending_historical_count(), 1, "still waiting on the venue");
+    assert!(shared.reference.drain_historical_errors().is_empty(), "and nothing invented");
     assert!(shared.reference.drain_historical_data().is_empty());
 }
+
 
 #[test]
 fn query_error_for_unknown_query_id_drops_nothing_and_emits_no_error() {
@@ -346,7 +325,7 @@ fn query_error_for_unknown_query_id_drops_nothing_and_emits_no_error() {
     let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let mut conn: Option<Connection> = None;
-    hmds.pending_historical.push(("hist_1003".to_string(), 11, Instant::now() + HISTORICAL_IDLE_TIMEOUT));
+    hmds.pending_historical.push(("hist_1003".to_string(), 11));
 
     let msg = make_query_error_msg("hist_9999", "Boom");
     hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
