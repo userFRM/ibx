@@ -328,6 +328,13 @@ pub struct OptionComputation {
     pub theta: f64,
     /// What the model says the underlying is worth.
     pub und_price: f64,
+    /// How long the venue says the contract has left, in days, carried to the
+    /// fraction — the hours of the last day included.
+    ///
+    /// `f64::MAX` where the venue stated none. Read rather than counted: a
+    /// count of whole days from this machine's clock has no hours in it, and
+    /// makes a contract expiring today look expired.
+    pub cal_days: f64,
 }
 
 impl OptionComputation {
@@ -345,6 +352,7 @@ impl OptionComputation {
             vega: f64::MAX,
             theta: f64::MAX,
             pv_dividend: f64::MAX,
+            cal_days: f64::MAX,
             ..Default::default()
         }
     }

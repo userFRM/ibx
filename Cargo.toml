@@ -288,3 +288,8 @@ required-features = ["dev-tools"]
 name = "hours_probe"
 path = "src/bin/hours_probe.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "probe_live_options"
+path = "src/bin/probe_live_options.rs"
+required-features = ["dev-tools"]
