@@ -880,13 +880,28 @@ pub fn parse_secdef_response(
     // The smallest size the rule states, from its size table. Taken from the
     // rule the venue sent rather than assumed: a contract dealt in whole units
     // and one dealt in fractions state different tables.
+    //
+    // The smallest across every band, not the first one stated: a table with
+    // more than one band names the finest last as often as first, and taking
+    // whichever came first named a size larger than the contract deals in.
     if let Some(size) = parse_market_rules(data)
         .iter()
         .flat_map(|r| r.size_increments.iter())
         .map(|b| b.increment)
-        .find(|v| *v > 0.0)
+        .filter(|v| *v > 0.0)
+        .min_by(|a, b| a.total_cmp(b))
     {
         def.size_increment = size;
+        // And the suggestion falls back to it. The reference client derives a
+        // figure of its own from the contract's market rule and its security
+        // definition, which this does not; what it also does, where nothing
+        // separate was stated, is stand the suggestion on the increment. This
+        // used to copy it here for no stated reason, which was worth removing;
+        // removing it and putting nothing back left the field empty on every
+        // contract, which is a figure the reference client always has and this
+        // one never did. The fallback is the closer of the two until the
+        // derivation is read.
+        def.suggested_size_increment = size;
     }
     if let Some(v) = tags.get(&TAG_MULTIPLIER) {
         def.multiplier = v.parse().unwrap_or(1.0);
