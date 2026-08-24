@@ -511,6 +511,13 @@ impl EClient {
 
             let attrib = TickAttrib::default();
             let attrib_obj = Py::new(py, attrib)?.into_any();
+            // Which kinds the venue has stated, for anything waiting on a
+            // snapshot of this contract.
+            for tick in &result.ticks {
+                for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
+                    self.core.note_snapshot_tick(id, tick.tick_type);
+                }
+            }
             for tick in &result.ticks {
                 for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
                     if let Some(mdt) = self.core.check_mdt_needed(id, result.delivered) {
@@ -549,9 +556,8 @@ impl EClient {
             // contract somebody was already watching is recorded as a
             // follower, and naming only the holder left its snapshot never
             // completed and never withdrawn.
-            let quoted = crate::client_core::ClientCore::is_quoted(&shared.market.quote(iid));
             for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
-                if self.core.check_snapshot_done(id, result.delivered, quoted) {
+                if self.core.check_snapshot_done(id) {
                     call_wrapper!(self.wrapper, py, "tick_snapshot_end", (id,));
                     snapshot_done.push(id);
                 }

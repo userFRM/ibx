@@ -1211,3 +1211,37 @@ fn an_adjustable_stop_carries_what_the_contract_states() {
     assert_eq!(attrs.combo_legs[1].con_id, 222);
     assert_eq!(attrs.primary_exchange, "CBOE", "the listing exchange it names");
 }
+
+/// A snapshot ends on the venue having stated what one is made of, or on the
+/// wait running out from when it was ASKED FOR. Waiting on the quiet instead
+/// ended one on a pause, and never ended one the venue said nothing about.
+#[test]
+fn a_snapshot_ends_on_the_venue_or_on_the_wait_from_asking() {
+    let core = ClientCore::new();
+    core.snapshot_reqs.lock().unwrap().insert(1, (std::time::Instant::now(), 0));
+    // Bid, ask, last, open — four of the five.
+    for kind in [1, 2, 4, 14] {
+        core.note_snapshot_tick(1, kind);
+        assert!(!core.check_snapshot_done(1), "kind {kind} still leaves one to come");
+    }
+    core.note_snapshot_tick(1, 9);
+    assert!(core.check_snapshot_done(1), "the close was the last of them");
+    assert!(!core.check_snapshot_done(1), "and it is only said once");
+
+    // What a kind CARRIED does not matter, only that it came: a pair states
+    // its last as minus one and a contract yet to open states its open as
+    // nothing, and both are the venue answering.
+    core.snapshot_reqs.lock().unwrap().insert(3, (std::time::Instant::now(), 0));
+    for kind in [1, 2, 4, 14, 9] {
+        core.note_snapshot_tick(3, kind);
+    }
+    assert!(core.check_snapshot_done(3), "every kind was stated, whatever it said");
+
+    // A contract the venue says nothing about is let go of on the wait, and
+    // the wait is measured from asking — so one that never heard anything is
+    // swept rather than held for ever.
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(12);
+    core.snapshot_reqs.lock().unwrap().insert(2, (long_ago, 0));
+    assert!(core.check_snapshot_done(2), "nothing was ever stated, and the wait is up");
+    assert!(core.snapshot_reqs.lock().unwrap().is_empty(), "and nothing is left waiting");
+}

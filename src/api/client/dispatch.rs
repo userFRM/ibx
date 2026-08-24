@@ -321,6 +321,13 @@ impl EClient {
             if let Some(mdt) = self.core.check_mdt_needed(req_id, result.delivered) {
                 wrapper.market_data_type(req_id, mdt);
             }
+            // Which kinds the venue has stated, for anything waiting on a
+            // snapshot of this contract.
+            for tick in &result.ticks {
+                for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
+                    self.core.note_snapshot_tick(id, tick.tick_type);
+                }
+            }
             for tick in &result.ticks {
                 for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
                     if let Some(mdt) = self.core.check_mdt_needed(id, result.delivered) {
@@ -356,10 +363,8 @@ impl EClient {
             // as a follower, and only the holder was named here — so its
             // snapshot was never completed, never withdrawn, and a caller
             // waiting for the end of it waited for ever.
-            let quoted =
-                crate::client_core::ClientCore::is_quoted(&self.shared.market.quote(iid));
             for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
-                if self.core.check_snapshot_done(id, result.delivered, quoted) {
+                if self.core.check_snapshot_done(id) {
                     wrapper.tick_snapshot_end(id);
                     snapshot_done.push(id);
                 }

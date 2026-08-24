@@ -303,3 +303,8 @@ required-features = ["dev-tools"]
 name = "probe_adjusted_last"
 path = "src/bin/probe_adjusted_last.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "probe_snapshot_end"
+path = "src/bin/probe_snapshot_end.rs"
+required-features = ["dev-tools"]
