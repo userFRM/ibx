@@ -2247,7 +2247,13 @@ impl FarmState {
 
             if pos + 8 > body.len() { break; }
             pos += 4;
-            let timestamp = u32::from_be_bytes([body[pos], body[pos+1], body[pos+2], body[pos+3]]) as u64;
+            // Seconds on the wire, and the reference client hands a caller
+            // milliseconds: it builds a date out of this and passes what that
+            // date reads as. Handed on as it arrived, every stamp a caller
+            // read was a thousandth of the moment it meant.
+            let stated_secs =
+                u32::from_be_bytes([body[pos], body[pos+1], body[pos+2], body[pos+3]]) as u64;
+            let timestamp = stated_secs.saturating_mul(1_000);
             pos += 4;
 
             if pos + 4 > body.len() { break; }
@@ -2265,6 +2271,11 @@ impl FarmState {
             } else {
                 raw_headline
             };
+            // With the characters the venue escaped put back, the same as on a
+            // headline out of the archive: it writes anything outside plain
+            // ASCII as `&#xNN;`, and the reference client reads those back
+            // here too.
+            let headline = crate::control::news::unescape_venue_characters(&headline);
 
             let news = crate::types::TickNews {
                 instrument,

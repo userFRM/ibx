@@ -358,6 +358,7 @@ pub(super) fn phase_news_ticks(conns: Conns) -> Conns {
         .send(ControlCommand::SubscribeNews {
             con_id: 265598,
             symbol: "AAPL".into(),
+            sec_type: "STK".into(),
             providers: "BZ+FLY".into(),
             reply_tx: None,
         })

@@ -327,7 +327,7 @@ fn unescape_properties(line: &str) -> String {
 /// word with an accent in it arrives as a run of them. The reference client
 /// reads them back — it carries the pattern for exactly this. Left alone, a
 /// caller reading a headline in any language but English got the escapes.
-fn unescape_venue_characters(text: &str) -> String {
+pub(crate) fn unescape_venue_characters(text: &str) -> String {
     // Nothing escaped, nothing to put back.
     if !text.contains('&') {
         return text.to_string();

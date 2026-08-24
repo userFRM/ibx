@@ -1129,6 +1129,7 @@ impl ClientCore {
             let _ = control_tx.send(ControlCommand::SubscribeNews {
                 con_id,
                 symbol: symbol.to_string(),
+                sec_type: sec_type.to_string(),
                 providers,
                 reply_tx: None,
             });
