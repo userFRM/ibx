@@ -106,19 +106,25 @@ pub fn validate_news_window(start_time: &str, end_time: &str) -> Result<(), Stri
 
 /// Build the XML query for a historical news request.
 pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
-    // Convert "BRFG+BRFUPDN" to "BRFG*BRFUPDN" for url_key
+    // The venue joins provider codes with a star where the caller uses a plus.
     let providers_star = req.provider_codes.replace('+', "*");
 
-    let tags = if req.con_id > 0 {
-        format!("@@{}:ALL_SUB@", req.con_id)
-    } else {
-        format!("@@0:{providers_star}@")
-    };
+    // Each entry names the contract and the providers wanted for it. The
+    // venue's own word for every provider a session is entitled to is
+    // ALL_SUB, which is what stands where the caller named none. The codes
+    // used to ride in `url_key` instead, which is not a slot for them.
+    let wanted = if providers_star.is_empty() { "ALL_SUB" } else { &providers_star };
+    let tags = format!("@@{}:{wanted}@", req.con_id);
 
     // The identity fields are an authorisation pair the news service issues,
     // not something a client invents. Empty strings are valid where none is
-    // held, and the same slot carries a refusal back. A literal stands in for
-    // neither, whether or not the venue validates it for what is asked here.
+    // held, and the same slot carries a refusal back — the vendor keeps both
+    // as one pair, the unheld one two empty strings and the refused one an
+    // empty key beside the words that say so. Asking for headlines, it sends
+    // the unheld pair.
+    //
+    // A key was composed here out of the provider codes the caller asked for,
+    // directly beneath the sentence saying a client does not invent one.
     let query_raw = format!(
         "conid_count=\"{count}\";\
          total_count=\"{count}\";\
@@ -126,11 +132,10 @@ pub fn build_historical_news_xml(req: &HistoricalNewsRequest) -> String {
          fingerprint=\"\";\
          cmd=\"history\";\
          tags=\"{tags}\";\
-         url_key=\"\\;{providers}\";\
+         url_key=\"\";\
          ",
         count = req.max_results,
         tags = tags,
-        providers = providers_star,
     );
 
     let id = build_news_id(&req.query_id, "history");
