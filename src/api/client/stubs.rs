@@ -191,7 +191,19 @@ impl EClient {
                 });
                 true
             }
-            Err(_) => false,
+            // Only one of the refusals here resolves by waiting: the one
+            // saying the venue has not stated its model yet. The rest are
+            // permanent — no expiry to measure from, a contract the venue
+            // priced on a model this does not solve with, a price no
+            // volatility reproduces — and read as "not yet" they leave the
+            // question kept for the life of the session, re-solved on every
+            // pass, with the caller told neither an answer nor a reason. The
+            // first call already tells them apart; this is where it was not.
+            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED => false,
+            Err(why) => {
+                self.report_reason(req_id, &why);
+                true
+            }
         }
     }
 
@@ -213,7 +225,19 @@ impl EClient {
                 });
                 true
             }
-            Err(_) => false,
+            // Only one of the refusals here resolves by waiting: the one
+            // saying the venue has not stated its model yet. The rest are
+            // permanent — no expiry to measure from, a contract the venue
+            // priced on a model this does not solve with, a price no
+            // volatility reproduces — and read as "not yet" they leave the
+            // question kept for the life of the session, re-solved on every
+            // pass, with the caller told neither an answer nor a reason. The
+            // first call already tells them apart; this is where it was not.
+            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED => false,
+            Err(why) => {
+                self.report_reason(req_id, &why);
+                true
+            }
         }
     }
 

@@ -442,10 +442,16 @@ impl EClient {
         self.wait_for(&mut collector, &state, &format!("a search for {pattern}"))
     }
 
-    /// The headlines the venue holds for a contract.
+    /// The headlines the venue holds for a contract, up to the number asked
+    /// for.
     ///
     /// Each is the time, the provider's code, the article's id and the
     /// headline itself. Reading an article needs the first two.
+    ///
+    /// The venue states whether it holds more than it sent, and that is
+    /// reported through the log rather than in the returned rows: what comes
+    /// back is a page, and a full one is not evidence there is no next one.
+    /// Ask for more, or narrow the window, to see the rest.
     pub fn news_headlines(
         &self, con_id: i64, provider_codes: &str,
         start_date_time: &str, end_date_time: &str, total_results: i32,
@@ -467,8 +473,18 @@ impl EClient {
                     });
                 }
             }
-            fn historical_news_end(&mut self, req_id: i64, _has_more: bool) {
+            fn historical_news_end(&mut self, req_id: i64, has_more: bool) {
                 if req_id == self.req_id {
+                    // Said rather than dropped. A caller reading a full page
+                    // has nothing else to tell "this is all of them" from
+                    // "this is the first of many".
+                    if has_more {
+                        log::info!(
+                            "the venue holds more headlines for this contract than the \
+                             {} asked for, so these are the most recent of them",
+                            self.state.lock().unwrap().rows.len(),
+                        );
+                    }
                     self.state.lock().unwrap().done = true;
                 }
             }
@@ -630,6 +646,21 @@ impl EClient {
             fn position_end(&mut self) {
                 self.state.lock().unwrap().done = true;
             }
+            // Holdings are asked for account-wide rather than under a request,
+            // so a refusal about them carries no request to match on — it is
+            // this question's by being the only one running. Kept rather than
+            // dropped: it is the statement that what follows is what the
+            // session already held rather than what the account holds, and a
+            // caller reading a short list has nothing else to tell it apart
+            // from a complete one.
+            fn error(&mut self, _req_id: i64, code: i64, message: &str, _: &str) {
+                if is_connection_notice(code) {
+                    return;
+                }
+                let mut s = self.state.lock().unwrap();
+                s.error = Some(Refusal::stated(code as i32, message));
+                s.done = true;
+            }
         }
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Held { state: Arc::clone(&state) };
@@ -762,6 +793,13 @@ impl EClient {
             report: Arc::clone(&report),
             done: Arc::clone(&done),
         };
+        // The notice that the session went away is delivered once and then
+        // latched. Pumped into this collector, which does not take it, the
+        // caller's own wrapper never hears it and nothing says so again until
+        // a reconnect — so a caller waiting on an order when the session drops
+        // is told the order said nothing, and goes on believing it is
+        // connected. Left for them the way the other waits here leave it.
+        let _leave_the_notice = LeaveTheCloseNoticeForTheCaller::new(self);
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             self.process_msgs(&mut watch);
