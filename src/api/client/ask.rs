@@ -854,6 +854,27 @@ impl EClient {
         }
     }
 
+    /// The contract as the venue names it, where the caller named it by id
+    /// alone.
+    ///
+    /// A request states the contract's security type and its exchange, and the
+    /// venue routes on both. A caller that gave neither has stated neither,
+    /// and both are the venue's to say: asked for by id, it answers with them.
+    /// Stamping in a guess instead sends a future or an option out as a
+    /// smart-routed US stock.
+    ///
+    /// Costs a round trip, so it happens only where the caller left them out.
+    pub(crate) fn named_by_the_venue<'a>(
+        &self, contract: &'a Contract,
+    ) -> Result<std::borrow::Cow<'a, Contract>, Refusal> {
+        if contract.con_id != 0
+            && (contract.sec_type.is_empty() || contract.exchange.is_empty())
+        {
+            return Ok(std::borrow::Cow::Owned(self.qualify_contract(contract)?));
+        }
+        Ok(std::borrow::Cow::Borrowed(contract))
+    }
+
     /// Fill in a batch of contracts, keeping the caller's order.
     ///
     /// Stops at the first that cannot be named, because a caller building a

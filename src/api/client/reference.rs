@@ -33,6 +33,10 @@ impl EClient {
         end_date_time: &str, duration: &str, bar_size: &str,
         what_to_show: &str, use_rth: bool, format_date: i32, keep_up_to_date: bool,
     ) -> Result<(), Refusal> {
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let contract = &*self.named_by_the_venue(contract)?;
         ClientCore::validate_historical_args(bar_size, what_to_show, keep_up_to_date)?;
         // How this request wants its bar times written. The venue states one
         // form; whichever the caller asked for is what is written.
@@ -70,6 +74,10 @@ impl EClient {
         &self, req_id: i64, contract: &Contract, what_to_show: &str, use_rth: bool,
         format_date: i32,
     ) -> Result<(), Refusal> {
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let contract = &*self.named_by_the_venue(contract)?;
         self.core.note_date_format(req_id, format_date);
         self.send(ControlCommand::FetchHeadTimestamp {
             contract: contract.into(),
@@ -305,6 +313,10 @@ impl EClient {
     /// Named by its venue id, as
     /// [`req_fundamental_data`](EClient::req_fundamental_data) is.
     pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool, period: &str) -> Result<(), Refusal> {
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let contract = &*self.named_by_the_venue(contract)?;
         self.send(ControlCommand::FetchHistogramData {
             req_id: wire_req_id(req_id)?,
             con_id: wire_con_id(contract.con_id, "a request for a histogram")?,
@@ -332,6 +344,10 @@ impl EClient {
         start_date_time: &str, end_date_time: &str,
         number_of_ticks: i32, what_to_show: &str, use_rth: bool,
     ) -> Result<(), Refusal> {
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let contract = &*self.named_by_the_venue(contract)?;
         // Refused here rather than turned into trades on the way out.
         crate::control::historical::tick_data_type(what_to_show)?;
         // A count below zero is not a count. Cast unchecked it became a
@@ -361,6 +377,10 @@ impl EClient {
         &self, req_id: i64, contract: &Contract,
         end_date_time: &str, duration: &str, use_rth: bool,
     ) -> Result<(), Refusal> {
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let contract = &*self.named_by_the_venue(contract)?;
         self.send(ControlCommand::FetchHistoricalSchedule {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,

@@ -100,6 +100,12 @@ pub(crate) struct HmdsState {
 /// the enum to stop discarding what it cannot name.
 fn hist_sec_type(sec_type: &str) -> String {
     if sec_type.is_empty() {
+        // The last resort, and a guess: it names a US stock, so anything else
+        // reaching here is asked for as one. Every caller that names a
+        // contract by id alone is answered by the venue before it gets this
+        // far, so what arrives undescribed came in through the engine's own
+        // request without one.
+        log::warn!("a historical query states no security type; asking as a US stock");
         return "CS".to_string();
     }
     match crate::control::contracts::SecurityType::from_fix(sec_type).to_fix() {
@@ -121,6 +127,7 @@ fn is_plausible_sec_type(s: &str) -> bool {
 /// Exchange for a historical query, defaulting to the previous constant.
 fn hist_exchange(exchange: &str) -> String {
     if exchange.is_empty() {
+        log::warn!("a historical query states no exchange; asking smart-routed");
         return "SMART".to_string();
     }
     // Under the name the venue routes by. A caller passing back a contract it
