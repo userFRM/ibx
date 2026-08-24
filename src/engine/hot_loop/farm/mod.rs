@@ -1600,6 +1600,24 @@ impl FarmState {
             // What the venue counts this contract's sizes in, the same way
             // min_tick is what it counts its prices in. Stating none means
             // whole ones.
+            //
+            // KNOWN TO DIVERGE, and not changed without a book to check it
+            // against. The reference client's multiplier belongs to the
+            // CONTRACT and is the same whatever the venue packed the number
+            // into: one for anything that is not a share, and for a share the
+            // size table's smallest step, or a hundred where the venue stated
+            // no rule. What happens below instead is a hundred on the
+            // one-byte form and nothing on the two-byte one — a multiplier
+            // keyed on the width of the encoding, which the reference client
+            // has nothing like.
+            //
+            // The two agree for exactly one case: a share the venue states no
+            // size rule for, packed into one byte. Everything else is out by a
+            // hundred one way or the other, and which way cannot be settled
+            // from here — the login this was written on is refused a book on
+            // every venue it asked (354), so there is nothing to read. A
+            // hundredfold error in a number people size trades on is not a
+            // thing to fix on reasoning alone.
             let counted_in = if size_tick > 0.0 { size_tick } else { 1.0 };
             // Parse field tags, pushing a depth update on each complete price+size
             // pair.

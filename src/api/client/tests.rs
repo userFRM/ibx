@@ -891,7 +891,7 @@ fn a_stream_outlives_the_snapshot_it_was_watching() {
     client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
     client.core.req_to_instrument.lock().unwrap().insert(1, 0);
-    client.core.snapshot_reqs.lock().unwrap().insert(1, None);
+    client.core.snapshot_reqs.lock().unwrap().insert(1, (std::time::Instant::now(), 0));
 
     // A stream watches what is already up.
     client.req_mkt_data(2, &spy(), "", false, false).expect("watches what is up");

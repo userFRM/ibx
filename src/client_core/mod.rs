@@ -606,7 +606,9 @@ pub struct ClientCore {
     /// ending at the first one cancelled the subscription on whatever arrived
     /// first — often the previous close — and the bid and ask that the caller
     /// asked for never came.
-    pub snapshot_reqs: Mutex<HashMap<i64, Option<std::time::Instant>>>,
+    /// Snapshots being waited on: when each was asked for, and which of the
+    /// kinds one is made of the venue has stated so far.
+    pub snapshot_reqs: Mutex<HashMap<i64, (std::time::Instant, u8)>>,
 
     // PnL subscription state
     /// The request a running profit is reported under.
@@ -1148,7 +1150,7 @@ impl ClientCore {
                 },
             );
             if snapshot {
-                self.snapshot_reqs.lock().unwrap().insert(req_id, None);
+                self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
             // The news subscription was sent above whether or not the quotes
             // were already up, so it is recorded here as well. Recorded only
@@ -1209,7 +1211,7 @@ impl ClientCore {
                 },
             );
             if snapshot {
-                self.snapshot_reqs.lock().unwrap().insert(req_id, None);
+                self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
             return Ok(instrument_id);
         }
@@ -1229,7 +1231,7 @@ impl ClientCore {
             },
         );
         if snapshot {
-            self.snapshot_reqs.lock().unwrap().insert(req_id, None);
+            self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
         }
         Ok(instrument_id)
     }
@@ -2148,44 +2150,55 @@ impl ClientCore {
     /// Answers true once, for the pump that sees the snapshot complete. A
     /// request that is not a snapshot is never one of these.
     ///
-    /// A snapshot is asked for to learn what a contract is quoted at, so it
-    /// ends when that has arrived: both sides, or a traded price for something
-    /// quoted on one side. Ending on the first tick of any kind cancelled the
-    /// subscription on whatever came first — usually the previous close — and
-    /// the quote never arrived at all. A contract the venue says nothing about
-    /// ends on the quiet instead, so nothing waits for ever.
-    pub fn check_snapshot_done(&self, req_id: i64, delivered: bool, quoted: bool) -> bool {
-        /// How long a snapshot with nothing quoted waits before giving up on
-        /// hearing more.
-        const QUIET: std::time::Duration = std::time::Duration::from_secs(6);
-
-        let mut waiting = self.snapshot_reqs.lock().unwrap();
-        let Some(last_heard) = waiting.get_mut(&req_id) else {
-            return false;
+    /// Note that the venue has stated one of the kinds a snapshot is made of.
+    ///
+    /// What counts is that a tick of the kind ARRIVED, not what it carried: a
+    /// currency pair states its last as minus one and a contract that has not
+    /// opened states its open as nothing, and both of those are the venue
+    /// answering. Waiting for a figure above zero instead waits out the clock
+    /// on every one of them.
+    pub fn note_snapshot_tick(&self, req_id: i64, tick_type: i32) {
+        let bit = match tick_type {
+            1 => 1u8,   // bid
+            2 => 2,     // ask
+            4 => 4,     // last
+            14 => 8,    // open
+            9 => 16,    // close
+            _ => return,
         };
-        if quoted {
-            waiting.remove(&req_id);
-            return true;
-        }
-        if delivered {
-            *last_heard = Some(std::time::Instant::now());
-            return false;
-        }
-        match *last_heard {
-            Some(at) if at.elapsed() >= QUIET => {
-                waiting.remove(&req_id);
-                true
-            }
-            _ => false,
+        if let Some((_, stated)) = self.snapshot_reqs.lock().unwrap().get_mut(&req_id) {
+            *stated |= bit;
         }
     }
 
-    /// Whether a quote says what a contract is going for.
+    /// A snapshot ends when the venue has stated every kind one is made of, or
+    /// when long enough has passed since it was asked for.
     ///
-    /// A currency pair states no traded price and marks it as absent with a
-    /// negative one, so that is not a quote.
-    pub fn is_quoted(quote: &crate::types::Quote) -> bool {
-        (quote.bid > 0 && quote.ask > 0) || quote.last > 0
+    /// Both are the reference client's: it holds a snapshot until the bid, the
+    /// ask, the last, the open and the close have each been delivered, and
+    /// sweeps anything still waiting eleven seconds after the REQUEST — not
+    /// eleven since the last thing heard.
+    ///
+    /// Waiting on the quiet instead, as this did, ends a snapshot on a pause
+    /// rather than on an answer, and a contract the venue never says anything
+    /// about was never swept at all: the clock only started on the first
+    /// delivery, so one that got none waited for ever.
+    pub fn check_snapshot_done(&self, req_id: i64) -> bool {
+        /// How long after asking the reference client gives up waiting for the
+        /// rest of a snapshot.
+        const GIVE_UP_AFTER: std::time::Duration = std::time::Duration::from_secs(11);
+        /// Every kind: bid, ask, last, open, close.
+        const WHOLE: u8 = 1 | 2 | 4 | 8 | 16;
+
+        let mut waiting = self.snapshot_reqs.lock().unwrap();
+        let Some((asked_at, stated)) = waiting.get(&req_id).copied() else {
+            return false;
+        };
+        if stated == WHOLE || asked_at.elapsed() >= GIVE_UP_AFTER {
+            waiting.remove(&req_id);
+            return true;
+        }
+        false
     }
 
     /// Snapshot the current instrument→req_id mapping.
