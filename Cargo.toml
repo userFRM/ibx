@@ -313,3 +313,8 @@ required-features = ["dev-tools"]
 name = "probe_tbt_last"
 path = "src/bin/probe_tbt_last.rs"
 required-features = ["dev-tools"]
+
+[[bin]]
+name = "probe_tick_window"
+path = "src/bin/probe_tick_window.rs"
+required-features = ["dev-tools"]

@@ -291,7 +291,9 @@ impl EClient {
             provider_codes: provider_codes.to_string(),
             start_time: start_date_time.to_string(),
             end_time: end_date_time.to_string(),
-            max_results: super::wire_u32("total_results", total_results as i64)?,
+            // No more than the reference client asks for, whatever was wanted.
+            max_results: super::wire_u32("total_results", total_results as i64)?
+                .min(crate::control::news::MOST_HEADLINES_ASKED_FOR),
         })?;
         Ok(())
     }

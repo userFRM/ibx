@@ -2913,7 +2913,7 @@ fn an_unwireable_req_id_is_refused() {
         ("cancel_fundamental_data", |c, id| c.cancel_fundamental_data(id)),
         ("req_histogram_data", |c, id| c.req_histogram_data(id, &spy(), true, "3 days")),
         ("cancel_histogram_data", |c, id| c.cancel_histogram_data(id)),
-        ("req_historical_ticks", |c, id| c.req_historical_ticks(id, &spy(), "", "", 100, "TRADES", true)),
+        ("req_historical_ticks", |c, id| c.req_historical_ticks(id, &spy(), "", "20260101 16:00:00", 100, "TRADES", true)),
         ("req_historical_schedule", |c, id| c.req_historical_schedule(id, &spy(), "", "1 D", true)),
         ("req_mkt_depth", |c, id| c.req_mkt_depth(id, &spy(), 5, false)),
         ("cancel_mkt_depth", |c, id| c.cancel_mkt_depth(id)),
@@ -3471,9 +3471,12 @@ fn cancel_histogram_data_sends_cancel() {
 #[test]
 fn req_historical_ticks_sends_fetch() {
     let (client, rx, _shared) = test_client();
-    // Bounded at its end. A start alone asked for the ticks before the moment
-    // the caller wanted the ticks after.
-    assert!(client.req_historical_ticks(8, &spy(), "20260101 09:30:00", "", 1000, "TRADES", true).is_err());
+    // Either end, and the count says how far it reaches. Naming neither, or
+    // both, is what the venue refuses.
+    assert!(client.req_historical_ticks(8, &spy(), "", "", 1000, "TRADES", true).is_err());
+    assert!(client.req_historical_ticks(8, &spy(), "20260101 09:30:00", "20260101 16:00:00", 1000, "TRADES", true).is_err());
+    client.req_historical_ticks(8, &spy(), "20260101 09:30:00", "", 1000, "TRADES", true).unwrap();
+    let _ = rx.try_recv();
     client.req_historical_ticks(8, &spy(), "", "20260101 16:00:00", 1000, "TRADES", true).unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {

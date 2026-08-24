@@ -1573,12 +1573,12 @@ impl HmdsState {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn send_historical_ticks_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, end_date_time: &str, number_of_ticks: u32, what_to_show: &str, use_rth: bool, include_expired: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_historical_ticks_request(&mut self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str, start_date_time: &str, end_date_time: &str, number_of_ticks: u32, what_to_show: &str, use_rth: bool, include_expired: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
         let query_id = format!("tk_{qid}");
         let xml = crate::control::historical::build_tick_query_xml(
-            &query_id, con_id, end_date_time, number_of_ticks, what_to_show, use_rth,
+            &query_id, con_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth,
             &hist_sec_type(sec_type), &hist_exchange(exchange), include_expired,
         );
         if let Some(conn) = hmds_conn.as_mut() {
