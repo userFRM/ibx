@@ -3644,6 +3644,10 @@ impl ClientCore {
             years_to_expiry: years,
             is_call: contract.right.eq_ignore_ascii_case("C")
                 || contract.right.eq_ignore_ascii_case("CALL"),
+            // The venue's own calculator tells these apart, and so must this:
+            // an option on a future is priced on one that drifts nowhere and
+            // settles at expiry.
+            on_a_future: contract.sec_type.eq_ignore_ascii_case("FOP"),
         };
         let model = crate::control::option_model::VenueModel {
             volatility: stated_or_none(stated.implied_vol)

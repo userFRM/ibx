@@ -81,7 +81,10 @@ fn main() {
         let days = (y - 2026) as f64 * 365.0 + (m - 8) as f64 * 30.4 + (day - 11) as f64;
         days / 365.0
     };
-    let terms = OptionTerms { strike: resolved.strike, years_to_expiry: years, is_call: true };
+    let terms = OptionTerms {
+        strike: resolved.strike, years_to_expiry: years, is_call: true,
+        on_a_future: resolved.sec_type.eq_ignore_ascii_case("FOP"),
+    };
     let model = VenueModel {
         volatility: stated.implied_vol,
         option_price: stated.opt_price,
