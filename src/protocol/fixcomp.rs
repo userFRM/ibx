@@ -269,7 +269,18 @@ fn split_messages(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
                                     Some(p) => after95 + p,
                                     None => break,
                                 };
-                                scan = tag96 + 3 + rdl;
+                                // The length is the sender's, and it is read
+                                // before the bytes it counts have been seen. One
+                                // that runs past the end is what a frame cut
+                                // mid-block looks like, so the frame is dropped
+                                // the way every other unreadable one here is —
+                                // rather than indexing past the buffer, which
+                                // takes the whole session down through the panic
+                                // handler instead of one bad frame.
+                                scan = match tag96.checked_add(3).and_then(|n| n.checked_add(rdl)) {
+                                    Some(n) if n <= chunk.len() => n,
+                                    _ => break,
+                                };
                                 continue;
                             }
                         cksum = ck;
@@ -298,6 +309,28 @@ fn split_messages(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
 mod tests {
     use super::*;
     use crate::protocol::fix::{fix_build, fix_parse};
+
+    /// A raw-data length that counts more bytes than followed it drops the
+    /// frame rather than reading past the end of it.
+    ///
+    /// The length is stated ahead of the bytes it counts, so a frame cut inside
+    /// one carries a length the buffer cannot satisfy. Read as given it indexes
+    /// past the end, which takes the session down through the panic handler —
+    /// where every caller of this plainly means to drop the one frame.
+    #[test]
+    fn a_raw_data_length_past_the_end_drops_the_frame() {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"8=FIX.4.2\x019=40\x0135=A\x0195=99999\x0196=AB\x0110=000\x01");
+        let (messages, leftover) = split_messages(&msg);
+        assert!(messages.is_empty(), "a frame that cannot be read is not a message");
+        assert_eq!(leftover, msg.len(), "and every byte of it is still unconsumed");
+
+        // The same shape with a length the bytes do satisfy is still read.
+        let mut whole = Vec::new();
+        whole.extend_from_slice(b"8=FIX.4.2\x019=40\x0135=A\x0195=2\x0196=AB\x0110=000\x01");
+        let (messages, _) = split_messages(&whole);
+        assert_eq!(messages.len(), 1, "a length the frame satisfies is followed");
+    }
 
     #[test]
     fn build_structure() {
