@@ -37,7 +37,7 @@ mod hot_loop_panic_tests {
             start: closed.clone(),
             end: closed,
         };
-        let out = format_sessions_string(&[s]);
+        let out = format_sessions_string(&[s], "UTC");
         assert!(!out.is_empty(), "a closed session must still render");
 
         // A short trade_date falls back to start, and a short start to the
@@ -47,7 +47,7 @@ mod hot_loop_panic_tests {
             start: "2026".to_string(),
             end: "2026".to_string(),
         };
-        let _ = format_sessions_string(&[short]);
+        let _ = format_sessions_string(&[short], "UTC");
     }
 }
 use super::*;
@@ -400,13 +400,13 @@ fn format_sessions_string_basic() {
             trade_date: "20260428".into(),
         },
     ];
-    let s = format_sessions_string(&sessions);
+    let s = format_sessions_string(&sessions, "UTC");
     assert_eq!(s, "20260427:1330-20260427:2000;20260428:1330-20260428:2000");
 }
 
 #[test]
 fn format_sessions_string_empty() {
-    assert_eq!(format_sessions_string(&[]), "");
+    assert_eq!(format_sessions_string(&[], "UTC"), "");
 }
 
 #[test]
@@ -615,7 +615,7 @@ fn schedule_closed_day_is_kept_and_renders_closed() {
     let sched = parse_schedule_response(&msg).unwrap();
     assert_eq!(sched.trading_hours.len(), 2, "closed day must appear");
         assert_eq!(sched.liquid_hours.len(), 2);
-    let rendered = format_sessions_string(&sched.trading_hours);
+    let rendered = format_sessions_string(&sched.trading_hours, "UTC");
     assert_eq!(rendered, "20260718:CLOSED;20260720:1330-20260720:2000");
 }
 
@@ -860,7 +860,7 @@ fn a_schedule_that_is_not_ascii_does_not_panic() {
             end: "20260101-16:00:00".to_string(),
             trade_date: h.clone(),
         }];
-        let _ = format_sessions_string(&sessions);
+        let _ = format_sessions_string(&sessions, "UTC");
 
         // And the closed-session branch, which takes the other two slices.
         let closed = [ScheduleSession {
@@ -868,7 +868,7 @@ fn a_schedule_that_is_not_ascii_does_not_panic() {
             end: h.clone(),
             trade_date: h,
         }];
-        let _ = format_sessions_string(&closed);
+        let _ = format_sessions_string(&closed, "UTC");
     }
 }
 
@@ -889,7 +889,7 @@ fn a_well_formed_schedule_is_still_trimmed() {
         },
     ];
     assert_eq!(
-        format_sessions_string(&sessions),
+        format_sessions_string(&sessions, "UTC"),
         "20260101:0930-20260101:1600;20260102:CLOSED",
     );
 }

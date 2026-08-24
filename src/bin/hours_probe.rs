@@ -20,6 +20,36 @@ fn main() {
         paper: true, ..Default::default()
     }).expect("session");
     println!("session open");
+    // Every zone this venue names, across a spread of the world's exchanges,
+    // and whether a zone database can resolve each. What it cannot resolve is
+    // what stops the hours being stated on the clock they are named with.
+    let mut named: Vec<(String, String)> = Vec::new();
+    for c in [
+        ("SPY", "STK", "SMART", "USD"), ("AAPL", "STK", "ISLAND", "USD"),
+        ("SAP", "STK", "IBIS", "EUR"), ("VOD", "STK", "LSE", "GBP"),
+        ("7203", "STK", "TSEJ", "JPY"), ("BHP", "STK", "ASX", "AUD"),
+        ("0700", "STK", "SEHK", "HKD"), ("NESN", "STK", "EBS", "CHF"),
+        ("MES", "FUT", "CME", "USD"), ("RY", "STK", "TSE", "CAD"),
+    ] {
+        let ask = Contract {
+            symbol: c.0.into(), sec_type: c.1.into(), exchange: c.2.into(),
+            currency: c.3.into(), ..Default::default()
+        };
+        if let Ok(found) = client.contract_details(&ask)
+            && let Some(d) = found.first()
+            && let Some(zone) = d.time_zone_id.as_deref()
+            && !zone.is_empty()
+        {
+            let known = ibx::control::contracts::sessions_are_stated_on(zone);
+            named.push((zone.to_string(), format!("{} on {}", c.0, c.2)));
+            println!(
+                "  {:<20} {}  ({})",
+                zone, if known { "stated on it   " } else { "left on UTC    " }, named.last().unwrap().1,
+            );
+        }
+    }
+    println!();
+
     for (what, c) in [
         ("a US listing", Contract {
             symbol: "SPY".into(), sec_type: "STK".into(),
@@ -34,7 +64,7 @@ fn main() {
                 println!("    time_zone_id  = {:?}", d.time_zone_id);
                 println!("    trading_hours = {:?}", d.trading_hours.as_deref().unwrap_or("").split(';').next().unwrap_or(""));
                 println!("    liquid_hours  = {:?}", d.liquid_hours.as_deref().unwrap_or("").split(';').next().unwrap_or(""));
-                println!("    (SPY trades 0930-1600 in US/Eastern; 1330-2000 is that in UTC)");
+
             },
             Err(e) => println!("\n  {what}: refused: {e}"),
         }
