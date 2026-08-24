@@ -448,6 +448,9 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
     const FUGIT: u32 = 1 << 21;
     const BOUNDARY: u32 = 1 << 22;
     const FORWARD_COEFF: u32 = 1 << 23;
+    // Which volatility the model was given, not a figure: it states no bytes
+    // and the walk below steps over nothing for it.
+    const PRICE_BASED_VOL: u32 = 1 << 24;
     const UNDERLYING_PRICE: u32 = 1 << 25;
     const IMPLIED_VOL: u32 = 1 << 26;
     const CALENDAR_DAYS: u32 = 1 << 27;
@@ -491,7 +494,7 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
     let und_price = next(flags & UNDERLYING_PRICE != 0);
     let implied_vol = next(flags & IMPLIED_VOL != 0);
     let cal_days = next(flags & CALENDAR_DAYS != 0);
-    let _daily_rate = next(flags & DAILY_RATE != 0);
+    let daily_rate = next(flags & DAILY_RATE != 0);
     let _model_yield = next(flags & MODEL_YIELD != 0);
     let _bridge_yield = next(flags & BRIDGE_YIELD != 0);
     let _time_value = next(flags & TIME_VALUE != 0);
@@ -510,6 +513,8 @@ fn decode_greeks(payload: &[u8]) -> Option<crate::types::OptionComputation> {
         theta,
         und_price,
         cal_days,
+        daily_rate,
+        price_based_vol: flags & PRICE_BASED_VOL != 0,
     })
 }
 

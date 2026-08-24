@@ -6,30 +6,42 @@
 //!
 //! What is done here is not a model of this library's own devising, and it is
 //! not seeded with numbers of its own. The venue states its own model for a
-//! contract — the volatility it used, the price that came out, and the
-//! underlying it used — and that statement is what this is anchored to: a
-//! carry is solved for until the model reproduces the venue's price exactly,
-//! and a caller's question is answered as a change to that, not as an opinion.
+//! contract — the volatility it used, the rate it discounted at, the price
+//! that came out, and the underlying it used — and that statement is what this
+//! is anchored to. A caller's question is answered as a change to it, not as
+//! an opinion.
 //!
-//! The venue does state a rate, on the same message as the rest of the model,
-//! and it is not what is solved for here. What it does not state on that
-//! message is the dividends, and this model has no dividend of its own to put
-//! in their place. Measured against a captured statement, substituting the
-//! stated rate and no dividend puts the model twenty-seven cents above the
-//! venue's own price for the contract, and leaves the venue's price
-//! unreachable at any volatility — the question it was asked would come back
-//! refused. So the carry stays a fit, and it absorbs the dividends along with
-//! everything else this model does differently. Taking the stated rate is
-//! worth revisiting the day the dividends are read too, and not before.
+//! Every one of those figures is on the venue's own scale, and that scale is a
+//! day's: the volatility is spread over the root of the days it states beside
+//! it, and the rate discounts over those days themselves. Measured across two
+//! expiries and eighteen strikes, that reading reproduces the venue's price on
+//! every one of them — an eight-day call a hundred and fifty points out of the
+//! money at 6.7629 against the venue's 6.7629 — and solving each price back
+//! returns the volatility the venue stated it against.
+//!
+//! Taking those figures for a year's is short by the root of a year, which is
+//! what this did before. It prices anything but a contract already worth its
+//! intrinsic value at nothing: the same call came out at zero, no volatility
+//! reached the venue's price, and the caller was told the contract could not be
+//! solved.
 //!
 //! With no statement in hand, nothing is answered. A price worked out from a
 //! rate nobody stated is a number this library made up, and a made-up option
 //! price is worse than no answer.
 
 /// What the venue said its own model made of a contract.
+///
+/// The volatility and the rate are on the venue's own scale, which is a day's
+/// rather than a year's: it states them beside a count of days, and its price
+/// is reproduced by spreading the volatility over the root of that count and
+/// discounting at the rate over the count itself. Read as a year's figures
+/// they are short by the root of a year, which prices a strike a little way
+/// out of the money at nothing at all. Measured across two expiries and
+/// eighteen strikes: a day's reading reproduces every one of them, a year's
+/// reproduces only the ones already worth their intrinsic value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VenueModel {
-    /// The volatility it used.
+    /// The volatility it used, over a day.
     pub volatility: f64,
     /// The price that came out.
     pub option_price: f64,
@@ -37,6 +49,22 @@ pub struct VenueModel {
     pub underlying_price: f64,
     /// The dividends it took off, as a present value.
     pub present_value_of_dividends: f64,
+    /// The rate it discounted at, over a day.
+    pub rate: f64,
+}
+
+/// The days the venue's own scale is stated over.
+const A_YEAR_OF_DAYS: f64 = 365.0;
+
+/// A day's volatility as a year's. Volatility grows with the root of time, so
+/// the two differ by the root of the days in a year.
+fn over_a_year(a_day: f64) -> f64 {
+    a_day * A_YEAR_OF_DAYS.sqrt()
+}
+
+/// A year's volatility back on the scale the venue states its own on.
+fn over_a_day(a_year: f64) -> f64 {
+    a_year / A_YEAR_OF_DAYS.sqrt()
 }
 
 /// What the contract is.
@@ -138,62 +166,25 @@ fn exercise_value(terms: OptionTerms, underlying: f64) -> f64 {
     }
 }
 
-/// The carry that makes this model reproduce the venue's price from the
-/// venue's volatility.
-///
-/// **Not the venue's interest rate, and not presented as one.** It is a
-/// fitting number: whatever this model needs so that its price for a contract
-/// matches the price the venue published for it. Anything the venue's model
-/// does that this one does not — a different tree, dividends taken discretely,
-/// a borrow cost — is absorbed here, which is exactly what makes a caller's
-/// question answerable as a change to the venue's answer.
-///
-/// That it is a fit and not a rate is visible on the wire: two contracts on
-/// one underlying, one expiry, one minute, wanted five per cent and twenty per
-/// cent. No interest rate differs by strike.
-///
-/// The venue states a rate of its own on the same message as the rest of the
-/// model, and this is not it: against a captured statement the two are three
-/// hundred basis points apart, because what this absorbs is the dividends the
-/// message does not state as well as the difference between the two models.
-pub fn carry_that_matches_the_venue(terms: OptionTerms, model: VenueModel) -> Option<f64> {
-    // Searched only where the tree holds together. A step's worth of growth
-    // has to stay inside a step up, or the tree's own odds leave nought-to-one
-    // and it prices nothing — and how far that reaches depends on the
-    // volatility and the step, not on a bound picked here. A contract with a
-    // volatility of two per cent leaves far less room than one with fifty.
-    let step = terms.years_to_expiry / STEPS as f64;
-    if step <= 0.0 || model.volatility <= 0.0 {
-        return None;
-    }
-    // Bounded twice over: by where the tree holds together, and by what a
-    // rate is. Money has never cost a quarter of itself a year, and letting
-    // the search run out to where the tree degenerates finds a rate that
-    // reproduces the price by breaking the model rather than by being right —
-    // and leaves no room underneath it for the volatility to be solved for
-    // afterwards.
-    const FURTHEST_A_RATE_GOES: f64 = 0.25;
-    let furthest = (model.volatility / step.sqrt() * 0.9).min(FURTHEST_A_RATE_GOES);
-    solve(-furthest, furthest, |rate| {
-        price(
-            terms,
-            model.underlying_price,
-            model.volatility,
-            rate,
-            model.present_value_of_dividends,
-        )
-        .map(|p| p - model.option_price)
-    })
-}
-
 /// What volatility a caller's price implies, under the venue's model.
+///
+/// Answered on the scale the venue states its own volatility on, so the two
+/// can be read beside each other.
 pub fn implied_volatility(
     terms: OptionTerms,
     model: VenueModel,
     option_price: f64,
     underlying_price: f64,
 ) -> Option<f64> {
-    let rate = carry_that_matches_the_venue(terms, model)?;
+    // The rate the venue stated, rather than one fitted to reproduce its
+    // price. Fitting one was how this stood while the volatility was being
+    // read a root of a year short, and the fit was absorbing that: it landed
+    // on the stated rate where the price still moved with the rate, and ran
+    // away where it did not — negative five per cent one strike out of the
+    // money, and nothing at all the strike after, which is why a contract out
+    // of the money could not be solved. The venue states one rate for every
+    // strike on the chain, which is what a rate is.
+    let rate = model.rate * A_YEAR_OF_DAYS;
     // Searched from where the tree holds together. A step up has to outrun a
     // step's worth of growth or the tree stops being a tree — its own odds
     // leave nought-to-one — so the smallest volatility worth trying is set by
@@ -204,6 +195,9 @@ pub fn implied_volatility(
     // and a floor set with room to spare sits above the answer and finds
     // nothing.
     let smallest = (rate.abs() * step.sqrt() * 1.02).max(1e-4);
+    // Solved over a year, because that is what the tree is walked in, and
+    // handed back over a day, because that is the scale the venue states its
+    // own volatility on and the scale a caller reads this one beside.
     solve(smallest, 5.0, |volatility| {
         price(
             terms,
@@ -214,6 +208,7 @@ pub fn implied_volatility(
         )
         .map(|p| p - option_price)
     })
+    .map(over_a_day)
 }
 
 /// What price a caller's volatility implies, under the venue's model.
@@ -223,12 +218,13 @@ pub fn option_price(
     volatility: f64,
     underlying_price: f64,
 ) -> Option<f64> {
-    let rate = carry_that_matches_the_venue(terms, model)?;
+    // The caller's volatility is on the venue's scale, because the venue's is
+    // what they read to choose it.
     price(
         terms,
         underlying_price,
-        volatility,
-        rate,
+        over_a_year(volatility),
+        model.rate * A_YEAR_OF_DAYS,
         model.present_value_of_dividends,
     )
 }
@@ -317,40 +313,58 @@ mod tests {
         assert!(price >= 100.0 - 0.01, "an American put worth less than exercising it: {price}");
     }
 
-    /// The carry is fitted to what the venue stated rather than assumed.
-    /// Given a price this model produced at a known rate, that number comes
-    /// back — which is what makes it a fit, not a measurement.
+    /// A strike out of the money is worth something, which is what reading
+    /// the venue's volatility over a day rather than a year restores.
+    ///
+    /// These are the venue's own figures for a contract eight days out, taken
+    /// off the wire: it stated 6.7223 where reading the same volatility over a
+    /// year prices the contract at nothing at all — and a price of nothing is
+    /// what left a caller told the contract could not be solved.
     #[test]
-    fn the_carry_that_matches_the_venue_is_found() {
-        let terms = call(100.0, 1.0);
-        let at_four_percent = price(terms, 100.0, 0.25, 0.04, 1.5).expect("it prices");
-        let model = VenueModel {
-            volatility: 0.25,
-            option_price: at_four_percent,
-            underlying_price: 100.0,
-            present_value_of_dividends: 1.5,
+    fn a_strike_out_of_the_money_is_worth_something() {
+        let terms = OptionTerms {
+            strike: 7830.0,
+            years_to_expiry: 8.3034 / A_YEAR_OF_DAYS,
+            is_call: true,
+            on_a_future: true,
         };
-        let found = carry_that_matches_the_venue(terms, model).expect("a carry matches it");
-        assert!((found - 0.04).abs() < 1e-3, "the carry came back as {found}");
+        let model = VenueModel {
+            volatility: 0.00561,
+            option_price: 6.7223,
+            underlying_price: 7676.90,
+            present_value_of_dividends: 0.0,
+            rate: 0.00011,
+        };
+        let ours = option_price(terms, model, model.volatility, model.underlying_price)
+            .expect("it prices");
+        assert!((ours - 6.7223).abs() < 0.05, "the venue said 6.7223, this said {ours}");
+
+        // The same figures taken for a year's, which is how they were read
+        // before and what priced the contract at nothing.
+        let as_a_year = price(
+            terms, model.underlying_price, model.volatility, model.rate, 0.0,
+        ).expect("it prices");
+        assert!(as_a_year < 0.01, "read over a year the contract was worth {as_a_year}");
     }
 
-    /// A caller's price gives back the volatility that produces it, and the
-    /// venue's price gives back the venue's volatility.
+    /// A caller's price gives back the volatility that produces it, on the
+    /// scale the venue states its own on.
     #[test]
     fn a_price_gives_back_its_volatility() {
         let terms = call(100.0, 1.0);
         let venue_price = price(terms, 100.0, 0.25, 0.04, 1.5).expect("it prices");
         let model = VenueModel {
-            volatility: 0.25,
+            volatility: over_a_day(0.25),
             option_price: venue_price,
             underlying_price: 100.0,
             present_value_of_dividends: 1.5,
+            rate: 0.04 / A_YEAR_OF_DAYS,
         };
         let same = implied_volatility(terms, model, venue_price, 100.0).expect("it solves");
-        assert!((same - 0.25).abs() < 1e-3, "the venue's price gave {same}");
+        assert!((over_a_year(same) - 0.25).abs() < 1e-3, "the venue's price gave {same}");
 
         let dearer = implied_volatility(terms, model, venue_price * 1.2, 100.0).expect("it solves");
-        assert!(dearer > 0.25, "a dearer option implies more volatility, not {dearer}");
+        assert!(dearer > same, "a dearer option implies more volatility, not {dearer}");
     }
 
     /// And a caller's volatility gives back a price, which is the same
@@ -360,12 +374,13 @@ mod tests {
         let terms = call(100.0, 1.0);
         let venue_price = price(terms, 100.0, 0.25, 0.04, 1.5).expect("it prices");
         let model = VenueModel {
-            volatility: 0.25,
+            volatility: over_a_day(0.25),
             option_price: venue_price,
             underlying_price: 100.0,
             present_value_of_dividends: 1.5,
+            rate: 0.04 / A_YEAR_OF_DAYS,
         };
-        let same = option_price(terms, model, 0.25, 100.0).expect("it prices");
+        let same = option_price(terms, model, over_a_day(0.25), 100.0).expect("it prices");
         assert!((same - venue_price).abs() < 0.01, "{same} against {venue_price}");
     }
 

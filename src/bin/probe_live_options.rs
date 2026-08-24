@@ -30,6 +30,7 @@ struct Stated {
     cal_days: f64,
     und_price: f64,
     opt_price: f64,
+    daily_rate: f64,
 }
 
 impl Wrapper for Heard {
@@ -149,6 +150,7 @@ fn main() {
                                 got = Stated {
                                     implied_vol: m.implied_vol,
                                     cal_days: m.cal_days,
+                                    daily_rate: m.daily_rate,
                                     und_price: m.und_price,
                                     opt_price: m.opt_price,
                                 };
@@ -188,6 +190,7 @@ fn main() {
                             if m.implied_vol > 0.0 && m.implied_vol != f64::MAX {
                                 now = Stated {
                                     implied_vol: m.implied_vol, cal_days: m.cal_days,
+                                    daily_rate: m.daily_rate,
                                     und_price: m.und_price, opt_price: m.opt_price,
                                 };
                             }
@@ -229,6 +232,7 @@ fn main() {
                             option_price: got.opt_price,
                             underlying_price: got.und_price,
                             present_value_of_dividends: 0.0,
+                            rate: got.daily_rate,
                         };
                         match implied_volatility(terms, model, got.opt_price, got.und_price) {
                             Some(v) => format!("{v:.6}"),

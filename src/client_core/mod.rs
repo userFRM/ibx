@@ -3658,6 +3658,20 @@ impl ClientCore {
             _ => years_to_expiry(&contract.last_trade_date_or_contract_month)
                 .ok_or_else(|| "the contract states no expiry to measure from".to_string())?,
         };
+        // The venue states which of two models it priced this contract on, and
+        // this library has one of them. Answering a question about the other
+        // with this one gives a number, and a number worked out under the
+        // wrong distribution is worse than no answer — so it is refused by
+        // name rather than quietly produced.
+        if stated.price_based_vol {
+            return Err(crate::error_codes::Refusal::validation(
+                "the venue priced this contract on a volatility stated in its own price \
+                 units, which is a different model from the one this client solves with. \
+                 Its own figures for the contract are on the model tick and stand as \
+                 stated; what cannot be answered is a question about a price or a \
+                 volatility other than the ones it published",
+            ));
+        }
         let terms = crate::control::option_model::OptionTerms {
             strike: contract.strike,
             years_to_expiry: years,
@@ -3677,6 +3691,11 @@ impl ClientCore {
                 .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?,
             // No dividend stated is no dividend, which is what it means.
             present_value_of_dividends: stated_or_none(stated.pv_dividend).unwrap_or(0.0),
+            // The rate it discounted at, over the same day its volatility is
+            // stated over. No rate stated is no discount, which over the days
+            // one of these has left moves the price by less than it is quoted
+            // in.
+            rate: stated_or_none(stated.daily_rate).unwrap_or(0.0),
         };
         solve(terms, model).ok_or_else(|| {
             crate::error_codes::Refusal::validation(
