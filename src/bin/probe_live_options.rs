@@ -222,6 +222,7 @@ fn main() {
                             strike: row.1,
                             years_to_expiry: got.cal_days / 365.0,
                             is_call: true,
+                            on_a_future: true,
                         };
                         let model = VenueModel {
                             volatility: got.implied_vol,
@@ -234,12 +235,37 @@ fn main() {
                             None => "no solution".into(),
                         }
                     };
+                    // The anchor itself: given the volatility the venue used
+                    // and the rate it states, does this model land on the
+                    // price the venue published? That is the question the
+                    // model has to answer. Inverting a price back to a
+                    // volatility is a different one, and for a contract this
+                    // near expiry and this far in the money its price barely
+                    // moves with volatility at all, so there is nothing to
+                    // invert.
+                    let priced = {
+                        use ibx::control::option_model::{price, OptionTerms};
+                        let terms = OptionTerms {
+                            strike: row.1,
+                            years_to_expiry: got.cal_days / 365.0,
+                            is_call: true,
+                            on_a_future: true,
+                        };
+                        // The rate the venue states on the same message,
+                        // annualised the way it divides it.
+                        match price(terms, got.und_price, got.implied_vol, 0.042231, 0.0) {
+                            Some(p) => format!(
+                                "{p:.4} vs venue {:.4} ({:+.4})", got.opt_price, p - got.opt_price,
+                            ),
+                            None => "no price".into(),
+                        }
+                    };
                     println!(
-                        "    strike {:>8}  vol={:<10.6} px={:<10.3} und={:<10.3} calDays={days}\n                    model direct: {direct}   through the client: {round_trip}",
+                        "    strike {:>8}  vol={:<10.6} px={:<10.3} und={:<10.3} calDays={days}\n                    priced: {priced}\n                    inverted: {direct}",
                         row.1, got.implied_vol, got.opt_price, got.und_price,
                     );
                     let _ = client.cancel_mkt_data(req);
-                    let _ = before;
+                    let _ = (before, &round_trip);
                 }
             }
         }

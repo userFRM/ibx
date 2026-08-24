@@ -48,6 +48,21 @@ pub struct OptionTerms {
     pub years_to_expiry: f64,
     /// Whether it is a call.
     pub is_call: bool,
+    /// Whether what it is written on is a future.
+    ///
+    /// A future costs nothing to hold, so it drifts nowhere: where a share
+    /// grows at the rate over the life of the option, a futures price is
+    /// already the price agreed for delivery and stays where it is. And the
+    /// pay-off is settled at expiry rather than taken today, so it is
+    /// discounted back — which is why one of these can be worth less than the
+    /// difference between the future and the strike, where an option on a
+    /// share cannot.
+    ///
+    /// The venue's own model says so: on a contract expiring in 0.728 of a
+    /// day it stated 2294.945 where the future stood 2295.135 above the
+    /// strike, and that difference discounted at the rate the venue states is
+    /// 2294.942.
+    pub on_a_future: bool,
 }
 
 /// How finely the tree is walked. Enough that a step's worth of error is far
@@ -77,7 +92,9 @@ pub fn price(terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividend
     let dt = terms.years_to_expiry / STEPS as f64;
     let up = (volatility * dt.sqrt()).exp();
     let down = 1.0 / up;
-    let growth = (rate * dt).exp();
+    // A future drifts nowhere: it is already the price agreed for delivery,
+    // and holding it costs nothing. A share grows at the rate.
+    let growth = if terms.on_a_future { 1.0 } else { (rate * dt).exp() };
     if !(up.is_finite() && growth.is_finite()) || (up - down).abs() < f64::EPSILON {
         return None;
     }
@@ -98,7 +115,16 @@ pub fn price(terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividend
         for i in 0..=step {
             let held = discount * (up_chance * value[i + 1] + (1.0 - up_chance) * value[i]);
             let underlying = adjusted * up.powi(i as i32) * down.powi((step - i) as i32);
-            value[i] = held.max(exercise_value(terms, underlying));
+            // Taken early where that is worth more — except on a future,
+            // whose options settle at expiry. Allowed there, the tree returns
+            // the difference between the future and the strike for anything
+            // deep enough in the money, and the venue's own price for those
+            // sits below it.
+            value[i] = if terms.on_a_future {
+                held
+            } else {
+                held.max(exercise_value(terms, underlying))
+            };
         }
     }
     Some(value[0])
@@ -240,7 +266,7 @@ mod tests {
     use super::*;
 
     fn call(strike: f64, years: f64) -> OptionTerms {
-        OptionTerms { strike, years_to_expiry: years, is_call: true }
+        OptionTerms { strike, years_to_expiry: years, is_call: true, on_a_future: false }
     }
 
     /// A call with no dividends and no rate is worth what the tree says, and
@@ -268,7 +294,7 @@ mod tests {
     /// an American option and a European one.
     #[test]
     fn a_deep_put_is_worth_at_least_exercising_it() {
-        let terms = OptionTerms { strike: 200.0, years_to_expiry: 1.0, is_call: false };
+        let terms = OptionTerms { strike: 200.0, years_to_expiry: 1.0, is_call: false, on_a_future: false };
         let price = price(terms, 100.0, 0.2, 0.05, 0.0).expect("it prices");
         assert!(price >= 100.0 - 0.01, "an American put worth less than exercising it: {price}");
     }
