@@ -1991,6 +1991,18 @@ impl HotLoop {
     fn maybe_spawn_hmds_reconnect(&mut self) {
         if self.hmds_conn.is_some() { return; }
         if self.pending_hmds_reconnect.is_some() { return; }
+        // A session that has ended for good is not one to keep dialling for.
+        // Without this, a connection refused because the account was taken
+        // over, or because the credentials were not accepted, was retried
+        // every minute or so for the life of the process — full handshake
+        // each time, against a session key the venue had already finished
+        // with.
+        if self.reconnect_halted.is_some() { return; }
+        // And the caller's own limits, once spent, are spent for this too.
+        // Not reported here: what this rebuilds is historical data and
+        // contract definitions, and a session can trade without either, so
+        // losing them is not the end of one.
+        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) { return; }
         let auth = match self.reconnect_auth.as_ref() {
             Some(a) if !a.host.is_empty() && !a.hmds_host.is_empty() => a,
             _ => return,
@@ -2030,6 +2042,18 @@ impl HotLoop {
     fn maybe_spawn_secdef_reconnect(&mut self) {
         if self.secdef_conn.is_some() { return; }
         if self.pending_secdef_reconnect.is_some() { return; }
+        // A session that has ended for good is not one to keep dialling for.
+        // Without this, a connection refused because the account was taken
+        // over, or because the credentials were not accepted, was retried
+        // every minute or so for the life of the process — full handshake
+        // each time, against a session key the venue had already finished
+        // with.
+        if self.reconnect_halted.is_some() { return; }
+        // And the caller's own limits, once spent, are spent for this too.
+        // Not reported here: what this rebuilds is historical data and
+        // contract definitions, and a session can trade without either, so
+        // losing them is not the end of one.
+        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) { return; }
         let auth = match self.reconnect_auth.as_ref() {
             Some(a) if !a.secdef_host.is_empty() && !a.secdef_farm.is_empty() => a,
             // A session the venue named no such farm for has none to rebuild.

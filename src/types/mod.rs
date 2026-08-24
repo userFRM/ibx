@@ -176,7 +176,9 @@ pub fn snap_to_tick(price: Price, tick: i64) -> Price {
 /// Maximum number of concurrently tracked instruments.
 pub const MAX_INSTRUMENTS: usize = 256;
 
-/// Maximum pending order requests per tick cycle.
+/// How deep a healthy backlog of order requests goes, which is what the
+/// buffer is built to hold without asking for more room. Not a limit: it
+/// grows past this rather than drop anything.
 const MAX_PENDING_ORDERS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
