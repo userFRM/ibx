@@ -261,11 +261,11 @@ fn main() {
                         }
                     };
                     println!(
-                        "    strike {:>8}  vol={:<10.6} px={:<10.3} und={:<10.3} calDays={days}\n                    priced: {priced}\n                    inverted: {direct}",
+                        "    strike {:>8}  vol={:<10.6} px={:<10.3} und={:<10.3} calDays={days}\n                    priced: {priced}\n                    inverted: {direct}\n                    through the client: {round_trip}",
                         row.1, got.implied_vol, got.opt_price, got.und_price,
                     );
                     let _ = client.cancel_mkt_data(req);
-                    let _ = (before, &round_trip);
+                    let _ = before;
                 }
             }
         }
