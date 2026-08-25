@@ -1258,63 +1258,6 @@ impl OrderRequest {
         }
     }
 
-    /// Snap every outbound price-like field to the instrument's tick grid. `tick` is
-    /// the fixed-point tick from
-    /// `MarketState::min_tick_scaled`; 0 (unknown — no market-data
-    /// subscription seen yet) leaves prices unchanged. Percent-based fields
-    /// (trailing percent) and non-price fields (quantities, cash amounts)
-    /// are not touched.
-    pub fn snap_prices(&mut self, tick: i64) -> bool {
-        if tick <= 0 {
-            return false;
-        }
-        let mut moved = false;
-        let mut s = |p: &mut Price| {
-            let snapped = snap_to_tick(*p, tick);
-            moved |= snapped != *p;
-            *p = snapped;
-        };
-        match self {
-            Self::Cancel { .. } | Self::CancelAll { .. } => {}
-            Self::Modify { price, stop_price, .. } => { s(price); s(stop_price); }
-            Self::SubmitBracket { entry_price, take_profit, stop_loss, .. } => {
-                s(entry_price); s(take_profit); s(stop_loss);
-            }
-            Self::SubmitEx { kind, .. } => match kind {
-                OrderKind::Market | OrderKind::Moc | OrderKind::Mtl | OrderKind::MktPrt
-                | OrderKind::SnapMkt { .. } | OrderKind::SnapMid { .. }
-                | OrderKind::SnapPri { .. } => {}
-                OrderKind::TrailPct { trail_stop_price, .. } => s(trail_stop_price),
-                OrderKind::PegBench {
-                    price, pegged_change_amount, ref_change_amount, starting_price, ..
-                } => { s(price); s(pegged_change_amount); s(ref_change_amount); s(starting_price); }
-                OrderKind::Adaptive { price, .. }
-                | OrderKind::Algo { price, .. } => s(price),
-                OrderKind::WhatIf { price, aux, .. } => { s(price); s(aux); }
-                OrderKind::AdjustableStop {
-                    stop_price, trigger_price, adjusted_stop_price, adjusted_stop_limit_price,
-                    adjusted_trailing_amount, adjustable_trailing_unit, ..
-                } => {
-                    s(stop_price); s(trigger_price); s(adjusted_stop_price); s(adjusted_stop_limit_price);
-                    // Snap the trailing amount only when it is an absolute price
-                    // offset; a percent (unit 100) is not a price and must not snap.
-                    if *adjustable_trailing_unit == 0 { s(adjusted_trailing_amount); }
-                }
-                OrderKind::Limit { price } | OrderKind::Loc { price } => s(price),
-                OrderKind::Stop { stop_price }
-                | OrderKind::Mit { stop_price }
-                | OrderKind::StpPrt { stop_price } => s(stop_price),
-                OrderKind::StopLimit { price, stop_price }
-                | OrderKind::Lit { price, stop_price } => { s(price); s(stop_price); }
-                OrderKind::TrailingStop { trail_amt, trail_stop_price } => { s(trail_amt); s(trail_stop_price); }
-                OrderKind::TrailingStopLimit { lmt_offset, trail_amt, trail_stop_price } => { s(lmt_offset); s(trail_amt); s(trail_stop_price); }
-                OrderKind::MidPrice { price_cap } => s(price_cap),
-                OrderKind::PegMkt { offset, .. } | OrderKind::PegMid { offset, .. }
-                | OrderKind::Rel { offset } => s(offset),
-            },
-        }
-        moved
-    }
 }
 
 /// Pre-allocated buffer for pending order requests. Never allocates on the hot path.
