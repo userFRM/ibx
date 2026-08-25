@@ -47,6 +47,15 @@ pub struct MarketDataState {
     tbt_quotes: Mutex<Vec<TbtQuote>>,
     real_time_bars: Mutex<Vec<(u32, RealTimeBar)>>,
     depth_updates: Mutex<Vec<DepthUpdate>>,
+    /// Books that were dropped for running away unread, and have not been
+    /// asked for again.
+    ///
+    /// A book only means anything whole. Once entries are gone, everything
+    /// after them describes positions in a book that no longer exists — so
+    /// nothing further is kept for one until the caller withdraws it and asks
+    /// again. Handing back what arrives next would be handing back a book that
+    /// reads correct and is not.
+    depth_dropped: Mutex<std::collections::HashSet<u32>>,
     tick_news: Mutex<Vec<TickNews>>,
     news_bulletins: Mutex<Vec<NewsBulletin>>,
     option_computations: Mutex<Vec<crate::types::OptionComputation>>,
@@ -79,6 +88,7 @@ impl MarketDataState {
             tbt_quotes: Mutex::new(Vec::with_capacity(256)),
             real_time_bars: Mutex::new(Vec::with_capacity(64)),
             depth_updates: Mutex::new(Vec::with_capacity(64)),
+            depth_dropped: Mutex::new(std::collections::HashSet::new()),
             tick_news: Mutex::new(Vec::with_capacity(32)),
             news_bulletins: Mutex::new(Vec::with_capacity(16)),
             option_computations: Mutex::new(Vec::with_capacity(16)),
@@ -251,6 +261,12 @@ impl MarketDataState {
         // book. That is the one nobody is draining, and dropping it puts the
         // queue back under its bound, so the next push is cheap again.
         {
+            // Nothing is kept for a book already given up on. What arrives
+            // now describes positions in a book that no longer exists, and
+            // kept, it would be handed back as though it were one.
+            if self.depth_dropped.lock().unwrap().contains(&update.req_id) {
+                return;
+            }
             let mut held = self.depth_updates.lock().unwrap();
             if held.len() >= STREAM_BACKLOG_LIMIT {
                 let mut per_book: std::collections::HashMap<u32, usize> =
@@ -260,6 +276,20 @@ impl MarketDataState {
                 }
                 if let Some((&worst, &how_many)) = per_book.iter().max_by_key(|(_, n)| **n) {
                     held.retain(|u| u.req_id != worst);
+                    self.depth_dropped.lock().unwrap().insert(worst);
+                    if worst == update.req_id {
+                        // Including the one that arrived. It is usually the
+                        // book that ran away that pushes next, and kept, it
+                        // would be the first entry of a book starting from
+                        // the middle — which is the thing being prevented.
+                        log::warn!(
+                            "the book on request {worst} has gone past what is kept for \
+                             one and was dropped whole ({how_many} entries), because part \
+                             of a book is not a book — withdraw it and ask again to start \
+                             another",
+                        );
+                        return;
+                    }
                     log::warn!(
                         "the book on request {worst} has gone past what is kept for one and \
                          was dropped whole ({how_many} entries), because part of a book is \
@@ -289,6 +319,15 @@ impl MarketDataState {
     /// Remove all buffered depth updates for a given req_id (called on cancel).
     #[doc(hidden)] pub fn purge_depth_updates(&self, req_id: u32) {
         self.depth_updates.lock().unwrap().retain(|u| u.req_id != req_id);
+        // Withdrawing is how a caller starts again, so this is where a book
+        // that was dropped stops being refused.
+        self.depth_dropped.lock().unwrap().remove(&req_id);
+    }
+
+    /// Whether a book was dropped for running away and has not been asked for
+    /// again. Nothing is kept for one until it is.
+    #[doc(hidden)] pub fn depth_was_dropped(&self, req_id: u32) -> bool {
+        self.depth_dropped.lock().unwrap().contains(&req_id)
     }
 
     #[doc(hidden)] pub fn push_tick_news(&self, news: TickNews) {
@@ -344,6 +383,67 @@ impl MarketDataState {
 
     #[doc(hidden)] pub fn set_instrument_count(&self, count: u32) {
         self.instrument_count.store(count as u64, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod depth_backlog_tests {
+    use super::*;
+
+    fn entry(req_id: u32) -> DepthUpdate {
+        DepthUpdate {
+            req_id,
+            position: 0,
+            market_maker: String::new(),
+            operation: 0,
+            side: 1,
+            price: 1.0,
+            size: 1.0,
+            is_smart_depth: false,
+        }
+    }
+
+    /// A book that runs away unread is dropped whole, and nothing further is
+    /// kept for it until the caller asks again.
+    ///
+    /// A book only means anything whole: each entry names a position, and
+    /// once entries are gone everything after them describes a book that no
+    /// longer exists. Kept, those would be handed back reading exactly like a
+    /// real book. And the one dropped is the one that ran away, not whoever
+    /// happened to push next — they share a queue, and each is drained on its
+    /// own.
+    #[test]
+    fn a_runaway_book_is_dropped_and_not_quietly_restarted() {
+        let market = MarketDataState::new();
+
+        // One caller reads nothing; another keeps one entry outstanding.
+        let flooding = 7;
+        let reading = 9;
+        market.push_depth_update(entry(reading));
+        for _ in 0..STREAM_BACKLOG_LIMIT {
+            market.push_depth_update(entry(flooding));
+        }
+
+        assert!(market.depth_was_dropped(flooding), "the book that ran away was given up");
+        assert!(!market.depth_was_dropped(reading), "and the one being read was not");
+        assert_eq!(
+            market.take_depth_updates_for(reading).len(), 1,
+            "a caller that was reading keeps its book",
+        );
+
+        // Nothing further is kept for the dropped one: a part of a book is
+        // not a book.
+        market.push_depth_update(entry(flooding));
+        assert!(
+            market.take_depth_updates_for(flooding).is_empty(),
+            "nothing is handed back for a book that was given up",
+        );
+
+        // Withdrawing is how it starts again.
+        market.purge_depth_updates(flooding);
+        assert!(!market.depth_was_dropped(flooding));
+        market.push_depth_update(entry(flooding));
+        assert_eq!(market.take_depth_updates_for(flooding).len(), 1, "and it does");
     }
 }
 
