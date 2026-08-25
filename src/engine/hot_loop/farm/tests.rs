@@ -1280,3 +1280,28 @@ mod exchange_map_tests {
         assert_eq!(named[2].exchange_letter, "P");
     }
 }
+
+/// A size increment is read only from an acknowledgement shaped like one that
+/// carries it.
+///
+/// Captured off the wire, a ticker setup is five fields and a subscription
+/// acknowledgement is nine, both ending on the increment. Every neighbouring
+/// field parses as a positive number, so a shorter acknowledgement would not
+/// fail the parse — it would hand back the field before it, and a server tag
+/// read as a size increment multiplies every size on the contract by five
+/// figures.
+#[test]
+fn a_size_increment_comes_only_from_an_ack_shaped_to_carry_one() {
+    // The two shapes, as the venue sent them.
+    let setup = ["893091670", "0.25", "33079", "", "1"];
+    assert_eq!(trailing_size_increment(&setup), Some(1.0));
+    let subscribed = ["33082", "6", "0.01", "0", "3", "a6", "", "1", "0.5"];
+    assert_eq!(trailing_size_increment(&subscribed), Some(0.5));
+
+    // And one too short to carry it, whose last field is a server tag.
+    let short = ["893091670", "0.25", "33079"];
+    assert_eq!(
+        trailing_size_increment(&short), None,
+        "a server tag is not a size increment",
+    );
+}

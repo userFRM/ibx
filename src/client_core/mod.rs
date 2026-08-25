@@ -2420,7 +2420,7 @@ impl ClientCore {
             };
             let unit_value = if pi.market_value != 0 {
                 pi.market_value as f64 / PRICE_SCALE_F
-            } else if position_is_multiplied(&pi) {
+            } else if qty_now != 0.0 && position_is_multiplied(&pi) {
                 // The venue states a value that already carries the contract's
                 // multiplier and a price that does not. With no value stated,
                 // multiplying the quantity by the price alone values a
@@ -2428,6 +2428,11 @@ impl ClientCore {
                 // that is the branch an update carrying only the price takes,
                 // because an absent value reads as zero. Both neighbours here
                 // test for this; this one did not.
+                //
+                // Only where something is held. A position closed today keeps
+                // its row, and its value really is nothing — skipped for
+                // carrying a multiplier, the caller would never hear the close
+                // or the realized figure that came with it.
                 continue;
             } else {
                 qty_now * price_now as f64 / PRICE_SCALE_F

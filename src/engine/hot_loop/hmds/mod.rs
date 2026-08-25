@@ -637,6 +637,13 @@ impl HmdsState {
                             if answers(xml_tag, &sub.0) {
                                 sub.2 = Some(ticker_id);
                                 sub.3 = min_tick;
+                                // And the increment its sizes move in. A
+                                // stream asked for directly is written down
+                                // before the ack arrives, with a placeholder
+                                // for both — updating only the price one left
+                                // every ordinary real-time bar counting sizes
+                                // as whole units.
+                                sub.4 = size_tick;
                                 log::info!("HMDS rtbar ticker_id={} min_tick={} for req_id={}", ticker_id, min_tick, sub.1);
                                 matched = true;
                                 break;

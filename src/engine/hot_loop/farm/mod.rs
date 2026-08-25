@@ -266,6 +266,18 @@ const DEEP_REQUEST: &str = "0";
 /// one of the two a hundred million times over. An acknowledgement that
 /// states none is counted in whole ones, which is what stating none means.
 fn trailing_size_increment(parts: &[&str]) -> Option<f64> {
+    // Only on an acknowledgement long enough to be one that carries it.
+    // Captured off the wire, the two shapes are five fields for a ticker
+    // setup — contract, price increment, server tag, an empty field, the size
+    // increment — and nine for a subscription, ending the same way. Every
+    // neighbouring field parses as a positive number, so a shorter
+    // acknowledgement than either would not fail this: it would quietly hand
+    // back the field before it, and a server tag read as a size increment
+    // multiplies every size on the contract by five figures.
+    const SHORTEST_THAT_CARRIES_ONE: usize = 5;
+    if parts.len() < SHORTEST_THAT_CARRIES_ONE {
+        return None;
+    }
     let stated: f64 = parts.last()?.trim().parse().ok()?;
     (stated > 0.0).then_some(stated)
 }

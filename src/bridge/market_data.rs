@@ -271,7 +271,17 @@ impl MarketDataState {
     }
 
     #[doc(hidden)] pub fn push_option_computation(&self, comp: crate::types::OptionComputation) {
-        self.last_option_model.lock().unwrap().insert(comp.instrument, comp);
+        // Only the venue's own statement becomes the model for a contract. An
+        // answer worked out here belongs to the question that asked it and
+        // names no contract at all — stored, it lands on slot zero, which is a
+        // real contract, and the next question about that contract is answered
+        // against the last caller's own volatility and price instead of the
+        // venue's. It also says nothing about which model the venue used, so
+        // the refusal that guards the one this client cannot solve with reads
+        // as though there were nothing to guard.
+        if comp.answers.is_none() {
+            self.last_option_model.lock().unwrap().insert(comp.instrument, comp);
+        }
         push_bounded(&self.option_computations, comp, STREAM_BACKLOG_LIMIT, "option_computations");
     }
 
@@ -281,5 +291,41 @@ impl MarketDataState {
 
     #[doc(hidden)] pub fn set_instrument_count(&self, count: u32) {
         self.instrument_count.store(count as u64, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod option_model_tests {
+    use super::*;
+    use crate::types::OptionComputation;
+
+    /// An answer worked out here does not become the venue's model for a
+    /// contract.
+    ///
+    /// It names no contract — a solve answers a request, not an instrument —
+    /// so stored it lands on slot zero, which is a real contract. The next
+    /// question about that contract would then be answered against the last
+    /// caller's own volatility and price, and against a record saying nothing
+    /// about which model the venue used.
+    #[test]
+    fn a_local_answer_does_not_become_the_venues_model() {
+        let market = MarketDataState::new();
+
+        // The venue's own statement for the contract in slot zero.
+        market.push_option_computation(OptionComputation {
+            instrument: 0,
+            implied_vol: 0.25,
+            price_based_vol: true,
+            ..Default::default()
+        });
+        // And a caller's question answered here, which names no contract.
+        market.push_option_computation(OptionComputation {
+            implied_vol: 0.99,
+            ..OptionComputation::solved(7)
+        });
+
+        let stated = market.option_model(0).expect("the venue's statement stands");
+        assert_eq!(stated.implied_vol, 0.25, "the venue's volatility, not the answer's");
+        assert!(stated.price_based_vol, "and what it says about the model it used");
     }
 }
