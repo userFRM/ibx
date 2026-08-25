@@ -826,7 +826,15 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         let raw_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
 
         let inner = if raw_type == ns::NS_SECURE_MESSAGE {
-            let ct = B64.decode(parts[2])
+            // A secure message states three fields and the frame header
+            // establishes none of them. Read rather than indexed: a short
+            // frame is a thing to report, where indexing it takes the thread
+            // down — and on the reconnect path that is the thread every
+            // recovery depends on.
+            let body = parts.get(2).copied().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "secure message carries no body")
+            })?;
+            let ct = B64.decode(body)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
             channel.decrypt(&ct)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
@@ -896,6 +904,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     // those bytes are the session's own state and are handed to the connection
     // below rather than dropped here.
     let mut carry: Vec<u8> = Vec::new();
+    let mut acked = false;
     for _ in 0..5 {
         let response = fix_read_deadline(&mut tls, &mut carry, fix_deadline)?;
         let fields = fix_parse(&response);
@@ -933,10 +942,20 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
                 // hand the account back rather than finish.
                 logged_in_at = fields.get(&52).cloned()
                     .unwrap_or_else(|| chrono_free_timestamp().to_string());
+                acked = true;
                 break;
             }
             _ => {}
         }
+    }
+    // Five is a budget against a preamble the venue sets the length of, not a
+    // statement that the logon was answered. Falling out of it leaves the
+    // session with no stamp and no token while reporting success.
+    if !acked {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "CCP logon read past five messages without an ACK",
+        ));
     }
     tls.get_ref().set_read_timeout(None)?;
 
@@ -1100,7 +1119,15 @@ fn wait_for_data_start(
 
         // Decrypt if encrypted, otherwise use raw
         let inner = if raw_type == ns::NS_SECURE_MESSAGE {
-            let ct = B64.decode(parts[2])
+            // A secure message states three fields and the frame header
+            // establishes none of them. Read rather than indexed: a short
+            // frame is a thing to report, where indexing it takes the thread
+            // down — and on the reconnect path that is the thread every
+            // recovery depends on.
+            let body = parts.get(2).copied().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "secure message carries no body")
+            })?;
+            let ct = B64.decode(body)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
             channel.decrypt(&ct)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?

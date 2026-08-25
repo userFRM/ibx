@@ -172,16 +172,30 @@ impl EClient {
         // If orderId is already tracked, this is a modification — emit Modify instead
         // of Submit.
         let cmd = if self.core.is_order_tracked(oid) {
+            // A replace carries the order id and its fields, not the contract, so
+            // the order stays on the instrument it was placed on. A contract naming
+            // a different instrument is refused rather than recorded.
+            let placed_on = self.core.open_orders.lock().unwrap()
+                .get(&oid)
+                .map(|tracked| tracked.instrument);
+            if placed_on.is_some_and(|placed_on| placed_on != instrument) {
+                return self.report_refusal(py, order_id, Refusal::validation(format!(
+                    "order {oid} is working on another contract, and a replace names \
+                     the order rather than the contract: withdraw it and place a new \
+                     order to trade {}",
+                    contract.symbol,
+                )));
+            }
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one.
             if let Some(refusal) = self.core.modify_refusal(oid, &api_order) {
                 return self.report_refusal(py, order_id, refusal.into());
             }
-            let price = (api_order.lmt_price * crate::types::model::PRICE_SCALE_F) as i64;
+            let price = crate::types::price_from_f64(api_order.lmt_price);
             let qty = crate::types::qty_from_f64(api_order.total_quantity);
             // A stop's trigger rides on aux_price, exactly as it does on the
             // submit path.
-            let stop_price = (api_order.aux_price * crate::types::model::PRICE_SCALE_F) as i64;
+            let stop_price = crate::types::price_from_f64(api_order.aux_price);
             ControlCommand::Order(OrderRequest::Modify {
                 order_id: oid,
                 price,

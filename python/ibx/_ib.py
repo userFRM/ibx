@@ -917,7 +917,14 @@ class Client:
 
         Python looks here only after failing to find the name on this class, so
         nothing defined above can be hidden by it.
+
+        A name opening on an underscore is not carried across. The client keeps
+        its own workings under those names and a session is not the place to
+        reach them; forwarding them published the whole test-injection surface
+        as though it were this class's own API.
         """
+        if name.startswith("_"):
+            raise AttributeError(name)
         try:
             return getattr(self.client, name)
         except AttributeError:

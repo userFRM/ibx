@@ -70,7 +70,10 @@ impl EClient {
         // and the caller may have stated a description instead. Resolved only
         // when news is what was asked for: a quote on a description is asked
         // for by description and the venue names it itself.
-        let wants_news = generic_tick_list.split(',').any(|t| t.trim().ends_with("292"));
+        // The whole entry, not a number ending in it: 1292 is not 292. Matching on
+        // the ending qualifies the contract, which is a request to the venue and a
+        // wait on the caller's thread, while the core subscribes to no news.
+        let wants_news = generic_tick_list.split(',').any(|t| t.trim() == "292");
         let named;
         let contract = if wants_news && contract.con_id == 0 && !contract.symbol.is_empty() {
             match self.qualify_contract_stated(py, contract) {

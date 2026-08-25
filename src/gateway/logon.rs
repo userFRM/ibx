@@ -93,6 +93,7 @@ impl LogonAck {
     ) -> io::Result<Self> {
         // What the venue is asked for, until it answers with its own.
         let mut ack = Self { heartbeat_interval: CCP_HEARTBEAT, ..Self::default() };
+        let mut acked = false;
         for _ in 0..5 {
             let raw_response = fix_read_deadline(r, carry, deadline)?;
             // The auth-logon ACK arrives as `8=FIXCOMP` with a DEFLATE-
@@ -241,8 +242,21 @@ impl LogonAck {
 
             // Stop on the logon ACK or the server config message
             if msg_type == "A" || msg_type == "U" {
+                acked = true;
                 break;
             }
+        }
+        // Five is a budget against a preamble whose length the venue sets, not
+        // a statement that the logon was answered. Falling out of it holds an
+        // ack with no account, no token and no session stamp, and a session
+        // built on that reports success and takes orders — while the empty
+        // stamp reads to the reconnect logic as every session being another
+        // client, which hands the account away on the next reconnect.
+        if !acked {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "logon read past five messages without an ACK",
+            ));
         }
         Ok(ack)
     }
