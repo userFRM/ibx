@@ -157,22 +157,6 @@ pub fn qty_from_counted(counted: i64, size_tick: f64) -> Qty {
     (counted as f64 * size_tick * QTY_SCALE as f64).round() as Qty
 }
 
-/// Snap a fixed-point price to the nearest multiple of `tick` (ties round
-/// away from zero). A non-positive tick means the grid is unknown and the
-/// price is returned unchanged. Pure integer math — exact on the fixed-point
-/// representation.
-pub fn snap_to_tick(price: Price, tick: i64) -> Price {
-    if tick <= 0 {
-        return price;
-    }
-    let half = tick / 2;
-    if price >= 0 {
-        ((price + half) / tick) * tick
-    } else {
-        -(((-price + half) / tick) * tick)
-    }
-}
-
 /// Maximum number of concurrently tracked instruments.
 pub const MAX_INSTRUMENTS: usize = 256;
 

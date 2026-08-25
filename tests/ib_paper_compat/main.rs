@@ -1683,15 +1683,19 @@ fn submit_ex_bracket_child_phase_live() {
     println!("\n  PASS — SubmitEx child linked, held, and cascade-cancelled\n");
 }
 
-/// Live entry that validates snap-to-tick on the outbound path.
-/// Subscribes SPY market data (the subscribe ack carries the tick size the
-/// engine stores), then places a resting LMT GTC BUY 1 SPY at the off-grid
-/// price $1.001234. The engine must snap it to $1.00 before encoding; the
-/// assertion reads the price back from the server-echoed open-order cache.
-/// Run: cargo test --test ib_paper_compat snap_to_tick_phase_live -- --ignored --nocapture
+/// A price off the contract's tick grid goes out as the caller stated it, and
+/// the venue's refusal reaches the caller.
+///
+/// This client does not move a price onto the grid. The venue rejects an
+/// off-grid price rather than adjusting it, and snapping here would put an
+/// order on the market at a price nobody asked for — so the price is sent as
+/// given and what comes back is reported. Placing SPY at $1.001234 on a cent
+/// grid is the smallest way to ask for that refusal and watch it arrive.
+///
+/// Run: cargo test --test ib_paper_compat an_off_grid_price_is_refused_and_the_caller_told -- --ignored --nocapture
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
-fn snap_to_tick_phase_live() {
+fn an_off_grid_price_is_refused_and_the_caller_told() {
     start_logging();
     let config = match get_config() {
         Some(c) => c,
@@ -1746,37 +1750,19 @@ fn snap_to_tick_phase_live() {
             }
         }
     }
-    assert!(!rejected, "off-grid price was rejected — snap-to-tick did not apply");
-    assert!(acked, "order never acked within 30s — cleanup orderId={order_id} via GUI");
+    // The refusal is the outcome under test: the venue states it, and a caller
+    // that hears nothing cannot tell a refused order from a slow one.
+    assert!(
+        rejected,
+        "the venue accepted an off-grid price, so this no longer tests anything: \
+         either the grid moved or something is putting the price on it",
+    );
+    assert!(!acked, "an order the venue refused was reported as working");
 
-    // Read the price back from the server-echoed open-order cache.
-    std::thread::sleep(Duration::from_secs(2));
-    let core = ibx::client_core::ClientCore::new();
-    let echoed = core.collect_open_orders(&shared)
-        .into_iter()
-        .find(|(oid, _)| *oid == order_id)
-        .map(|(_, t)| t.order.lmt_price);
-    println!("  server-echoed lmt_price: {echoed:?}");
-
-    // Cleanup before asserting on the echo.
-    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
-        .expect("send cancel failed");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut cancelled = false;
-    while Instant::now() < deadline && !cancelled {
-        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100))
-            && u.order_id == order_id && u.status == OrderStatus::Cancelled { cancelled = true; }
-    }
     let _ = control_tx.send(ControlCommand::Shutdown);
     let _ = join.join();
-    assert!(cancelled, "cancel not confirmed within 30s — cleanup orderId={order_id} via GUI");
-
-    let echoed = echoed.expect("order missing from the open-order cache after ack");
-    assert!((echoed - 1.00).abs() < 1e-9,
-        "server echoed lmt_price {echoed} — expected the snapped 1.00");
-
-    println!("\n  PASS — off-grid price snapped to the tick grid and accepted\n");
 }
+
 
 /// Live entry that validates that the deadline
 /// sweeps do NOT fire on healthy traffic: a normal contract-details lookup
