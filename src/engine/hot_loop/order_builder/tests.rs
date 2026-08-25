@@ -33,6 +33,57 @@ fn only_a_stock_leaves_the_contract_unnamed() {
     }
 }
 
+/// A replace names the contract by its local symbol, and an option's local
+/// symbol is not its underlying's. With no local symbol carried on the
+/// instrument the tag is left off rather than filled with the underlying —
+/// the venue tolerates an omission and acts on a name, and the name of the
+/// family is the wrong contract to act on.
+#[test]
+fn a_replace_does_not_name_an_option_by_its_underlying() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context
+        .market
+        .try_register_contract(756733, "SPY", "OPT", "SMART", "20270917|500|C|100|||USD")
+        .expect("register an option");
+    context.set_symbol(instrument, "SPY".to_string());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        order_id: 42,
+        instrument,
+        side: Side::Buy,
+        qty: crate::types::QTY_SCALE,
+        kind: crate::types::OrderKind::Limit { price: 5 * crate::types::PRICE_SCALE },
+        tif: b'0',
+        attrs: Default::default(),
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let mut buf = [0u8; 8192];
+    peer.read(&mut buf).unwrap();
+
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 42,
+        price: 6 * crate::types::PRICE_SCALE,
+        qty: crate::types::QTY_SCALE,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+    assert_eq!(tag("6035=").as_deref(), None, "it does not name the underlying: {msg}");
+}
+
 /// A replace is a full statement of the order, so an attribute the submit
 /// made survives it. This one came back without its all-or-none instruction
 /// and was a different order to the one the caller had placed.

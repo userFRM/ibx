@@ -411,12 +411,24 @@ pub(crate) fn drain_and_send_orders(
                 // with an expiry or a strike. Naming
                 // the family there says nothing about which member is being
                 // replaced.
-                let local_symbol = context
-                    .market
-                    .order_identity(orig.instrument)
+                // A contract an expiry, a strike or a right names is not
+                // named by its symbol, and standing the symbol in for its local
+                // symbol states the family where the venue is being told which
+                // member is being replaced. Only a contract named by its symbol
+                // alone has the two the same; anything else drops the tag below
+                // rather than send a name that belongs to something other than
+                // the order being replaced.
+                let identity = context.market.order_identity(orig.instrument);
+                let named_by_symbol = identity.as_ref().is_none_or(|id| {
+                    id.expiry.is_empty()
+                        && id.right.is_empty()
+                        && (id.strike.is_empty()
+                            || id.strike.parse::<f64>().is_ok_and(|s| s <= 0.0))
+                });
+                let local_symbol = identity
                     .map(|id| id.local_symbol)
                     .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| symbol.clone());
+                    .unwrap_or_else(|| if named_by_symbol { symbol.clone() } else { String::new() });
                 let (sec_type_str, destination) = context.market.order_routing(orig.instrument);
                 let ord_type_str = crate::types::ord_type_fix_str(ord_type).to_string();
                 // An order recovered without a stated time-in-force has none to
@@ -482,6 +494,9 @@ pub(crate) fn drain_and_send_orders(
                 fields.extend(rest);
                 if tif == crate::types::TIF_UNSTATED {
                     fields.retain(|(tag, _)| *tag != 59);
+                }
+                if local_symbol.is_empty() {
+                    fields.retain(|(tag, _)| *tag != 6035);
                 }
                 // The trigger the caller moved, or the one the order already had.
                 let stop_str;

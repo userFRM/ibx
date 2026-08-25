@@ -2242,7 +2242,12 @@ impl HotLoop {
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                log::error!("secdef reconnect thread dropped without result");
                 self.pending_secdef_reconnect = None;
+                // Spent like any other attempt: see the HMDS arm.
+                self.secdef_next_attempt_at = Some(
+                    Instant::now() + hmds_reconnect_backoff(self.secdef_reconnect_attempt + 1),
+                );
             }
         }
     }
@@ -2291,6 +2296,11 @@ impl HotLoop {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("HMDS reconnect thread dropped without result");
                 self.pending_hmds_reconnect = None;
+                // A thread that never answered is a spent attempt like any
+                // other. Leaving the due time on the instant that authorised
+                // this one makes the next pass spawn immediately, and the one
+                // after that, for as long as the rest of the session is up.
+                self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
             }
         }
     }
