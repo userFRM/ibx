@@ -82,17 +82,15 @@ impl EClient {
     /// — from `qualify_contract`, or from any contract-details answer — and
     /// nothing is resolved and nothing waits.
     pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), Refusal> {
-        // Refused once the session is over, rather than accepted and buffered.
-        // The engine keeps running after it gives up reconnecting, so the
-        // channel still takes an order and this still returned an id for one
-        // that had nowhere to go: it joined a buffer that is deliberately
-        // unbounded, and nothing further was ever said about it. The reads
-        // already refuse on this; the order path did not.
-        if let Some(why) = self.shared.reference.session_over() {
-            return Err(Refusal::not_connected(format!(
-                "the session is over, so this order has nowhere to go: {why}",
-            )));
-        }
+        // Not gated on the session being over, though an order accepted after
+        // the engine gives up reconnecting does join a buffer nothing drains.
+        // That flag is one flag for every transport, and the market-data
+        // farm's own terminal reasons set it — so refusing here takes the
+        // trading connection down with the quote feed, permanently, on a
+        // connection that would have accepted the order. Rejecting an order
+        // that would have worked is the worse of the two failures. What this
+        // needs is the trading transport's own state, which nothing here
+        // publishes yet.
         self.core.refuse_if_readonly("an order").map_err(Refusal::validation)?;
         ClientCore::validate_order_destination(&contract.exchange)?;
 

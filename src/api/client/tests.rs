@@ -6154,21 +6154,36 @@ fn asking_for_the_accounts_pnl_asks_the_venue() {
     )));
 }
 
-/// `regulatory_snapshot` reaches the venue rather than being refused here. It
-/// names the venue's own chargeable one-shot snapshot, which is a request type
-/// of its own — an account without the entitlement is refused by the venue,
-/// which names that type back, and refusing it here instead would have hidden
-/// a request the protocol does carry. What goes on the wire is pinned where
-/// the request is built.
+/// `regulatory_snapshot` reaches the venue rather than being refused here, and
+/// it reaches it even when the contract is already being watched.
+///
+/// It names the venue's own chargeable one-shot snapshot, which is a request
+/// of its own rather than a share of somebody else's stream. Answered by
+/// following a subscription that is already up, nothing goes on the wire,
+/// nothing is billed, and an account with no entitlement hears an end it was
+/// never refused — off a stream it did not ask for.
 #[test]
-fn a_regulatory_snapshot_is_asked_for_rather_than_refused_here() {
-    let (client, _rx, _shared) = test_client();
-    // Following a subscription that is already up, so the request is answered
-    // without an engine behind it.
+fn a_chargeable_snapshot_is_asked_for_even_where_the_contract_is_watched() {
+    let (client, rx, _shared) = test_client();
+    // A subscription on this contract is already up and held by another
+    // request, which is the state that used to swallow this one.
     client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
     client.core.req_to_instrument.lock().unwrap().insert(1, 0);
-    client
-        .req_mkt_data_ex(2, &spy(), "", false, true, 0)
-        .expect("the chargeable snapshot is the venue's to refuse, not this client's");
+
+    // An ordinary request does follow it, and asks the engine for nothing.
+    client.req_mkt_data(2, &spy(), "", false, false).expect("it follows the stream");
+    assert!(
+        !rx.try_iter().any(|c| matches!(c, ControlCommand::Subscribe { .. })),
+        "an ordinary request shares the subscription that is up",
+    );
+
+    // The chargeable one does not.
+    let _ = client.req_mkt_data_ex(3, &spy(), "", false, true, 0);
+    assert!(
+        rx.try_iter().any(|c| matches!(
+            c, ControlCommand::Subscribe { regulatory_snapshot: true, .. }
+        )),
+        "the chargeable snapshot is asked for on its own",
+    );
 }
