@@ -2146,8 +2146,8 @@ fn tif_round_trips_through_encoder_and_decoder() {
         assert_eq!(decode_tif(order.tif_byte()), tif,
             "TIF {tif} must survive encode->decode");
     }
-    // DTC shares the GTD wire byte and decodes as GTD: the counterpart names
-    // the two differently but tag 59 does not carry the difference.
+    // DTC shares the GTD wire byte and decodes as GTD: the two are separate
+    // lives with separate names, but tag 59 does not carry the difference.
     let dtc = api::Order { tif: "DTC".to_string(), ..Default::default() };
     assert_eq!(decode_tif(dtc.tif_byte()), "GTD");
     // Unknown bytes decode to empty, not a wrong TIF.
