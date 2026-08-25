@@ -332,43 +332,38 @@ impl ReferenceState {
     // for a head timestamp at once — and withdrawing either must not take the
     // other's answers with it.
 
-    /// Throw away a refusal still queued under a request.
-    ///
-    /// Every kind of cancel does this, because the refusal queue is one queue
-    /// for all of them: a reason left standing is read back as the reason the
-    /// NEXT request under that number failed.
-    pub fn purge_errors_for(&self, req_id: u32) {
-        self.historical_errors.lock().unwrap().retain(|(id, ..)| *id != req_id);
-    }
+    // The refusals are not purged with them, and cannot be as things stand.
+    // They share one queue keyed by request number alone — written by the
+    // calendar, the contract lookups, the trading connection and the scanner
+    // as well — so throwing away "the refusals under 7" throws away another
+    // kind's reason for failing, which is the very thing the paragraph above
+    // forbids. A reason left standing is read back as the next request's, and
+    // that is the lesser of the two until the queue carries which kind it
+    // belongs to.
 
     /// Throw away bars still queued under a request.
     pub fn purge_historical_for(&self, req_id: u32) {
-        self.purge_errors_for(req_id);
         self.historical_data.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
     /// Throw away a head timestamp still queued under a request.
     pub fn purge_head_timestamp_for(&self, req_id: u32) {
-        self.purge_errors_for(req_id);
         self.head_timestamps.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
     /// Throw away calendar answers still queued under a request.
     pub fn purge_calendar_for(&self, req_id: u32) {
-        self.purge_errors_for(req_id);
         self.calendar_meta_data.lock().unwrap().retain(|(id, _)| *id != req_id);
         self.calendar_events.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
     /// Throw away a report still queued under a request.
     pub fn purge_fundamental_for(&self, req_id: u32) {
-        self.purge_errors_for(req_id);
         self.fundamental_data.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
     /// Throw away a histogram still queued under a request.
     pub fn purge_histogram_for(&self, req_id: u32) {
-        self.purge_errors_for(req_id);
         self.histogram_data.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
