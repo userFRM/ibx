@@ -958,8 +958,14 @@ pub fn decode_bar_payload(
     };
     let volume = counted * size_tick;
 
-    let wap = if count > 1 && volume > 0.0 {
-        low + wap_sum * min_tick / volume
+    // Divided by the count, not by the volume above it. The weighted sum is a
+    // raw wire figure weighted by those same counts, so the two cancel; put
+    // the scaled volume underneath it instead and the offset from the low
+    // scales by the reciprocal of the increment — which on a contract counted
+    // in hundred-millionths reads a sixty-thousand-dollar bar at fifty
+    // million.
+    let wap = if count > 1 && counted > 0.0 {
+        low + wap_sum * min_tick / counted
     } else {
         low
     };

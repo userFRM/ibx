@@ -567,16 +567,59 @@ fn single_tick_payload(low_ticks: u32, volume: u32) -> Vec<u8> {
     stream.chunks(4).flat_map(|c| c.iter().rev().copied()).collect()
 }
 
-/// A bar's volume is a count of the increment the venue said this
-/// contract's sizes move in, the same as a size on the quote and
-/// tick-by-tick streams. Counted as whole units, one instrument reported
-/// two different volumes depending on which stream it was read from.
+/// A bar's volume is a count of the increment the venue said this contract's
+/// sizes move in, and its weighted average price is not.
+///
+/// The weighted sum is a raw wire figure weighted by those same counts, so the
+/// counts cancel and the volume must not be put underneath it. Scaled on both
+/// sides, the offset from the low moves by the reciprocal of the increment — a
+/// contract counted in hundred-millionths reads a sixty-thousand bar at fifty
+/// million. This walks a bar of several ticks, which is the only shape that
+/// carries a weighted price at all.
 #[test]
-fn a_bars_volume_counts_the_contracts_size_increment() {
-    let payload = single_tick_payload(15_000, 100);
-    let whole = decode_bar_payload(&payload, 0.01, 1.0).expect("it decodes");
-    let counted = decode_bar_payload(&payload, 0.01, 0.5).expect("it decodes");
-    assert_eq!(counted.volume, whole.volume * 0.5, "the count is in the venue's unit");
+fn a_bars_volume_counts_the_increment_and_its_weighted_price_does_not() {
+    // count > 1, so the bar carries deltas and a weighted sum.
+    let mut bits: Vec<u8> = Vec::new();
+    let put = |v: u32, w: usize, bits: &mut Vec<u8>| {
+        for i in 0..w { bits.push(((v >> i) & 1) as u8); }
+    };
+    put(0, 4, &mut bits);        // padding
+    put(1, 1, &mut bits);        // count width flag: 8 bits
+    put(4, 8, &mut bits);        // count = 4
+    put(1000, 31, &mut bits);    // low = 1000 ticks
+    put(1, 1, &mut bits);        // delta width flag: 5 bits
+    put(2, 5, &mut bits);        // open delta
+    put(6, 5, &mut bits);        // high delta
+    put(3, 5, &mut bits);        // close delta
+    put(1, 1, &mut bits);        // wap width flag: 18 bits
+    put(2000, 18, &mut bits);    // weighted sum
+    put(1, 1, &mut bits);        // volume width flag: 16 bits
+    put(500, 16, &mut bits);     // volume count = 500
+
+    let mut packed = vec![0u8; bits.len().div_ceil(8)];
+    for (i, &b) in bits.iter().enumerate() {
+        if b == 1 { packed[i / 8] |= 1 << (i % 8); }
+    }
+    let mut payload = Vec::new();
+    for chunk in packed.chunks(4) {
+        let mut c = chunk.to_vec();
+        c.reverse();
+        payload.extend_from_slice(&c);
+    }
+
+    let min_tick = 0.01;
+    let whole = decode_bar_payload(&payload, min_tick, 1.0).expect("decodes");
+    let counted = decode_bar_payload(&payload, min_tick, 0.5).expect("decodes");
+
+    assert_eq!(whole.count, 4, "the bar carries several ticks");
+    assert_eq!(counted.volume, whole.volume * 0.5, "volume counts the increment");
+    // 10.0 + 2000 * 0.01 / 500
+    assert!((whole.wap - 10.04).abs() < 1e-9, "weighted price: {}", whole.wap);
+    assert!(
+        (counted.wap - whole.wap).abs() < 1e-9,
+        "and it does not move with the increment: {} against {}",
+        counted.wap, whole.wap,
+    );
 }
 
 
