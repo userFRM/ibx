@@ -1812,9 +1812,71 @@ impl OrderAllocation {
     }
 }
 
+/// A margin figure the venue did not state, written the way the reference
+/// client writes one.
+///
+/// These carry numbers as text and a caller reads them with `float`. Left
+/// empty that raises, and the answer the empty figure belonged to never
+/// reaches the caller at all — a preview on a contract the venue states no
+/// margin for was lost whole, not merely missing a field. The reference stack
+/// writes an unstated double as the largest one there is, which a caller's
+/// library already reads back as nothing.
+fn unstated_figure(stated: &str) -> String {
+    if stated.is_empty() {
+        f64::MAX.to_string()
+    } else {
+        stated.to_string()
+    }
+}
+
+impl Default for OrderState {
+    /// An order state nobody has filled in yet.
+    ///
+    /// The margin and equity figures carry numbers as text, and a caller reads
+    /// them with `float`. Defaulted to the empty string they raise inside the
+    /// callback, and the whole report is lost rather than arriving with a field
+    /// unset — which is what happened to every open order reported through a
+    /// path that states the status and leaves the rest to this.
+    fn default() -> Self {
+        let unstated = || f64::MAX.to_string();
+        Self {
+            status: String::new(),
+            init_margin_before: unstated(),
+            maint_margin_before: unstated(),
+            equity_with_loan_before: unstated(),
+            init_margin_change: unstated(),
+            maint_margin_change: unstated(),
+            equity_with_loan_change: unstated(),
+            init_margin_after: unstated(),
+            maint_margin_after: unstated(),
+            equity_with_loan_after: unstated(),
+            commission_and_fees: f64::MAX,
+            min_commission_and_fees: f64::MAX,
+            max_commission_and_fees: f64::MAX,
+            commission_and_fees_currency: String::new(),
+            warning_text: String::new(),
+            completed_time: String::new(),
+            completed_status: String::new(),
+            margin_currency: String::new(),
+            init_margin_before_outside_rth: f64::MAX,
+            maint_margin_before_outside_rth: f64::MAX,
+            equity_with_loan_before_outside_rth: f64::MAX,
+            init_margin_change_outside_rth: f64::MAX,
+            maint_margin_change_outside_rth: f64::MAX,
+            equity_with_loan_change_outside_rth: f64::MAX,
+            init_margin_after_outside_rth: f64::MAX,
+            maint_margin_after_outside_rth: f64::MAX,
+            equity_with_loan_after_outside_rth: f64::MAX,
+            suggested_size: String::new(),
+            reject_reason: String::new(),
+            order_allocations: Vec::new(),
+        }
+    }
+}
+
 /// ibapi-compatible OrderState class (used in openOrder callback).
 #[pyclass(from_py_object)]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct OrderState {
     #[pyo3(get, set)]
     pub status: String,
@@ -1871,15 +1933,15 @@ impl OrderState {
     pub(crate) fn from_api(s: &crate::types::model::OrderState) -> Self {
         Self {
             status: s.status.clone(),
-            init_margin_before: s.init_margin_before.clone(),
-            maint_margin_before: s.maint_margin_before.clone(),
-            equity_with_loan_before: s.equity_with_loan_before.clone(),
-            init_margin_change: s.init_margin_change.clone(),
-            maint_margin_change: s.maint_margin_change.clone(),
-            equity_with_loan_change: s.equity_with_loan_change.clone(),
-            init_margin_after: s.init_margin_after.clone(),
-            maint_margin_after: s.maint_margin_after.clone(),
-            equity_with_loan_after: s.equity_with_loan_after.clone(),
+            init_margin_before: unstated_figure(&s.init_margin_before),
+            maint_margin_before: unstated_figure(&s.maint_margin_before),
+            equity_with_loan_before: unstated_figure(&s.equity_with_loan_before),
+            init_margin_change: unstated_figure(&s.init_margin_change),
+            maint_margin_change: unstated_figure(&s.maint_margin_change),
+            equity_with_loan_change: unstated_figure(&s.equity_with_loan_change),
+            init_margin_after: unstated_figure(&s.init_margin_after),
+            maint_margin_after: unstated_figure(&s.maint_margin_after),
+            equity_with_loan_after: unstated_figure(&s.equity_with_loan_after),
             commission_and_fees: s.commission_and_fees,
             min_commission_and_fees: s.min_commission_and_fees,
             max_commission_and_fees: s.max_commission_and_fees,
@@ -1956,4 +2018,34 @@ impl SoftDollarTierPy {
     fn get_display_name_alias(&self) -> String { self.display_name.clone() }
     #[setter(displayName)]
     fn set_display_name_alias(&mut self, v: String) { self.display_name = v; }
+}
+
+#[cfg(test)]
+mod unstated_figure_tests {
+    use super::unstated_figure;
+
+    /// A margin figure the venue did not state is written as the reference
+    /// client writes one, not left empty.
+    ///
+    /// A caller reads these with `float`. Empty, that raises inside the
+    /// callback and the whole answer is lost — a preview on a contract the
+    /// venue states no margin for reached the caller as nothing at all, rather
+    /// than as a preview missing a field. Seen against a crypto contract,
+    /// which the venue prices without stating margin.
+    #[test]
+    fn an_unstated_figure_is_written_the_way_a_caller_can_read_it() {
+        let written = unstated_figure("");
+        assert!(
+            written.parse::<f64>().is_ok(),
+            "a caller reads these with float, and got {written:?}",
+        );
+        assert_eq!(written.parse::<f64>().unwrap(), f64::MAX, "and reads it back as unstated");
+    }
+
+    /// A figure the venue did state is passed through untouched.
+    #[test]
+    fn a_stated_figure_is_left_as_the_venue_wrote_it() {
+        assert_eq!(unstated_figure("96525.01"), "96525.01");
+        assert_eq!(unstated_figure("0"), "0", "nothing is not zero, and zero is not nothing");
+    }
 }
