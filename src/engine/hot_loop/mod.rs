@@ -1025,6 +1025,10 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelHistorical { req_id } => {
+                    // What the venue already sent and nobody has read yet
+                    // goes with the request. Left queued, the next request
+                    // under this number is answered with this one's.
+                    self.shared.reference.purge_answers_for(req_id);
                     self.hmds.keep_up_to_date_reqs.remove(&req_id);
                     // A keep-up-to-date request rides a five-second bar
                     // stream held as a separate query. Cancelling withdraws
@@ -1068,6 +1072,8 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelHeadTimestamp { req_id } => {
+                    // As above: the answers already queued go with it.
+                    self.shared.reference.purge_answers_for(req_id);
                     if let Some(pos) = self.hmds.pending_head_ts.iter().position(|(_, rid)| *rid == req_id) {
                         self.hmds.pending_head_ts.remove(pos);
                     }
@@ -1086,6 +1092,8 @@ impl HotLoop {
                     );
                 }
                 ControlCommand::CancelCalendar { req_id } => {
+                    // As above: the answers already queued go with it.
+                    self.shared.reference.purge_answers_for(req_id);
                     if !self.secdef.withdraw_calendar_request(req_id) {
                         push_hmds_error(
                             &self.shared, req_id,
@@ -1118,6 +1126,14 @@ impl HotLoop {
                         let (scan_id, _) = self.hmds.pending_scanner.remove(pos);
                         self.hmds.send_scanner_cancel(&scan_id, &mut self.hmds_conn, &mut self.hb);
                     }
+                    // Rows already found and waiting on their contracts to be
+                    // named go with it. They are parked for up to five
+                    // seconds, and the parking happens earlier in a lap than
+                    // this does — so without this a scan answers after it was
+                    // withdrawn, and under a number that may already belong to
+                    // the next scan.
+                    self.ccp.pending_scanner_enrichment.retain(|pe| pe.api_req_id != req_id);
+                    self.shared.reference.purge_answers_for(req_id);
                 }
                 ControlCommand::FetchHistoricalNews { req_id, con_id, provider_codes, start_time, end_time, max_results } => {
                     if self.hmds_conn.is_none() {
@@ -1141,6 +1157,8 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelFundamentalData { req_id } => {
+                    // As above: the answers already queued go with it.
+                    self.shared.reference.purge_answers_for(req_id);
                     self.hmds.send_fundamental_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
                 }
                 ControlCommand::FetchHistogramData { req_id, con_id, sec_type, exchange, use_rth, period } => {
@@ -1151,6 +1169,8 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelHistogramData { req_id } => {
+                    // As above: the answers already queued go with it.
+                    self.shared.reference.purge_answers_for(req_id);
                     if let Some(pos) = self.hmds.pending_histogram.iter().position(|(_, rid)| *rid == req_id) {
                         self.hmds.pending_histogram.remove(pos);
                     }

@@ -89,6 +89,14 @@ impl Write for Stream {
 /// stalled send cannot hold the loop past its own cadence.
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long a whole frame may take to reach the socket.
+///
+/// The bound above is per syscall and a partial write restarts it, so on its
+/// own it bounds a peer taking nothing and not a peer taking a little. This is
+/// the bound on the frame, and it is what stops a dribbling peer holding the
+/// loop that polls every socket and checks every deadline.
+const WHOLE_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// The timeouts every connection runs with, in one place so the two
 /// constructors cannot drift apart — a write bound present on one transport and
 /// missing on another is invisible to a test that probes either one.
@@ -552,8 +560,27 @@ impl Connection {
                 "connection abandoned after an incomplete write",
             ));
         }
+        // The per-syscall timeout bounds a peer making no progress at all. It
+        // does not bound one making a little: every partial write restarts it,
+        // so a peer taking a byte just under the timeout holds this thread for
+        // as long as it cares to — and this thread is the one that polls the
+        // sockets, checks the deadlines and reads the stop flag, so a wedged
+        // peer keeps the whole loop while the detector built for it cannot
+        // run. The whole frame gets one budget.
+        let give_up_at = std::time::Instant::now() + WHOLE_FRAME_TIMEOUT;
         let mut written = 0;
         while written < bytes.len() {
+            if std::time::Instant::now() >= give_up_at {
+                self.write_failed = true;
+                log::warn!(
+                    "a frame took longer than {}s to go out and was abandoned part-written",
+                    WHOLE_FRAME_TIMEOUT.as_secs(),
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the peer did not take a whole frame in time",
+                ));
+            }
             match self.stream.write(&bytes[written..]) {
                 Ok(0) => {
                     self.write_failed = true;

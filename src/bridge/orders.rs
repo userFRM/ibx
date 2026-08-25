@@ -286,12 +286,18 @@ impl OrderState {
             if self.recently_completed(order_id) {
                 return;
             }
-            let cache = self.order_cache.lock().unwrap();
+            // Held from the test to the insert. Taken and dropped and taken
+            // again, a removal landing in the gap let a completed order be
+            // written back as an open one — the test saw the record, the
+            // removal took it away, and the insert put a stale view of it back.
+            let mut cache = self.order_cache.lock().unwrap();
             if cache.get(&order_id)
                 .is_some_and(|e| Self::is_terminal_status(&e.order_state.status))
             {
                 return;
             }
+            cache.insert(order_id, info);
+            return;
         }
         self.order_cache.lock().unwrap().insert(order_id, info);
     }

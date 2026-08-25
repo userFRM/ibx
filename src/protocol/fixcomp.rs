@@ -52,8 +52,12 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
             .ok()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| parse_err("fixcomp: tag 95 value is not a usize"))?;
-        let payload_start = if let Some(idx96) = find_tag(&data[soh..], b"96=") {
-            soh + idx96 + 3
+        // Anchored just past the separator, not at it. Searching from the
+        // separator itself lets a "96=" byte run inside a payload stand in for
+        // a tag that is not there, and the payload is then read from the wrong
+        // place.
+        let payload_start = if let Some(idx96) = find_tag(&data[soh + 1..], b"96=") {
+            soh + 1 + idx96 + 3
         } else {
             soh + 1
         };

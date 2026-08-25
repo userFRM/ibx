@@ -11,6 +11,33 @@ use crate::types::*;
 /// day for the life of the process.
 pub const NEWS_BULLETIN_LIMIT: usize = 1000;
 
+/// How much of a stream is kept for a caller who has stopped reading it.
+///
+/// The same reasoning as the bulletins above, and it applies harder: these
+/// arrive at market rate rather than a few times an hour, and this library
+/// documents a way of reading them that never pumps the callback loop at all.
+/// Unbounded, a book or a tick-by-tick stream grows the process until it dies.
+/// Bounded, a caller that stopped reading loses the oldest of what it was not
+/// reading, which is the lesser of the two.
+pub const STREAM_BACKLOG_LIMIT: usize = 100_000;
+
+/// Push onto a stream that nobody may be draining, oldest out first.
+fn push_bounded<T>(queue: &Mutex<Vec<T>>, item: T, limit: usize, what: &str) {
+    let mut held = queue.lock().unwrap();
+    if held.len() >= limit {
+        // A tenth at a time rather than one at a time: dropping a single entry
+        // per push leaves every later push doing a full shift of the vector.
+        let drop_to = limit - limit / 10;
+        let shed = held.len() - drop_to;
+        held.drain(..shed);
+        log::warn!(
+            "{what} has gone past {limit} unread, so the oldest of them were dropped — \
+             nothing is draining this stream",
+        );
+    }
+    held.push(item);
+}
+
 /// Lock-free quotes, TBT streams, real-time bars, depth updates, and news ticks.
 pub struct MarketDataState {
     quotes: Box<[SeqQuote; MAX_INSTRUMENTS]>,
@@ -190,20 +217,20 @@ impl MarketDataState {
     }
 
     #[doc(hidden)] pub fn push_tbt_trade(&self, trade: TbtTrade) {
-        self.tbt_trades.lock().unwrap().push(trade);
+        push_bounded(&self.tbt_trades, trade, STREAM_BACKLOG_LIMIT, "tbt_trades");
     }
 
     #[doc(hidden)] pub fn push_tbt_quote(&self, quote: TbtQuote) {
-        self.tbt_quotes.lock().unwrap().push(quote);
+        push_bounded(&self.tbt_quotes, quote, STREAM_BACKLOG_LIMIT, "tbt_quotes");
     }
 
 
     #[doc(hidden)] pub fn push_real_time_bar(&self, req_id: u32, bar: RealTimeBar) {
-        self.real_time_bars.lock().unwrap().push((req_id, bar));
+        push_bounded(&self.real_time_bars, (req_id, bar), STREAM_BACKLOG_LIMIT, "real_time_bars");
     }
 
     #[doc(hidden)] pub fn push_depth_update(&self, update: DepthUpdate) {
-        self.depth_updates.lock().unwrap().push(update);
+        push_bounded(&self.depth_updates, update, STREAM_BACKLOG_LIMIT, "depth_updates");
     }
 
     /// Remove all buffered depth updates for a given req_id (called on cancel).
@@ -212,7 +239,7 @@ impl MarketDataState {
     }
 
     #[doc(hidden)] pub fn push_tick_news(&self, news: TickNews) {
-        self.tick_news.lock().unwrap().push(news);
+        push_bounded(&self.tick_news, news, STREAM_BACKLOG_LIMIT, "tick_news");
     }
 
     /// A broadcast notice, kept until someone reads it.
@@ -245,7 +272,7 @@ impl MarketDataState {
 
     #[doc(hidden)] pub fn push_option_computation(&self, comp: crate::types::OptionComputation) {
         self.last_option_model.lock().unwrap().insert(comp.instrument, comp);
-        self.option_computations.lock().unwrap().push(comp);
+        push_bounded(&self.option_computations, comp, STREAM_BACKLOG_LIMIT, "option_computations");
     }
 
     #[doc(hidden)] pub fn push_subscription_failure(&self, instrument: crate::types::InstrumentId, reason: String) {

@@ -109,9 +109,9 @@ fn main() {
     let calls: Vec<_> = rows.iter().filter(|r| r.0 == expiry && r.2 == "C").collect();
     println!("nearest expiry {expiry}: {} calls\n", calls.len());
 
-    println!("  {:>7}  {:>4}  {:>10}  {:>9}  {:>8}  {:>7}  {:>8}  {:>9}  {:>9}  {:>9}  {:>8}",
+    println!("  {:>7}  {:>4}  {:>10}  {:>9}  {:>8}  {:>7}  {:>8}  {:>9}  {:>9}",
         "strike", "bit", "underlying", "venue", "sigma", "days", "rate/yr",
-        "as annual", "venue math", "ibx model", "solved v");
+        "ibx price", "solved v");
     println!("  {}", "-".repeat(112));
 
     let step = (calls.len() / 9).max(1);
@@ -155,15 +155,12 @@ fn main() {
         // Both readings of the rate, told apart by which one prices the deep
         // strikes: their whole value is the discount, so they show it plainly.
         let per_year = (-rate * years).exp();
-        let per_day = (-rate / 365.0 * m.cal_days).exp();
         // The volatility read as an annual figure, which is what a year in
         // the time makes it, against the same figure read as a day's.
         // What the wire carries, before it is carried over to a year: the
         // reading this had before, kept for the contrast.
         let a_day = m.implied_vol / 365.0_f64.sqrt();
         let as_annual = call_on_fractional_vol(m.und_price, row.1, a_day, years, per_year);
-        let as_daily_both =
-            call_on_fractional_vol(m.und_price, row.1, a_day, m.cal_days, per_day);
         // The same contract through this library's own model, which carries
         // the venue's figures into the units it works in itself.
         let ours = ibx::control::option_model::option_price(
@@ -203,12 +200,31 @@ fn main() {
             m.opt_price,
             m.und_price,
         ).unwrap_or(f64::NAN);
+        // Vega is a rate of change per unit of volatility, so it is
+        // denominated in whichever volatility the venue's calculator works in
+        // — and the whole point of the scale fix is that its own is a day's.
+        // Reported beside an annualised volatility, a vega still per day is
+        // the same root of a year out, in the same direction.
+        let terms = ibx::control::option_model::OptionTerms {
+            strike: row.1, years_to_expiry: years, is_call: true, on_a_future: true,
+        };
+        let bump = 0.001_f64;
+        let priced = |sigma: f64| ibx::control::option_model::price(
+            terms, m.und_price, sigma, rate, 0.0,
+        );
+        let per_year = match (priced(m.implied_vol + bump), priced(m.implied_vol - bump)) {
+            (Some(up), Some(down)) => (up - down) / (2.0 * bump) * 0.01,
+            _ => f64::NAN,
+        };
+        let per_day = per_year * 365.0_f64.sqrt();
         seen += 1;
         if (ours - m.opt_price).abs() < 0.01 { agree_price += 1 }
         if (as_annual - m.opt_price).abs() < 0.01 { agree_fraction += 1 }
-        println!("  {:>7.0}  {:>4}  {:>10.2}  {:>9.4}  {:>8.5}  {:>7.4}  {:>8.5}  {:>9.4}  {:>9.4}  {:>9.4}  {:>8.4}",
+        println!("  {:>7.0}  {:>4}  {:>10.2}  {:>9.4}  {:>8.5}  {:>7.4}  {:>8.5}  {:>9.4}  {:>9.4}",
             row.1, m.price_based_vol as u8, m.und_price, m.opt_price, m.implied_vol,
-            m.cal_days, rate, as_annual, as_daily_both, ours, solved);
+            m.cal_days, rate, ours, solved);
+        println!("        vega: venue {:>9.5}   as a year {:>9.5}   as a day {:>9.5}",
+            m.vega, per_year, per_day);
     }
     println!("\n  of {seen} strikes the venue priced: {agree_price} reproduced by this \
               library's model on a day's volatility, {agree_fraction} on a year's");

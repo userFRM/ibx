@@ -321,6 +321,23 @@ impl ReferenceState {
         Some(g.remove(at).1)
     }
 
+    /// Throw away every answer still queued under a request.
+    ///
+    /// Withdrawing a request stops the venue sending more; it does not unsend
+    /// what already arrived and is waiting to be read. Left there, the next
+    /// request under the same number is answered with the previous one's — its
+    /// bars, its head timestamp, its calendar, its report, its histogram —
+    /// and, where one of those said it was the last, terminated before its own
+    /// answer arrives.
+    pub fn purge_answers_for(&self, req_id: u32) {
+        self.historical_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.head_timestamps.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.calendar_meta_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.calendar_events.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.fundamental_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.histogram_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+    }
+
     /// Bars answering one request. The venue may answer in several parts, so
     /// this takes every part waiting and the caller stops on the one that says
     /// it is the last.
