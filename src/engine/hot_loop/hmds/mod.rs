@@ -1232,7 +1232,18 @@ fn build_tbt_query(
         if gone.venue_id != 0 {
             self.tbt_withdrawn.insert(gone.venue_id);
         }
-        let ticker_id = gone.query_id;
+        // By the venue's own number for the stream, not the name this client
+        // gave it when asking. Named the second way the withdrawal is accepted
+        // and does nothing: a live session counted three hundred and forty-four
+        // records after one, and four hundred and sixty-nine after another,
+        // arriving until the session ended. The bar stream beside this already
+        // withdraws by the venue's number. Falls back to the name only where
+        // the subscription was never acknowledged and there is no number yet.
+        let ticker_id = if gone.venue_id != 0 {
+            gone.venue_id.to_string()
+        } else {
+            gone.query_id
+        };
         if let Some(conn) = hmds_conn.as_mut() {
             let xml = format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\

@@ -1075,9 +1075,15 @@ impl HotLoop {
                     // that query as well as the batch query below, and clears
                     // it from the resubscribe record so a reconnect does not
                     // request it again.
+                    // By the venue's own number for the stream where it has
+                    // given one, as the withdrawal below this does: a stream
+                    // named by the id this client made up is not one the venue
+                    // finds, and it goes on sending.
                     let rtbar_query: Option<String> = self.hmds.rtbar_subs.iter()
                         .find(|(_, rid, ..)| *rid == req_id)
-                        .map(|(qid, ..)| qid.clone());
+                        .map(|(qid, _, ticker_id, ..)| {
+                            ticker_id.map(|t| t.to_string()).unwrap_or_else(|| qid.clone())
+                        });
                     self.hmds.rtbar_subs.retain(|(_, rid, ..)| *rid != req_id);
                     self.hmds.rtbar_resub.retain(|r| r.req_id != req_id);
                     if let Some(qid) = rtbar_query {
@@ -3208,7 +3214,11 @@ mod tests {
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
         let sent = String::from_utf8_lossy(&buf[..n]).to_string();
-        assert!(sent.contains("ticker:rt_4"), "the venue was told to stop: {sent}");
+        // By the venue's number for the stream, not the name this client asked
+        // under. Named the second way the withdrawal is accepted and the stream
+        // carries on, which is what a live session showed it doing.
+        assert!(sent.contains("ticker:99"), "the venue was told to stop: {sent}");
+        assert!(!sent.contains("rt_4"), "and not by a name it never issued: {sent}");
     }
 
     /// A subscription still waiting to be told which contract it is for.
