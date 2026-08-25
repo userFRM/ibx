@@ -832,7 +832,11 @@ pub fn farm_logon_exchange(
                     match do_soft_token(stream, session_token, &mut buf)? {
                         session::SoftTokenOutcome::Passed => {}
                         session::SoftTokenOutcome::Unknown => {
-                            log::warn!("Soft token rejected — falling back to SRP farm auth");
+                            // Expected, and handled: the venue holds no token
+                            // for this session and the exchange below earns
+                            // one. Reported because it costs a round trip on
+                            // every farm connection, not because it is wrong.
+                            log::info!("Soft token not held by the farm — authenticating in full");
                             stream.set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
                             session::do_srp_farm(stream, username, password, &mut buf)?;
                         }

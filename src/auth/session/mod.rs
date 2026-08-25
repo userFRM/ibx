@@ -1429,7 +1429,10 @@ pub fn do_soft_token(
 
     if state2 == 5 {
         // Farm rejected soft token — SRP fallback needed.
-        log::warn!("SOFT_TOKEN: farm returned state 5 (UNKNOWN) — SRP fallback needed");
+        // The caller reports this; said twice it is two lines a farm connection
+        // for a documented outcome with a defined recovery, and there are four
+        // of those on a session.
+        log::debug!("SOFT_TOKEN: farm returned state 5 (UNKNOWN) — SRP fallback needed");
         return Ok(SoftTokenOutcome::Unknown);
     }
     if state2 != 2 {
