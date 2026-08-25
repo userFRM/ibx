@@ -254,18 +254,30 @@ fn ccp_answers(ccp: &mut Connection) -> bool {
     false
 }
 
-/// Generate a unique order ID based on current time. The trailing three
-/// digits come from a process-wide counter: two calls in the same
-/// millisecond (e.g. allocating a parent and child id back-to-back)
-/// otherwise return the SAME id, and the second order clobbers the first.
+/// An order id no run of this suite has used, that a caller could also have
+/// stated.
+///
+/// Unique across runs, because an id a fill has spent is spent for good and a
+/// run that reuses one is refused. Taken from the clock for that, and kept
+/// inside what an order id can be: the reference client carries one as a
+/// signed 32-bit number, so an id above that is one no program written
+/// against that client could ever name — and the account remembers it. Placed
+/// once, it stands as the highest id the account has used, and every client
+/// that floors its own ids on that is left asking for a number it cannot
+/// state. Seconds rather than milliseconds, wrapped inside the range, with a
+/// counter beneath: two calls in the same second — a parent and its child,
+/// allocated back to back — otherwise return the same id and the second order
+/// clobbers the first.
 pub(super) fn next_order_id() -> OrderId {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let base = std::time::SystemTime::now()
+    // Room for the counter beneath, and for the wrap to stay clear of zero.
+    const SPAN: u64 = (i32::MAX as u64) / 100;
+    let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis() as u64 * 1000;
-    base + (SEQ.fetch_add(1, Ordering::Relaxed) % 1000)
+        .as_secs();
+    (secs % SPAN) * 100 + (SEQ.fetch_add(1, Ordering::Relaxed) % 100)
 }
 
 /// How many phases have announced themselves.
