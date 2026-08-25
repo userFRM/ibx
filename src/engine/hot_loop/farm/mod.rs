@@ -2278,10 +2278,18 @@ impl FarmState {
                     // Every venue, in the order the mask's bits refer to:
                     // `NAME/LETTER` per venue, one after another.
                     let Some(stated) = length_prefixed_text(payload) else {
-                        log::warn!(
-                            "the exchange map states a length its {} bytes do not carry",
-                            payload.len(),
-                        );
+                        // An empty payload states no length at all, which is
+                        // the venue naming no venues rather than a message
+                        // that lost its tail — reported as the same thing, it
+                        // sends the next reader looking for a truncation.
+                        if payload.is_empty() {
+                            log::debug!("the exchange map named no venues");
+                        } else {
+                            log::warn!(
+                                "the exchange map states a length its {} bytes do not carry",
+                                payload.len(),
+                            );
+                        }
                         continue;
                     };
                     let venues: Vec<crate::types::SmartComponent> = stated
