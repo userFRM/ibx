@@ -1418,6 +1418,8 @@ impl FarmState {
         // Take the option-model records before the connection is checked. With
         // the farm down there is nothing to send, and a record left behind
         // would outlive the subscription it describes.
+        // Kept for the line below, which the loop consumes the list to send.
+        let asked = reqs.len();
         let mut withdrawn: Vec<(u32, i64, String)> = Vec::new();
         self.greeks_subs.retain(|entry| {
             if reqs.contains(&entry.0) {
@@ -1459,6 +1461,12 @@ impl FarmState {
                 (263, "2"),
             ]);
         }
+        // Said, because the venue serves a limited number of these at once and
+        // a withdrawal that leaves no trace cannot be told apart from one that
+        // never went. The subscribe on the way in is logged; this is the other
+        // half of the pair, and without it a session that runs out of room
+        // looks like a venue that stopped sending for no reason.
+        log::info!("Sent 35=V unsubscribe: instrument={instrument} requests={asked}");
         hb.last_farm_sent = Instant::now();
     }
 
