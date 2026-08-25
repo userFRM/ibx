@@ -325,6 +325,15 @@ pub struct LiveState {
     /// What each fill cost, by the venue's id for the execution. Held for the
     /// fill that has not arrived yet, and read by the one that has.
     commissions: BTreeMap<String, crate::types::model::CommissionAndFeesReport>,
+    /// Where a fill is, by the venue's id for it: the order it belongs to, and
+    /// its place in the list below. Both lists are only ever appended to, so a
+    /// place recorded here stays that fill's.
+    ///
+    /// Costs arrive as their own reports, one per fill, and each was matched by
+    /// walking every fill the session holds — twice. Over a session that is the
+    /// square of the number of fills in string comparisons, on the path that
+    /// tells a caller what its trading cost.
+    exec_at: std::collections::HashMap<String, (i64, usize)>,
 }
 
 /// How many of the venue's remarks are kept before the oldest is let go.
@@ -689,6 +698,10 @@ impl Wrapper for LiveState {
         if let Some(trade) = self.trades.get_mut(&execution.order_id) {
             trade.fills.push(fill.clone());
         }
+        self.exec_at.insert(
+            fill.execution.exec_id.clone(),
+            (execution.order_id, self.executions.len()),
+        );
         self.executions.push(fill);
         self.changed();
     }
@@ -744,19 +757,26 @@ impl Wrapper for LiveState {
         // execution id. Unread, the session names what traded and never what it
         // cost. Either report can arrive first, so this is kept for the fill
         // that has not come yet and written onto the one that has.
-        for trade in self.trades.values_mut() {
-            for fill in trade.fills.iter_mut() {
-                if fill.execution.exec_id == report.exec_id {
-                    fill.commission = Some(report.clone());
-                }
+        //
+        // Found rather than searched for. The order it belongs to and its place
+        // in the session's own list are both recorded when the fill arrives, so
+        // neither list is walked: only the fills of the one order are looked
+        // through, and an order has few.
+        if let Some(&(order_id, at)) = self.exec_at.get(&report.exec_id) {
+            if let Some(fill) = self
+                .trades
+                .get_mut(&order_id)
+                .and_then(|trade| {
+                    trade.fills.iter_mut().find(|f| f.execution.exec_id == report.exec_id)
+                })
+            {
+                fill.commission = Some(report.clone());
             }
-        }
-        // The session's own list holds the same fills, so the cost is written
-        // there too. The trade arrives before its cost, so a fill read through
-        // `fills()` otherwise reports no commission whatever the venue states
-        // afterwards.
-        for fill in self.executions.iter_mut() {
-            if fill.execution.exec_id == report.exec_id {
+            // The session's own list holds the same fills, so the cost is
+            // written there too. The trade arrives before its cost, so a fill
+            // read through `fills()` otherwise reports no commission whatever
+            // the venue states afterwards.
+            if let Some(fill) = self.executions.get_mut(at) {
                 fill.commission = Some(report.clone());
             }
         }
