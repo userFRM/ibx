@@ -1117,6 +1117,63 @@ mod tests {
         assert_eq!(ack.logged_in_at, "20260101-12:00:00");
     }
 
+    /// The ACK inside a compressed envelope is an answered logon whatever the
+    /// envelope ends on.
+    ///
+    /// The inner messages are inflated, joined and parsed in one pass, and that
+    /// parse keeps the last value for a tag — so tag 35 names the last inner
+    /// message rather than the ACK. A logon judged on that type refuses an
+    /// answer it holds in full: the account, the token and the routes are all
+    /// read off the joined body regardless of which message ended it.
+    #[test]
+    fn an_ack_inside_an_envelope_is_read_though_another_message_ends_it() {
+        let inner: Vec<u8> = [
+            fix_build(&[
+                (35, "A"),
+                (1, "DU111111"),
+                (52, "20260101-12:00:00"),
+                (6386, "a-session-token"),
+                (6145, "cdc1.ibllc.com/usfarm"),
+            ], 1),
+            // The venue's init data, after the ACK and inside the same envelope.
+            fix_build(&[(35, "9"), (6830, "BRFG+Briefing.com")], 2),
+        ]
+        .concat();
+        // The envelope, and then enough of the session's own traffic to spend
+        // the read budget without ever naming an ACK — which is what the loop
+        // sees when the envelope is not the last thing the venue sends.
+        let mut wire = Answer(
+            std::iter::once(crate::protocol::fixcomp::fixcomp_build(&inner))
+                .chain((0..4).map(|i| fix_build(&[(35, "9")], i + 3)))
+                .collect(),
+        );
+
+        let ack = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now())
+            .expect("an envelope carrying the ACK is an answered logon");
+        assert_eq!(ack.account_id, "DU111111");
+        assert_eq!(ack.ccp_token, "a-session-token");
+        assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
+    }
+
+    /// A logon that answered with nothing is a failed logon, not a session.
+    ///
+    /// Falling out of the read budget holding no account and no token leaves a
+    /// session that reports success and takes orders, and whose empty stamp
+    /// reads to the reconnect logic as every session belonging to another
+    /// client — which hands the account away on the next reconnect.
+    #[test]
+    fn a_logon_that_names_nothing_is_refused() {
+        let mut wire = answered_with(&[
+            &[(35, "9")], &[(35, "9")], &[(35, "9")], &[(35, "9")], &[(35, "9")],
+        ]);
+        // `.err()` rather than `expect_err`: the ack holds the session token and
+        // is deliberately not `Debug`.
+        let err = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now())
+            .err()
+            .expect("a logon that stated no account and no token is not a session");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
     /// Reading stops at the logon ACK or the server config message, whichever
     /// arrives first. What follows it belongs to the session, not to the
     /// logon, and is left on the socket for the hot loop to read.
