@@ -113,7 +113,13 @@ pub(super) fn read_fix_body(
 /// answers for whichever message ended the envelope. A message worth acting on
 /// is not always the last one, and looking for the field itself is what tells
 /// the difference. Every `35=` is preceded by a separator, the length field
-/// coming before it in every message.
+/// coming before it in every message — each message keeps its own header
+/// through the envelope, so this holds for the first as much as the rest.
+///
+/// ponytail: a body may also hold a length-delimited frame whose payload is
+/// arbitrary bytes, and those bytes could spell this field. Reading the
+/// envelope as a list of messages rather than one buffer is what would rule it
+/// out; do that if a payload ever collides here.
 pub(super) fn body_names_msg_type(body: &[u8], msg_type: &str) -> bool {
     let mut marker = Vec::with_capacity(msg_type.len() + 5);
     marker.push(SOH);
@@ -1206,6 +1212,20 @@ mod tests {
         // Not a prefix of another type, and not a value read off some other tag.
         assert!(!body_names_msg_type(&body, "A9"));
         assert!(!body_names_msg_type(&body, "DU111111"));
+
+        // And over a body that came the way a real one comes. The scan reads a
+        // separator before every `35=`, which holds because each message keeps
+        // its own header through the envelope — assert it on a body that has
+        // actually been through one, so a splitter that stopped doing that
+        // fails here rather than in a reconnect.
+        let mut wire = Answer(
+            [crate::protocol::fixcomp::fixcomp_build(&body)].into_iter().collect(),
+        );
+        let inflated = read_fix_body(&mut wire, &mut Vec::new(), a_minute_from_now())
+            .expect("the envelope inflates");
+        assert!(body_names_msg_type(&inflated, "A"), "the ACK survives the envelope");
+        assert!(body_names_msg_type(&inflated, "9"), "and so does what followed it");
+        assert!(!body_names_msg_type(&inflated, "U"));
     }
 
     /// A logon that answered with nothing is a failed logon, not a session.
