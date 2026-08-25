@@ -175,6 +175,13 @@ jobs:
       - name: No module depends on one that depends on it
         run: python scripts/check_module_graph.py
 
+      # A question pumps the queues into its own collector and the queues empty
+      # as they are read, so the Tee is what also feeds the record a session
+      # keeps. A callback it does not forward reaches the question and nobody
+      # else — and compiles, because every trait method has an empty default.
+      - name: Every callback reaches both sinks
+        run: python scripts/check_wrapper_tee.py
+
       - name: A function did not take a doc comment written for something else
         run: |
           python scripts/check_orphaned_docs.py --demo
