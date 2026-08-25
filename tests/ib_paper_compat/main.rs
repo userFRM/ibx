@@ -1687,10 +1687,10 @@ fn submit_ex_bracket_child_phase_live() {
 
 /// The venue carries good-til-crossing, and this client can ask for it.
 ///
-/// It was refused here as a time in force the venue does not carry, which the
-/// counterpart's own table says it does. A spelling this client rejects is one
-/// no caller can reach, so the only proof that adding it was right is the
-/// venue taking the order.
+/// It was refused here as a time in force the venue does not carry. The venue
+/// carries it: asked for it, the venue answers by name. A spelling this client
+/// rejects is one no caller can reach, so the only proof that adding it was
+/// right is the venue reading it back.
 ///
 /// Run: cargo test --test ib_paper_compat a_good_til_crossing_order_is_sent_as_one -- --ignored --nocapture
 #[test]
