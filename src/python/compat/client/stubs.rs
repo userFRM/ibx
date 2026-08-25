@@ -679,11 +679,16 @@ fn carried_under(req_id: i64) -> u32 {
 ///
 /// The reference client names it by a number. The two vocabularies are not the
 /// same, and sending the number would ask for a partition that does not exist.
+///
+/// The numbers are the reference client's, and they run groups, profiles,
+/// aliases — which is what this surface's own reference states and what the
+/// Rust surface sends. Rotated by one here, a caller that asked for its groups
+/// was given its aliases.
 fn advisor_partition(fa_data_type: i32) -> Option<&'static str> {
     match fa_data_type {
-        1 => Some("Aliases"),
-        2 => Some("Group"),
-        3 => Some("Profile"),
+        1 => Some("Group"),
+        2 => Some("Profile"),
+        3 => Some("Aliases"),
         _ => None,
     }
 }
@@ -697,9 +702,10 @@ mod advisor_partition_tests {
     /// a partition that does not exist.
     #[test]
     fn a_number_is_turned_into_the_word_the_venue_uses() {
-        assert_eq!(advisor_partition(1), Some("Aliases"));
-        assert_eq!(advisor_partition(2), Some("Group"));
-        assert_eq!(advisor_partition(3), Some("Profile"));
+        // The order is the reference client's: groups, profiles, aliases.
+        assert_eq!(advisor_partition(1), Some("Group"));
+        assert_eq!(advisor_partition(2), Some("Profile"));
+        assert_eq!(advisor_partition(3), Some("Aliases"));
     }
 
     /// A number standing for nothing is refused rather than sent as an empty
