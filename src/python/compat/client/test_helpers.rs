@@ -202,6 +202,30 @@ impl EClient {
             cum_qty: crate::types::qty_from_wire(qty),
             avg_price: (price * ps) as i64,
         });
+        // What it cost, the way the venue sends it: its own message, naming the
+        // execution it belongs to and stating the currency it is charged in.
+        // A fill carries the figure but nothing reads it out of there — the
+        // report a caller is told through is drained from the charges, so a
+        // fill pushed without one is a fill whose cost reaches nobody.
+        if commission != 0.0 {
+            let currency = self
+                .core
+                .open_orders
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&order_id)
+                .map(|tracked| tracked.contract.currency.clone())
+                .unwrap_or_default();
+            shared.orders.push_charge(
+                crate::types::model::CommissionAndFeesReport::charged(
+                    // The id the fill above is reported under, so the cost and
+                    // the execution name the same thing.
+                    &format!("{order_id}.100"),
+                    commission,
+                    &currency,
+                ),
+            );
+        }
         Ok(())
     }
 

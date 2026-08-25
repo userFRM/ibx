@@ -42,12 +42,16 @@ def _spy():
     return c
 
 
-def test_a_regulatory_snapshot_is_reported_not_subscribed():
+def test_a_regulatory_snapshot_is_asked_for_rather_than_refused():
+    """The chargeable snapshot is one this client makes, not one it declines.
+
+    It was refused here, and reported as a request that could not be made. The
+    venue serves it under a request type of its own, so asking for it is the
+    whole of what is needed and a caller that wants one gets one.
+    """
     w, c = _client()
     c.req_mkt_data(11, _spy(), "", False, True, [])
-    assert w.errors, "a chargeable request this client cannot make must be reported"
-    assert "regulatory_snapshot" in w.errors[-1][2]
-    assert w.errors[-1][0] == 11, "reported under the request that asked for it"
+    assert not [e for e in w.errors if "regulatory_snapshot" in e[2]], w.errors
 
 
 def test_an_ordinary_subscription_is_untouched():
