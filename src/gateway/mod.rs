@@ -22,7 +22,7 @@ use crate::auth::session::{self, do_srp, do_soft_token};
 use crate::config::*;
 use crate::bridge::SharedState;
 use crate::protocol::connection::Connection;
-use crate::protocol::fix::{self, fix_build, fix_parse, fix_read_deadline};
+use crate::protocol::fix::{self, fix_build, fix_parse};
 use crate::protocol::fixcomp;
 use crate::protocol::ns;
 
@@ -913,9 +913,19 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     let mut carry: Vec<u8> = Vec::new();
     let mut acked = false;
     for _ in 0..5 {
-        let response = fix_read_deadline(&mut tls, &mut carry, fix_deadline)?;
+        // Read the same way the first logon reads it. This loop parsed the
+        // frame as it arrived, so a compressed answer was read as FIX, found
+        // nothing in it, and the reconnect failed on an answer it was holding.
+        let response = read_fix_body(&mut tls, &mut carry, fix_deadline)?;
         let fields = fix_parse(&response);
         let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("");
+        // The ACK is looked for in the body rather than taken from the parse.
+        // An answer arriving as one envelope holds several messages and the
+        // parse keeps the last value for tag 35, so an ACK followed by the
+        // session's own init data reads as init data — and this loop acts on
+        // nothing but the ACK, so it would read a full answer as no answer.
+        let names_ack = body_names_msg_type(&response, "A")
+            || body_names_msg_type(&response, "U");
         match msg_type {
             "3" | "5" => {
                 let reason = fields.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
@@ -924,7 +934,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
                     format!("CCP reconnect logon rejected: {reason}"),
                 ));
             }
-            "A" | "U" => {
+            _ if names_ack => {
                 // The interval the venue holds this connection to. Read from
                 // the answer for the same reason the first logon reads it: the
                 // number this client proposes is not what it is held to, and a
