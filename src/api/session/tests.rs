@@ -351,6 +351,54 @@ fn a_fill_lands_against_the_order_it_belongs_to() {
     assert_eq!(kept.fills().len(), 2);
 }
 
+/// A cost lands on the fill it belongs to and on no other.
+///
+/// The fill each report names is looked up rather than searched for, so what
+/// this guards is the lookup pointing at the right one: several fills across
+/// several orders, arriving before any of their costs, and each cost then
+/// naming a fill in the middle of the list rather than the one just added.
+#[test]
+fn a_cost_lands_on_its_own_fill_and_leaves_the_rest_alone() {
+    let mut kept = LiveState::default();
+    let spy = Contract::stock("SPY");
+    for order_id in [5i64, 6] {
+        kept.open_order(order_id, &spy, &an_order(order_id), &OrderState::default());
+        for n in 0..3 {
+            kept.exec_details(0, &spy, &crate::types::model::Execution {
+                order_id,
+                exec_id: format!("{order_id}.{n}"),
+                ..Default::default()
+            });
+        }
+    }
+
+    // The middle fill of the first order, and the last of the second.
+    kept.commission_and_fees_report(
+        &crate::types::model::CommissionAndFeesReport::charged("5.1", 1.25, "USD"),
+    );
+    kept.commission_and_fees_report(
+        &crate::types::model::CommissionAndFeesReport::charged("6.2", 3.50, "USD"),
+    );
+
+    let cost_of = |id: &str| {
+        kept.fills().iter()
+            .find(|f| f.execution.exec_id == id)
+            .and_then(|f| f.commission.clone())
+            .map(|c| c.commission_and_fees)
+    };
+    assert_eq!(cost_of("5.1"), Some(1.25), "the fill the report named");
+    assert_eq!(cost_of("6.2"), Some(3.50), "and the one the second named");
+    for untouched in ["5.0", "5.2", "6.0", "6.1"] {
+        assert_eq!(cost_of(untouched), None, "{untouched} was given a cost of its own");
+    }
+    // And on the order's own copy, which is a separate list of the same fills.
+    assert_eq!(
+        kept.trade(5).map(|t| t.fills.iter().filter(|f| f.commission.is_some()).count()),
+        Some(1),
+        "exactly one of the order's fills has a cost",
+    );
+}
+
 /// What a fill cost reaches every view of that fill.
 ///
 /// The trade and its cost are two reports and the trade arrives first. The
