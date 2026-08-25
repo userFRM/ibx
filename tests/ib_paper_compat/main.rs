@@ -1685,16 +1685,6 @@ fn submit_ex_bracket_child_phase_live() {
     println!("\n  PASS — SubmitEx child linked, held, and cascade-cancelled\n");
 }
 
-/// A price off the contract's tick grid goes out as the caller stated it, and
-/// the venue's refusal reaches the caller.
-///
-/// This client does not move a price onto the grid. The venue rejects an
-/// off-grid price rather than adjusting it, and snapping here would put an
-/// order on the market at a price nobody asked for — so the price is sent as
-/// given and what comes back is reported. Placing SPY at $1.001234 on a cent
-/// grid is the smallest way to ask for that refusal and watch it arrive.
-///
-/// Run: cargo test --test ib_paper_compat an_off_grid_price_is_refused_and_the_caller_told -- --ignored --nocapture
 /// The venue carries good-til-crossing, and this client can ask for it.
 ///
 /// It was refused here as a time in force the venue does not carry, which the
@@ -1781,6 +1771,16 @@ fn a_good_til_crossing_order_is_sent_as_one() {
     println!("\n  PASS — the venue read it as GTX\n");
 }
 
+/// A price off the contract's tick grid goes out as the caller stated it, and
+/// the venue's refusal reaches the caller.
+///
+/// This client does not move a price onto the grid. The venue rejects an
+/// off-grid price rather than adjusting it, and snapping here would put an
+/// order on the market at a price nobody asked for — so the price is sent as
+/// given and what comes back is reported. Placing SPY at $1.001234 on a cent
+/// grid is the smallest way to ask for that refusal and watch it arrive.
+///
+/// Run: cargo test --test ib_paper_compat an_off_grid_price_is_refused_and_the_caller_told -- --ignored --nocapture
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn an_off_grid_price_is_refused_and_the_caller_told() {
