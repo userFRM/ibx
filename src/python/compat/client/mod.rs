@@ -761,9 +761,17 @@ impl EClient {
 
     /// The id a caller may next place under, without taking it.
     ///
-    /// One past the highest id the venue has named an order working under.
-    /// Stated rather than reserved, as the reference client states it: the
-    /// caller places under it, and the taking happens then.
+    /// One past the highest id the venue has named an order under. Stated
+    /// rather than reserved, as the reference client states it: the caller
+    /// places under it, and the taking happens then.
+    ///
+    /// An id is spent for good once a fill has spent it — only a withdrawn one
+    /// comes free. The venue names the live orders at connect and replays the
+    /// executions behind the rest, and both raise the mark, so what this
+    /// answers is safe once that has arrived. Asked before it has, it answers
+    /// from a mark of nothing and names an id a fill spent long ago, which the
+    /// venue refuses as a duplicate. Seen on a session that connected and
+    /// asked in the same breath.
     pub(crate) fn stated_order_id(&self) -> u64 {
         let floor = self.shared.lock().unwrap().as_ref()
             .map(|shared| shared.orders.working_id_watermark() + 1)
@@ -773,11 +781,11 @@ impl EClient {
 
     /// Hand out the next order id.
     ///
-    /// Floored at one past the highest id the venue has named an order working
-    /// under, from any session: an id is spent only while its order is live,
-    /// and the venue names what is live at every connect. Nothing is kept
-    /// between runs, because there is nothing a run knows that the next one
-    /// will not be told.
+    /// Floored at one past the highest id the venue has named an order under,
+    /// from any session. Nothing is kept between runs, because there is
+    /// nothing a run knows that the next one will not be told — but it is told
+    /// after connecting rather than during it, so an id asked for in the same
+    /// breath as the connection is floored at nothing. See `stated_order_id`.
     pub(crate) fn take_order_id(&self, _py: Python<'_>) -> u64 {
         let floor = self.stated_order_id();
         let mut held = self.next_order_id.load(Ordering::Acquire);
