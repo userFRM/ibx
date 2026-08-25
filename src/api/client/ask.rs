@@ -254,6 +254,29 @@ impl Drop for LeaveTheCloseNoticeForTheCaller<'_> {
 }
 
 impl EClient {
+    /// Pump the queues into a question's collector, and into the record the
+    /// session keeps as well.
+    ///
+    /// The queues empty as they are read. Read into a collector alone, every
+    /// callback that collector does not implement — a fill, a trade, an
+    /// order's new status — was taken off the queue and dropped, and the
+    /// record a caller reads those back from never saw it. A question can run
+    /// for the whole answer timeout, so that is a whole timeout of them.
+    pub(crate) fn pump_for_ask(&self, collector: &mut impl crate::api::wrapper::Wrapper) {
+        // Locked per pump rather than for the length of the question, so a
+        // caller reading the record from another thread waits for one pass and
+        // not for the answer.
+        let kept = self.kept.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match kept {
+            Some(record) => {
+                let mut held = record.lock().unwrap_or_else(|e| e.into_inner());
+                let mut both = crate::api::wrapper::Tee { asked: collector, kept: &mut *held };
+                self.process_msgs(&mut both);
+            }
+            None => self.process_msgs(collector),
+        }
+    }
+
     /// Pump until the collector says the answer is complete, or time runs out.
     fn wait_for<T, W: Wrapper>(
         &self, collector: &mut W, state: &Arc<Mutex<Pending<T>>>, what: &str,
@@ -261,7 +284,7 @@ impl EClient {
         let _notice = LeaveTheCloseNoticeForTheCaller::new(self);
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         while Instant::now() < deadline {
-            self.process_msgs(collector);
+            self.pump_for_ask(collector);
             if state.lock().unwrap().done {
                 break;
             }
@@ -802,7 +825,7 @@ impl EClient {
         let _leave_the_notice = LeaveTheCloseNoticeForTheCaller::new(self);
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            self.process_msgs(&mut watch);
+            self.pump_for_ask(&mut watch);
             if *done.lock().unwrap() {
                 break;
             }

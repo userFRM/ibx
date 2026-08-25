@@ -369,6 +369,406 @@ pub trait Wrapper {
     fn user_info(&mut self, req_id: i64, white_branding_id: &str) {}
 }
 
+
+/// Deliver every callback to two places at once.
+///
+/// A question takes the read turn and pumps the queues into its own collector,
+/// which implements the handful of callbacks it cares about and inherits an
+/// empty body for the rest. The queues are drained as they are read, so
+/// anything the collector ignores — a fill, a trade, an order's new status —
+/// was read and thrown away, and the record a caller reads those from never
+/// saw it. Leaving those queues alone while a question runs is not the answer
+/// either: waiting on an order is itself a question, and the order callbacks
+/// are what it waits for.
+///
+/// So both get everything: the collector answering the question, and whatever
+/// the session keeps its running record in.
+pub(crate) struct Tee<'a, A: Wrapper + ?Sized, B: Wrapper + ?Sized> {
+    /// The collector answering the question being asked.
+    pub asked: &'a mut A,
+    /// The record kept across questions.
+    pub kept: &'a mut B,
+}
+
+#[allow(unused_variables)]
+impl<A: Wrapper + ?Sized, B: Wrapper + ?Sized> Wrapper for Tee<'_, A, B> {
+    fn connect_ack(&mut self) {
+        self.asked.connect_ack();
+        self.kept.connect_ack();
+    }
+    fn connection_closed(&mut self) {
+        self.asked.connection_closed();
+        self.kept.connection_closed();
+    }
+    fn next_valid_id(&mut self, order_id: i64) {
+        self.asked.next_valid_id(order_id);
+        self.kept.next_valid_id(order_id);
+    }
+    fn managed_accounts(&mut self, accounts_list: &str) {
+        self.asked.managed_accounts(accounts_list);
+        self.kept.managed_accounts(accounts_list);
+    }
+    fn error(&mut self, req_id: i64, error_code: i64, error_string: &str, advanced_order_reject_json: &str) {
+        self.asked.error(req_id, error_code, error_string, advanced_order_reject_json);
+        self.kept.error(req_id, error_code, error_string, advanced_order_reject_json);
+    }
+    fn current_time(&mut self, time: i64) {
+        self.asked.current_time(time);
+        self.kept.current_time(time);
+    }
+    fn tick_price(&mut self, req_id: i64, tick_type: i32, price: f64, attrib: &TickAttrib) {
+        self.asked.tick_price(req_id, tick_type, price, attrib);
+        self.kept.tick_price(req_id, tick_type, price, attrib);
+    }
+    fn tick_size(&mut self, req_id: i64, tick_type: i32, size: f64) {
+        self.asked.tick_size(req_id, tick_type, size);
+        self.kept.tick_size(req_id, tick_type, size);
+    }
+    fn tick_string(&mut self, req_id: i64, tick_type: i32, value: &str) {
+        self.asked.tick_string(req_id, tick_type, value);
+        self.kept.tick_string(req_id, tick_type, value);
+    }
+    fn tick_generic(&mut self, req_id: i64, tick_type: i32, value: f64) {
+        self.asked.tick_generic(req_id, tick_type, value);
+        self.kept.tick_generic(req_id, tick_type, value);
+    }
+    fn tick_snapshot_end(&mut self, req_id: i64) {
+        self.asked.tick_snapshot_end(req_id);
+        self.kept.tick_snapshot_end(req_id);
+    }
+    fn market_data_type(&mut self, req_id: i64, market_data_type: i32) {
+        self.asked.market_data_type(req_id, market_data_type);
+        self.kept.market_data_type(req_id, market_data_type);
+    }
+    fn order_status(&mut self, order_id: i64, status: &str, filled: f64, remaining: f64, avg_fill_price: f64, perm_id: i64, parent_id: i64, last_fill_price: f64, client_id: i64, why_held: &str, mkt_cap_price: f64) {
+        self.asked.order_status(order_id, status, filled, remaining, avg_fill_price, perm_id, parent_id, last_fill_price, client_id, why_held, mkt_cap_price);
+        self.kept.order_status(order_id, status, filled, remaining, avg_fill_price, perm_id, parent_id, last_fill_price, client_id, why_held, mkt_cap_price);
+    }
+    fn open_order(&mut self, order_id: i64, contract: &Contract, order: &Order, order_state: &OrderState) {
+        self.asked.open_order(order_id, contract, order, order_state);
+        self.kept.open_order(order_id, contract, order, order_state);
+    }
+    fn open_order_end(&mut self) {
+        self.asked.open_order_end();
+        self.kept.open_order_end();
+    }
+    fn exec_details(&mut self, req_id: i64, contract: &Contract, execution: &Execution) {
+        self.asked.exec_details(req_id, contract, execution);
+        self.kept.exec_details(req_id, contract, execution);
+    }
+    fn exec_details_end(&mut self, req_id: i64) {
+        self.asked.exec_details_end(req_id);
+        self.kept.exec_details_end(req_id);
+    }
+    fn commission_and_fees_report(&mut self, report: &CommissionAndFeesReport) {
+        self.asked.commission_and_fees_report(report);
+        self.kept.commission_and_fees_report(report);
+    }
+    fn update_account_value(&mut self, key: &str, value: &str, currency: &str, account_name: &str) {
+        self.asked.update_account_value(key, value, currency, account_name);
+        self.kept.update_account_value(key, value, currency, account_name);
+    }
+    fn update_portfolio(&mut self, contract: &Contract, position: f64, market_price: f64, market_value: f64, average_cost: f64, unrealized_pnl: f64, realized_pnl: f64, account_name: &str) {
+        self.asked.update_portfolio(contract, position, market_price, market_value, average_cost, unrealized_pnl, realized_pnl, account_name);
+        self.kept.update_portfolio(contract, position, market_price, market_value, average_cost, unrealized_pnl, realized_pnl, account_name);
+    }
+    fn update_account_time(&mut self, timestamp: &str) {
+        self.asked.update_account_time(timestamp);
+        self.kept.update_account_time(timestamp);
+    }
+    fn account_download_end(&mut self, account: &str) {
+        self.asked.account_download_end(account);
+        self.kept.account_download_end(account);
+    }
+    fn account_summary(&mut self, req_id: i64, account: &str, tag: &str, value: &str, currency: &str) {
+        self.asked.account_summary(req_id, account, tag, value, currency);
+        self.kept.account_summary(req_id, account, tag, value, currency);
+    }
+    fn account_summary_end(&mut self, req_id: i64) {
+        self.asked.account_summary_end(req_id);
+        self.kept.account_summary_end(req_id);
+    }
+    fn position(&mut self, account: &str, contract: &Contract, pos: f64, avg_cost: f64) {
+        self.asked.position(account, contract, pos, avg_cost);
+        self.kept.position(account, contract, pos, avg_cost);
+    }
+    fn position_end(&mut self) {
+        self.asked.position_end();
+        self.kept.position_end();
+    }
+    fn position_multi(&mut self, req_id: i64, account: &str, model_code: &str, contract: &Contract, pos: f64, avg_cost: f64) {
+        self.asked.position_multi(req_id, account, model_code, contract, pos, avg_cost);
+        self.kept.position_multi(req_id, account, model_code, contract, pos, avg_cost);
+    }
+    fn position_multi_end(&mut self, req_id: i64) {
+        self.asked.position_multi_end(req_id);
+        self.kept.position_multi_end(req_id);
+    }
+    fn account_update_multi(&mut self, req_id: i64, account: &str, model_code: &str, key: &str, value: &str, currency: &str) {
+        self.asked.account_update_multi(req_id, account, model_code, key, value, currency);
+        self.kept.account_update_multi(req_id, account, model_code, key, value, currency);
+    }
+    fn account_update_multi_end(&mut self, req_id: i64) {
+        self.asked.account_update_multi_end(req_id);
+        self.kept.account_update_multi_end(req_id);
+    }
+    fn pnl(&mut self, req_id: i64, daily_pnl: f64, unrealized_pnl: f64, realized_pnl: f64) {
+        self.asked.pnl(req_id, daily_pnl, unrealized_pnl, realized_pnl);
+        self.kept.pnl(req_id, daily_pnl, unrealized_pnl, realized_pnl);
+    }
+    fn pnl_single(&mut self, req_id: i64, pos: f64, daily_pnl: f64, unrealized_pnl: f64, realized_pnl: f64, value: f64) {
+        self.asked.pnl_single(req_id, pos, daily_pnl, unrealized_pnl, realized_pnl, value);
+        self.kept.pnl_single(req_id, pos, daily_pnl, unrealized_pnl, realized_pnl, value);
+    }
+    fn historical_data(&mut self, req_id: i64, bar: &BarData) {
+        self.asked.historical_data(req_id, bar);
+        self.kept.historical_data(req_id, bar);
+    }
+    fn historical_data_end(&mut self, req_id: i64, start: &str, end: &str) {
+        self.asked.historical_data_end(req_id, start, end);
+        self.kept.historical_data_end(req_id, start, end);
+    }
+    fn historical_data_update(&mut self, req_id: i64, bar: &BarData) {
+        self.asked.historical_data_update(req_id, bar);
+        self.kept.historical_data_update(req_id, bar);
+    }
+    fn head_timestamp(&mut self, req_id: i64, head_timestamp: &str) {
+        self.asked.head_timestamp(req_id, head_timestamp);
+        self.kept.head_timestamp(req_id, head_timestamp);
+    }
+    fn contract_details(&mut self, req_id: i64, details: &ContractDetails) {
+        self.asked.contract_details(req_id, details);
+        self.kept.contract_details(req_id, details);
+    }
+    fn contract_details_end(&mut self, req_id: i64) {
+        self.asked.contract_details_end(req_id);
+        self.kept.contract_details_end(req_id);
+    }
+    fn symbol_samples(&mut self, req_id: i64, descriptions: &[ContractDescription]) {
+        self.asked.symbol_samples(req_id, descriptions);
+        self.kept.symbol_samples(req_id, descriptions);
+    }
+    fn tick_by_tick_all_last(&mut self, req_id: i64, tick_type: i32, time: i64, price: f64, size: f64, attrib: &TickAttribLast, exchange: &str, special_conditions: &str) {
+        self.asked.tick_by_tick_all_last(req_id, tick_type, time, price, size, attrib, exchange, special_conditions);
+        self.kept.tick_by_tick_all_last(req_id, tick_type, time, price, size, attrib, exchange, special_conditions);
+    }
+    fn tick_by_tick_bid_ask(&mut self, req_id: i64, time: i64, bid_price: f64, ask_price: f64, bid_size: f64, ask_size: f64, attrib: &TickAttribBidAsk) {
+        self.asked.tick_by_tick_bid_ask(req_id, time, bid_price, ask_price, bid_size, ask_size, attrib);
+        self.kept.tick_by_tick_bid_ask(req_id, time, bid_price, ask_price, bid_size, ask_size, attrib);
+    }
+    fn tick_by_tick_mid_point(&mut self, req_id: i64, time: i64, mid_point: f64) {
+        self.asked.tick_by_tick_mid_point(req_id, time, mid_point);
+        self.kept.tick_by_tick_mid_point(req_id, time, mid_point);
+    }
+    fn scanner_data(&mut self, req_id: i64, rank: i32, details: &ContractDetails, distance: &str, benchmark: &str, projection: &str, legs_str: &str) {
+        self.asked.scanner_data(req_id, rank, details, distance, benchmark, projection, legs_str);
+        self.kept.scanner_data(req_id, rank, details, distance, benchmark, projection, legs_str);
+    }
+    fn scanner_data_end(&mut self, req_id: i64) {
+        self.asked.scanner_data_end(req_id);
+        self.kept.scanner_data_end(req_id);
+    }
+    fn scanner_parameters(&mut self, xml: &str) {
+        self.asked.scanner_parameters(xml);
+        self.kept.scanner_parameters(xml);
+    }
+    fn update_news_bulletin(&mut self, msg_id: i64, msg_type: i32, message: &str, orig_exchange: &str) {
+        self.asked.update_news_bulletin(msg_id, msg_type, message, orig_exchange);
+        self.kept.update_news_bulletin(msg_id, msg_type, message, orig_exchange);
+    }
+    fn tick_news(&mut self, ticker_id: i64, timestamp: i64, provider_code: &str, article_id: &str, headline: &str, extra_data: &str) {
+        self.asked.tick_news(ticker_id, timestamp, provider_code, article_id, headline, extra_data);
+        self.kept.tick_news(ticker_id, timestamp, provider_code, article_id, headline, extra_data);
+    }
+    fn historical_news(&mut self, req_id: i64, time: &str, provider_code: &str, article_id: &str, headline: &str) {
+        self.asked.historical_news(req_id, time, provider_code, article_id, headline);
+        self.kept.historical_news(req_id, time, provider_code, article_id, headline);
+    }
+    fn historical_news_end(&mut self, req_id: i64, has_more: bool) {
+        self.asked.historical_news_end(req_id, has_more);
+        self.kept.historical_news_end(req_id, has_more);
+    }
+    fn news_article(&mut self, req_id: i64, article_type: i32, article_text: &str) {
+        self.asked.news_article(req_id, article_type, article_text);
+        self.kept.news_article(req_id, article_type, article_text);
+    }
+    fn real_time_bar(&mut self, req_id: i64, date: i64, open: f64, high: f64, low: f64, close: f64, volume: f64, wap: f64, count: i32) {
+        self.asked.real_time_bar(req_id, date, open, high, low, close, volume, wap, count);
+        self.kept.real_time_bar(req_id, date, open, high, low, close, volume, wap, count);
+    }
+    fn historical_ticks(&mut self, req_id: i64, ticks: &HistoricalTickData, done: bool) {
+        self.asked.historical_ticks(req_id, ticks, done);
+        self.kept.historical_ticks(req_id, ticks, done);
+    }
+    fn historical_ticks_bid_ask(&mut self, req_id: i64, ticks: &HistoricalTickData, done: bool) {
+        self.asked.historical_ticks_bid_ask(req_id, ticks, done);
+        self.kept.historical_ticks_bid_ask(req_id, ticks, done);
+    }
+    fn historical_ticks_last(&mut self, req_id: i64, ticks: &HistoricalTickData, done: bool) {
+        self.asked.historical_ticks_last(req_id, ticks, done);
+        self.kept.historical_ticks_last(req_id, ticks, done);
+    }
+    fn tick_option_computation(&mut self, req_id: i64, tick_type: i32, tick_attrib: i32, implied_vol: f64, delta: f64, opt_price: f64, pv_dividend: f64, gamma: f64, vega: f64, theta: f64, und_price: f64) {
+        self.asked.tick_option_computation(req_id, tick_type, tick_attrib, implied_vol, delta, opt_price, pv_dividend, gamma, vega, theta, und_price);
+        self.kept.tick_option_computation(req_id, tick_type, tick_attrib, implied_vol, delta, opt_price, pv_dividend, gamma, vega, theta, und_price);
+    }
+    fn display_group_list(&mut self, req_id: i64, groups: &str) {
+        self.asked.display_group_list(req_id, groups);
+        self.kept.display_group_list(req_id, groups);
+    }
+    fn display_group_updated(&mut self, req_id: i64, contract_info: &str) {
+        self.asked.display_group_updated(req_id, contract_info);
+        self.kept.display_group_updated(req_id, contract_info);
+    }
+    fn bond_contract_details(&mut self, req_id: i64, details: &ContractDetails) {
+        self.asked.bond_contract_details(req_id, details);
+        self.kept.bond_contract_details(req_id, details);
+    }
+    fn order_bound(&mut self, perm_id: i64, client_id: i64, order_id: i64) {
+        self.asked.order_bound(perm_id, client_id, order_id);
+        self.kept.order_bound(perm_id, client_id, order_id);
+    }
+    fn receive_fa(&mut self, fa_data_type: i32, cxml: &str) {
+        self.asked.receive_fa(fa_data_type, cxml);
+        self.kept.receive_fa(fa_data_type, cxml);
+    }
+    fn replace_fa_end(&mut self, req_id: i64, text: &str) {
+        self.asked.replace_fa_end(req_id, text);
+        self.kept.replace_fa_end(req_id, text);
+    }
+    fn wsh_meta_data(&mut self, req_id: i64, data_json: &str) {
+        self.asked.wsh_meta_data(req_id, data_json);
+        self.kept.wsh_meta_data(req_id, data_json);
+    }
+    fn wsh_event_data(&mut self, req_id: i64, data_json: &str) {
+        self.asked.wsh_event_data(req_id, data_json);
+        self.kept.wsh_event_data(req_id, data_json);
+    }
+    fn security_definition_option_parameter(&mut self, req_id: i64, exchange: &str, underlying_con_id: i64, trading_class: &str, multiplier: &str, expirations: &[String], strikes: &[f64]) {
+        self.asked.security_definition_option_parameter(req_id, exchange, underlying_con_id, trading_class, multiplier, expirations, strikes);
+        self.kept.security_definition_option_parameter(req_id, exchange, underlying_con_id, trading_class, multiplier, expirations, strikes);
+    }
+    fn security_definition_option_parameter_end(&mut self, req_id: i64) {
+        self.asked.security_definition_option_parameter_end(req_id);
+        self.kept.security_definition_option_parameter_end(req_id);
+    }
+    fn delta_neutral_validation(&mut self, req_id: i64, con_id: i64, delta: f64, price: f64) {
+        self.asked.delta_neutral_validation(req_id, con_id, delta, price);
+        self.kept.delta_neutral_validation(req_id, con_id, delta, price);
+    }
+    fn histogram_data(&mut self, req_id: i64, items: &[(f64, i64)]) {
+        self.asked.histogram_data(req_id, items);
+        self.kept.histogram_data(req_id, items);
+    }
+    fn market_rule(&mut self, market_rule_id: i64, price_increments: &[PriceIncrement]) {
+        self.asked.market_rule(market_rule_id, price_increments);
+        self.kept.market_rule(market_rule_id, price_increments);
+    }
+    fn completed_order(&mut self, contract: &Contract, order: &Order, order_state: &OrderState) {
+        self.asked.completed_order(contract, order, order_state);
+        self.kept.completed_order(contract, order, order_state);
+    }
+    fn completed_orders_end(&mut self) {
+        self.asked.completed_orders_end();
+        self.kept.completed_orders_end();
+    }
+    fn historical_schedule(&mut self, req_id: i64, start_date_time: &str, end_date_time: &str, time_zone: &str, sessions: &[(String, String, String)]) {
+        self.asked.historical_schedule(req_id, start_date_time, end_date_time, time_zone, sessions);
+        self.kept.historical_schedule(req_id, start_date_time, end_date_time, time_zone, sessions);
+    }
+    fn fundamental_data(&mut self, req_id: i64, data: &str) {
+        self.asked.fundamental_data(req_id, data);
+        self.kept.fundamental_data(req_id, data);
+    }
+    fn update_mkt_depth(&mut self, req_id: i64, position: i32, operation: i32, side: i32, price: f64, size: f64) {
+        self.asked.update_mkt_depth(req_id, position, operation, side, price, size);
+        self.kept.update_mkt_depth(req_id, position, operation, side, price, size);
+    }
+    fn update_mkt_depth_l2(&mut self, req_id: i64, position: i32, market_maker: &str, operation: i32, side: i32, price: f64, size: f64, is_smart_depth: bool) {
+        self.asked.update_mkt_depth_l2(req_id, position, market_maker, operation, side, price, size, is_smart_depth);
+        self.kept.update_mkt_depth_l2(req_id, position, market_maker, operation, side, price, size, is_smart_depth);
+    }
+    fn mkt_depth_exchanges(&mut self, _descriptions: &[crate::types::DepthMktDataDescription]) {
+        self.asked.mkt_depth_exchanges(_descriptions);
+        self.kept.mkt_depth_exchanges(_descriptions);
+    }
+    fn tick_req_params(&mut self, ticker_id: i64, min_tick: f64, bbo_exchange: &str, snapshot_permissions: i64) {
+        self.asked.tick_req_params(ticker_id, min_tick, bbo_exchange, snapshot_permissions);
+        self.kept.tick_req_params(ticker_id, min_tick, bbo_exchange, snapshot_permissions);
+    }
+    fn smart_components(&mut self, req_id: i64, components: &[crate::types::SmartComponent]) {
+        self.asked.smart_components(req_id, components);
+        self.kept.smart_components(req_id, components);
+    }
+    fn news_providers(&mut self, providers: &[crate::types::NewsProvider]) {
+        self.asked.news_providers(providers);
+        self.kept.news_providers(providers);
+    }
+    fn soft_dollar_tiers(&mut self, req_id: i64, tiers: &[crate::types::SoftDollarTier]) {
+        self.asked.soft_dollar_tiers(req_id, tiers);
+        self.kept.soft_dollar_tiers(req_id, tiers);
+    }
+    fn family_codes(&mut self, codes: &[crate::types::FamilyCode]) {
+        self.asked.family_codes(codes);
+        self.kept.family_codes(codes);
+    }
+    fn user_info(&mut self, req_id: i64, white_branding_id: &str) {
+        self.asked.user_info(req_id, white_branding_id);
+        self.kept.user_info(req_id, white_branding_id);
+    }
+}
+
+#[cfg(test)]
+mod tee_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Counts { fills: Vec<String>, errors: Vec<i64> }
+    impl Wrapper for Counts {
+        fn exec_details(
+            &mut self, _req_id: i64, _contract: &crate::types::model::Contract,
+            execution: &crate::types::model::Execution,
+        ) {
+            self.fills.push(execution.exec_id.clone());
+        }
+        fn error(&mut self, _req_id: i64, code: i64, _message: &str, _adv: &str) {
+            self.errors.push(code);
+        }
+    }
+
+    /// A collector that does not implement a callback must not swallow it.
+    ///
+    /// This is the whole point: a question's collector implements the few
+    /// callbacks it needs and inherits an empty body for the rest, and the
+    /// queues empty as they are read — so anything it ignores is gone unless
+    /// something else is fed at the same time.
+    #[test]
+    fn what_one_side_ignores_still_reaches_the_other() {
+        struct AsksAboutErrorsOnly { seen: Vec<i64> }
+        impl Wrapper for AsksAboutErrorsOnly {
+            fn error(&mut self, _req_id: i64, code: i64, _message: &str, _adv: &str) {
+                self.seen.push(code);
+            }
+        }
+
+        let mut asked = AsksAboutErrorsOnly { seen: Vec::new() };
+        let mut kept = Counts::default();
+        {
+            let mut both = Tee { asked: &mut asked, kept: &mut kept };
+            let contract = crate::types::model::Contract::default();
+            let execution = crate::types::model::Execution {
+                exec_id: "0001".to_string(),
+                ..Default::default()
+            };
+            both.exec_details(7, &contract, &execution);
+            both.error(7, 321, "a reason", "");
+        }
+        assert_eq!(kept.fills, ["0001"], "the fill reached the record");
+        assert_eq!(kept.errors, [321], "and so did the error");
+        assert_eq!(asked.seen, [321], "the question heard what it asked about");
+    }
+}
+
 /// Test helpers for Wrapper-based testing. Hidden from docs.
 #[doc(hidden)]
 pub mod tests {

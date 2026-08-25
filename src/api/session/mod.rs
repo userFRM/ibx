@@ -121,6 +121,13 @@ impl Client {
             stop: Arc::new(AtomicBool::new(false)),
             reader: Arc::new(Mutex::new(None)),
         };
+        // What a question does not care about still reaches the record. A
+        // question holds the read turn and pumps into its own collector, and
+        // the queues empty as they are read — so without this a fill arriving
+        // while `bars` or `qualify` runs was read, dropped, and never seen by
+        // `fills` or by the streams.
+        *session.client.kept.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(session.state.clone());
         session.start_reading();
         // Asked for as the session opens, the way the reference client's own
         // wrapper does. Without it the account is silent until something asks,

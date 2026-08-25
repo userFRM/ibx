@@ -260,6 +260,15 @@ pub struct EClient {
     /// came. Held across the sending too, so the second question is not on the
     /// wire while the first is listening.
     pub(crate) asking: Mutex<()>,
+    /// Where the callbacks a question does not care about are also delivered.
+    ///
+    /// A question holds the read turn and pumps into its own collector, and
+    /// the queues empty as they are read — so a fill or a trade arriving while
+    /// one runs reached a collector that ignores it and was gone. A session
+    /// keeping a running record installs it here, and both are fed.
+    ///
+    /// Empty on a bare client, which has no record of its own to keep.
+    pub(crate) kept: Mutex<Option<std::sync::Arc<Mutex<dyn crate::api::wrapper::Wrapper + Send>>>>,
     /// How many events the channel above discarded, if one is attached.
     pub(crate) discarded: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The orders the venue has finished with, as they were reported.
@@ -475,6 +484,7 @@ impl EClient {
             pending_option_calcs: Mutex::new(std::collections::HashMap::new()),
             next_order_id: AtomicU64::new(0),
             asking: Mutex::new(()),
+            kept: Mutex::new(None),
             discarded: Default::default(),
             completed: Mutex::new(Vec::new()),
             tbt_kinds: Mutex::new(std::collections::HashMap::new()),
@@ -507,6 +517,7 @@ impl EClient {
             pending_option_calcs: Mutex::new(std::collections::HashMap::new()),
             next_order_id: AtomicU64::new(0),
             asking: Mutex::new(()),
+            kept: Mutex::new(None),
             discarded: Default::default(),
             completed: Mutex::new(Vec::new()),
             tbt_kinds: Mutex::new(std::collections::HashMap::new()),
