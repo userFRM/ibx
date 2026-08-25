@@ -612,7 +612,11 @@ impl FarmState {
                 Some(c) => c,
             };
             match conn.try_recv() {
-                Ok(0) => return,
+                // Nothing new on the socket, but a frame may already be whole
+                // in the buffer — the other three pollers make that
+                // distinction and this one did not.
+                Ok(0) if !conn.has_buffered_data() => return,
+                Ok(0) => {}
                 Err(e) => {
                     log::error!("Farm connection lost: {e}");
                     self.handle_disconnect(context, event_tx);
@@ -1009,6 +1013,14 @@ impl FarmState {
                 .find(|(sub, _)| *sub == req_id)
                 .map(|(_, exch)| exch.clone())
                 .unwrap_or_default();
+            // The venue answers a second subscription on a contract and venue
+            // it is already streaming with the tag it is already using, so two
+            // acks can name the same one. Two records then match every update
+            // and the book applies each level twice. The generic-tick branch
+            // below already keeps one record per tag.
+            self.depth_tag_to_req.retain(|(tag, id, ..)| {
+                !(*tag == server_tag && *id == user_req)
+            });
             self.depth_tag_to_req.push((
                 server_tag,
                 user_req,
@@ -1517,6 +1529,10 @@ impl FarmState {
         // The caller's request, kept so a reconnect can ask for it again. What
         // is registered as a subscription is the id this client asks under,
         // one per venue, below.
+        // One record per request, not one per time it was asked for. A caller
+        // that asks twice under the same number without withdrawing gets two
+        // otherwise, and a reconnect then asks the venue for the book twice.
+        self.depth_resub_info.retain(|(id, ..)| *id != req_id);
         self.depth_resub_info.push((
             req_id, con_id, exchange.to_string(), primary_exchange.to_string(),
             sec_type.to_string(), num_rows, is_smart_depth,
