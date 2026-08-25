@@ -669,21 +669,20 @@ impl EClient {
             fn position_end(&mut self) {
                 self.state.lock().unwrap().done = true;
             }
-            // Holdings are asked for account-wide rather than under a request,
-            // so a refusal about them carries no request to match on — it is
-            // this question's by being the only one running. Kept rather than
-            // dropped: it is the statement that what follows is what the
-            // session already held rather than what the account holds, and a
-            // caller reading a short list has nothing else to tell it apart
-            // from a complete one.
-            fn error(&mut self, _req_id: i64, code: i64, message: &str, _: &str) {
-                if is_connection_notice(code) {
-                    return;
-                }
-                let mut s = self.state.lock().unwrap();
-                s.error = Some(Refusal::stated(code as i32, message));
-                s.done = true;
-            }
+            // No arm for the venue's errors, deliberately. Holdings are asked
+            // for account-wide, so a refusal about them carries no request to
+            // match on — and taking every refusal that arrives while this runs
+            // takes the ones that do not belong to it: an order reject under
+            // its own id, a subscription failure, the venue's unattributed
+            // text, a farm reconnect notice. Worse, an error ends the wait,
+            // and the wait hands back its rows only on the way out — so a
+            // question that stopped on somebody else's refusal returned
+            // nothing at all where it used to return the holdings it had.
+            //
+            // The one refusal that is this question's — that the account had
+            // not finished stating its holdings — is said in the log by the
+            // call that raises it. A short list is worse than a complete one
+            // and better than none.
         }
         let state = Arc::new(Mutex::new(Pending::default()));
         let mut collector = Held { state: Arc::clone(&state) };
@@ -853,7 +852,7 @@ impl EClient {
         let _notice = LeaveTheCloseNoticeForTheCaller::new(self);
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         while Instant::now() < deadline {
-            self.process_msgs(&mut collector);
+            self.pump_for_ask(&mut collector);
             if answer.lock().unwrap().done {
                 break;
             }

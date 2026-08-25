@@ -1147,7 +1147,13 @@ impl ClientCore {
         // A contract already being watched needs no second subscription: this
         // caller watches the one that is up, and hears the same quotes under
         // its own request. Nothing goes to the engine.
-        if let Some(instrument) = self.cached_instrument(con_id)
+        //
+        // Except a chargeable snapshot, which is a request of its own and not
+        // a share of somebody's stream. Following one instead sends nothing,
+        // bills nothing, and lets an account with no entitlement hear an end
+        // it was never refused — off a stream it did not ask for.
+        if !regulatory_snapshot
+            && let Some(instrument) = self.cached_instrument(con_id)
             && self.follows_existing_subscription(instrument, req_id)
         {
             self.mdt_by_req.lock().unwrap().insert(
@@ -1210,8 +1216,10 @@ impl ClientCore {
         self.cache_instrument(con_id, instrument_id);
         // The contract may have been named only by symbol, in which case the
         // engine is the first to know which slot it holds — and it may already
-        // be watched. This caller watches it too rather than taking it over.
-        if self.follows_existing_subscription(instrument_id, req_id) {
+        // be watched. This caller watches it too rather than taking it over —
+        // unless it asked for the chargeable snapshot, which is its own
+        // request and was already sent above.
+        if !regulatory_snapshot && self.follows_existing_subscription(instrument_id, req_id) {
             self.mdt_by_req.lock().unwrap().insert(
                 req_id,
                 match mode_9887 {

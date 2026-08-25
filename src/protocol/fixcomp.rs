@@ -52,12 +52,15 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
             .ok()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| parse_err("fixcomp: tag 95 value is not a usize"))?;
-        // Anchored just past the separator, not at it. Searching from the
-        // separator itself lets a "96=" byte run inside a payload stand in for
-        // a tag that is not there, and the payload is then read from the wrong
-        // place.
-        let payload_start = if let Some(idx96) = find_tag(&data[soh + 1..], b"96=") {
-            soh + 1 + idx96 + 3
+        // Unbounded over the rest of the frame, which is a real weakness: a
+        // "96=" byte run inside a payload stands in for a tag that is not
+        // there, and the payload is then read from the wrong place. Anchoring
+        // one byte later does not help — the byte at the separator is the
+        // separator, so the search could never have matched there — and
+        // nothing here knows where the tags end, so bounding it needs
+        // something this does not have.
+        let payload_start = if let Some(idx96) = find_tag(&data[soh..], b"96=") {
+            soh + idx96 + 3
         } else {
             soh + 1
         };

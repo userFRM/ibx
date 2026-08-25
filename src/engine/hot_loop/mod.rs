@@ -701,13 +701,26 @@ impl HotLoop {
 
             // 5b. Poll pending reconnects and schedule the next attempts
             // (jittered backoff instead of immediate re-dials)
-            self.poll_farm_reconnect();
-            // What a reconnect has still to put back. Paced, and paced on the
-            // passes the loop is already making rather than by holding it.
-            self.drive_replay();
-            self.poll_ccp_reconnect();
-            self.poll_hmds_reconnect();
-            self.poll_secdef_reconnect();
+            //
+            // None of it once the stop has been processed. Control commands
+            // are read earlier in this same lap, so a stop that arrived while
+            // an attempt was already in flight would otherwise be followed by
+            // that attempt's connection being INSTALLED — a freshly
+            // authenticated session opened at the venue after the caller was
+            // told the engine stopped, never logged out, and on the trading
+            // connection one the account reads as competing with itself.
+            // Replay is the same shape: the stop has just withdrawn every
+            // subscription, and this would put back whatever was still queued.
+            if self.running {
+                self.poll_farm_reconnect();
+                // What a reconnect has still to put back. Paced, and paced on
+                // the passes the loop is already making rather than by
+                // holding it.
+                self.drive_replay();
+                self.poll_ccp_reconnect();
+                self.poll_hmds_reconnect();
+                self.poll_secdef_reconnect();
+            }
             // The stability clock starts only when both transports the retry
             // budget covers are carrying traffic. One side alone does not
             // refund attempts.
@@ -1290,6 +1303,16 @@ impl HotLoop {
                     // These variants exist for future CCP round-trip support.
                 }
                 ControlCommand::Logout => {
+                    // Orders handed over before the goodbye go out before it.
+                    // Stopping sends this and then the stop, both read in one
+                    // pass, so draining only at the stop put an accepted order
+                    // on the wire after the venue had been told the session was
+                    // ending.
+                    order_builder::drain_and_send_orders(
+                        &mut self.ccp_conn, &mut self.context, &self.account_id, &mut self.hb,
+                        self.ccp.disconnected, &self.shared,
+                        self.ccp.recovery_sweep_at.is_some(), &self.event_tx,
+                    );
                     // Tell the venue the session is going rather than leaving it
                     // to notice. This ends the session, so it is not part of
                     // stopping the loop: a caller that stops the engine and keeps
@@ -1353,8 +1376,15 @@ impl HotLoop {
                     // server tags the next engine has no record of, and, once
                     // it subscribes and the venue reuses a tag for the same
                     // contract and venue, merged into the new caller's book.
-                    let books: Vec<u32> =
-                        self.farm.depth_subs.iter().map(|(id, _)| *id).collect();
+                    // Named the way a caller named them. `depth_subs` holds
+                    // the ids this client asked the venue under, which is what
+                    // the withdrawal resolves TO — handed those, it looks for
+                    // a caller behind a caller and finds none, and no book is
+                    // withdrawn at all.
+                    let mut books: Vec<u32> =
+                        self.farm.depth_fanout_map.iter().map(|(_, user)| *user).collect();
+                    books.sort_unstable();
+                    books.dedup();
                     for req_id in books {
                         self.farm.send_depth_unsubscribe(
                             req_id, &mut self.farm_conn, &mut self.hb,

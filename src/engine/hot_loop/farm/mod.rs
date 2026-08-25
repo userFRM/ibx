@@ -142,7 +142,7 @@ pub(crate) struct FarmState {
     /// subscriptions.
     pub(crate) depth_tag_to_req: Vec<(u32, u32, bool, f64, f64, String)>,
     /// SmartDepth fan-out: maps internal sub_req → user's original req_id.
-    depth_fanout_map: Vec<(u32, u32)>,
+    pub(crate) depth_fanout_map: Vec<(u32, u32)>,
     /// Primary depth subscription params for reconnect: (req_id, con_id, exchange,
     /// sec_type, num_rows, is_smart_depth).
     depth_resub_info: Vec<(u32, i64, String, String, String, i32, bool)>,
