@@ -924,6 +924,15 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         // parse keeps the last value for tag 35, so an ACK followed by the
         // session's own init data reads as init data — and this loop acts on
         // nothing but the ACK, so it would read a full answer as no answer.
+        //
+        // The refusal below is deliberately not tested the same way, and the
+        // two are not worth making symmetric. A refusal is acted on when the
+        // answer ended on one, because a reject riding along in an envelope
+        // beside good init data belongs to some earlier message and is not
+        // this logon being turned down — scanning the body for it would abort
+        // healthy reconnects. The looser test is right for the ACK because the
+        // ACK is known not to be last; the stricter one is right for the
+        // refusal because it is.
         let names_ack = body_names_msg_type(&response, "A")
             || body_names_msg_type(&response, "U");
         match msg_type {
@@ -957,6 +966,12 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
                 // session the venue names reads as another client, and a
                 // reconnect that meets its own logon still being reaped would
                 // hand the account back rather than finish.
+                // Tag 52 is on every message, so over an envelope this is the
+                // last one's sending time rather than the ACK's. They are the
+                // same clock and this is compared at second granularity, so
+                // the difference does not reach anything — noted because it is
+                // the same last-wins hazard the read above works around, and
+                // the next tag read here may not be as forgiving.
                 logged_in_at = fields.get(&52).cloned()
                     .unwrap_or_else(|| chrono_free_timestamp().to_string());
                 acked = true;
