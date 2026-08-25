@@ -64,6 +64,11 @@ pub const LIVENESS_STALL_COOLDOWN_SECS: u64 = 60;
 // window, fails the build rather than a test the optimizer folds away.
 const _: () = assert!(CCP_HEARTBEAT_SECS < LIVENESS_TEST_SECS);
 const _: () = assert!(LIVENESS_TEST_SECS < LIVENESS_DEAD_SECS);
+// A frame gets one probe interval to reach the socket. The bound lives with
+// the socket, which is below this, so the two are held equal here instead.
+const _: () = assert!(
+    LIVENESS_TEST_SECS == crate::protocol::connection::WHOLE_FRAME_TIMEOUT_SECS
+);
 /// How long a book on no particular venue waits for the list of venues that
 /// offer one before the caller is told it cannot be asked for.
 ///
@@ -1028,7 +1033,7 @@ impl HotLoop {
                     // What the venue already sent and nobody has read yet
                     // goes with the request. Left queued, the next request
                     // under this number is answered with this one's.
-                    self.shared.reference.purge_answers_for(req_id);
+                    self.shared.reference.purge_historical_for(req_id);
                     self.hmds.keep_up_to_date_reqs.remove(&req_id);
                     // A keep-up-to-date request rides a five-second bar
                     // stream held as a separate query. Cancelling withdraws
@@ -1073,7 +1078,7 @@ impl HotLoop {
                 }
                 ControlCommand::CancelHeadTimestamp { req_id } => {
                     // As above: the answers already queued go with it.
-                    self.shared.reference.purge_answers_for(req_id);
+                    self.shared.reference.purge_head_timestamp_for(req_id);
                     if let Some(pos) = self.hmds.pending_head_ts.iter().position(|(_, rid)| *rid == req_id) {
                         self.hmds.pending_head_ts.remove(pos);
                     }
@@ -1093,7 +1098,7 @@ impl HotLoop {
                 }
                 ControlCommand::CancelCalendar { req_id } => {
                     // As above: the answers already queued go with it.
-                    self.shared.reference.purge_answers_for(req_id);
+                    self.shared.reference.purge_calendar_for(req_id);
                     if !self.secdef.withdraw_calendar_request(req_id) {
                         push_hmds_error(
                             &self.shared, req_id,
@@ -1133,7 +1138,7 @@ impl HotLoop {
                     // withdrawn, and under a number that may already belong to
                     // the next scan.
                     self.ccp.pending_scanner_enrichment.retain(|pe| pe.api_req_id != req_id);
-                    self.shared.reference.purge_answers_for(req_id);
+                    self.shared.reference.purge_scanner_data_for(req_id);
                 }
                 ControlCommand::FetchHistoricalNews { req_id, con_id, provider_codes, start_time, end_time, max_results } => {
                     if self.hmds_conn.is_none() {
@@ -1158,7 +1163,7 @@ impl HotLoop {
                 }
                 ControlCommand::CancelFundamentalData { req_id } => {
                     // As above: the answers already queued go with it.
-                    self.shared.reference.purge_answers_for(req_id);
+                    self.shared.reference.purge_fundamental_for(req_id);
                     self.hmds.send_fundamental_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
                 }
                 ControlCommand::FetchHistogramData { req_id, con_id, sec_type, exchange, use_rth, period } => {
@@ -1170,7 +1175,7 @@ impl HotLoop {
                 }
                 ControlCommand::CancelHistogramData { req_id } => {
                     // As above: the answers already queued go with it.
-                    self.shared.reference.purge_answers_for(req_id);
+                    self.shared.reference.purge_histogram_for(req_id);
                     if let Some(pos) = self.hmds.pending_histogram.iter().position(|(_, rid)| *rid == req_id) {
                         self.hmds.pending_histogram.remove(pos);
                     }
@@ -1340,6 +1345,19 @@ impl HotLoop {
                     for (req_id, instrument) in open {
                         self.hmds.send_tbt_unsubscribe(
                             req_id, instrument, &mut self.hmds_conn, &mut self.hb,
+                        );
+                    }
+                    // Every book withdrawn too. A caller may stop the engine
+                    // and keep its connections for the next piece of work, and
+                    // a book left standing keeps arriving on one — under
+                    // server tags the next engine has no record of, and, once
+                    // it subscribes and the venue reuses a tag for the same
+                    // contract and venue, merged into the new caller's book.
+                    let books: Vec<u32> =
+                        self.farm.depth_subs.iter().map(|(id, _)| *id).collect();
+                    for req_id in books {
+                        self.farm.send_depth_unsubscribe(
+                            req_id, &mut self.farm_conn, &mut self.hb,
                         );
                     }
                     // Unsubscribe all news subscriptions before stopping
