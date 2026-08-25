@@ -539,10 +539,10 @@ pub fn parse_ticker_id(xml: &str) -> Option<String> {
         return None;
     }
     // The assignment comes back under either name: a bar subscription is
-    // answered with `tickerId` and a tick-by-tick one with `rtTickerId`.
-    // Reading only the first left every tick-by-tick assignment unmatched, so
-    // the ticker was never bound to the subscription and every tick that
-    // followed had nowhere to go.
+    // answered with `tickerId` and a tick-by-tick one with `rtTickerId`. The
+    // second name is a fallback only — a tick-by-tick acknowledgement is taken
+    // and answered before this is reached — but it costs nothing and the two
+    // shapes are not otherwise told apart here.
     tag(xml, "tickerId")
         .or_else(|| tag(xml, "rtTickerId"))
         .map(|s| s.to_string())
@@ -956,7 +956,11 @@ pub fn decode_bar_payload(
     } else {
         read_bits(&mut pos, 32) as f64
     };
-    let volume = counted * size_tick;
+    // An increment of nothing would zero every volume on the contract, which
+    // reads as a bar nobody traded rather than as the missing increment it is.
+    // Both writers guarantee a positive one today; this is what happens if a
+    // third does not.
+    let volume = counted * if size_tick > 0.0 { size_tick } else { 1.0 };
 
     // Divided by the count, not by the volume above it. The weighted sum is a
     // raw wire figure weighted by those same counts, so the two cancel; put

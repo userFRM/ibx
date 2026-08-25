@@ -240,18 +240,32 @@ impl MarketDataState {
         // So a book that has run away is dropped whole, per request, and the
         // caller is told. Nothing is a book it can trust; a wrong one reads
         // like a right one.
+        // The one that has run away is dropped, which is not the same as the
+        // one that pushed. Every book shares this queue and each is drained on
+        // its own, so measuring the whole and dropping whoever arrives next
+        // destroys the book of a caller reading diligently because of one that
+        // is not — and leaves the one that is not still flooding.
+        //
+        // Reading the queue costs walking it, so it is only walked once the
+        // whole has run out of room, and what it drops then is the longest
+        // book. That is the one nobody is draining, and dropping it puts the
+        // queue back under its bound, so the next push is cheap again.
         {
             let mut held = self.depth_updates.lock().unwrap();
             if held.len() >= STREAM_BACKLOG_LIMIT {
-                let req_id = update.req_id;
-                let before = held.len();
-                held.retain(|u| u.req_id != req_id);
-                log::warn!(
-                    "the book on request {req_id} has gone past {STREAM_BACKLOG_LIMIT} unread \
-                     and was dropped whole ({} entries), because part of a book is not a \
-                     book — resubscribe to start it again",
-                    before - held.len(),
-                );
+                let mut per_book: std::collections::HashMap<u32, usize> =
+                    std::collections::HashMap::new();
+                for u in held.iter() {
+                    *per_book.entry(u.req_id).or_insert(0) += 1;
+                }
+                if let Some((&worst, &how_many)) = per_book.iter().max_by_key(|(_, n)| **n) {
+                    held.retain(|u| u.req_id != worst);
+                    log::warn!(
+                        "the book on request {worst} has gone past what is kept for one and \
+                         was dropped whole ({how_many} entries), because part of a book is \
+                         not a book — resubscribe to start it again",
+                    );
+                }
             }
             held.push(update);
         }

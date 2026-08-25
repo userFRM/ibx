@@ -631,18 +631,51 @@ pub(crate) fn refuse_what_is_left(
     if left.is_empty() {
         return;
     }
-    log::warn!("{} order(s) were still waiting when the engine stopped", left.len());
+    log::warn!("{} instruction(s) were still waiting when the engine stopped", left.len());
     for req in left {
-        let id = req.order_id();
-        if id == 0 {
-            continue;
+        // What is said depends on what was asked for, because these do not
+        // all name an order of their own. A cancel and a modify name the order
+        // they act ON — one that is working at the venue — so reporting that
+        // id as never placed states a live order is dead. What did not happen
+        // is the instruction, and that is what is said.
+        let (ids, what): (Vec<crate::types::OrderId>, &str) = match &req {
+            OrderRequest::Cancel { .. } => (
+                req.order_ids(),
+                "the engine stopped before this order's cancellation reached the venue, so \
+                 the order stands as it was",
+            ),
+            OrderRequest::Modify { .. } => (
+                req.order_ids(),
+                "the engine stopped before this order's change reached the venue, so the \
+                 order stands as it was",
+            ),
+            OrderRequest::CancelAll { .. } => {
+                // Names no order at all, so there is nobody to tell but the log.
+                log::warn!(
+                    "a request to cancel every order was still waiting when the engine \
+                     stopped, and did not reach the venue: whatever was working still is",
+                );
+                continue;
+            }
+            // A bracket is three orders under one request, and all three were
+            // waiting. Reporting the parent alone leaves two carrying a state
+            // nothing confirmed.
+            _ => (
+                req.order_ids(),
+                "the engine stopped before this order reached the venue, so it was never \
+                 placed",
+            ),
+        };
+        for id in ids {
+            if id == 0 {
+                continue;
+            }
+            shared.orders.push_order_inactive(
+                id,
+                crate::error_codes::Refusal::NOT_CONNECTED,
+                what.to_string(),
+            );
         }
-        shared.orders.push_order_inactive(
-            id,
-            crate::error_codes::Refusal::NOT_CONNECTED,
-            "the engine stopped before this order reached the venue, so it was never placed"
-                .to_string(),
-        );
     }
 }
 

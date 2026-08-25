@@ -141,7 +141,12 @@ pub(crate) struct FarmState {
     /// Maps server_tag → (depth_req_id, is_smart_depth, min_tick) for active depth
     /// subscriptions.
     pub(crate) depth_tag_to_req: Vec<(u32, u32, bool, f64, f64, String)>,
-    /// SmartDepth fan-out: maps internal sub_req → user's original req_id.
+    /// Every book: the id this client asked the venue under, against the id
+    /// the caller asked for it under.
+    ///
+    /// Not only the smart-routed fan-out, whatever it was once for — the
+    /// subscribe path fills this for every book, and withdrawing them all at a
+    /// stop reads the caller's side of it.
     pub(crate) depth_fanout_map: Vec<(u32, u32)>,
     /// Primary depth subscription params for reconnect: (req_id, con_id, exchange,
     /// sec_type, num_rows, is_smart_depth).

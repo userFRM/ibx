@@ -1051,6 +1051,11 @@ impl HotLoop {
                     // goes with the request. Left queued, the next request
                     // under this number is answered with this one's.
                     self.shared.reference.purge_historical_for(req_id);
+                    // A request keeping its bars up to date pushes them onto
+                    // the live stream as well, under this same number, so
+                    // withdrawing it has to take those too — the same thing
+                    // the cancel for a live stream does.
+                    self.shared.market.purge_real_time_bars(req_id);
                     self.hmds.keep_up_to_date_reqs.remove(&req_id);
                     // A keep-up-to-date request rides a five-second bar
                     // stream held as a separate query. Cancelling withdraws
