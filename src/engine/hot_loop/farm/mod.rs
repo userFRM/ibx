@@ -124,6 +124,11 @@ pub(crate) struct FarmState {
     pub(crate) next_md_req_id: u32,
     pub(crate) md_req_to_instrument: Vec<(u32, InstrumentId)>,
     pub(crate) instrument_md_reqs: Vec<(InstrumentId, Vec<u32>)>,
+    /// Venue numbers whose quotes this session has no contract for, each said
+    /// once. A quote naming one is dropped, and dropped silently there is no
+    /// way to tell a venue that stopped sending from one still sending under a
+    /// number nobody here holds.
+    quotes_for_no_one: std::collections::HashSet<u32>,
     /// Active depth subscriptions: (req_id, is_smart_depth).
     pub(crate) depth_subs: Vec<(u32, bool)>,
     /// How deep each caller asked its book to be, by the caller's own id.
@@ -594,6 +599,7 @@ impl FarmState {
             next_md_req_id: 1,
             md_req_to_instrument: Vec::new(),
             instrument_md_reqs: Vec::new(),
+            quotes_for_no_one: std::collections::HashSet::new(),
             depth_subs: Vec::new(),
             depth_rows: Vec::new(),
             depth_tag_to_req: Vec::new(),
@@ -823,7 +829,23 @@ impl FarmState {
         for tick in &ticks {
             let instrument = match context.market.instrument_by_server_tag(tick.server_tag) {
                 Some(id) => id,
-                None => continue,
+                None => {
+                    // Said once for the number rather than once for the quote:
+                    // a stream sends as fast held or not, and a line each would
+                    // be the whole log. A number this session gave up is the
+                    // ordinary case — what was in flight when the withdrawal
+                    // went out — and is not worth saying at all.
+                    if self.quotes_for_no_one.insert(tick.server_tag)
+                        && !context.market.retired_server_tags().contains(&tick.server_tag)
+                    {
+                        log::warn!(
+                            "quotes are arriving under venue number {}, which no contract \
+                             in this session holds and which it never gave up; dropped",
+                            tick.server_tag,
+                        );
+                    }
+                    continue;
+                }
             };
 
             let mts = context.market.min_tick_scaled(instrument);
@@ -1050,7 +1072,19 @@ impl FarmState {
             return;
         }
 
-        // L1 ack
+        // L1 ack. A number this session has given up names a subscription that
+        // is over, whatever request id the answer carries: the caller's ids are
+        // its own and it may ask again under one it used before, and the first
+        // request's answer arriving second would point the second at a number
+        // nothing comes on.
+        if context.market.retired_server_tags().contains(&server_tag) {
+            log::warn!(
+                "an answer names venue number {server_tag}, which this session has given \
+                 up; it belongs to a subscription that is over and is not taken as the \
+                 answer to a later one",
+            );
+            return;
+        }
         let instrument = match self.md_req_to_instrument.iter()
             .position(|(id, _)| *id == req_id)
         {
