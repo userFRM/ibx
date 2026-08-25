@@ -2670,13 +2670,15 @@ pub(crate) fn parse_qty_tag(val: Option<&String>) -> Option<Qty> {
 }
 
 /// Decode a wire TIF byte to the API TIF string. Exact inverse of
-/// `api::types::Order::tif_byte` (DTC also encodes to '6' and decodes as GTD).
+/// `api::types::Order::tif_byte`.
+///
 /// The old inline map decoded '7' (never emitted) as OPG and dropped
 /// OPG ('2') and AUC ('8') to "".
 pub(crate) fn decode_tif(tif: u8) -> &'static str {
     match tif {
         b'0' => "DAY", b'1' => "GTC", b'2' => "OPG", b'3' => "IOC",
-        b'4' => "FOK", b'6' => "GTD", b'8' => "AUC", _ => "",
+        b'4' => "FOK", b'5' => "GTX", b'6' => "GTD", b'8' => "AUC",
+        _ => "",
     }
 }
 

@@ -1695,6 +1695,92 @@ fn submit_ex_bracket_child_phase_live() {
 /// grid is the smallest way to ask for that refusal and watch it arrive.
 ///
 /// Run: cargo test --test ib_paper_compat an_off_grid_price_is_refused_and_the_caller_told -- --ignored --nocapture
+/// The venue carries good-til-crossing, and this client can ask for it.
+///
+/// It was refused here as a time in force the venue does not carry, which the
+/// counterpart's own table says it does. A spelling this client rejects is one
+/// no caller can reach, so the only proof that adding it was right is the
+/// venue taking the order.
+///
+/// Run: cargo test --test ib_paper_compat a_good_til_crossing_order_is_sent_as_one -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn a_good_til_crossing_order_is_sent_as_one() {
+    start_logging();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+
+    println!("=== good-til-crossing ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } = Gateway::connect(&config)
+        .expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    let order_id = common::next_order_id();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
+        farm, ccp, hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+    let join = run_hot_loop(hot_loop);
+
+    // Far below the market so it rests rather than trades.
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        kind: OrderKind::Limit { price: 1_00_000_000 },
+        tif: b'5',
+        attrs: OrderAttrs { outside_rth: true, ..Default::default() },
+    })).expect("send order failed");
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (mut acked, mut rejected) = (false, false);
+    while Instant::now() < deadline && !acked && !rejected {
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            println!("  [update] oid={} status={:?}", u.order_id, u.status);
+            match u.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => acked = true,
+                OrderStatus::Rejected => rejected = true,
+                _ => {}
+            }
+        }
+    }
+    if acked {
+        let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }));
+        let bye = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < bye {
+            if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100))
+                && u.order_id == order_id && u.status == OrderStatus::Cancelled { break; }
+        }
+    }
+    // What the venue said about it, which is the whole of the evidence here.
+    let said: Vec<String> = shared.orders.drain_order_inactive()
+        .into_iter().map(|(_, _, message)| message).collect();
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+
+    println!("  venue said: {said:?}");
+    // Named back, the value parsed. A byte tag 59 does not carry is answered
+    // with a complaint about the field rather than about the time in force —
+    // which is what this client got for as long as it sent one of those.
+    let named_it = said.iter().any(|m| m.contains("GTX"));
+    let unparsed = said.iter().any(|m| m.contains("field # 59"));
+    assert!(
+        !unparsed,
+        "the venue could not read the byte sent for good-til-crossing: {said:?}",
+    );
+    assert!(
+        named_it || acked,
+        "the venue neither took the order nor named the time in force back: {said:?}",
+    );
+    println!("\n  PASS — the venue read it as GTX\n");
+}
+
 #[test]
 #[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
 fn an_off_grid_price_is_refused_and_the_caller_told() {
