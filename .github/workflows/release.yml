@@ -81,6 +81,7 @@ jobs:
           .venv/bin/pytest tests/python -q
           python scripts/check_status_counts.py
           python scripts/check_module_graph.py
+          python scripts/check_wrapper_tee.py
           python scripts/check_orphaned_docs.py
 
       - name: Documentation builds
