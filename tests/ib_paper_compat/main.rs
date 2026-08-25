@@ -1174,8 +1174,10 @@ fn what_an_advisor_request_is_answered_with_live() {
     let join = run_hot_loop(hot_loop);
 
     // Each partition the reference client names, asked for by the word the
-    // venue knows it by.
-    for (which, partition) in [(1, "GROUPS"), (2, "PROFILES"), (3, "ALIASES")] {
+    // venue knows it by — which is not the reference client's own spelling of
+    // it. Asked for in upper case these came back as a session-level refusal
+    // naming the field, on every run.
+    for (which, partition) in [(1, "Group"), (2, "Profile"), (3, "Aliases")] {
         println!("  asking for {partition} ({which})");
         control_tx.send(ControlCommand::AdvisorConfig {
             command: 5,
