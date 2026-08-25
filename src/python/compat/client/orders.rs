@@ -364,6 +364,9 @@ impl EClient {
     #[pyo3(signature = (num_ids=1))]
     fn req_ids(&self, py: Python<'_>, num_ids: i32) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
+        // As `take_order_id` does: the mark this is read off is raised by a
+        // replay that lands after the connection does.
+        self.wait_for_the_replay(py);
         self.callback(py, "next_valid_id", (self.stated_order_id() as i64,))?;
         let _ = num_ids;
         Ok(())

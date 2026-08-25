@@ -607,8 +607,12 @@ class TestReqOpenOrdersOrderState:
         # RecordingWrapper.open_order reads `order_state.status`, which raises
         # AttributeError on a dict. Reaching here means state is an OrderState.
         assert state["status"] == "PendingSubmit"
-        # Newly tracked orders have empty margin fields — populated only for what-if.
-        assert state["init_margin_after"] == ""
+        # A newly tracked order has no margin figures — the venue states those
+        # for a preview. They are carried as text and read with `float`, so
+        # "unstated" is written as the number that means it rather than left
+        # empty: empty raises inside the callback and the whole report is lost,
+        # which is what a caller of their library saw on every open order.
+        assert float(state["init_margin_after"]) == float("1.7976931348623157e+308")
         assert state["commission_and_fees"] == 0.0
 
 
