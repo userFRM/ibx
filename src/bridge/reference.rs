@@ -321,20 +321,40 @@ impl ReferenceState {
         Some(g.remove(at).1)
     }
 
-    /// Throw away every answer still queued under a request.
-    ///
-    /// Withdrawing a request stops the venue sending more; it does not unsend
-    /// what already arrived and is waiting to be read. Left there, the next
-    /// request under the same number is answered with the previous one's — its
-    /// bars, its head timestamp, its calendar, its report, its histogram —
-    /// and, where one of those said it was the last, terminated before its own
-    /// answer arrives.
-    pub fn purge_answers_for(&self, req_id: u32) {
+    // Withdrawing a request stops the venue sending more; it does not unsend
+    // what already arrived and is waiting to be read. Left there, the next
+    // request under the same number is answered with the previous one's, and
+    // where one of those said it was the last, terminated before its own
+    // answer arrives.
+    //
+    // One per kind, not one for all of them. A request number means one thing
+    // per kind of request, so a caller may hold the same number for bars and
+    // for a head timestamp at once — and withdrawing either must not take the
+    // other's answers with it.
+
+    /// Throw away bars still queued under a request.
+    pub fn purge_historical_for(&self, req_id: u32) {
         self.historical_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+    }
+
+    /// Throw away a head timestamp still queued under a request.
+    pub fn purge_head_timestamp_for(&self, req_id: u32) {
         self.head_timestamps.lock().unwrap().retain(|(id, _)| *id != req_id);
+    }
+
+    /// Throw away calendar answers still queued under a request.
+    pub fn purge_calendar_for(&self, req_id: u32) {
         self.calendar_meta_data.lock().unwrap().retain(|(id, _)| *id != req_id);
         self.calendar_events.lock().unwrap().retain(|(id, _)| *id != req_id);
+    }
+
+    /// Throw away a report still queued under a request.
+    pub fn purge_fundamental_for(&self, req_id: u32) {
         self.fundamental_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+    }
+
+    /// Throw away a histogram still queued under a request.
+    pub fn purge_histogram_for(&self, req_id: u32) {
         self.histogram_data.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
@@ -580,6 +600,15 @@ impl ReferenceState {
 
     #[doc(hidden)] pub fn push_scanner_params(&self, xml: String) {
         self.scanner_params.lock().unwrap().push(xml);
+    }
+
+    /// Throw away scan rows still queued under a request.
+    ///
+    /// Separate from the answers above because a request number means one
+    /// thing per kind of request: a caller may hold the same number for a scan
+    /// and for a set of bars, and withdrawing one must not take the other's.
+    pub fn purge_scanner_data_for(&self, req_id: u32) {
+        self.scanner_data.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
     #[doc(hidden)] pub fn push_scanner_data(&self, req_id: u32, result: ScannerResult) {

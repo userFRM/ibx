@@ -93,9 +93,19 @@ const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 ///
 /// The bound above is per syscall and a partial write restarts it, so on its
 /// own it bounds a peer taking nothing and not a peer taking a little. This is
-/// the bound on the frame, and it is what stops a dribbling peer holding the
-/// loop that polls every socket and checks every deadline.
-const WHOLE_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// the bound on the frame.
+///
+/// Set to the interval the loop probes liveness on, which is the bound the
+/// per-write timeout was already reasoned against — "kept under the liveness
+/// probe interval so a stalled send cannot hold the loop past its own
+/// cadence". A frame that has not gone out within one probe interval has
+/// already held the thread that would have done the probing for a whole one.
+///
+/// Stated here rather than taken from the loop, because this layer is below
+/// it. The loop asserts the two agree, so they cannot drift apart in silence.
+pub const WHOLE_FRAME_TIMEOUT_SECS: u64 = 15;
+const WHOLE_FRAME_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(WHOLE_FRAME_TIMEOUT_SECS);
 
 /// The timeouts every connection runs with, in one place so the two
 /// constructors cannot drift apart — a write bound present on one transport and
