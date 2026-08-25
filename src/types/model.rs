@@ -912,7 +912,13 @@ impl Order {
             "IOC" => b'3',
             "FOK" => b'4',
             "OPG" => b'2',
-            "GTD" | "DTC" => b'6',
+            "GTD" => b'6',
+            "GTX" => b'5',
+            // Day-til-cancelled shares the good-til-date byte. The counterpart
+            // holds its own character for it, but that is how it names the
+            // life internally, not what tag 59 carries: sent as that character
+            // the venue answers `Invalid value in field # 59`.
+            "DTC" => b'6',
             "AUC" => b'8',
             _ => b'0', // DAY
         }

@@ -2752,8 +2752,8 @@ impl ClientCore {
         // order dies at the close. A caller who wrote "gtc" and meant GTC gets
         // an order that quietly stops existing, so the spelling is checked
         // rather than fallen back on.
-        const TIME_IN_FORCE: [&str; 8] =
-            ["DAY", "GTC", "IOC", "FOK", "OPG", "GTD", "DTC", "AUC"];
+        const TIME_IN_FORCE: [&str; 9] =
+            ["DAY", "GTC", "IOC", "FOK", "OPG", "GTD", "GTX", "DTC", "AUC"];
         if !order.tif.is_empty() && !TIME_IN_FORCE.contains(&order.tif.as_str()) {
             return Err(format!(
                 "tif '{}' is not one this venue carries. It is one of {}, \

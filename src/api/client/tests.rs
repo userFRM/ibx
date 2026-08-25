@@ -1743,7 +1743,7 @@ fn place_order_unknown_tif_is_rejected() {
     shared.market.set_instrument_count(1);
     let order = Order {
         action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
-        lmt_price: 100.0, tif: "GTX".into(), ..Default::default()
+        lmt_price: 100.0, tif: "XYZ".into(), ..Default::default()
     };
     let err = client.place_order(1, &spy(), &order).unwrap_err();
     assert!(err.to_string().contains("tif"), "got: {err}");

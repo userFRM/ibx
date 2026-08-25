@@ -2141,12 +2141,13 @@ fn lean_position_feed_does_not_clobber_marks() {
 // OPG and AUC to "".
 #[test]
 fn tif_round_trips_through_encoder_and_decoder() {
-    for tif in ["DAY", "GTC", "OPG", "IOC", "FOK", "GTD", "AUC"] {
+    for tif in ["DAY", "GTC", "OPG", "IOC", "FOK", "GTD", "GTX", "AUC"] {
         let order = api::Order { tif: tif.to_string(), ..Default::default() };
         assert_eq!(decode_tif(order.tif_byte()), tif,
             "TIF {tif} must survive encode->decode");
     }
-    // DTC shares the GTD wire byte and decodes as GTD.
+    // DTC shares the GTD wire byte and decodes as GTD: the counterpart names
+    // the two differently but tag 59 does not carry the difference.
     let dtc = api::Order { tif: "DTC".to_string(), ..Default::default() };
     assert_eq!(decode_tif(dtc.tif_byte()), "GTD");
     // Unknown bytes decode to empty, not a wrong TIF.
