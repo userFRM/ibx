@@ -73,6 +73,56 @@ pub(super) struct LogonAck {
     pub trading_port: Option<u16>,
 }
 
+/// One read, with a compressed envelope inflated into the messages it carries.
+///
+/// The venue answers a logon with `8=FIXCOMP`: a DEFLATE-compressed body
+/// holding several messages, among them the ACK and the per-account routing
+/// tags. The inner messages are joined so that a single parse sees every tag —
+/// which does mean the parse keeps the last value for a repeated tag, tag 35
+/// among them, so the type it reports names whichever message ended the
+/// envelope rather than the one worth acting on.
+///
+/// Shared because a reader that does not do this reads compressed bytes as
+/// though they were FIX and finds nothing in them, and the two loops that read
+/// this socket read it one after the other.
+pub(super) fn read_fix_body(
+    r: &mut impl Read,
+    carry: &mut Vec<u8>,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    let raw = fix_read_deadline(r, carry, deadline)?;
+    if !raw.starts_with(b"8=FIXCOMP\x01") {
+        return Ok(raw);
+    }
+    let inflated = fixcomp::fixcomp_decompress(&raw)?;
+    let total: usize = inflated.iter().map(|m| m.len()).sum();
+    log::info!("FIXCOMP envelope: {} bytes compressed → {} inner messages, ~{} inflated bytes",
+        raw.len(), inflated.len(), total);
+    let mut body = Vec::with_capacity(total + inflated.len());
+    for inner in inflated {
+        body.extend_from_slice(&inner);
+        body.push(b'\x01');
+    }
+    Ok(body)
+}
+
+/// Whether a body states a message of this type at any point in it.
+///
+/// The joined body of an envelope holds several messages and a parse of it
+/// keeps the last value for tag 35, so asking the parse what type arrived
+/// answers for whichever message ended the envelope. A message worth acting on
+/// is not always the last one, and looking for the field itself is what tells
+/// the difference. Every `35=` is preceded by a separator, the length field
+/// coming before it in every message.
+pub(super) fn body_names_msg_type(body: &[u8], msg_type: &str) -> bool {
+    let mut marker = Vec::with_capacity(msg_type.len() + 5);
+    marker.push(SOH);
+    marker.extend_from_slice(b"35=");
+    marker.extend_from_slice(msg_type.as_bytes());
+    marker.push(SOH);
+    body.windows(marker.len()).any(|w| w == marker)
+}
+
 impl LogonAck {
     /// Read the answer to a logon, up to the ACK that ends it.
     ///
@@ -95,28 +145,10 @@ impl LogonAck {
         let mut ack = Self { heartbeat_interval: CCP_HEARTBEAT, ..Self::default() };
         let mut acked = false;
         for _ in 0..5 {
-            let raw_response = fix_read_deadline(r, carry, deadline)?;
-            // The auth-logon ACK arrives as `8=FIXCOMP` with a DEFLATE-
-            // compressed inner body containing the per-account routing tags
-            // (6145/6171/8008) and other init data. Inflate before parsing.
-            let mut response = raw_response.clone();
-            if raw_response.starts_with(b"8=FIXCOMP\x01") {
-                let inflated_msgs = fixcomp::fixcomp_decompress(&raw_response)?;
-                let total: usize = inflated_msgs.iter().map(|m| m.len()).sum();
-                log::info!("Auth FIXCOMP envelope: {} bytes compressed → {} inner messages, ~{} inflated bytes",
-                    raw_response.len(), inflated_msgs.len(), total);
-                // Concatenate all inner messages so a single fix_parse pass
-                // sees every tag.
-                response.clear();
-                for inner in inflated_msgs {
-                    response.extend_from_slice(&inner);
-                    response.push(b'\x01');
-                }
-            }
+            let response = read_fix_body(r, carry, deadline)?;
             let fields = fix_parse(&response);
             let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("");
-            log::info!("Auth msg type={} ({} bytes raw / {} bytes parsed)",
-                msg_type, raw_response.len(), response.len());
+            log::info!("Auth msg type={} ({} bytes parsed)", msg_type, response.len());
             for tag in [6144u32, 6145, 6146, 6147, 6171, 6172, 8008, 8009, 6160, 6161] {
                 if let Some(v) = fields.get(&tag) {
                     log::info!("Auth msg type={msg_type} tag={tag}: {v:?}");
@@ -1153,6 +1185,27 @@ mod tests {
         assert_eq!(ack.account_id, "DU111111");
         assert_eq!(ack.ccp_token, "a-session-token");
         assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
+    }
+
+    /// A message inside an envelope is found wherever it sits in it.
+    ///
+    /// The parse answers for whichever message ended the envelope, so the ACK
+    /// is looked for in the body itself. Both readers of this socket depend on
+    /// that: one to know it has an answer, the other to act on it at all.
+    #[test]
+    fn an_envelope_names_the_messages_inside_it_not_just_the_last() {
+        let body: Vec<u8> = [
+            fix_build(&[(35, "A"), (1, "DU111111")], 1),
+            fix_build(&[(35, "9"), (6830, "BRFG+Briefing.com")], 2),
+        ]
+        .concat();
+
+        assert!(body_names_msg_type(&body, "A"), "the ACK is in there");
+        assert!(body_names_msg_type(&body, "9"), "so is what followed it");
+        assert!(!body_names_msg_type(&body, "U"), "and nothing that is not");
+        // Not a prefix of another type, and not a value read off some other tag.
+        assert!(!body_names_msg_type(&body, "A9"));
+        assert!(!body_names_msg_type(&body, "DU111111"));
     }
 
     /// A logon that answered with nothing is a failed logon, not a session.
