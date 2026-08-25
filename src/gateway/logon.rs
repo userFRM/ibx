@@ -247,12 +247,18 @@ impl LogonAck {
             }
         }
         // Five is a budget against a preamble whose length the venue sets, not
-        // a statement that the logon was answered. Falling out of it holds an
-        // ack with no account, no token and no session stamp, and a session
-        // built on that reports success and takes orders — while the empty
-        // stamp reads to the reconnect logic as every session being another
-        // client, which hands the account away on the next reconnect.
-        if !acked {
+        // a statement that the logon was answered. Falling out of it holding
+        // nothing is the failure worth reporting: no account, no token and no
+        // session stamp, on a session that would otherwise report success and
+        // take orders — and whose empty stamp reads to the reconnect logic as
+        // every session belonging to another client.
+        //
+        // Judged on what was read rather than on the last message type seen.
+        // The ACK arrives inside a compressed envelope whose inner messages are
+        // concatenated and parsed in one pass, and the parse is last-wins, so
+        // tag 35 names whatever the envelope ended on. An ack this loop filled
+        // is an answered logon whichever message that was.
+        if !acked && ack.account_id.is_empty() && ack.ccp_token.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "logon read past five messages without an ACK",
