@@ -2177,7 +2177,7 @@ impl HotLoop {
         self.hmds_connected_at = None;
         // Schedule the first attempt if not already scheduled.
         if self.hmds_next_attempt_at.is_none() {
-            self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
+            self.hmds_next_attempt_at = Some(Instant::now() + reconnect_backoff(self.hmds_reconnect_attempt));
             return;
         }
         let due = self.hmds_next_attempt_at.unwrap();
@@ -2240,7 +2240,7 @@ impl HotLoop {
         self.secdef_connected_at = None;
         if self.secdef_next_attempt_at.is_none() {
             self.secdef_next_attempt_at =
-                Some(Instant::now() + hmds_reconnect_backoff(self.secdef_reconnect_attempt + 1));
+                Some(Instant::now() + reconnect_backoff(self.secdef_reconnect_attempt));
             return;
         }
         if Instant::now() < self.secdef_next_attempt_at.unwrap() { return; }
@@ -2294,7 +2294,7 @@ impl HotLoop {
                 );
                 self.pending_secdef_reconnect = None;
                 self.secdef_next_attempt_at = Some(
-                    Instant::now() + hmds_reconnect_backoff(self.secdef_reconnect_attempt + 1),
+                    Instant::now() + reconnect_backoff(self.secdef_reconnect_attempt),
                 );
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -2303,7 +2303,7 @@ impl HotLoop {
                 self.pending_secdef_reconnect = None;
                 // Spent like any other attempt: see the HMDS arm.
                 self.secdef_next_attempt_at = Some(
-                    Instant::now() + hmds_reconnect_backoff(self.secdef_reconnect_attempt + 1),
+                    Instant::now() + reconnect_backoff(self.secdef_reconnect_attempt),
                 );
             }
         }
@@ -2347,7 +2347,7 @@ impl HotLoop {
                         "HMDS still down after {HMDS_NOTIFY_AFTER_ATTEMPTS} attempts — historical data is unavailable until it answers; retries continue",
                     );
                 }
-                self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
+                self.hmds_next_attempt_at = Some(Instant::now() + reconnect_backoff(self.hmds_reconnect_attempt));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -2357,7 +2357,7 @@ impl HotLoop {
                 // other. Leaving the due time on the instant that authorised
                 // this one makes the next pass spawn immediately, and the one
                 // after that, for as long as the rest of the session is up.
-                self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
+                self.hmds_next_attempt_at = Some(Instant::now() + reconnect_backoff(self.hmds_reconnect_attempt));
             }
         }
     }
@@ -2547,28 +2547,28 @@ pub(crate) fn clone_for_event<T: Clone>(event_tx: &Option<EventSink>, value: &T)
     event_tx.as_ref().map(|_| value.clone())
 }
 
-/// Backoff schedule for HMDS reconnect attempts.
-/// `min(64, 3 * 2^(attempt-1))` seconds — approximates the captured cadence
-/// of 3.2 / 11.4 / 18.5 / 42.7 / 63.7 s the official client uses.
+/// How long to wait before the next reconnect attempt: a two-second floor,
+/// the rung this many consecutive failures has reached, and a spread across
+/// the window that rung opens, to a ceiling of 82 seconds.
+///
+/// Every transport climbs this one ladder. The spread is not decoration —
+/// without it two transports that fail together retry together for as long as
+/// they keep failing, and re-dialling on the beat is what a server rate-limits.
+/// How long each consecutive failure waits before the next attempt, in
+/// milliseconds, before the spread below is added to it.
+const LADDER_MS: [u64; 6] = [0, 5_000, 15_000, 30_000, 50_000, 60_000];
+
+/// The width of the window a wait is spread across, which opens by a step per
+/// consecutive failure up to its own ceiling.
 #[inline]
-/// Jittered reconnect backoff for CCP/farm, mirroring the
-/// gateway's ladder: delay = min(2s floor + ladder + jitter, 82s). The
-/// ladder climbs 0/5/15/30/50/60s per consecutive failure and the jitter
-/// range grows 5s -> 20s (+5s per failure). Immediate rapid-fire re-dials
-/// risk server-side rate limiting and eviction. (HMDS keeps its own
-/// capture-matched doubling schedule below.)
-pub(crate) fn reconnect_backoff(failures: u32) -> std::time::Duration {
-    const LADDER_MS: [u64; 6] = [0, 5_000, 15_000, 30_000, 50_000, 60_000];
-    let ladder = LADDER_MS[(failures as usize).min(LADDER_MS.len() - 1)];
-    let jitter_max = (5_000 + 5_000 * failures as u64).min(20_000);
-    let jitter = rand::random::<u64>() % jitter_max;
-    std::time::Duration::from_millis((2_000 + ladder + jitter).min(82_000))
+fn jitter_span(failures: u32) -> u64 {
+    (5_000 + 5_000 * failures as u64).min(20_000)
 }
 
-pub(crate) fn hmds_reconnect_backoff(attempt: u32) -> std::time::Duration {
-    let n = attempt.saturating_sub(1).min(31);
-    let secs = (3u64.saturating_mul(1u64 << n)).min(64);
-    std::time::Duration::from_secs(secs)
+pub(crate) fn reconnect_backoff(failures: u32) -> std::time::Duration {
+    let ladder = LADDER_MS[(failures as usize).min(LADDER_MS.len() - 1)];
+    let jitter = rand::random::<u64>() % jitter_span(failures);
+    std::time::Duration::from_millis((2_000 + ladder + jitter).min(82_000))
 }
 
 /// Surface an "HMDS unavailable" error for `req_id` when the historical-data
@@ -3445,7 +3445,7 @@ mod tests {
 
         let due = hl.hmds_next_attempt_at.expect("another attempt is armed");
         assert!(
-            due.saturating_duration_since(Instant::now()) <= Duration::from_secs(64),
+            due.saturating_duration_since(Instant::now()) <= Duration::from_secs(82),
             "and the ladder stays capped rather than drifting out to nothing",
         );
     }
@@ -3860,24 +3860,31 @@ mod tests {
         assert_eq!(LIVENESS_STALL_COOLDOWN_SECS, 60);
     }
 
+    /// Every reconnect this client makes climbs the one ladder, and each of the
+    /// observed historical-data retries lands inside the rung it belongs to.
+    ///
+    /// Those retries were read as a doubling schedule of their own and given
+    /// one — five samples fitted with a curve. They are the same ladder every
+    /// other transport climbs: each sample falls inside the window its rung
+    /// opens, which a schedule of 3/6/12/24/48 does not explain and this does.
     #[test]
-    fn hmds_reconnect_backoff_matches_captured_cadence() {
-        use std::time::Duration;
-        // Captured cadence: 3.2 / 11.4 / 18.5 / 42.7 / 63.7 s.
-        // This schedule: 3 / 6 / 12 / 24 / 48 / 64 s — follows the doubling
-        // shape and caps at the 64 s ceiling.
-        assert_eq!(hmds_reconnect_backoff(1), Duration::from_secs(3));
-        assert_eq!(hmds_reconnect_backoff(2), Duration::from_secs(6));
-        assert_eq!(hmds_reconnect_backoff(3), Duration::from_secs(12));
-        assert_eq!(hmds_reconnect_backoff(4), Duration::from_secs(24));
-        assert_eq!(hmds_reconnect_backoff(5), Duration::from_secs(48));
-        assert_eq!(hmds_reconnect_backoff(6), Duration::from_secs(64));
-        // Cap holds for any further attempts.
-        assert_eq!(hmds_reconnect_backoff(7), Duration::from_secs(64));
-        assert_eq!(hmds_reconnect_backoff(100), Duration::from_secs(64));
-        // Saturating math survives degenerate inputs.
-        assert_eq!(hmds_reconnect_backoff(0), Duration::from_secs(3));
-        assert_eq!(hmds_reconnect_backoff(u32::MAX), Duration::from_secs(64));
+    fn the_observed_retries_land_in_the_rung_they_belong_to() {
+        const OBSERVED_SECS: [f64; 5] = [3.2, 11.4, 18.5, 42.7, 63.7];
+        for (rung, observed) in OBSERVED_SECS.iter().enumerate() {
+            // The rung is a floor plus a step, and the wait is somewhere in it.
+            let floor = std::time::Duration::from_millis(2_000 + LADDER_MS[rung]);
+            let ceiling = floor + std::time::Duration::from_millis(jitter_span(rung as u32));
+            let waited = std::time::Duration::from_secs_f64(*observed);
+            assert!(
+                waited >= floor && waited < ceiling,
+                "rung {rung}: {observed}s is outside {floor:?}..{ceiling:?}",
+            );
+            // And what this client waits is inside the same window.
+            for _ in 0..64 {
+                let ours = reconnect_backoff(rung as u32);
+                assert!(ours >= floor && ours < ceiling, "rung {rung}: {ours:?}");
+            }
+        }
     }
 
     #[test]
