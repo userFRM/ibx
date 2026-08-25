@@ -700,6 +700,14 @@ pub fn farm_logon_exchange(
         let msg = loop {
             if let Some((msg, consumed)) = try_frame_farm_msg(&buf) {
                 buf.drain(..consumed);
+                // An empty frame is the skip the framer states for bytes that
+                // start no message, not a message. Taken as one it was counted
+                // against the budget below and parsed as an empty body, so a
+                // noisy socket failed as "read past twenty messages" rather
+                // than as the garbage it was.
+                if msg.is_empty() {
+                    continue;
+                }
                 break msg;
             }
             let mut tmp = [0u8; FARM_RECV_BUF];

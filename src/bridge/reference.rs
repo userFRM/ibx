@@ -679,8 +679,12 @@ impl ReferenceState {
         self.depth_exchanges_cache.lock().unwrap().clone()
     }
 
+    /// The venue states the whole directory in one message, unprompted, every
+    /// time the session logs on. Added to what was already held, a reconnect
+    /// leaves every exchange in it twice — and the list is cloned out on each
+    /// subscribe.
     #[doc(hidden)] pub fn push_depth_exchanges(&self, descs: Vec<DepthMktDataDescription>) {
-        self.depth_exchanges_cache.lock().unwrap().extend(descs);
+        *self.depth_exchanges_cache.lock().unwrap() = descs;
     }
 
     #[doc(hidden)] pub fn notify_depth_exchanges(&self) {

@@ -409,6 +409,10 @@ pub fn connect_farm(
     // What the venue said to reach this farm on. The configured port applies
     // only where it said nothing.
     let port = stated_port.unwrap_or(settings.port);
+    // Every farm this opens, not one of them: `Farm` names the logon shape
+    // rather than the connection's role, and the trading farm carries
+    // `MarketData` while the quote farm carries `Historical`. Nothing here can
+    // tell the two apart, so the override is documented as moving them all.
     let farm_host = settings
         .market_data_host
         .clone()
@@ -1541,9 +1545,18 @@ impl Gateway {
             PostAuth::Redirect(redirect_host, redirect_port) => {
                 log::info!("Reconnecting to {redirect_host}:{redirect_port}");
                 drop(tls);
-                return Self::connect_to_host(
+                // The host that answered is one this account can reach, and a
+                // redirect here dropped it — a session redirected at data-start
+                // ran the rest of its life one failover host short. Kept the
+                // same way the redirect above keeps it.
+                let knocked = host.to_string();
+                let mut session = Self::connect_to_host(
                     config, &redirect_host, redirect_port, redirect_depth + 1,
-                );
+                )?;
+                if !session.gateway.auth_hosts.contains(&knocked) {
+                    session.gateway.auth_hosts.push(knocked);
+                }
+                return Ok(session);
             }
         };
 

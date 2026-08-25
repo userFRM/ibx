@@ -150,6 +150,15 @@ pub struct HotLoop {
     /// connect failed, or a future runtime disconnect detector trips it.
     pending_hmds_reconnect: Option<Receiver<io::Result<Connection>>>,
     hmds_reconnect_attempt: u32,
+    /// When each transport last came up. The backoff is only given back once
+    /// the connection has held for the stable window — a peer that accepts and
+    /// drops a second later has not recovered, and counting it as a fresh start
+    /// is how a session never climbs past the first rung and retries at that
+    /// rung for ever. The retry budget beside it already works this way.
+    farm_connected_at: Option<Instant>,
+    ccp_connected_at: Option<Instant>,
+    hmds_connected_at: Option<Instant>,
+    secdef_connected_at: Option<Instant>,
     /// The same, for the connection carrying the calendar. Rebuilt on the
     /// same terms as the others: a farm that goes is not a session that ends.
     secdef_reconnect_attempt: u32,
@@ -373,6 +382,10 @@ impl HotLoop {
             ccp_reconnect_attempt: 0,
             pending_hmds_reconnect: None,
             hmds_reconnect_attempt: 0,
+            farm_connected_at: None,
+            ccp_connected_at: None,
+            hmds_connected_at: None,
+            secdef_connected_at: None,
             secdef_reconnect_attempt: 0,
             secdef_next_attempt_at: None,
             pending_secdef_reconnect: None,
@@ -1921,6 +1934,13 @@ impl HotLoop {
                 return;
             }
         };
+        // Given back only by a connection that held: see the fields.
+        if self.farm_connected_at
+            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
+        {
+            self.farm_reconnect_attempt = 0;
+        }
+        self.farm_connected_at = None;
         self.farm_reconnect_attempt += 1;
         let attempt = self.farm_reconnect_attempt;
         log::info!(
@@ -1956,7 +1976,7 @@ impl HotLoop {
             Ok(Ok(conn)) => {
                 log::info!("Farm auto-reconnect succeeded (attempt {})", self.farm_reconnect_attempt);
                 self.reconnect_farm(conn);
-                self.farm_reconnect_attempt = 0;
+                self.farm_connected_at = Some(Instant::now());
                 self.clear_halt_if_it_was_not_settled();
                 self.budget.record_connected(Instant::now());
                 // Said whether or not a loss was ever announced, because the
@@ -2035,6 +2055,13 @@ impl HotLoop {
                 return;
             }
         };
+        // Given back only by a connection that held: see the fields.
+        if self.ccp_connected_at
+            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
+        {
+            self.ccp_reconnect_attempt = 0;
+        }
+        self.ccp_connected_at = None;
         self.ccp_reconnect_attempt += 1;
         let attempt = self.ccp_reconnect_attempt;
         log::info!("CCP auto-reconnect attempt {} starting (host={})", attempt, auth.host);
@@ -2059,7 +2086,7 @@ impl HotLoop {
             Ok(Ok(conn)) => {
                 log::info!("CCP auto-reconnect succeeded (attempt {})", self.ccp_reconnect_attempt);
                 self.reconnect_ccp(conn);
-                self.ccp_reconnect_attempt = 0;
+                self.ccp_connected_at = Some(Instant::now());
                 self.clear_halt_if_it_was_not_settled();
                 self.budget.record_connected(Instant::now());
                 self.announce_reconnected();
@@ -2137,6 +2164,13 @@ impl HotLoop {
         let due = self.hmds_next_attempt_at.unwrap();
         if Instant::now() < due { return; }
         let auth = auth.clone();
+        // Given back only by a connection that held: see the fields.
+        if self.hmds_connected_at
+            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
+        {
+            self.hmds_reconnect_attempt = 0;
+        }
+        self.hmds_connected_at = None;
         self.hmds_reconnect_attempt += 1;
         let attempt = self.hmds_reconnect_attempt;
         log::info!(
@@ -2188,6 +2222,13 @@ impl HotLoop {
         }
         if Instant::now() < self.secdef_next_attempt_at.unwrap() { return; }
         let auth = auth.clone();
+        // Given back only by a connection that held: see the fields.
+        if self.secdef_connected_at
+            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
+        {
+            self.secdef_reconnect_attempt = 0;
+        }
+        self.secdef_connected_at = None;
         self.secdef_reconnect_attempt += 1;
         let attempt = self.secdef_reconnect_attempt;
         log::info!(
@@ -2226,7 +2267,7 @@ impl HotLoop {
                 self.hb.last_secdef_recv = Instant::now();
                 self.hb.pending_secdef_test = None;
                 self.hb.last_secdef_sent = Instant::now();
-                self.secdef_reconnect_attempt = 0;
+                self.secdef_connected_at = Some(Instant::now());
                 self.secdef_next_attempt_at = None;
                 self.pending_secdef_reconnect = None;
             }
@@ -2271,7 +2312,7 @@ impl HotLoop {
                 // probed. What silence is measured from restarts with it, or
                 // the new connection is judged on the old one's.
                 self.hb.pending_hmds_test = None;
-                self.hmds_reconnect_attempt = 0;
+                self.hmds_connected_at = Some(Instant::now());
                 self.hmds_next_attempt_at = None;
                 self.pending_hmds_reconnect = None;
                 emit(&self.event_tx, Event::VenueData {

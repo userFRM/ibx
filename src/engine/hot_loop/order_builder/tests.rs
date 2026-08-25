@@ -33,6 +33,61 @@ fn only_a_stock_leaves_the_contract_unnamed() {
     }
 }
 
+/// The two-part midpoint peg is a distinct order type, and a replace states
+/// the type on its own message. The attributes settled it in place on a list
+/// the replace does not send, so a replaced two-part peg went out as a bare
+/// `P` with the instruction that names the peg dropped — and `P` alone is
+/// three different orders depending on an ExecInst that was no longer there.
+#[test]
+fn a_replaced_two_part_peg_keeps_its_order_type() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    let attrs = crate::types::OrderAttrs {
+        mid_offset_at_whole: 0.01,
+        mid_offset_at_half: 0.005,
+        ..Default::default()
+    };
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        order_id: 42,
+        instrument,
+        side: Side::Buy,
+        qty: 100 * crate::types::QTY_SCALE,
+        kind: crate::types::OrderKind::PegMid { offset: 0, price_cap: 0 },
+        tif: b'0',
+        attrs,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let mut buf = [0u8; 8192];
+    let n = peer.read(&mut buf).unwrap();
+    let placed = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(placed.contains("\u{1}40=PMID2\u{1}"), "placed as the two-part form: {placed}");
+
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 42,
+        price: 0,
+        qty: 100 * crate::types::QTY_SCALE,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+    assert_eq!(tag("40=").as_deref(), Some("PMID2"), "it is still the two-part peg: {msg}");
+}
+
 /// A replace names the contract by its local symbol, and an option's local
 /// symbol is not its underlying's. With no local symbol carried on the
 /// instrument the tag is left off rather than filled with the underlying —
@@ -65,7 +120,7 @@ fn a_replace_does_not_name_an_option_by_its_underlying() {
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let mut buf = [0u8; 8192];
-    peer.read(&mut buf).unwrap();
+    let _ = peer.read(&mut buf).unwrap();
 
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 42,

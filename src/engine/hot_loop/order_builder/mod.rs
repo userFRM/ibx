@@ -512,8 +512,9 @@ pub(crate) fn drain_and_send_orders(
                 // placed with — accepted, acknowledged, and quietly a different
                 // order. What the submit said is restated here.
                 let mut attr_fields: Vec<(u32, String)> = Vec::new();
+                let mut restated_type = None;
                 if let Some(spec) = spec.as_deref() {
-                    push_order_attrs(
+                    restated_type = push_order_attrs(
                         &mut attr_fields,
                         &spec.attrs,
                         &spec.kind,
@@ -524,6 +525,16 @@ pub(crate) fn drain_and_send_orders(
                     // gateway reads a repeated tag as a second statement of it.
                     let stated: Vec<u32> = fields.iter().map(|(t, _)| *t).collect();
                     attr_fields.retain(|(tag, _)| !stated.contains(tag));
+                }
+                // The attributes can settle on an order type of their own, and
+                // the lean message above states the continuous form. Restated
+                // here, where the tag it names actually lives.
+                if let Some(stated) = restated_type {
+                    for (tag, value) in fields.iter_mut() {
+                        if *tag == 40 {
+                            *value = stated;
+                        }
+                    }
                 }
                 fields.extend(attr_fields.iter().map(|(t, v)| (*t, v.as_str())));
                 conn.send_fix(&fields)
@@ -1240,7 +1251,13 @@ fn send_order_ex(
     // rather than defaulting to USD.
     fields.push((15, currency_for(context, shared, instrument)));
 
-    push_order_attrs(&mut fields, attrs, &kind, side, exec_inst);
+    if let Some(stated) = push_order_attrs(&mut fields, attrs, &kind, side, exec_inst) {
+        for (tag, value) in fields.iter_mut() {
+            if *tag == 40 {
+                *value = stated.to_string();
+            }
+        }
+    }
 
     let refs: Vec<(u32, &str)> = fields.iter().map(|(t, s)| (*t, s.as_str())).collect();
     conn.send_fix(&refs)
@@ -1279,8 +1296,15 @@ fn push_order_attrs(
     // relative, trailing and algo types each contribute a character, and the
     // all-or-none instruction below joins them on one field.
     mut exec_inst: String,
-) {
+) -> Option<&'static str> {
     use crate::types::OrderKind as K;
+    // The order type the attributes below settle on, when they settle on one
+    // the caller's own tag 40 does not already state. Returned rather than
+    // written over the caller's list: a replace states the type on the lean
+    // message and hands this function a list of its own, so rewriting in place
+    // silently did nothing there while the instruction that names the peg was
+    // still dropped — leaving a bare `P`, which is three different orders.
+    let mut order_type: Option<&'static str> = None;
     // Extended attributes — same tag order as the historical SubmitLimitEx
     // block.
     if attrs.display_size > 0 {
@@ -1818,10 +1842,9 @@ fn push_order_attrs(
                 // The two-part form. The order type stated above is the one for
                 // a continuous offset, so it is restated, and the instruction
                 // that names the peg is dropped — the type carries it.
+                order_type = Some("PMID2");
                 for (tag, value) in fields.iter_mut() {
-                    if *tag == 40 {
-                        *value = "PMID2".to_string();
-                    } else if *tag == 18 {
+                    if *tag == 18 {
                         value.retain(|c| c != 'M');
                     }
                 }
@@ -1876,6 +1899,7 @@ fn push_order_attrs(
         K::WhatIf { .. } => fields.push((6091, "1".to_string())),
         _ => {}
     }
+    order_type
 }
 
 fn build_algo_tags(algo: &AlgoParams) -> (&str, Vec<String>) {

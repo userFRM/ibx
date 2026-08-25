@@ -33,7 +33,7 @@ _SETTINGS: dict[str, tuple[str, str]] = {
     "log_level": ("IBX_LOG_LEVEL", "verbose logging"),
     "log_dir": ("IBX_LOG_DIR", "log directory"),
     "log_queue": ("IBX_LOG_QUEUE", "log buffering"),
-    "market_data_host": ("IBX_FARM_HOST", "the market data connection"),
+    "market_data_host": ("IBX_FARM_HOST", "the host every farm connection is opened on"),
     "port": ("IBX_MISC_PORT", "the port the session reaches the venue on"),
     "registration_timeout_ms": (
         "IBX_REGISTRATION_TIMEOUT_MS",
