@@ -759,6 +759,25 @@ impl EClient {
             .ok_or_else(|| PyRuntimeError::new_err("Not connected"))
     }
 
+    /// Hold until the venue has named what the account already has.
+    ///
+    /// The working orders and the executions behind the rest arrive unprompted
+    /// after a connect, and both raise the mark an id is floored at. Asked
+    /// before they land, the floor is nothing and the id handed out is one a
+    /// fill spent long ago, which the venue refuses as a duplicate — so the
+    /// first order of a session is the one that cannot be placed. Bounded the
+    /// same way and for the same reason as the open-order replay beside it: an
+    /// account with nothing working never sees the replay end.
+    pub(crate) fn wait_for_the_replay(&self, py: Python<'_>) {
+        let Ok(shared) = self.shared_state() else { return };
+        for _ in 0..300 {
+            if shared.orders.replay_done() {
+                return;
+            }
+            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
+        }
+    }
+
     /// The id a caller may next place under, without taking it.
     ///
     /// One past the highest id the venue has named an order under. Stated
@@ -786,7 +805,8 @@ impl EClient {
     /// nothing a run knows that the next one will not be told — but it is told
     /// after connecting rather than during it, so an id asked for in the same
     /// breath as the connection is floored at nothing. See `stated_order_id`.
-    pub(crate) fn take_order_id(&self, _py: Python<'_>) -> u64 {
+    pub(crate) fn take_order_id(&self, py: Python<'_>) -> u64 {
+        self.wait_for_the_replay(py);
         let floor = self.stated_order_id();
         let mut held = self.next_order_id.load(Ordering::Acquire);
         loop {

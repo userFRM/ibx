@@ -1837,6 +1837,9 @@ impl Default for OrderState {
     /// callback, and the whole report is lost rather than arriving with a field
     /// unset — which is what happened to every open order reported through a
     /// path that states the status and leaves the rest to this.
+    ///
+    /// Only the ones carried as text. The figures already carried as numbers
+    /// are read as numbers and default as they did.
     fn default() -> Self {
         let unstated = || f64::MAX.to_string();
         Self {
@@ -1850,23 +1853,23 @@ impl Default for OrderState {
             init_margin_after: unstated(),
             maint_margin_after: unstated(),
             equity_with_loan_after: unstated(),
-            commission_and_fees: f64::MAX,
-            min_commission_and_fees: f64::MAX,
-            max_commission_and_fees: f64::MAX,
+            commission_and_fees: 0.0,
+            min_commission_and_fees: 0.0,
+            max_commission_and_fees: 0.0,
             commission_and_fees_currency: String::new(),
             warning_text: String::new(),
             completed_time: String::new(),
             completed_status: String::new(),
             margin_currency: String::new(),
-            init_margin_before_outside_rth: f64::MAX,
-            maint_margin_before_outside_rth: f64::MAX,
-            equity_with_loan_before_outside_rth: f64::MAX,
-            init_margin_change_outside_rth: f64::MAX,
-            maint_margin_change_outside_rth: f64::MAX,
-            equity_with_loan_change_outside_rth: f64::MAX,
-            init_margin_after_outside_rth: f64::MAX,
-            maint_margin_after_outside_rth: f64::MAX,
-            equity_with_loan_after_outside_rth: f64::MAX,
+            init_margin_before_outside_rth: 0.0,
+            maint_margin_before_outside_rth: 0.0,
+            equity_with_loan_before_outside_rth: 0.0,
+            init_margin_change_outside_rth: 0.0,
+            maint_margin_change_outside_rth: 0.0,
+            equity_with_loan_change_outside_rth: 0.0,
+            init_margin_after_outside_rth: 0.0,
+            maint_margin_after_outside_rth: 0.0,
+            equity_with_loan_after_outside_rth: 0.0,
             suggested_size: String::new(),
             reject_reason: String::new(),
             order_allocations: Vec::new(),
