@@ -409,10 +409,13 @@ pub fn connect_farm(
     // What the venue said to reach this farm on. The configured port applies
     // only where it said nothing.
     let port = stated_port.unwrap_or(settings.port);
-    // Every farm this opens, not one of them: `Farm` names the logon shape
-    // rather than the connection's role, and the trading farm carries
-    // `MarketData` while the quote farm carries `Historical`. Nothing here can
-    // tell the two apart, so the override is documented as moving them all.
+    // Every farm this opens, not the market-data one alone. `Farm` does name
+    // the connection — `MarketData` is the quote connection, and the trading
+    // connection is the CCP one, which never comes through here — so scoping
+    // this is a one-line change and deliberately not made: the setting is an
+    // escape hatch for pointing a session somewhere else, and moving one of
+    // three connections is not what anyone reaches for it to do. Documented as
+    // moving them all, which is what it does.
     let farm_host = settings
         .market_data_host
         .clone()
@@ -953,9 +956,13 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
         }
     }
     // Five is a budget against a preamble the venue sets the length of, not a
-    // statement that the logon was answered. Falling out of it leaves the
-    // session with no stamp and no token while reporting success.
-    if !acked {
+    // statement that the logon was answered. Falling out of it with nothing
+    // read leaves the session with no stamp while reporting success.
+    //
+    // Judged on what was read rather than on having seen the message type:
+    // this loop does not inflate a compressed envelope, so tag 35 over one is
+    // read off compressed bytes and names nothing. A stamp is an answer.
+    if !acked && logged_in_at.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "CCP logon read past five messages without an ACK",

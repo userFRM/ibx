@@ -1860,6 +1860,17 @@ impl HotLoop {
             self.report_recovery_exhausted("farm");
             return;
         }
+        // Given back before the delay below is read off it, and only by a
+        // connection that held for the stable window: see the fields. Applied
+        // after the schedule was set, a transport that had been up for hours
+        // still waited the rung it reached long ago for its first retry, which
+        // is the case this exists for.
+        if self.farm_connected_at
+            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
+        {
+            self.farm_reconnect_attempt = 0;
+        }
+        self.farm_connected_at = None;
         match self.farm_next_attempt_at {
             None => {
                 let delay = reconnect_backoff(self.farm_reconnect_attempt);
@@ -1894,6 +1905,17 @@ impl HotLoop {
             self.report_recovery_exhausted("ccp");
             return;
         }
+        // Given back before the delay below is read off it, and only by a
+        // connection that held for the stable window: see the fields. Applied
+        // after the schedule was set, a transport that had been up for hours
+        // still waited the rung it reached long ago for its first retry, which
+        // is the case this exists for.
+        if self.ccp_connected_at
+            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
+        {
+            self.ccp_reconnect_attempt = 0;
+        }
+        self.ccp_connected_at = None;
         match self.ccp_next_attempt_at {
             None => {
                 let delay = reconnect_backoff(self.ccp_reconnect_attempt);
@@ -1934,13 +1956,6 @@ impl HotLoop {
                 return;
             }
         };
-        // Given back only by a connection that held: see the fields.
-        if self.farm_connected_at
-            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
-        {
-            self.farm_reconnect_attempt = 0;
-        }
-        self.farm_connected_at = None;
         self.farm_reconnect_attempt += 1;
         let attempt = self.farm_reconnect_attempt;
         log::info!(
@@ -2055,13 +2070,6 @@ impl HotLoop {
                 return;
             }
         };
-        // Given back only by a connection that held: see the fields.
-        if self.ccp_connected_at
-            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
-        {
-            self.ccp_reconnect_attempt = 0;
-        }
-        self.ccp_connected_at = None;
         self.ccp_reconnect_attempt += 1;
         let attempt = self.ccp_reconnect_attempt;
         log::info!("CCP auto-reconnect attempt {} starting (host={})", attempt, auth.host);
@@ -2156,6 +2164,17 @@ impl HotLoop {
             Some(a) if !a.host.is_empty() && !a.hmds_host.is_empty() => a,
             _ => return,
         };
+        // Given back before the delay below is read off it, and only by a
+        // connection that held for the stable window: see the fields. Applied
+        // after the schedule was set, a transport that had been up for hours
+        // still waited the rung it reached long ago for its first retry, which
+        // is the case this exists for.
+        if self.hmds_connected_at
+            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
+        {
+            self.hmds_reconnect_attempt = 0;
+        }
+        self.hmds_connected_at = None;
         // Schedule the first attempt if not already scheduled.
         if self.hmds_next_attempt_at.is_none() {
             self.hmds_next_attempt_at = Some(Instant::now() + hmds_reconnect_backoff(self.hmds_reconnect_attempt + 1));
@@ -2164,13 +2183,6 @@ impl HotLoop {
         let due = self.hmds_next_attempt_at.unwrap();
         if Instant::now() < due { return; }
         let auth = auth.clone();
-        // Given back only by a connection that held: see the fields.
-        if self.hmds_connected_at
-            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
-        {
-            self.hmds_reconnect_attempt = 0;
-        }
-        self.hmds_connected_at = None;
         self.hmds_reconnect_attempt += 1;
         let attempt = self.hmds_reconnect_attempt;
         log::info!(
@@ -2215,6 +2227,17 @@ impl HotLoop {
             // A session the venue named no such farm for has none to rebuild.
             _ => return,
         };
+        // Given back before the delay below is read off it, and only by a
+        // connection that held for the stable window: see the fields. Applied
+        // after the schedule was set, a transport that had been up for hours
+        // still waited the rung it reached long ago for its first retry, which
+        // is the case this exists for.
+        if self.secdef_connected_at
+            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
+        {
+            self.secdef_reconnect_attempt = 0;
+        }
+        self.secdef_connected_at = None;
         if self.secdef_next_attempt_at.is_none() {
             self.secdef_next_attempt_at =
                 Some(Instant::now() + hmds_reconnect_backoff(self.secdef_reconnect_attempt + 1));
@@ -2222,13 +2245,6 @@ impl HotLoop {
         }
         if Instant::now() < self.secdef_next_attempt_at.unwrap() { return; }
         let auth = auth.clone();
-        // Given back only by a connection that held: see the fields.
-        if self.secdef_connected_at
-            .is_some_and(|up| up.elapsed() >= self.reconnect_cfg.stable_window)
-        {
-            self.secdef_reconnect_attempt = 0;
-        }
-        self.secdef_connected_at = None;
         self.secdef_reconnect_attempt += 1;
         let attempt = self.secdef_reconnect_attempt;
         log::info!(

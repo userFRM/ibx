@@ -143,23 +143,24 @@ impl MarketDataState {
 
     /// Bars answering one request, leaving other requests' alone.
     pub fn take_real_time_bars_for(&self, req_id: u32) -> Vec<RealTimeBar> {
+        // Partitioned rather than removed one at a time: each `remove` shifts
+        // the tail, so draining a request that holds most of a full queue costs
+        // the square of it — on exactly the path a caller takes when its own
+        // stream has grown large.
         let mut q = self.real_time_bars.lock().unwrap();
-        let mut mine = Vec::new();
-        let mut i = 0;
-        while i < q.len() {
-            if q[i].0 == req_id { mine.push(q.remove(i).1); } else { i += 1; }
-        }
-        mine
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut *q).into_iter().partition(|b| b.0 == req_id);
+        *q = rest;
+        mine.into_iter().map(|b| b.1).collect()
     }
 
     /// Book changes answering one request.
     pub fn take_depth_updates_for(&self, req_id: u32) -> Vec<DepthUpdate> {
+        // Partitioned, not removed one at a time: see the bars above.
         let mut q = self.depth_updates.lock().unwrap();
-        let mut mine = Vec::new();
-        let mut i = 0;
-        while i < q.len() {
-            if q[i].req_id == req_id { mine.push(q.remove(i)); } else { i += 1; }
-        }
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut *q).into_iter().partition(|u| u.req_id == req_id);
+        *q = rest;
         mine
     }
 
@@ -401,6 +402,35 @@ mod depth_backlog_tests {
             size: 1.0,
             is_smart_depth: false,
         }
+    }
+
+    /// The book that is dropped is the longest one, not whoever happened to
+    /// push at the moment the queue filled.
+    ///
+    /// Kept apart from the test below because there the flooder is also the
+    /// pusher, so dropping the longest and dropping the pusher pick the same
+    /// book and neither rule is pinned. Here a caller reading its own small
+    /// book is the one that pushes at the bound: taking the pusher would give
+    /// up the book that was being read and leave the runaway streaming.
+    #[test]
+    fn the_longest_book_is_dropped_and_not_the_one_that_pushed() {
+        let market = MarketDataState::new();
+        let flooding = 7;
+        let reading = 9;
+
+        for _ in 0..STREAM_BACKLOG_LIMIT - 1 {
+            market.push_depth_update(entry(flooding));
+        }
+        // Fills the queue exactly, so the next push is the one that walks it.
+        market.push_depth_update(entry(reading));
+        market.push_depth_update(entry(reading));
+
+        assert!(market.depth_was_dropped(flooding), "the longest book was the one given up");
+        assert!(!market.depth_was_dropped(reading), "not the one that pushed");
+        assert_eq!(
+            market.take_depth_updates_for(reading).len(), 2,
+            "and the pusher's own book is whole, the update that triggered it included",
+        );
     }
 
     /// A book that runs away unread is dropped whole, and nothing further is

@@ -2181,6 +2181,13 @@ impl FarmState {
         for (req_id, con_id, exchange, listed_on, sec_type, num_rows, is_smart_depth)
             in depth_params
         {
+            // A book given up on for running away is refused until it is asked
+            // for again, and this is asking for it again: the venue restarts it
+            // from the top on the new connection, so what was held against the
+            // old one goes with the old one. Without this the reconnect brings
+            // the book back on the wire and every update is discarded at the
+            // guard, silently and for the life of the session.
+            shared.market.purge_depth_updates(req_id);
             self.send_depth_subscribe(
                 req_id, con_id, &exchange, &listed_on, &sec_type, num_rows, is_smart_depth,
                 farm_conn, hb, shared,
