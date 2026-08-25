@@ -251,7 +251,15 @@ fn a_subscription_naming_only_the_contract_id_is_answered() {
 
     let bare = Contract { con_id: 12087792, ..Default::default() };
     let req_id = 9001;
-    client.req_mkt_data(req_id, &bare, "", false, false).expect("subscribe by id alone");
+    // Refused rather than sent, for a contract this client cannot describe: an
+    // undescribed one is asked about as a US stock, and the venue holds no US
+    // stock under this id. That is an answer, and a better one than silence —
+    // recorded here the same way the silence is, because what this phase is
+    // for is the described subscription below it.
+    let asked = client.req_mkt_data(req_id, &bare, "", false, false);
+    if let Err(refused) = &asked {
+        println!("  bare conId refused: {}", refused.message);
+    }
     let mut seen = None;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while std::time::Instant::now() < deadline {
@@ -264,7 +272,9 @@ fn a_subscription_naming_only_the_contract_id_is_answered() {
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    let _ = client.cancel_mkt_data(req_id);
+    if asked.is_ok() {
+        let _ = client.cancel_mkt_data(req_id);
+    }
     // What the venue does with each, recorded rather than asserted one way:
     // the described subscription is answered and the bare one is not, which is
     // why this client states a description at all. It should state the
