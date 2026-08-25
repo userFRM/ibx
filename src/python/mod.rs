@@ -42,18 +42,33 @@ pub(crate) fn settings_from(
                 settings.registration_timeout_ms =
                     Some(value.parse().map_err(|_| format!("registration_timeout_ms: {value}"))?);
             }
-            "log_level" => settings.log_level = Some(value),
-            "log_dir" => settings.log_dir = Some(value),
-            "log_queue" => settings.log_queue = Some(value == "true" || value == "1"),
+            // One logger per process, so these are not settled per session:
+            // taken here they were parsed, held and then dropped on the way to
+            // the session, which reads as a log level that was set and did
+            // nothing. Said plainly instead, naming where they do work.
+            "log_level" | "log_dir" | "log_queue" => {
+                return Err(format!(
+                    "{name} belongs to the process, not one session: set it with \
+                     ibx.configure() or the environment before the first connect",
+                ));
+            }
+            // However it is spelled, matching what the same settings are read
+            // as when they come from the environment. Matched against the
+            // lowercase spelling alone, `Today` was refused here where the
+            // environment accepts it, and `False` turned the Island setting on.
             "execution_reports" => {
-                settings.execution_reports = Some(match value.as_str() {
-                    "today" => ExecutionReportScope::Today,
-                    "all" => ExecutionReportScope::All,
-                    other => return Err(format!("execution_reports: {other}")),
+                settings.execution_reports = Some(if value.eq_ignore_ascii_case("today") {
+                    ExecutionReportScope::Today
+                } else if value.eq_ignore_ascii_case("all") {
+                    ExecutionReportScope::All
+                } else {
+                    return Err(format!("execution_reports: {value}"));
                 });
             }
             "island_for_nasdaq" => {
-                settings.island_for_nasdaq = Some(value != "false" && value != "0");
+                settings.island_for_nasdaq = Some(
+                    !["0", "false", "no"].iter().any(|off| value.eq_ignore_ascii_case(off)),
+                );
             }
             other => return Err(format!("no such setting: {other}")),
         }
