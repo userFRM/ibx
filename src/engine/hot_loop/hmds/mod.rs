@@ -42,6 +42,14 @@ pub(crate) struct TbtSubscription {
 pub(crate) struct HmdsState {
     pub(crate) next_tbt_req_id: u32,
     pub(crate) tbt_subscriptions: Vec<TbtSubscription>,
+    /// Streams this session withdrew and the venue kept sending anyway, by the
+    /// number the venue names them with. Held so the records that keep arriving
+    /// are reported once as what they are rather than once each: a withdrawal
+    /// this venue does not act on sends ticks for the rest of the session, and
+    /// several hundred identical warnings bury whatever else is in the log.
+    pub(crate) tbt_withdrawn: std::collections::HashSet<u64>,
+    /// Streams already spoken about, so each is spoken about once.
+    pub(crate) tbt_reported: std::collections::HashSet<u64>,
     pub(crate) next_hmds_query_id: u32,
     pub(crate) disconnected: bool,
     /// In-flight historical bar queries: the venue's id for each, and the
@@ -214,6 +222,8 @@ impl HmdsState {
         Self {
             next_tbt_req_id: 1,
             tbt_subscriptions: Vec::new(),
+            tbt_withdrawn: std::collections::HashSet::new(),
+            tbt_reported: std::collections::HashSet::new(),
             next_hmds_query_id: 1000,
             disconnected: false,
             pending_historical: Vec::new(),
@@ -304,7 +314,11 @@ impl HmdsState {
         self.disconnected = false;
 
         // The ids belong to the session that died; each subscription is sent
-        // again and takes a new one.
+        // again and takes a new one. What was held against the old numbers goes
+        // with them — a stream the last connection would not stop is a question
+        // the new one answers for itself.
+        self.tbt_withdrawn.clear();
+        self.tbt_reported.clear();
         let stale = std::mem::take(&mut self.tbt_subscriptions);
         let wanted = stale.len();
         for dead in stale {
@@ -946,8 +960,24 @@ impl HmdsState {
         // A frame naming a subscription this session does not hold is not
         // attributed to another one.
         let Some(at) = found else {
-            if stated.is_some() {
-                log::warn!("a tick names a subscription this session does not hold; dropped");
+            // Said once per stream rather than once per tick. A withdrawal this
+            // venue does not act on goes on delivering for the rest of the
+            // session, and several hundred identical lines bury the rest of the
+            // log without saying anything the first one did not.
+            if let Some(id) = stated
+                && self.tbt_reported.insert(id)
+            {
+                if self.tbt_withdrawn.contains(&id) {
+                    log::warn!(
+                        "the venue is still sending ticks for stream {id}, which this \
+                         session withdrew; they are dropped, and it does not stop until \
+                         the session ends",
+                    );
+                } else {
+                    log::warn!(
+                        "a tick names stream {id}, which this session does not hold; dropped",
+                    );
+                }
             }
             return;
         };
@@ -1195,7 +1225,14 @@ fn build_tbt_query(
             Some(i) => i,
             None => return,
         };
-        let ticker_id = self.tbt_subscriptions.remove(idx).query_id;
+        let gone = self.tbt_subscriptions.remove(idx);
+        // The venue's own number for the stream, which its records are stamped
+        // with. Kept so records that keep arriving after this are recognised as
+        // the ones this withdrawal was meant to stop.
+        if gone.venue_id != 0 {
+            self.tbt_withdrawn.insert(gone.venue_id);
+        }
+        let ticker_id = gone.query_id;
         if let Some(conn) = hmds_conn.as_mut() {
             let xml = format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
