@@ -910,8 +910,8 @@ fn a_tick_stream_states_the_contract_and_the_kind() {
     assert!(q.contains("<contractID>265598</contractID>"));
     assert!(q.contains("<data>AllLast</data>"));
     assert!(q.contains("<source>API</source>"));
-    // Nothing states a filter: the venue carries one, and this client has not
-    // settled how to make it take effect, so it sends none rather than an
-    // empty one.
+    // And no filter: the venue carries one, this client has not settled how to
+    // make it apply, and `ignore_size` is refused rather than sent — so a
+    // filter appearing here would be one nothing asked for.
     assert!(!q.contains("filter"), "{q}");
 }

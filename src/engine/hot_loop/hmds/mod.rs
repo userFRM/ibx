@@ -1079,8 +1079,9 @@ impl HmdsState {
 /// The query that opens one tick stream.
 ///
 /// Every element is named for the field the venue's own query holds it in,
-/// without its prefix, and one it has not been given is left out rather than
-/// sent empty.
+/// without its prefix. It states no filter: the venue carries one and this
+/// client has not settled how to make it apply, which is why `ignore_size` is
+/// refused rather than sent.
 fn build_tbt_query(
     req_id: u32,
     con_id: i64,
@@ -1146,11 +1147,6 @@ fn build_tbt_query(
         // description that was not its own.
         let venue = hist_exchange(exchange);
         let stype = hist_sec_type(sec_type);
-        // The changes that move only the size, left out where the caller asked
-        // for them to be. Named the way every other element of this query is —
-        // the field the query holds it in, without its prefix — and left out
-        // entirely where nothing asked for it, which is what the venue's own
-        // query does with a filter it has not been given.
         let xml = Self::build_tbt_query(req_id, con_id, &venue, &stype, tbt_type_str);
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();

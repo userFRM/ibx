@@ -144,11 +144,12 @@ impl Client {
         // that the session keeps what it is already being sent.
         session.client.req_news_bulletins(true);
 
-        // Into a record of its own and merged after, not straight into the
-        // session's. The reader takes the session's turn and then the state;
-        // filling the state here would take them the other way round, and two
-        // locks taken in two orders is a session that stops at the first
-        // moment both are wanted.
+        // Into a record of its own and merged after. The ordering argument
+        // that put it this way is gone — the pump now takes the turn and then
+        // the state, the same way round as the reader — but the merge is kept
+        // because it dedupes: these answers reach the session's record through
+        // the pump as well, and absorbing rather than appending is what stops
+        // each holding and trade being counted twice.
         let mut answered = LiveState::default();
         session.client.req_positions(&mut answered);
         // And what this account already has working, which may have been
@@ -212,7 +213,12 @@ impl Client {
     pub fn disconnect(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.client.disconnect();
-        if let Some(reader) = self.reader.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        // Taken out before the join, not across it. A session is shared by
+        // cloning, so a second clone stopping at the same moment would wait on
+        // this lock for as long as the reader takes to finish — and the reader
+        // can be a whole answer timeout behind a question that holds the turn.
+        let reader = self.reader.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(reader) = reader {
             let _ = reader.join();
         }
         // The streams the session was feeding end with it. Left in place, the

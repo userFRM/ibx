@@ -960,6 +960,10 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::UnsubscribeTbt { req_id, instrument } => {
+                    // As above: records already queued under this request are
+                    // this request's, and a stream reopened under the same
+                    // number before the next drain would be served them.
+                    self.shared.market.purge_tbt_for(req_id);
                     self.hmds.send_tbt_unsubscribe(req_id, instrument, &mut self.hmds_conn, &mut self.hb);
                     self.try_reclaim_instrument(instrument);
                 }
@@ -1210,6 +1214,10 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelRealTimeBar { req_id } => {
+                    // What already arrived and nobody has read goes with it,
+                    // or the next request under this number is served this
+                    // stream's bars.
+                    self.shared.market.purge_real_time_bars(req_id);
                     self.hmds.rtbar_resub.retain(|r| r.req_id != req_id);
                     if let Some(pos) = self.hmds.rtbar_subs.iter().position(|(_, rid, ..)| *rid == req_id) {
                         let (query_id, _, ticker_id, ..) = self.hmds.rtbar_subs.remove(pos);
@@ -1396,6 +1404,9 @@ impl HotLoop {
                     for instrument in news_instruments {
                         self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb);
                     }
+                    // And whatever the drain above could not send is said
+                    // rather than left in a buffer nothing will read again.
+                    order_builder::refuse_what_is_left(&mut self.context, &self.shared);
                     self.running = false;
                     // Records the reason alongside the flag. The flag alone
                     // does not distinguish a venue-initiated drop from a
@@ -1417,6 +1428,7 @@ impl HotLoop {
                 self.ccp.disconnected, &self.shared,
                 self.ccp.recovery_sweep_at.is_some(), &self.event_tx,
             );
+            order_builder::refuse_what_is_left(&mut self.context, &self.shared);
             self.running = false;
             self.shared.reference
                 .set_session_over(retry::DisconnectReason::ByDesign.as_str());
