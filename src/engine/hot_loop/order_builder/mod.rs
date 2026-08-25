@@ -616,6 +616,36 @@ fn send_cancel(
     conn.send_fix(&fields)
 }
 
+/// Say so for every order still waiting when the loop stops.
+///
+/// The buffer's rule is that nothing is dropped from it, because an order
+/// dropped is one nobody was told about. Stopping broke that: whatever the
+/// last drain could not send was put back, and nothing drained it again — the
+/// caller had been told the order was accepted, and given an id for it, and
+/// then heard nothing ever again.
+pub(crate) fn refuse_what_is_left(
+    context: &mut Context,
+    shared: &Arc<SharedState>,
+) {
+    let left: Vec<OrderRequest> = context.drain_pending_orders().collect();
+    if left.is_empty() {
+        return;
+    }
+    log::warn!("{} order(s) were still waiting when the engine stopped", left.len());
+    for req in left {
+        let id = req.order_id();
+        if id == 0 {
+            continue;
+        }
+        shared.orders.push_order_inactive(
+            id,
+            crate::error_codes::Refusal::NOT_CONNECTED,
+            "the engine stopped before this order reached the venue, so it was never placed"
+                .to_string(),
+        );
+    }
+}
+
 /// Mark an order's state unknown and announce it.
 ///
 /// Reports the order as this session holds it. Instrument 0 is a valid

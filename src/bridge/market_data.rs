@@ -230,7 +230,46 @@ impl MarketDataState {
     }
 
     #[doc(hidden)] pub fn push_depth_update(&self, update: DepthUpdate) {
-        push_bounded(&self.depth_updates, update, STREAM_BACKLOG_LIMIT, "depth_updates");
+        // A book is not a stream of independent rows: each entry says insert,
+        // change or delete AT a position, so it only means anything against
+        // every entry before it. Shedding the oldest of these the way a quote
+        // or a trade is shed does not lose old rows — it leaves every later
+        // position pointing into a book missing its start, and the reader gets
+        // a well-formed book with the wrong prices in it.
+        //
+        // So a book that has run away is dropped whole, per request, and the
+        // caller is told. Nothing is a book it can trust; a wrong one reads
+        // like a right one.
+        {
+            let mut held = self.depth_updates.lock().unwrap();
+            if held.len() >= STREAM_BACKLOG_LIMIT {
+                let req_id = update.req_id;
+                let before = held.len();
+                held.retain(|u| u.req_id != req_id);
+                log::warn!(
+                    "the book on request {req_id} has gone past {STREAM_BACKLOG_LIMIT} unread \
+                     and was dropped whole ({} entries), because part of a book is not a \
+                     book — resubscribe to start it again",
+                    before - held.len(),
+                );
+            }
+            held.push(update);
+        }
+    }
+
+    /// Throw away bars still queued under a request.
+    ///
+    /// Withdrawing stops the venue sending more; it does not unsend what has
+    /// already arrived and nobody has read. Left there, the next request under
+    /// the same number is served the previous stream's bars.
+    #[doc(hidden)] pub fn purge_real_time_bars(&self, req_id: u32) {
+        self.real_time_bars.lock().unwrap().retain(|(id, _)| *id != req_id);
+    }
+
+    /// Throw away tick-by-tick records still queued under a request.
+    #[doc(hidden)] pub fn purge_tbt_for(&self, req_id: i64) {
+        self.tbt_trades.lock().unwrap().retain(|t| t.req_id != req_id);
+        self.tbt_quotes.lock().unwrap().retain(|q| q.req_id != req_id);
     }
 
     /// Remove all buffered depth updates for a given req_id (called on cancel).

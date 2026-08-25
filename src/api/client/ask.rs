@@ -6,13 +6,15 @@
 //! for asking one question. These ask, wait, and hand back the answer.
 //!
 //! They drive `process_msgs` themselves. That drains everything the session
-//! has queued, and a question keeps what carries its own request id and
-//! discards the rest, so what arrives while a question is waiting is delivered
-//! to that question rather than to a wrapper of the caller's. A program that
-//! reads the session through its own wrapper, or through
-//! [`Client`](crate::api::Client), should know that a question opens a window
-//! of that shape: it lasts until the answer or the timeout. Where nothing may
-//! be missed, take the events from the channel
+//! has queued, and a question keeps what carries its own request id — but what
+//! it does not keep is no longer thrown away. A session installs the record it
+//! keeps, and everything a question does not want goes there, so a fill or a
+//! tick arriving while a question runs still reaches
+//! [`Client`](crate::api::Client)'s own view of it.
+//!
+//! A bare client with no record of its own has nowhere to put them, and there
+//! a question does still consume what it does not keep. Where nothing may be
+//! missed, take the events from the channel
 //! [`connect_with_events`](super::EClient::connect_with_events) hands back,
 //! which the engine fills whether anything is pumping or not.
 
