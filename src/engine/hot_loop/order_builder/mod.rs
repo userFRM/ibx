@@ -657,10 +657,15 @@ pub(crate) fn refuse_what_is_left(
                 );
                 continue;
             }
-            // A bracket is three orders under one request, and all three were
-            // waiting. Reporting the parent alone leaves two carrying a state
-            // nothing confirmed.
-            _ => (
+            // A bracket is three orders under one request, and all three
+            // were waiting. Reporting the parent alone leaves two carrying a
+            // state nothing confirmed.
+            //
+            // Named rather than caught by a rest arm: a variant added later
+            // that acts ON an existing order would inherit "never placed" and
+            // tell a caller a working order is dead, which is the fault this
+            // function was just repaired for. Listed, the compiler asks.
+            OrderRequest::SubmitEx { .. } | OrderRequest::SubmitBracket { .. } => (
                 req.order_ids(),
                 "the engine stopped before this order reached the venue, so it was never \
                  placed",
